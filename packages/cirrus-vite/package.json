@@ -1,6 +1,11 @@
 {
     "name": "@cirrus/vite",
     "version": "0.0.0",
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md"
+    ],
     "type": "module",
     "sideEffects": false,
     "module": "./dist/index.mjs",
@@ -12,11 +17,6 @@
         },
         "./package.json": "./package.json"
     },
-    "files": [
-        "dist",
-        "README.md",
-        "LICENSE.md"
-    ],
     "scripts": {
         "build": "packem build",
         "build:prod": "packem build",
@@ -30,15 +30,6 @@
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"
     },
-    "peerDependencies": {
-        "@visulima/vite-overlay": "catalog:vite",
-        "vite": "catalog:vite"
-    },
-    "peerDependenciesMeta": {
-        "@visulima/vite-overlay": {
-            "optional": true
-        }
-    },
     "devDependencies": {
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -47,5 +38,14 @@
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@visulima/vite-overlay": "catalog:vite",
+        "vite": "catalog:vite"
+    },
+    "peerDependenciesMeta": {
+        "@visulima/vite-overlay": {
+            "optional": true
+        }
     }
 }

@@ -11,12 +11,12 @@
         "type": "git",
         "url": "https://github.com/anolilab/cirrus.git"
     },
-    "sideEffects": false,
-    "type": "module",
     "workspaces": [
         "packages/*",
         "apps/*"
     ],
+    "type": "module",
+    "sideEffects": false,
     "scripts": {
         "build": "vis run build",
         "build:affected": "vis affected build --fail-fast",
@@ -49,11 +49,11 @@
         "@commitlint/cli": "catalog:prod",
         "@commitlint/config-conventional": "catalog:prod",
         "@types/node": "catalog:types",
+        "@visulima/tabular": "catalog:prod",
+        "@visulima/vis": "catalog:prod",
         "cz-conventional-changelog": "catalog:prod",
         "eslint": "catalog:lint",
         "husky": "catalog:lint",
-        "@visulima/tabular": "catalog:prod",
-        "@visulima/vis": "catalog:prod",
         "prettier": "catalog:lint",
         "rimraf": "catalog:node",
         "tsx": "catalog:dev",

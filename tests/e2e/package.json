@@ -2,9 +2,9 @@
     "name": "@cirrus/e2e",
     "version": "0.0.0",
     "private": true,
+    "description": "End-to-end Playwright + Miniflare test suite for the Cirrus playground app.",
     "type": "module",
     "sideEffects": false,
-    "description": "End-to-end Playwright + Miniflare test suite for the Cirrus playground app.",
     "scripts": {
         "e2e": "playwright test",
         "e2e:ui": "playwright test --ui",

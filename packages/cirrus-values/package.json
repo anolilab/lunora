@@ -1,6 +1,11 @@
 {
     "name": "@cirrus/values",
     "version": "0.0.0",
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md"
+    ],
     "type": "module",
     "sideEffects": false,
     "main": "./dist/index.cjs",
@@ -14,11 +19,6 @@
         },
         "./package.json": "./package.json"
     },
-    "files": [
-        "dist",
-        "README.md",
-        "LICENSE.md"
-    ],
     "scripts": {
         "build": "packem build",
         "build:prod": "packem build",

@@ -1,19 +1,8 @@
 {
     "name": "@cirrus/cli",
     "version": "0.0.0",
-    "type": "module",
-    "sideEffects": false,
-    "module": "./dist/index.mjs",
-    "types": "./dist/index.d.ts",
     "bin": {
         "cirrus": "./bin/cirrus.mjs"
-    },
-    "exports": {
-        ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.mjs"
-        },
-        "./package.json": "./package.json"
     },
     "files": [
         "bin",
@@ -23,6 +12,17 @@
         "README.md",
         "LICENSE.md"
     ],
+    "type": "module",
+    "sideEffects": false,
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
     "scripts": {
         "build": "packem build",
         "build:prod": "packem build",
