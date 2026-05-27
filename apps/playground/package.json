@@ -8,7 +8,8 @@
         "build": "vite build",
         "deploy": "wrangler deploy",
         "dev": "vite",
-        "lint:types": "tsc --noEmit"
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
     },
     "dependencies": {
         "@cirrus/auth": "workspace:*",
@@ -25,12 +26,15 @@
         "react-dom": "catalog:frontend"
     },
     "devDependencies": {
+        "@cirrus/codegen": "workspace:*",
+        "@cirrus/config": "workspace:*",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
+        "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
     }
 }

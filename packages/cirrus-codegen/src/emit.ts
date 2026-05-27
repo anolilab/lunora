@@ -159,6 +159,28 @@ export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable
 `;
 };
 
+/**
+ * Rewrite `import("…")` qualifiers inside a return-type string so they resolve
+ * from `_generated/api.ts` rather than from the function's source file.
+ *
+ * ts-morph prints types relative to where they were *read* (the handler
+ * arrow), so a function at `cirrus/foo.ts` importing
+ * `./_generated/dataModel.js` produces `import("./_generated/dataModel.js").X`
+ * in the rendered text. Inlined verbatim into `cirrus/_generated/api.ts`,
+ * that path is one level too deep — tsc raises TS2307.
+ *
+ * Fix: strip the leading `./_generated/` segment so types resolve from inside
+ * `_generated/`. Cirrus's only relative `import("…")` qualifier comes from
+ * `_generated/dataModel.ts`, so this targeted rewrite is enough; absolute
+ * imports (e.g. `import("@cirrus/server")`) are left untouched.
+ */
+const relocateGeneratedImports = (returnType: string): string =>
+    returnType.replaceAll(/import\("(?<spec>(?:\.\/)?_generated\/[^"]+)"\)/gu, (_match, spec: string) => {
+        const stripped = spec.replace(/^\.\/_generated\//u, "./").replace(/^_generated\//u, "./");
+
+        return `import("${stripped}")`;
+    });
+
 /** Emit `_generated/api.ts` — the typed `api.*` registry. */
 export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
     // Group functions by file path (namespace).
@@ -181,8 +203,9 @@ export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
                 // The phantom `Kind`/`Args`/`Return` parameters carry the
                 // info downstream hooks need to infer call signatures.
                 const argsType = renderArgsType(function_.args);
+                const returnType = relocateGeneratedImports(function_.returnType);
 
-                return `        ${function_.exportName}: FunctionReference<"${function_.kind}", ${argsType}, ${function_.returnType}>;`;
+                return `        ${function_.exportName}: FunctionReference<"${function_.kind}", ${argsType}, ${returnType}>;`;
             })
             .join("\n");
 

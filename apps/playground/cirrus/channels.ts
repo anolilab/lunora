@@ -1,12 +1,7 @@
 import type { Id } from "@cirrus/server";
 import { mutation, query, v } from "@cirrus/server";
 
-interface ChannelDocument {
-    _id: Id<"channels">;
-    createdAt: number;
-    createdBy: Id<"users">;
-    name: string;
-}
+import type { Doc } from "./_generated/dataModel.js";
 
 /**
  * List every channel — `.global()` so the read happens against D1, with
@@ -14,10 +9,10 @@ interface ChannelDocument {
  */
 export const list = query({
     args: {},
-    handler: async (context): Promise<ChannelDocument[]> => {
+    handler: async (context): Promise<Doc<"channels">[]> => {
         const rows = await context.db.query("channels").collect();
 
-        return rows as unknown as ChannelDocument[];
+        return rows as unknown as Doc<"channels">[];
     },
 });
 

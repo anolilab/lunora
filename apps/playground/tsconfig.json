@@ -9,6 +9,6 @@
         "lib": ["DOM", "DOM.Iterable", "ES2024"],
         "noUncheckedIndexedAccess": false
     },
-    "include": ["src/**/*", "cirrus/**/*", "vite.config.ts"],
+    "include": ["src/**/*", "cirrus/**/*", "vite.config.ts", "vitest.config.ts", "__tests__/**/*"],
     "exclude": ["node_modules", "dist"]
 }
