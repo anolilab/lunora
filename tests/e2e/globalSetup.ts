@@ -38,7 +38,7 @@ interface SpawnedProcess {
 }
 
 declare global {
-    var __CIRRUS_E2E_PROCS__: SpawnedProcess[] | undefined;
+    var CIRRUS_E2E_PROCS: SpawnedProcess[] | undefined;
 }
 
 const waitForUrl = async (url: string, timeoutMs: number, label: string): Promise<void> => {
@@ -144,7 +144,7 @@ const globalSetup = async (_config: FullConfig): Promise<void> => {
 
     await waitForUrl("http://localhost:5173", 30_000, "vite");
 
-    globalThis.__CIRRUS_E2E_PROCS__ = procs;
+    globalThis.CIRRUS_E2E_PROCS = procs;
 };
 
 export default globalSetup;

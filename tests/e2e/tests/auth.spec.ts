@@ -1,15 +1,15 @@
 import { expect, test } from "../fixtures/cirrus.js";
 
 /**
- * Auth flow E2E — exercises `@cirrus/auth`'s email/password provider end to
- * end. Signup writes to D1 (Miniflare-backed), signin verifies the bcrypt
- * hash, and the returned token is read back by the React `useAuth` hook on
- * the next render.
+ * Auth flow E2E — exercises `@cirrus/auth`'s better-auth integration end to
+ * end. Signup runs the better-auth schema migrations against D1 (Miniflare),
+ * signin verifies the scrypt hash, and the issued session cookie is read
+ * back by `authClient.useSession()` on the next render.
  *
  * Failure modes covered:
- *   - happy path (signup → session, signout → cleared)
- *   - wrong password → 401 with a useful error body
- *   - weak password (< 8 chars) → 400 WEAK_PASSWORD
+ *   - happy path (signup → session cookie → authed view; signout → cleared)
+ *   - wrong password → 401 with INVALID_EMAIL_OR_PASSWORD code
+ *   - weak password (< 8 chars) → 400 PASSWORD_TOO_SHORT
  */
 const WORKER_URL = process.env.CIRRUS_E2E_WORKER_URL ?? "http://localhost:8787";
 
@@ -24,75 +24,76 @@ test("user can sign up and sees an authenticated session", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
     const email = `signup-${Date.now()}@cirrus.test`;
-    const password = "test-password-1234";
+    const password = "test-password-1234"; // gitleaks:allow
 
-    // The playground only ships a sign-in form, but the API has /auth/signup.
-    // Drive it via fetch so this spec still validates the worker route.
-    const signupResponse = await page.request.post(`${WORKER_URL}/auth/signup`, {
-        data: { email, password },
+    // Sign up via better-auth's REST endpoint directly so we still validate
+    // the worker route on top of the UI.
+    const signupResponse = await page.request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+        data: { email, name: email, password },
     });
 
     expect(signupResponse.status()).toBe(200);
 
-    const body = (await signupResponse.json()) as { token?: string };
+    const body = (await signupResponse.json()) as { token?: string; user?: { email?: string } };
 
+    expect(body.user?.email).toBe(email);
     expect(body.token).toBeTruthy();
 
-    // Now sign in via the UI to confirm the session is real.
-    await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    // Reload — `authClient.useSession()` picks up the cookie set on the
+    // request above (Playwright shares the cookie jar between `page` and
+    // `page.request`).
+    await page.reload();
 
-    // Chat view shows once the token is set.
+    // Chat view shows once the session cookie is present.
     await expect(page.getByRole("heading", { name: "Channels" })).toBeVisible();
 });
 
-test("sign in with wrong password returns 401 with a helpful error", async ({ page }) => {
+test("sign in with wrong password returns a helpful error", async ({ page }) => {
     const email = `wrongpw-${Date.now()}@cirrus.test`;
-    const password = "test-password-1234";
+    const password = "test-password-1234"; // gitleaks:allow
 
     // Pre-create the user via API so we can attempt a failed login.
-    const signupResponse = await page.request.post(`${WORKER_URL}/auth/signup`, {
-        data: { email, password },
+    const signupResponse = await page.request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+        data: { email, name: email, password },
     });
 
     expect(signupResponse.status()).toBe(200);
 
+    // Clear the session cookie that signup set so we land on the Login form.
+    await page.context().clearCookies();
+
     await page.goto("/");
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill("wrong-password-xxxx");
+    await page.getByLabel("Password").fill("wrong-password-xxxx"); // gitleaks:allow
     await page.getByRole("button", { name: "Sign in" }).click();
 
-    // Login.tsx renders the failure as a role="alert" paragraph.
+    // Login.tsx surfaces the failure as a role="alert" paragraph.
     const alert = page.getByRole("alert");
 
     await expect(alert).toBeVisible();
-    await expect(alert).toContainText(/401|failed/i);
+    await expect(alert).toContainText(/invalid email or password|failed/i);
 });
 
-test("sign out clears the session cookie / token", async ({ signedInPage }) => {
+test("sign out clears the session cookie", async ({ signedInPage }) => {
     await signedInPage.goto("/");
 
     await expect(signedInPage.getByRole("heading", { name: "Channels" })).toBeVisible();
 
-    // Clear the token (signout) — the React app re-renders into the Login form.
-    await signedInPage.evaluate(() => {
-        globalThis.localStorage.removeItem("cirrus.token");
-    });
+    await signedInPage.getByRole("button", { name: "Sign out" }).click();
 
-    await signedInPage.reload();
-
+    // After signOut() resolves better-auth has cleared the session cookie;
+    // useSession() flips the App back to the Login form on the next render.
     await expect(signedInPage.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
 
-test("sign up with weak password (< 8 chars) returns 400 WEAK_PASSWORD", async ({ page }) => {
-    const response = await page.request.post(`${WORKER_URL}/auth/signup`, {
-        data: { email: `weak-${Date.now()}@cirrus.test`, password: "abc" },
+test("sign up with weak password (< 8 chars) returns 400 PASSWORD_TOO_SHORT", async ({ page }) => {
+    const response = await page.request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+        data: { email: `weak-${Date.now()}@cirrus.test`, name: "weak", password: "abc" },
     });
 
     expect(response.status()).toBe(400);
 
     const body = (await response.json()) as { code?: string; message?: string };
 
-    expect(body.code).toBe("WEAK_PASSWORD");
+    expect(body.code).toBe("PASSWORD_TOO_SHORT");
 });

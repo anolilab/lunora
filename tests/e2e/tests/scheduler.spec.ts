@@ -10,26 +10,24 @@ import { expect, test } from "../fixtures/cirrus.js";
  *   - This is the *only* spec that uses a wall-clock sleep, because cron
  *     timing is the unit of measure under test.
  */
-const WORKER_URL = process.env.CIRRUS_E2E_WORKER_URL ?? "http://localhost:8787";
 
 test.beforeEach(async ({ resetServer }) => {
     await resetServer();
 });
 
 test("scheduled cleanup fires within a few seconds and updates the runs log", async ({ user }) => {
-    const scheduleResponse = await fetch(`${WORKER_URL}/test/schedule`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${user.token}` },
-        body: JSON.stringify({ function: "cleanup:cleanupOldMessages", afterMs: 1000 }),
+    // `user.request` carries the better-auth session cookie set during signup.
+    const scheduleResponse = await user.request.post(`/test/schedule`, {
+        data: { afterMs: 1000, function: "cleanup:cleanupOldMessages" },
     });
 
-    if (scheduleResponse.status === 404) {
+    if (scheduleResponse.status() === 404) {
         test.skip(true, "playground has no /test/schedule helper; scheduler test needs harness route");
 
         return;
     }
 
-    expect(scheduleResponse.ok).toBe(true);
+    expect(scheduleResponse.ok()).toBe(true);
 
     const { jobId } = (await scheduleResponse.json()) as { jobId: string };
 
@@ -41,9 +39,9 @@ test("scheduled cleanup fires within a few seconds and updates the runs log", as
     let status: string | null = null;
 
     while (Date.now() < deadline) {
-        const statusResponse = await fetch(`${WORKER_URL}/test/job-status?id=${encodeURIComponent(jobId)}`);
+        const statusResponse = await user.request.get(`/test/job-status?id=${encodeURIComponent(jobId)}`);
 
-        if (statusResponse.ok) {
+        if (statusResponse.ok()) {
             const body = (await statusResponse.json()) as { status?: string };
 
             status = body.status ?? null;

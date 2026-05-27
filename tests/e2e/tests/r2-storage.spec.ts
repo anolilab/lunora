@@ -11,26 +11,22 @@ import { expect, test } from "../fixtures/cirrus.js";
  *   - Miniflare's R2 stub uses an on-disk SQLite — `wrangler dev --persist-to`
  *     keeps the blob around between requests so we can fetch what we put.
  */
-const WORKER_URL = process.env.CIRRUS_E2E_WORKER_URL ?? "http://localhost:8787";
 
 test.beforeEach(async ({ resetServer }) => {
     await resetServer();
 });
 
 test("upload returns a signed URL and the URL serves the bytes back", async ({ user }) => {
-    const rpcResponse = await fetch(`${WORKER_URL}/_cirrus/rpc`, {
-        method: "POST",
-        headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${user.token}`,
-        },
-        body: JSON.stringify({
+    // `user.request` carries the better-auth session cookie set during signup,
+    // so the RPC is authenticated without an explicit header.
+    const rpcResponse = await user.request.post(`/_cirrus/rpc`, {
+        data: {
+            args: { contentType: "image/png", key: "profile" },
             function: "avatars:uploadAvatar",
-            args: { key: "profile", contentType: "image/png" },
-        }),
+        },
     });
 
-    expect(rpcResponse.ok).toBe(true);
+    expect(rpcResponse.ok()).toBe(true);
 
     const body = (await rpcResponse.json()) as { result?: { key?: string; url?: string } };
     const url = body.result?.url;
@@ -45,19 +41,17 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
 
     // Put bytes at the signed URL — Miniflare validates the signature.
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-    const putResponse = await fetch(url, {
-        method: "PUT",
+    const putResponse = await user.request.fetch(url, {
+        data: png,
         headers: { "content-type": "image/png" },
-        body: png,
+        method: "PUT",
     });
 
-    expect(putResponse.ok).toBe(true);
+    expect(putResponse.ok()).toBe(true);
 
     // Now fetch back via the GET signed URL.
-    const getRpc = await fetch(`${WORKER_URL}/_cirrus/rpc`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${user.token}` },
-        body: JSON.stringify({ function: "avatars:getAvatar", args: { userId: user.token } }),
+    const getRpc = await user.request.post(`/_cirrus/rpc`, {
+        data: { args: { userId: user.email }, function: "avatars:getAvatar" },
     });
 
     const getBody = (await getRpc.json()) as { result?: { url?: string } };
@@ -69,11 +63,11 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
         throw new Error("no signed get url");
     }
 
-    const fetched = await fetch(getUrl);
+    const fetched = await user.request.get(getUrl);
 
-    expect(fetched.ok).toBe(true);
+    expect(fetched.ok()).toBe(true);
 
-    const bytes = new Uint8Array(await fetched.arrayBuffer());
+    const bytes = new Uint8Array(await fetched.body());
 
     expect(bytes.length).toBe(png.length);
     expect(bytes[0]).toBe(0x89);
@@ -83,23 +77,18 @@ test("signed URL returns 403 after expiry", async ({ user }) => {
     // uploadAvatar uses a 60s expiry; getAvatar uses 5 minutes. To exercise
     // expiry without burning a real minute, we mint a 1-second URL via the
     // /test/sign route exposed by the e2e harness.
-    const response = await fetch(`${WORKER_URL}/test/sign`, {
-        method: "POST",
-        headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${user.token}`,
-        },
-        body: JSON.stringify({ key: "avatars/e2e/expiry", expiresInSeconds: 1 }),
+    const response = await user.request.post(`/test/sign`, {
+        data: { expiresInSeconds: 1, key: "avatars/e2e/expiry" },
     });
 
-    if (response.status === 404) {
+    if (response.status() === 404) {
         // Older playground without /test/sign — skip rather than fail.
         test.skip(true, "playground has no /test/sign helper; expiry test needs harness route");
 
         return;
     }
 
-    expect(response.ok).toBe(true);
+    expect(response.ok()).toBe(true);
 
     const body = (await response.json()) as { url?: string };
     const { url } = body;
@@ -114,7 +103,7 @@ test("signed URL returns 403 after expiry", async ({ user }) => {
     // of the test is the clock-based invalidation.
     await new Promise((resolve) => setTimeout(resolve, 1300));
 
-    const expired = await fetch(url);
+    const expired = await user.request.get(url);
 
-    expect(expired.status).toBe(403);
+    expect(expired.status()).toBe(403);
 });

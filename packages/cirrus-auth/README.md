@@ -7,10 +7,7 @@ import { createAuth, providers } from "@cirrus/auth";
 
 const auth = createAuth({
     secret: env.AUTH_SECRET,
-    providers: [
-        providers.emailPassword(),
-        providers.github({ clientId: env.GITHUB_ID, clientSecret: env.GITHUB_SECRET }),
-    ],
+    providers: [providers.emailPassword(), providers.github({ clientId: env.GITHUB_ID, clientSecret: env.GITHUB_SECRET })],
 });
 
 // Mount into the Worker's routes map.

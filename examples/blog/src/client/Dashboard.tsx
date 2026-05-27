@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@cirrus/react";
-import type { ChangeEvent, FormEvent, ReactElement } from "react";
+import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../cirrus/_generated/api.js";
@@ -21,51 +21,26 @@ export const Dashboard = (): ReactElement => {
     const { mutate: requestUpload } = useMutation(api.posts.requestImageUpload);
     const { mutate: publish, pending: publishing } = useMutation(api.posts.publish);
 
-    const onSelectImage = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
-        const file = event.target.files?.[0];
-
-        if (!file) {
-            return;
-        }
-
-        setUploadingImage(true);
-        setError(null);
-
-        try {
-            const { url, key } = (await requestUpload({ contentType: file.type })) as { key: string; url: string };
-
-            // Stream the bytes straight to R2 — the Worker never proxies them.
-            const upload = await fetch(url, { body: file, headers: { "content-type": file.type }, method: "PUT" });
-
-            if (!upload.ok) {
-                throw new Error(`R2 PUT failed (${upload.status})`);
-            }
-
-            setImageKey(key);
-        } catch (error_: unknown) {
-            setError(error_ instanceof Error ? error_.message : "upload failed");
-        } finally {
-            setUploadingImage(false);
-        }
-    };
-
-    const onPublish = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-        event.preventDefault();
-
-        if (title.trim() === "" || body.trim() === "") {
-            return;
-        }
-
-        await publish({ body, imageKey: imageKey ?? undefined, title });
-        setBody("");
-        setImageKey(null);
-        setTitle("");
-    };
-
     return (
         <main style={{ display: "grid", fontFamily: "system-ui", gap: 24, margin: "2rem auto", maxWidth: 720 }}>
             <h1>Dashboard</h1>
-            <form onSubmit={onPublish} style={{ display: "grid", gap: 12 }}>
+            <form
+                onSubmit={(event) => {
+                    event.preventDefault();
+
+                    if (title.trim() === "" || body.trim() === "") {
+                        return;
+                    }
+
+                    void (async () => {
+                        await publish({ body, imageKey: imageKey ?? undefined, title });
+                        setBody("");
+                        setImageKey(null);
+                        setTitle("");
+                    })();
+                }}
+                style={{ display: "grid", gap: 12 }}
+            >
                 <input
                     onChange={(event) => {
                         setTitle(event.target.value);
@@ -85,7 +60,40 @@ export const Dashboard = (): ReactElement => {
                 />
                 <label>
                     Featured image
-                    <input accept="image/*" disabled={uploadingImage} onChange={(event) => void onSelectImage(event)} type="file" />
+                    <input
+                        accept="image/*"
+                        disabled={uploadingImage}
+                        onChange={(event) => {
+                            const file = event.target.files?.[0];
+
+                            if (!file) {
+                                return;
+                            }
+
+                            setUploadingImage(true);
+                            setError(null);
+
+                            void (async () => {
+                                try {
+                                    const { url, key } = (await requestUpload({ contentType: file.type })) as { key: string; url: string };
+
+                                    // Stream the bytes straight to R2 — the Worker never proxies them.
+                                    const upload = await fetch(url, { body: file, headers: { "content-type": file.type }, method: "PUT" });
+
+                                    if (!upload.ok) {
+                                        throw new Error(`R2 PUT failed (${upload.status})`);
+                                    }
+
+                                    setImageKey(key);
+                                } catch (error_: unknown) {
+                                    setError(error_ instanceof Error ? error_.message : "upload failed");
+                                } finally {
+                                    setUploadingImage(false);
+                                }
+                            })();
+                        }}
+                        type="file"
+                    />
                 </label>
                 {imageKey ? <p style={{ fontSize: 12, opacity: 0.7 }}>Uploaded: {imageKey}</p> : null}
                 <button disabled={publishing || uploadingImage} type="submit">

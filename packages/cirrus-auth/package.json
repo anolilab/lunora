@@ -26,7 +26,7 @@
         "test": "vitest run"
     },
     "dependencies": {
-        "@cirrus/d1": "workspace:*"
+        "better-auth": "catalog:auth"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",

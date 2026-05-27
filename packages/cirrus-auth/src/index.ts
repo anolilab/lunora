@@ -1,39 +1,4 @@
-import { emailPassword } from "./providers/emailPassword.js";
-import { github } from "./providers/github.js";
-import { google } from "./providers/google.js";
-
+export type { CirrusAuth, CirrusAuthOptions } from "./createAuth.js";
 export { createAuth } from "./createAuth.js";
-export { hashPassword, verifyPassword } from "./pbkdf2.js";
-export { emailPassword } from "./providers/emailPassword.js";
-export { github } from "./providers/github.js";
-export { google } from "./providers/google.js";
-export type { OAuthProfile, OAuthProviderDescriptor } from "./routes/oauth.js";
-export {
-    buildAuthorizeRedirect,
-    decodeIdTokenPayload,
-    deriveCodeChallenge,
-    exchangeCodeForUser,
-    exchangeGithubCode,
-    exchangeGoogleCode,
-} from "./routes/oauth.js";
-export { createSession, findUserByEmail, getSession, revokeSession } from "./session.js";
-export type {
-    AuthEnv,
-    AuthProviderConfig,
-    AuthProviderContext,
-    AuthSession,
-    AuthState,
-    AuthUser,
-    CirrusAuth,
-    CirrusAuthOptions,
-    RouteHandler,
-    RouteMap,
-    SessionNamespaceLike,
-} from "./types.js";
-
-/** Bundle of built-in providers, mirroring the API surface in the design doc. */
-export const providers: {
-    emailPassword: typeof emailPassword;
-    github: typeof github;
-    google: typeof google;
-} = { emailPassword, github, google };
+export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler.js";
+export { compileMigrationsSql, ensureMigrated } from "./migrate.js";

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@cirrus/react";
-import type { FormEvent, ReactElement } from "react";
+import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../cirrus/_generated/api.js";
@@ -22,32 +22,23 @@ export const Chat = (): ReactElement => {
     const { mutate: sendMessage, pending: sendPending } = useMutation(api.messages.send);
     const { mutate: createChannel } = useMutation(api.channels.create);
 
-    const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-        event.preventDefault();
-
-        if (!activeChannel || draft.trim() === "") {
-            return;
-        }
-
-        await sendMessage({ channelId: activeChannel, text: draft });
-        setDraft("");
-    };
-
-    const createNew = async (): Promise<void> => {
-        const name = globalThis.prompt("Channel name?");
-
-        if (!name) {
-            return;
-        }
-
-        await createChannel({ name });
-    };
-
     return (
         <div style={{ display: "grid", gap: 16, gridTemplateColumns: "240px 1fr", padding: 16 }}>
             <aside>
                 <h2>Channels</h2>
-                <button onClick={createNew} type="button">
+                <button
+                    onClick={() => {
+                        // eslint-disable-next-line no-alert
+                        const name = globalThis.prompt("Channel name?");
+
+                        if (!name) {
+                            return;
+                        }
+
+                        void createChannel({ name });
+                    }}
+                    type="button"
+                >
                     + New channel
                 </button>
                 <ul>
@@ -74,11 +65,24 @@ export const Chat = (): ReactElement => {
                         </li>
                     ))}
                 </ul>
-                <form onSubmit={submit}>
+                <form
+                    onSubmit={(event) => {
+                        event.preventDefault();
+
+                        if (!activeChannel || draft.trim() === "") {
+                            return;
+                        }
+
+                        void (async () => {
+                            await sendMessage({ channelId: activeChannel, text: draft });
+                            setDraft("");
+                        })();
+                    }}
+                >
                     <input
                         disabled={!activeChannel}
-                        onChange={(e) => {
-                            setDraft(e.target.value);
+                        onChange={(event) => {
+                            setDraft(event.target.value);
                         }}
                         placeholder="Type a message…"
                         value={draft}

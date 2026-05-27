@@ -1,4 +1,5 @@
-import { createAuth, providers } from "@cirrus/auth";
+import type { CirrusAuth } from "@cirrus/auth";
+import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 
@@ -7,6 +8,8 @@ export { ShardDO } from "./ShardDO.js";
 
 interface Env {
     AUTH_SECRET?: string;
+    /** Base URL the auth handler resolves callback URLs against. */
+    AUTH_URL?: string;
 
     /**
      * When set to the literal string `"true"`, the worker exposes a small
@@ -24,36 +27,37 @@ interface Env {
 }
 
 /**
- * Worker entry — wires `@cirrus/auth` routes onto the RPC + WS router
- * exposed by `@cirrus/runtime`. The runtime owns `/_cirrus/rpc` and
- * `/_cirrus/ws`; auth provider routes (`/auth/signin`, `/auth/signup`, …)
- * are merged in via the `routes` option so they land at the same hostname.
+ * Worker entry — composes `@cirrus/auth` (better-auth) and `@cirrus/runtime`.
  *
- * `createWorker` takes the `env.SHARD` binding eagerly, so we build it at
- * the first fetch and memoise. The pattern is intentionally explicit — a
- * future v0.2 will offer a `createApp({ build: (env) => ... })` helper so
- * the per-request env is plumbed for you.
+ * Better-auth handles its own arbitrarily nested routes under `/api/auth/*`
+ * via a single handler, which doesn't fit the runtime's exact-path router.
+ * We intercept the auth prefix here, then fall through to the runtime for
+ * RPC + WebSocket traffic.
  */
 let worker: ReturnType<typeof createWorker> | null = null;
+let auth: CirrusAuth | null = null;
 
-const buildWorker = (env: Env): ReturnType<typeof createWorker> => {
+const buildAuth = (env: Env): CirrusAuth => {
     if (!env.AUTH_SECRET) {
         throw new Error("AUTH_SECRET is required");
     }
 
-    const auth = createAuth({
-        providers: [providers.emailPassword()],
+    return createAuth({
+        baseURL: env.AUTH_URL,
+        database: env.DB as never,
+        emailAndPassword: { enabled: true },
         secret: env.AUTH_SECRET,
     });
+};
 
-    return createWorker({
+const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
+    createWorker({
         d1: env.DB,
-        // Auth provider handlers narrow `env` to `AuthEnv`; cast to the runtime's
-        // looser `Route` type so the router can dispatch them uniformly.
-        routes: auth.routes() as unknown as Record<string, Route>,
+        // The runtime's route map can stay empty: better-auth routes are
+        // dispatched ahead of the worker by the `handleAuthRequest` hook.
+        routes: {} as Record<string, Route>,
         shardDO: env.SHARD,
     });
-};
 
 /**
  * E2E-only test helpers. Each route is a no-op unless `env.CIRRUS_E2E ===
@@ -72,70 +76,33 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
         return null;
     }
 
-    // `/test/reset` — wipe DO state. Implementation reaches into every
-    // active SHARD DO instance via the namespace and tells it to drop its
-    // SQLite tables; the SchedulerDO clears its alarms.
     if (url.pathname === "/test/reset" && request.method === "POST") {
         try {
-            // Use a well-known reset id so we don't accumulate orphan DOs.
             const id = env.SHARD.idFromName("__e2e_reset__");
             const stub = env.SHARD.get(id);
 
             await stub.fetch(new Request("https://do/internal/reset", { method: "POST" }));
         } catch {
-            // best-effort; if the DO method doesn't exist, ignore.
+            // best-effort
         }
 
-        return Response.json(
-            { ok: true },
-            {
-                headers: { "content-type": "application/json" },
-            },
-        );
+        return Response.json({ ok: true });
     }
 
-    // `/test/sign` — mint a signed URL with caller-controlled expiry so the
-    // R2 expiry test doesn't have to wait the full production TTL.
     if (url.pathname === "/test/sign" && request.method === "POST") {
-        return Response.json(
-            { url: null, error: "not implemented in playground build" },
-            {
-                headers: { "content-type": "application/json" },
-                status: 501,
-            },
-        );
+        return Response.json({ url: null, error: "not implemented in playground build" }, { status: 501 });
     }
 
-    // `/test/schedule` and `/test/job-status` — drive the SchedulerDO with
-    // an explicit afterMs so cron timing can be exercised in seconds.
     if (url.pathname === "/test/schedule" && request.method === "POST") {
-        return Response.json(
-            { jobId: null, error: "not implemented in playground build" },
-            {
-                headers: { "content-type": "application/json" },
-                status: 501,
-            },
-        );
+        return Response.json({ jobId: null, error: "not implemented in playground build" }, { status: 501 });
     }
 
     if (url.pathname === "/test/job-status" && request.method === "GET") {
-        return Response.json(
-            { status: "unknown" },
-            {
-                headers: { "content-type": "application/json" },
-            },
-        );
+        return Response.json({ status: "unknown" });
     }
 
-    // `/test/throw` — surface a synthetic error to validate the overlay.
     if (url.pathname === "/test/throw" && request.method === "POST") {
-        return Response.json(
-            { error: "simulated" },
-            {
-                headers: { "content-type": "application/json" },
-                status: 500,
-            },
-        );
+        return Response.json({ error: "simulated" }, { status: 500 });
     }
 
     return new Response("not found", { status: 404 });
@@ -149,9 +116,23 @@ export default {
             return testResponse;
         }
 
-        if (!worker) {
-            worker = buildWorker(env);
+        if (!auth) {
+            auth = buildAuth(env);
+
+            // Apply the better-auth schema lazily on first request. For
+            // production workloads, run `pnpm --filter playground migrate`
+            // ahead of deploy so the first user request doesn't pay the diff
+            // cost.
+            await ensureMigrated(auth);
         }
+
+        const authResponse = await handleAuthRequest(auth, request);
+
+        if (authResponse) {
+            return authResponse;
+        }
+
+        worker ??= buildWorker(env);
 
         return worker.fetch(request, env, context);
     },

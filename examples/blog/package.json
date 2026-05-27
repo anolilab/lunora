@@ -22,6 +22,7 @@
         "@cirrus/server": "workspace:*",
         "@cirrus/storage": "workspace:*",
         "@cirrus/vite": "workspace:*",
+        "better-auth": "catalog:auth",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend"
     },

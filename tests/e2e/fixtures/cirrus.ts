@@ -1,5 +1,5 @@
-import type { Page } from "@playwright/test";
-import { test as base } from "@playwright/test";
+import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
+import { test as base, request as requestApi } from "@playwright/test";
 
 /**
  * Cirrus-specific Playwright fixtures.
@@ -8,10 +8,12 @@ import { test as base } from "@playwright/test";
  *   - `resetServer`  — call the `/test/reset` route exposed by the playground
  *     worker (gated by `CIRRUS_E2E === "true"`). Clears DO state so tests are
  *     order-independent.
- *   - `signedInPage` — a Page that already has an authenticated session
- *     cookie. Most chat tests skip the signup form and use this.
- *   - `channel`      — creates a channel via the RPC layer and returns its id
- *     so tests can deep-link into it.
+ *   - `signedInPage` — a Page whose BrowserContext already holds the
+ *     better-auth `session_token` cookie. Most chat tests skip the signup
+ *     form and use this.
+ *   - `user`         — creates a user via better-auth's API and exposes the
+ *     credentials + a worker-scoped APIRequest context that owns the cookie
+ *     jar, so tests can issue authenticated RPCs without a UI round-trip.
  *
  * Why an RPC-level fixture instead of clicking through the UI?
  *   - The UI walkthrough is *itself* covered by `auth.spec.ts`. Other suites
@@ -22,8 +24,10 @@ const WORKER_URL = process.env.CIRRUS_E2E_WORKER_URL ?? "http://localhost:8787";
 
 export interface TestUser {
     readonly email: string;
+    readonly name: string;
     readonly password: string;
-    readonly token: string;
+    /** APIRequest context with the better-auth session cookie pre-loaded. */
+    readonly request: APIRequestContext;
 }
 
 export interface CirrusFixtures {
@@ -40,39 +44,39 @@ export const resetServer = async (): Promise<void> => {
     }
 };
 
-const signUp = async (email: string, password: string): Promise<string> => {
-    const response = await fetch(`${WORKER_URL}/auth/signup`, {
-        body: JSON.stringify({ email, password }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
+/**
+ * Sign up via better-auth's `/api/auth/sign-up/email` endpoint. better-auth
+ * responds with `Set-Cookie: better-auth.session_token=…`, which the supplied
+ * `request` context captures into its storage state so subsequent calls (and
+ * any `BrowserContext` initialised from the same `storageState`) are signed
+ * in automatically.
+ */
+const signUp = async (request: APIRequestContext, email: string, password: string, name: string): Promise<void> => {
+    const response = await request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+        data: { email, name, password },
     });
 
-    if (!response.ok) {
-        throw new Error(`/auth/signup failed (${response.status})`);
+    if (!response.ok()) {
+        const body = await response.text();
+
+        throw new Error(`/api/auth/sign-up/email failed (${response.status()}): ${body}`);
     }
-
-    const body = (await response.json()) as { token?: string };
-
-    if (!body.token) {
-        throw new Error("signup response missing token");
-    }
-
-    return body.token;
 };
 
 export const test = base.extend<CirrusFixtures>({
     resetServer: async ({}, use) => {
         await use(resetServer);
     },
-    signedInPage: async ({ page, user }, use) => {
-        // Seed the auth token before the React app mounts so `useAuth()` sees
-        // it on first render. The playground stores tokens in localStorage
-        // keyed by "cirrus.token" (see @cirrus/react default config).
-        await page.addInitScript((token) => {
-            globalThis.localStorage.setItem("cirrus.token", token);
-        }, user.token);
+    signedInPage: async ({ browser, user }, use) => {
+        // Spin up a context seeded with the cookie jar accumulated during
+        // `user` setup. The session cookie hops over to the browser side so
+        // `authClient.useSession()` resolves on first render.
+        const storageState = await user.request.storageState();
+        const context: BrowserContext = await browser.newContext({ storageState });
+        const page = await context.newPage();
 
         await use(page);
+        await context.close();
     },
     user: async ({}, use, testInfo) => {
         // Deterministic per-test email so parallel projects (chromium / firefox)
@@ -82,10 +86,14 @@ export const test = base.extend<CirrusFixtures>({
             .replaceAll(/[^a-z0-9]/gi, "-")
             .toLowerCase();
         const email = `e2e+${slug}-${Date.now()}@cirrus.test`;
-        const password = "test-password-1234";
-        const token = await signUp(email, password);
+        const password = "test-password-1234"; // gitleaks:allow
+        const name = `e2e ${slug}`;
+        const request = await requestApi.newContext({ baseURL: WORKER_URL });
 
-        await use({ email, password, token });
+        await signUp(request, email, password, name);
+
+        await use({ email, name, password, request });
+        await request.dispose();
     },
 });
 

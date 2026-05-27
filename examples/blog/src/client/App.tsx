@@ -1,11 +1,15 @@
-import { useAuth } from "@cirrus/react";
 import type { ReactElement } from "react";
 
 import { Auth } from "./Auth.js";
+import { authClient } from "./auth-client.js";
 import { Dashboard } from "./Dashboard.js";
 
 export const App = (): ReactElement => {
-    const { token } = useAuth();
+    const session = authClient.useSession();
 
-    return token ? <Dashboard /> : <Auth />;
+    if (session.isPending) {
+        return <p style={{ margin: "4rem auto", textAlign: "center" }}>Loading…</p>;
+    }
+
+    return session.data ? <Dashboard /> : <Auth />;
 };

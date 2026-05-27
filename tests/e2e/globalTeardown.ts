@@ -34,7 +34,7 @@ const killProc = async (name: string, proc: ChildProcess): Promise<void> => {
 };
 
 const globalTeardown = async (_config: FullConfig): Promise<void> => {
-    const procs = globalThis.__CIRRUS_E2E_PROCS__;
+    const procs = globalThis.CIRRUS_E2E_PROCS;
 
     if (!procs?.length) {
         return;
@@ -42,7 +42,7 @@ const globalTeardown = async (_config: FullConfig): Promise<void> => {
 
     await Promise.all(procs.map(async ({ name, proc }) => killProc(name, proc)));
 
-    globalThis.__CIRRUS_E2E_PROCS__ = undefined;
+    globalThis.CIRRUS_E2E_PROCS = undefined;
 };
 
 export default globalTeardown;

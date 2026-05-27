@@ -20,17 +20,12 @@ test.beforeEach(async ({ resetServer }) => {
 });
 
 test("tab B sees a message from tab A within 500ms via WS subscription", async ({ browser, user }) => {
-    const contextA = await browser.newContext();
-    const contextB = await browser.newContext();
-
-    // Seed the same auth token in both contexts so both subscriptions are
-    // authenticated as the same user.
-    await contextA.addInitScript((token: string) => {
-        globalThis.localStorage.setItem("cirrus.token", token);
-    }, user.token);
-    await contextB.addInitScript((token: string) => {
-        globalThis.localStorage.setItem("cirrus.token", token);
-    }, user.token);
+    // Seed both browser contexts with the better-auth session cookie that
+    // `user.request` accumulated during signup, so both subscriptions
+    // authenticate as the same user.
+    const storageState = await user.request.storageState();
+    const contextA = await browser.newContext({ storageState });
+    const contextB = await browser.newContext({ storageState });
 
     const pageA = await contextA.newPage();
     const pageB = await contextB.newPage();
@@ -77,15 +72,9 @@ test("tab B sees a message from tab A within 500ms via WS subscription", async (
 });
 
 test("offline → online replays queued messages and broadcasts to other tabs", async ({ browser, user }) => {
-    const contextA = await browser.newContext();
-    const contextB = await browser.newContext();
-
-    await contextA.addInitScript((token: string) => {
-        globalThis.localStorage.setItem("cirrus.token", token);
-    }, user.token);
-    await contextB.addInitScript((token: string) => {
-        globalThis.localStorage.setItem("cirrus.token", token);
-    }, user.token);
+    const storageState = await user.request.storageState();
+    const contextA = await browser.newContext({ storageState });
+    const contextB = await browser.newContext({ storageState });
 
     const pageA = await contextA.newPage();
     const pageB = await contextB.newPage();

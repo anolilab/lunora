@@ -9,7 +9,8 @@
         "lib": ["DOM", "DOM.Iterable", "ES2024"],
         "noUncheckedIndexedAccess": false,
         "noUnusedLocals": false,
-        "noUnusedParameters": false
+        "noUnusedParameters": false,
+        "declaration": false
     },
     "include": ["src/**/*", "cirrus/**/*", "vite.config.ts"],
     "exclude": ["node_modules", "dist"]

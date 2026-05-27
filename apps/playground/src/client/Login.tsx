@@ -1,54 +1,73 @@
-import { useAuth } from "@cirrus/react";
-import type { FormEvent, ReactElement } from "react";
+import type { ReactElement } from "react";
 import { useState } from "react";
 
+import { authClient } from "./auth-client.js";
+
 /**
- * Minimal email/password sign-in form for the playground. Real apps would
- * call the `/auth/signin` endpoint mounted by `@cirrus/auth` and store the
- * returned token via `useAuth().setToken(...)`. Here we keep the form
- * client-side only so the smoke build doesn't depend on a live D1.
+ * Email/password sign-in + sign-up. Posts at the `/api/auth/*` routes
+ * mounted by `@cirrus/auth` (better-auth). The HttpOnly session cookie is
+ * set by the response — there's no token to plumb back into client state.
+ *
+ * `authClient.useSession()` in {@link App.tsx} reactively flips to the
+ * authenticated view on the next render once the cookie lands.
  */
 export const Login = (): ReactElement => {
-    const { setToken } = useAuth();
+    const [mode, setMode] = useState<"signin" | "signup">("signin");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+    const [name, setName] = useState("");
     const [error, setError] = useState<string | null>(null);
+    const [pending, setPending] = useState(false);
 
-    const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-        event.preventDefault();
-        setError(null);
-
-        try {
-            const response = await fetch("/auth/signin", {
-                body: JSON.stringify({ email, password }),
-                headers: { "content-type": "application/json" },
-                method: "POST",
-            });
-
-            if (!response.ok) {
-                throw new Error(`sign-in failed (${response.status})`);
-            }
-
-            const body = (await response.json()) as { token?: string };
-
-            if (!body.token) {
-                throw new Error("no token in response");
-            }
-
-            setToken(body.token);
-        } catch (error_: unknown) {
-            setError(error_ instanceof Error ? error_.message : "unknown error");
-        }
-    };
+    const modeLabel = mode === "signin" ? "Sign in" : "Create account";
+    const submitLabel = pending ? "…" : modeLabel;
 
     return (
-        <form onSubmit={submit} style={{ display: "grid", gap: 12, margin: "4rem auto", maxWidth: 320 }}>
-            <h1>Sign in</h1>
+        <form
+            onSubmit={(event) => {
+                event.preventDefault();
+                setError(null);
+                setPending(true);
+
+                void (async () => {
+                    try {
+                        const result
+                            = mode === "signin"
+                                ? await authClient.signIn.email({ email, password })
+                                : await authClient.signUp.email({ email, name: name || email, password });
+
+                        if (result.error) {
+                            setError(result.error.message ?? `${mode} failed`);
+                        }
+                    } catch (error_: unknown) {
+                        setError(error_ instanceof Error ? error_.message : "unknown error");
+                    } finally {
+                        setPending(false);
+                    }
+                })();
+            }}
+            style={{ display: "grid", gap: 12, margin: "4rem auto", maxWidth: 320 }}
+        >
+            <h1>{mode === "signin" ? "Sign in" : "Sign up"}</h1>
+            {mode === "signup"
+                ? (
+                <label>
+                    Name
+                    <input
+                        onChange={(event) => {
+                            setName(event.target.value);
+                        }}
+                        value={name}
+                    />
+                </label>
+                )
+                : null}
             <label>
                 Email
                 <input
-                    onChange={(e) => {
-                        setEmail(e.target.value);
+                    autoComplete="email"
+                    onChange={(event) => {
+                        setEmail(event.target.value);
                     }}
                     required
                     type="email"
@@ -58,15 +77,28 @@ export const Login = (): ReactElement => {
             <label>
                 Password
                 <input
-                    onChange={(e) => {
-                        setPassword(e.target.value);
+                    autoComplete={mode === "signin" ? "current-password" : "new-password"}
+                    minLength={8}
+                    onChange={(event) => {
+                        setPassword(event.target.value);
                     }}
                     required
                     type="password"
                     value={password}
                 />
             </label>
-            <button type="submit">Sign in</button>
+            <button disabled={pending} type="submit">
+                {submitLabel}
+            </button>
+            <button
+                onClick={() => {
+                    setMode(mode === "signin" ? "signup" : "signin");
+                    setError(null);
+                }}
+                type="button"
+            >
+                {mode === "signin" ? "Need an account? Sign up" : "Have an account? Sign in"}
+            </button>
             {error ? <p role="alert">{error}</p> : null}
         </form>
     );

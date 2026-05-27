@@ -233,6 +233,24 @@ export default createConfig(
             "vitest/prefer-strict-equal": "off",
         },
     },
+    // Playwright e2e specs live under `tests/e2e/tests/*.spec.ts`. They are
+    // *not* Vitest tests; the auto-fixer for `vitest/prefer-importing-vitest-globals`
+    // happily inserts `import { expect, test } from 'vitest'` and breaks them.
+    // Turn off every vitest/* rule for these files, and disable the no-await-in-loop
+    // warning that polling-style integration tests routinely trip.
+    {
+        files: ["tests/e2e/**/*.{ts,tsx}"],
+        rules: {
+            "no-await-in-loop": "off",
+            "vitest/consistent-test-filename": "off",
+            "vitest/expect-expect": "off",
+            "vitest/no-conditional-expect": "off",
+            "vitest/prefer-importing-vitest-globals": "off",
+            "vitest/prefer-strict-equal": "off",
+            "vitest/require-hook": "off",
+            "vitest/require-to-throw-message": "off",
+        },
+    },
     // Markdown code blocks: don't enforce language tags
     {
         files: ["**/*.md", "**/*.md/**"],

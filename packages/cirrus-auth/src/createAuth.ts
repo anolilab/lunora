@@ -1,103 +1,34 @@
-import { ensureSchema, findSessionWithUser, readSessionCookie } from "./session.js";
-import {
-    DEFAULT_COOKIE_NAME,
-    DEFAULT_SESSION_TTL_SECONDS,
-    type AuthEnv,
-    type AuthState,
-    type CirrusAuth,
-    type CirrusAuthOptions,
-    type RouteMap,
-} from "./types.js";
+import { betterAuth, type BetterAuthOptions } from "better-auth";
 
 /**
- * Wires the configured providers' routes together and exposes the
- * `resolveAuth(req, env)` helper that queries/mutations call to populate
- * `ctx.auth`.
+ * Cirrus's options pass straight through to better-auth — the only thing we
+ * provide is the convention that `database` defaults to `env.DB` (a Cloudflare
+ * D1 binding) and `secret` is required so we surface a clear error if it's
+ * missing instead of letting better-auth's runtime check fire later.
  *
- * Note: each call to `routes()` requires `env.DB` at request time — the
- * provider context binds late so the same `CirrusAuth` instance can serve
- * multiple Workers (e.g. dev + preview) with different bindings.
+ * better-auth's `database` field accepts a D1Database directly (as well as a
+ * Kysely instance / dialect), so passing `env.DB` is sufficient — no extra
+ * adapter wiring needed.
+ */
+export type CirrusAuthOptions = BetterAuthOptions;
+
+/**
+ * The full better-auth instance: `auth.handler` accepts a `Request` and
+ * returns a `Response` (used by {@link handleAuthRequest}); `auth.api`
+ * exposes the typed endpoint surface for server-side calls (e.g.
+ * `auth.api.getSession({ headers })` inside a query/mutation).
+ */
+export type CirrusAuth = ReturnType<typeof betterAuth>;
+
+/**
+ * Create the auth instance. Thin wrapper around `betterAuth` that enforces
+ * the `secret` requirement at construction time so misconfigured deployments
+ * fail loudly at the first fetch rather than the first sign-in attempt.
  */
 export const createAuth = (options: CirrusAuthOptions): CirrusAuth => {
     if (!options.secret) {
         throw new Error("@cirrus/auth: `secret` is required");
     }
 
-    if (!options.providers || options.providers.length === 0) {
-        throw new Error("@cirrus/auth: at least one provider must be configured");
-    }
-
-    const sessionTtlSeconds = options.sessionTtlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;
-    const cookieName = options.cookieName ?? DEFAULT_COOKIE_NAME;
-
-    /**
-     * Late-bound route map. We return wrappers so each request can pull the
-     * `DB` + `SESSION` bindings off `env` at call time without forcing
-     * callers to pass an env into `createAuth` itself.
-     */
-    const routes = (): RouteMap => {
-        const map: RouteMap = {};
-
-        for (const provider of options.providers) {
-            const wrapper = (originalEnv: AuthEnv): ReturnType<typeof provider.routes> =>
-                provider.routes({
-                    secret: options.secret,
-                    sessionTtlSeconds,
-                    cookieName,
-                    db: originalEnv.DB,
-                    env: originalEnv,
-                });
-
-            // Eagerly enumerate keys against a sentinel context so callers can
-            // mount them into their router. The actual handler closes over the
-            // real env at request time. The sentinel never executes a handler,
-            // so the dummy bindings below are only used for key enumeration.
-            const sentinel = provider.routes({
-                secret: options.secret,
-                sessionTtlSeconds,
-                cookieName,
-                db: undefined as unknown as AuthEnv["DB"],
-                env: undefined as unknown as AuthEnv,
-            });
-
-            for (const key of Object.keys(sentinel)) {
-                map[key] = async (request, env, ctx) => {
-                    const handlers = wrapper(env);
-                    const handler = handlers[key];
-
-                    if (!handler) {
-                        return new Response("Not Found", { status: 404 });
-                    }
-
-                    return handler(request, env, ctx);
-                };
-            }
-        }
-
-        return map;
-    };
-
-    const resolveAuth = async (request: Request, env: AuthEnv): Promise<AuthState> => {
-        if (!env?.DB || !env?.SESSION) {
-            return { authenticated: false, user: null, session: null };
-        }
-
-        await ensureSchema(env.DB);
-
-        const token = readSessionCookie(request, cookieName);
-
-        if (!token) {
-            return { authenticated: false, user: null, session: null };
-        }
-
-        const result = await findSessionWithUser(env, token);
-
-        if (!result) {
-            return { authenticated: false, user: null, session: null };
-        }
-
-        return { authenticated: true, user: result.user, session: result.session };
-    };
-
-    return { routes, resolveAuth };
+    return betterAuth(options);
 };

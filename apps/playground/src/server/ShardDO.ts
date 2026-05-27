@@ -40,15 +40,15 @@ export class ShardDO extends ShardDOBase {
     }
 
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-        const function_ = REGISTRY[functionPath];
+        const entry = REGISTRY[functionPath];
 
-        if (!function_) {
+        if (!entry) {
             throw new Error(`unknown function: ${functionPath}`);
         }
 
         const context = this.buildCtx();
 
-        return function_.handler(context, args);
+        return entry.handler(context, args);
     }
 
     /**
