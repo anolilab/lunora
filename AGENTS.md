@@ -71,7 +71,7 @@ The CLI binary is `cirrus`. The npm scope is `@cirrus/*`. The "main" server pack
 ### Packages
 
 | Package             | Role                                                                                                                                                                                         |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- | ------ | ------- | --- | ------- |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@cirrus/server`    | Main API: `defineSchema`, `defineTable`, `query`, `mutation`, `action`.                                                                                                                      |
 | `@cirrus/values`    | `v.*` validators, return-type inference.                                                                                                                                                     |
 | `@cirrus/runtime`   | Worker entry: RPC router, shard resolver, query coordinator.                                                                                                                                 |
@@ -81,7 +81,7 @@ The CLI binary is `cirrus`. The npm scope is `@cirrus/*`. The "main" server pack
 | `@cirrus/client`    | Browser SDK: WebSocket, optimistic updates, offline queue.                                                                                                                                   |
 | `@cirrus/react`     | `useQuery` / `useMutation` / `useSubscription` / `useAuth`.                                                                                                                                  |
 | `@cirrus/vite`      | Vite plugin over `@cloudflare/vite-plugin` — codegen, wrangler validator, error overlay.                                                                                                     |
-| `@cirrus/cli`       | `cirrus init                                                                                                                                                                                 | dev | deploy | codegen | run | reset`. |
+| `@cirrus/cli`       | CLI subcommands: `init`, `dev`, `deploy`, `codegen`, `run`, `reset`.                                                                                                                         |
 | `@cirrus/auth`      | better-auth adapter, sessions in `SessionDO`.                                                                                                                                                |
 | `@cirrus/mail`      | Resend adapter, TSX templates, queue-backed sends.                                                                                                                                           |
 | `@cirrus/storage`   | R2 typed buckets, signed URLs.                                                                                                                                                               |
