@@ -1,3 +1,19 @@
+export type {
+    BroadcastDelta,
+    Clock,
+    CtxDbOptions,
+    DatabaseWriterLike,
+    IdGenerator,
+    IndexDefinitionLike,
+    IndexRangeBuilderLike,
+    SchemaLike,
+    SqlCursor,
+    SqlExec,
+    TableDefinitionLike,
+    TableReaderLike,
+    ValidatorLike,
+} from "./ctx-db.js";
+export { createShardCtxDb, runShardMigrations } from "./ctx-db.js";
 export type { SessionRecord } from "./session-do.js";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
 export type { HibernatableWebSocket, ShardDOState } from "./shard-do.js";

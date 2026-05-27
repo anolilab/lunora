@@ -75,9 +75,17 @@ class TestShard extends ShardDO {
     /** When set, `handleRpc` echoes this value via `setOutboundBookmark`. */
     public bookmarkToEmit: string | undefined;
 
+    /** UserId observed by `handleRpc` on the most recent request. */
+    public observedUserId: string | undefined;
+
+    /** Identity envelope observed by `handleRpc` on the most recent request. */
+    public observedIdentity: Record<string, unknown> | undefined;
+
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
         this.rpcCalls.push({ functionPath, args });
         this.observedInboundBookmark = this.getInboundBookmark();
+        this.observedUserId = this.getCurrentUserId();
+        this.observedIdentity = this.getCurrentIdentity();
 
         if (this.bookmarkToEmit !== undefined) {
             this.setOutboundBookmark(this.bookmarkToEmit);
@@ -425,5 +433,157 @@ describe("shardDO __root__ 1 GB warning", () => {
         expect(warn).not.toHaveBeenCalled();
 
         warn.mockRestore();
+    });
+});
+
+describe("shardDO identity capture", () => {
+    let state: ReturnType<typeof createFakeState>;
+    let shard: TestShard;
+
+    beforeEach(() => {
+        state = createFakeState();
+        shard = new TestShard(state, {});
+    });
+
+    test("exposes x-cirrus-userid to handlers via getCurrentUserId()", async () => {
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                headers: { "content-type": "application/json", "x-cirrus-userid": "user_42" },
+            }),
+        );
+
+        expect(shard.observedUserId).toBe("user_42");
+    });
+
+    test("parses x-cirrus-identity JSON envelope into a plain object", async () => {
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                headers: {
+                    "content-type": "application/json",
+                    "x-cirrus-userid": "user_42",
+                    "x-cirrus-identity": JSON.stringify({ email: "user@example.com", roles: ["admin"] }),
+                },
+            }),
+        );
+
+        expect(shard.observedIdentity).toEqual({ email: "user@example.com", roles: ["admin"] });
+    });
+
+    test("collapses malformed x-cirrus-identity to undefined rather than throwing", async () => {
+        const response = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                headers: { "content-type": "application/json", "x-cirrus-identity": "{not json" },
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        expect(shard.observedIdentity).toBeUndefined();
+    });
+
+    test("clears identity headers between requests so they don't leak across clients", async () => {
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                headers: { "content-type": "application/json", "x-cirrus-userid": "user_42" },
+            }),
+        );
+
+        expect(shard.observedUserId).toBe("user_42");
+
+        shard.observedUserId = "polluted";
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                headers: { "content-type": "application/json" },
+            }),
+        );
+
+        expect(shard.observedUserId).toBeUndefined();
+    });
+});
+
+describe("shardDO upgrade gating", () => {
+    /**
+     * The Node-based test environment doesn't define `WebSocketPair`. A
+     * successful gate-passing run reaches the `new WebSocketPair()` line and
+     * throws; failure to pass the gate returns a 403 response. So the
+     * predicate "gate passed" maps to "rejected with the WebSocketPair
+     * error" — which is exactly what `expectPassedGate` asserts.
+     */
+    const expectPassedGate = async (shard: TestShard, request: Request): Promise<void> => {
+        await expect(shard.fetch(request)).rejects.toThrow(/WebSocketPair/u);
+    };
+
+    const upgradeRequest = (url: string, init?: RequestInit): Request =>
+        new Request(url, { ...init, headers: { ...(init?.headers ?? {}), Upgrade: "websocket" } });
+
+    test("allows upgrade when no origin allowlist and no bearer are configured", async () => {
+        const shard = new TestShard(createFakeState(), {});
+
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/"));
+    });
+
+    test("rejects upgrade with 403 when origin missing and allowlist configured", async () => {
+        const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example" });
+        const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
+
+        expect(response.status).toBe(403);
+    });
+
+    test("rejects upgrade with 403 when origin not in allowlist", async () => {
+        const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example" });
+        const response = await shard.fetch(
+            upgradeRequest("https://shard.internal/", { headers: { Origin: "https://evil.example" } }),
+        );
+
+        expect(response.status).toBe(403);
+    });
+
+    test("passes the gate when origin matches the allowlist", async () => {
+        const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example,https://staging.example" });
+
+        await expectPassedGate(
+            shard,
+            upgradeRequest("https://shard.internal/", { headers: { Origin: "https://staging.example" } }),
+        );
+    });
+
+    test("rejects upgrade with 403 when bearer required but missing", async () => {
+        const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
+        const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
+
+        expect(response.status).toBe(403);
+    });
+
+    test("rejects upgrade with 403 when bearer token mismatches", async () => {
+        const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
+        const response = await shard.fetch(
+            upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer wrong" } }),
+        );
+
+        expect(response.status).toBe(403);
+    });
+
+    test("accepts bearer via Authorization header", async () => {
+        const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
+
+        await expectPassedGate(
+            shard,
+            upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer s3cret" } }),
+        );
+    });
+
+    test("accepts bearer via ?token query parameter as a browser escape hatch", async () => {
+        const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
+
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/?token=s3cret"));
     });
 });

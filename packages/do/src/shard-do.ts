@@ -123,6 +123,23 @@ export abstract class ShardDO {
      */
     private currentResponseBookmark: string | undefined;
 
+    /**
+     * Per-request userId forwarded from the runtime via the
+     * `x-cirrus-userid` header. Surfaced to handlers via
+     * {@link getCurrentUserId}. Cleared in the `finally` block of `fetch`
+     * so a stale identity from a previous client never leaks into the
+     * next request.
+     */
+    private currentRequestUserId: string | undefined;
+
+    /**
+     * Per-request identity envelope forwarded from the runtime via the
+     * `x-cirrus-identity` JSON header. Stores claims like `email`,
+     * `name`, or custom roles populated by `resolveIdentity` on the
+     * worker. Surfaced to handlers via {@link getCurrentIdentity}.
+     */
+    private currentRequestIdentity: Record<string, unknown> | undefined;
+
     constructor(state: ShardDOState, env: unknown) {
         this.state = state;
         this.env = env;
@@ -251,11 +268,13 @@ export abstract class ShardDO {
                 return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
             }
 
-            // Stash the inbound D1 bookmark for the duration of the handler
-            // call so `getInboundBookmark()` returns the right value. Clear
-            // it on exit so the next request starts fresh.
+            // Stash the inbound D1 bookmark and identity headers for the
+            // duration of the handler call so getters return the right
+            // values. Cleared on exit so the next request starts fresh.
             this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
             this.currentResponseBookmark = undefined;
+            this.currentRequestUserId = request.headers.get("x-cirrus-userid") ?? undefined;
+            this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-cirrus-identity"));
 
             try {
                 const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
@@ -271,6 +290,8 @@ export abstract class ShardDO {
             } finally {
                 this.currentRequestBookmark = undefined;
                 this.currentResponseBookmark = undefined;
+                this.currentRequestUserId = undefined;
+                this.currentRequestIdentity = undefined;
             }
         }
 
@@ -295,6 +316,25 @@ export abstract class ShardDO {
      */
     protected setOutboundBookmark(bookmark: string | undefined): void {
         this.currentResponseBookmark = bookmark;
+    }
+
+    /**
+     * The userId forwarded by the runtime's `resolveIdentity` hook for the
+     * current request, or `undefined` when the request is anonymous. Use
+     * this to populate `ctx.auth.userId` inside `buildCtx`.
+     */
+    protected getCurrentUserId(): string | undefined {
+        return this.currentRequestUserId;
+    }
+
+    /**
+     * Identity claims (email, name, roles, …) forwarded by the runtime's
+     * `resolveIdentity` hook. Returns `undefined` for anonymous requests
+     * or when no extra claims were attached. Use this to populate the
+     * value returned by `ctx.auth.getIdentity()` inside `buildCtx`.
+     */
+    protected getCurrentIdentity(): Record<string, unknown> | undefined {
+        return this.currentRequestIdentity;
     }
 
     /**
@@ -501,36 +541,62 @@ export abstract class ShardDO {
     }
 
     /**
-     * Validate the upgrade request's `Origin` header against the allowlist
-     * declared by `env.CIRRUS_ALLOWED_ORIGINS` (comma-separated). If unset,
-     * any origin is allowed — convenient for local dev but obviously not
-     * suitable for production traffic.
+     * Gate the upgrade request against two complementary controls:
      *
-     * TODO(v0.2): require a signed bearer token alongside origin matching.
+     *   1. Origin allowlist via `env.CIRRUS_ALLOWED_ORIGINS` (comma-separated).
+     *      When unset, any origin is accepted — convenient for local dev,
+     *      not suitable for production.
+     *   2. Bearer token via `env.CIRRUS_WS_BEARER`. When set, the upgrade
+     *      must present a matching token. We accept either an
+     *      `Authorization: Bearer <token>` header (preferred) or a
+     *      `?token=<token>` query parameter (the only escape hatch for
+     *      browsers, which can't customise headers on the WebSocket
+     *      constructor). The match runs in constant time to avoid leaking
+     *      the token via response-timing differences.
+     *
+     * The `?token=` path is a real risk surface: the token ends up in
+     * server logs, browser history, and `Referer` headers on any
+     * subresource the upgrade page loads after the handshake. Use a
+     * short-lived rotating token in production rather than a long-lived
+     * secret.
      */
-    private isOriginAllowed(request: Request): boolean {
-        const allowed = (this.env as { CIRRUS_ALLOWED_ORIGINS?: string })?.CIRRUS_ALLOWED_ORIGINS;
+    private isUpgradeAllowed(request: Request): boolean {
+        const env = (this.env ?? {}) as { CIRRUS_ALLOWED_ORIGINS?: string; CIRRUS_WS_BEARER?: string };
+        const allowedOrigins = env.CIRRUS_ALLOWED_ORIGINS;
 
-        if (!allowed || allowed.trim() === "") {
-            return true;
+        if (allowedOrigins && allowedOrigins.trim() !== "") {
+            const origin = request.headers.get("origin");
+
+            if (!origin) {
+                return false;
+            }
+
+            const list = allowedOrigins
+                .split(",")
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
+
+            if (!list.includes(origin)) {
+                return false;
+            }
         }
 
-        const origin = request.headers.get("origin");
+        const expectedBearer = env.CIRRUS_WS_BEARER;
 
-        if (!origin) {
-            return false;
+        if (expectedBearer && expectedBearer.length > 0) {
+            const url = new URL(request.url);
+            const supplied = extractBearerToken(request.headers.get("authorization")) ?? url.searchParams.get("token");
+
+            if (!supplied || !constantTimeEqual(supplied, expectedBearer)) {
+                return false;
+            }
         }
 
-        const list = allowed
-            .split(",")
-            .map((entry) => entry.trim())
-            .filter((entry) => entry.length > 0);
-
-        return list.includes(origin);
+        return true;
     }
 
     private handleWebSocketUpgrade(request: Request): Response {
-        if (!this.isOriginAllowed(request)) {
+        if (!this.isUpgradeAllowed(request)) {
             return new Response("Forbidden", { status: 403 });
         }
 
@@ -563,4 +629,65 @@ const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response 
     }
 
     return Response.json(body, { status, headers });
+};
+
+/**
+ * Decode the JSON envelope shipped on the `x-cirrus-identity` header.
+ * Malformed payloads collapse to `undefined` rather than throwing — the
+ * shard should still serve requests whose identity claims didn't round-trip.
+ */
+const parseIdentityHeader = (raw: string | null): Record<string, unknown> | undefined => {
+    if (!raw) {
+        return undefined;
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as unknown;
+
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            return parsed as Record<string, unknown>;
+        }
+    } catch {
+        // fall through to undefined
+    }
+
+    return undefined;
+};
+
+const extractBearerToken = (authorization: string | null): string | undefined => {
+    if (!authorization) {
+        return undefined;
+    }
+
+    const [scheme, ...rest] = authorization.split(" ");
+
+    if (!scheme || scheme.toLowerCase() !== "bearer") {
+        return undefined;
+    }
+
+    const value = rest.join(" ").trim();
+
+    return value.length > 0 ? value : undefined;
+};
+
+/**
+ * Constant-time string equality. Compares full length (capped at the longer
+ * input) so a shorter candidate can't short-circuit the loop. The
+ * `lengthDiff` term folds a length mismatch into the result so unequal-length
+ * strings still take the same number of XOR ops as equal-length ones.
+ */
+const constantTimeEqual = (a: string, b: string): boolean => {
+    const max = Math.max(a.length, b.length);
+    let diff = a.length ^ b.length;
+
+    for (let index = 0; index < max; index += 1) {
+        // charCodeAt returns NaN past the end of the string; coerce to 0
+        // so the XOR still folds into `diff` without poisoning it.
+        const ca = index < a.length ? a.charCodeAt(index) : 0;
+        const cb = index < b.length ? b.charCodeAt(index) : 0;
+
+        diff |= ca ^ cb;
+    }
+
+    return diff === 0;
 };

@@ -3,7 +3,7 @@
  *
  * These run inside a Miniflare-driven `workerd` process via
  * `@cloudflare/vitest-pool-workers`. The mock-state suite under
- * `__tests__/ShardDO.test.ts` exercises the same surface against hand-rolled
+ * `__tests__/shard-do.test.ts` exercises the same surface against hand-rolled
  * doubles — the value here is catching anything mock state cannot model:
  *
  *  - The real WebSocket Hibernation API (`state.acceptWebSocket`,
