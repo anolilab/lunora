@@ -1,0 +1,52 @@
+---
+title: Overview
+description: A type-safe real-time backend on your own Cloudflare account.
+---
+
+Cirrus is a Convex-style backend framework that runs entirely on **your own
+Cloudflare Workers + Durable Objects account**. It gives you typed functions,
+live subscriptions, schema-driven storage, first-party auth, file storage and
+a scheduler — without making you give up ownership of the data or paying a
+per-seat platform tax.
+
+Where Convex couples you to a hosted runtime, Cirrus lets you ship the exact
+same DX onto your own infrastructure. Where prior art on Cloudflare like
+`convex.do` and `zeroback` peaked at a single Durable Object, Cirrus is
+**scale-proof by default**: tables stay in one root DO until you opt into
+sharding, and the moment you do, every call site routes itself.
+
+```ts
+// cirrus/messages.ts
+import { mutation, query, v } from "@cirrus/server";
+
+export const send = mutation({
+    args: { channelId: v.id("channels"), text: v.string() },
+    handler: async (ctx, args) => {
+        await ctx.db.insert("messages", { ...args, userId: ctx.auth.user.id });
+    },
+});
+
+export const list = query({
+    args: { channelId: v.id("channels") },
+    handler: async (ctx, args) =>
+        ctx.db
+            .query("messages")
+            .withIndex("by_channel", (q) => q.eq("channelId", args.channelId))
+            .collect(),
+});
+```
+
+## What ships in v0.1
+
+- **`@cirrus/server`** — `defineSchema`, `defineTable`, `query`, `mutation`, `action`, validators
+- **`@cirrus/runtime`** — Worker entrypoint, RPC envelope, shard routing
+- **`@cirrus/do`** — `ShardDO` and `SessionDO` base classes
+- **`@cirrus/d1`** — D1 Sessions API wrapper for `.global()` tables
+- **`@cirrus/client` + `@cirrus/react`** — browser SDK and React hooks
+- **`@cirrus/vite` + `@cirrus/cli`** — codegen, dev server, scaffolding
+- **`@cirrus/auth` / `@cirrus/mail` / `@cirrus/storage` / `@cirrus/scheduler`** — first-party add-ons
+
+## See also
+
+- [Getting started](/docs/getting-started)
+- [Architecture](/docs/architecture)

@@ -1,0 +1,39 @@
+#!/bin/sh
+
+. "$(dirname "$0")/common.sh"
+
+echo --------------------------------------------
+echo Starting Git hook: prepare-commit-msg
+# if we hve a cmd that is running pnpx cz that means finalize and commit
+FILE=commit.cmd
+if test -f "$FILE"; then
+    echo "$FILE exists."
+    rm commit.cmd
+    exit 0;
+fi
+# if on Windows, spawn a cmd that will run pnpx cz
+case `uname` in
+    *CYGWIN*|*MINGW*|*MSYS* )
+        # Only run commitizen if no commit message was already provided.
+        if [ -z "${2-}" ]; then
+            export CZ_TYPE="${CZ_TYPE:-fix}"
+            export CZ_MAX_HEADER_WIDTH=$COMMITLINT_MAX_WIDTH
+            export CZ_MAX_LINE_WIDTH=$CZ_MAX_HEADER_WIDTH
+            echo "pnpx cz && exit" > commit.cmd
+            start commit.cmd
+            exit 1;
+        fi
+
+        exit 0;;
+esac
+# Only run commitizen if no commit message was already provided.
+if [ -z "${2-}" ]; then
+    export CZ_TYPE="${CZ_TYPE:-fix}"
+    export CZ_MAX_HEADER_WIDTH=$COMMITLINT_MAX_WIDTH
+    export CZ_MAX_LINE_WIDTH=$CZ_MAX_HEADER_WIDTH
+    # By default git hooks are not interactive. exec < /dev/tty allows a users terminal to interact with commitizen.
+    exec < /dev/tty && pnpx cz --hook || true
+fi
+
+echo Finished Git hook: prepare-commit-msg
+echo --------------------------------------------

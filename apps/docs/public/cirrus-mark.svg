@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" fill="none" role="img" aria-label="Cirrus mark">
+    <rect width="120" height="80" fill="transparent" />
+    <path d="M12 24 H108" stroke="#0B0F19" stroke-width="6" stroke-linecap="round" />
+    <path d="M12 40 H92" stroke="#0B0F19" stroke-width="6" stroke-linecap="round" />
+    <path d="M12 56 H72" stroke="#0B0F19" stroke-width="6" stroke-linecap="round" />
+</svg>

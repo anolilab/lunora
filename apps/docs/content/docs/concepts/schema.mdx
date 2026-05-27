@@ -1,0 +1,65 @@
+---
+title: Schema
+description: Declarative tables, validators, indexes and sharding.
+---
+
+A Cirrus schema is a single TypeScript file. It is the source of truth for
+your storage layout, the input to codegen, and the contract the type-safe
+client is generated against. There is no separate migrations DSL — schema
+edits + a codegen run is the migration.
+
+```ts
+// cirrus/schema.ts
+import { defineSchema, defineTable, v } from "@cirrus/server";
+
+export default defineSchema({
+    channels: defineTable({
+        name: v.string(),
+        createdBy: v.id("users"),
+        createdAt: v.number(),
+    })
+        .global()
+        .index("by_name", ["name"], { unique: true }),
+
+    messages: defineTable({
+        channelId: v.id("channels"),
+        userId: v.id("users"),
+        text: v.string(),
+    })
+        .shardBy("channelId")
+        .index("by_channel", ["channelId", "_creationTime"]),
+
+    users: defineTable({
+        email: v.string(),
+        name: v.string(),
+    })
+        .global()
+        .index("by_email", ["email"], { unique: true }),
+});
+```
+
+## Validators
+
+`v` exposes the primitive and composite validators used at the API boundary:
+
+- `v.string()`, `v.number()`, `v.boolean()`, `v.null()`, `v.bytes()`
+- `v.id("tableName")` — typed foreign key
+- `v.array(item)`, `v.object({ ... })`, `v.union(a, b)`, `v.literal("x")`
+- `v.optional(inner)` — makes a field optional
+
+## Tier modifiers
+
+- _(default)_ — table lives in the root `__root__` Durable Object
+- `.shardBy(field)` — one Durable Object per distinct value of `field`
+- `.global()` — table is stored in Cloudflare D1 (cross-tenant reads)
+
+## Indexes
+
+`.index(name, fields, { unique? })` defines a B-tree index used by
+`q.withIndex(name, ...)` in queries. `.searchIndex(name, { field, filterFields })`
+adds a full-text index over `field`.
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [Sharding](/docs/concepts/sharding)

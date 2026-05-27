@@ -1,0 +1,14 @@
+#!/bin/sh
+
+. "$(dirname "$0")/common.sh"
+
+# The hook should exit with non-zero status after issuing
+# an appropriate message if it wants to stop the commit.
+
+echo --------------------------------------------
+echo Starting Git hook: post-commit
+
+git update-index --again
+
+echo Finished Git hook: post-commit
+echo --------------------------------------------

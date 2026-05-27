@@ -1,0 +1,26 @@
+**/.git
+**/.svn
+**/.hg
+
+**/node_modules
+**/.next
+**/dist
+**/__fixtures__
+
+**/CHANGELOG.md
+
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
+**/tsconfig.json
+**/jsconfig.json
+
+/.nx/cache
+
+# Plop templates contain Handlebars syntax that Prettier cannot parse
+plop/**/*.hbs
+
+# Inherited from upstream — re-run prettier when the templates are Cirrus-themed
+.github/commit-convention.md
+.github/workflows/codeql.yml
+tools/get-vitest-config.ts

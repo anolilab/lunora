@@ -1,0 +1,19 @@
+# Vite
+.vite/
+dist/
+
+# Cirrus codegen output (regenerated on each build)
+cirrus/_generated/
+
+# Wrangler state
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# Node
+node_modules/
+*.tsbuildinfo
+
+# Local env
+.env*
+!.env.example

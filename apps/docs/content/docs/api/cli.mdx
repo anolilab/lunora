@@ -1,0 +1,98 @@
+---
+title: "@cirrus/cli"
+description: The standalone `cirrus` binary — scaffold, codegen, deploy.
+---
+
+`@cirrus/cli` is the standalone alternative to the Vite plugin. It powers
+the `cirrus` binary you got when you ran `pnpm create cirrus@latest`. The
+plugin and the CLI share the same `@cirrus/codegen` core, so the generated
+files are identical regardless of how they were produced.
+
+## Commands
+
+```bash
+cirrus init [name] -t <template>    # scaffold a new project
+cirrus codegen                      # one-shot codegen
+cirrus dev [--port n] [--no-vite]   # run vite + wrangler in dev mode
+cirrus deploy [--env <name>]        # codegen, validate wrangler, then wrangler deploy
+cirrus run <fn> [--args <json>]     # send a single RPC to a running worker
+            [--shard <key>] [--url] #
+cirrus new <kind> <name>            # scaffold query|mutation|action|table|package
+cirrus migrate generate [name]      # diff schema.ts → emit D1 migration SQL
+cirrus reset [--all]                # clear local miniflare state
+```
+
+### `cirrus init`
+
+Templates available via `-t`:
+
+- `vite` — React + Vite + the Cirrus plugin (the default)
+- `standalone` — Worker-only, no frontend
+- `next` — Next.js + the standalone CLI (not yet available — warns and exits)
+
+### `cirrus new`
+
+Scaffolds a Cirrus building block from a Plop template under
+`plop-templates/generators/`. Generators:
+
+| Kind       | Effect                                                                             |
+| ---------- | ---------------------------------------------------------------------------------- |
+| `query`    | `cirrus/<name>.ts` exporting a `query({ args, handler })`                          |
+| `mutation` | `cirrus/<name>.ts` exporting a `mutation({ args, handler })`                       |
+| `action`   | `cirrus/<name>.ts` exporting an `action({ args, handler })`                        |
+| `table`    | Appends `<name>: defineTable({ … })` to `cirrus/schema.ts` (creates it if missing) |
+| `package`  | New `packages/cirrus-<name>` workspace package — monorepo only                     |
+
+`cirrus new package` accepts `--description` and `--category` for the new
+package's `package.json` and nx tags. Names are normalised: identifiers
+go through `camelCase`, package directories through `dash-case`.
+
+```bash
+cirrus new query listMessages
+cirrus new mutation send
+cirrus new action callStripe
+cirrus new table users
+cirrus new package telemetry --description "OpenTelemetry adapter" --category observability
+```
+
+### `cirrus migrate generate`
+
+Parses `cirrus/schema.ts`, filters to `.global()` tables (sharded tables
+live in per-DO SQLite — no migration needed), diffs against
+`cirrus/migrations/.snapshot.json`, and emits a timestamped SQL file.
+v0.1 generates: `CREATE TABLE`, `DROP TABLE`, `ALTER TABLE ADD COLUMN`,
+`CREATE INDEX`, `DROP INDEX`. Renames and type changes are flagged in a
+manual-SQL comment block at the bottom of the file for you to fill in.
+
+```bash
+cirrus migrate generate add_email_index
+# wrote /repo/cirrus/migrations/20240401_add_email_index.sql
+```
+
+### `cirrus run`
+
+Send a single RPC to a running Worker without spinning up the client SDK:
+
+```bash
+cirrus run messages:send --args '{"channelId":"general","text":"hi"}'
+```
+
+`--shard` overrides shard routing, `--url` lets you point at a deployed
+Worker instead of `http://localhost:8787`.
+
+## Codegen output
+
+`cirrus/_generated/`:
+
+- `api.ts` — the typed `api.<file>.<function>` namespace
+- `server.ts` — `internalQuery`, `internalMutation` exports re-typed against your schema
+- `dataModel.ts` — `Doc<"messages">`, `Id<"users">`, etc.
+
+These files are deterministic — commit them. CI re-runs codegen and diffs
+the result to catch drift.
+
+## See also
+
+- [@cirrus/vite](/docs/api/vite)
+- [@cirrus/d1](/docs/api/d1)
+- [Deployment](/docs/deployment)

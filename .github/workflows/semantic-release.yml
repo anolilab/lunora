@@ -1,0 +1,125 @@
+# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
+
+"name": "Semantic Release"
+
+"on": # yamllint disable-line rule:truthy
+    "push":
+        "branches": ["main", "alpha", "next", "beta"]
+    "workflow_dispatch": # yamllint disable-line rule:empty-values
+
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.ref }}"
+    "cancel-in-progress": true
+
+"permissions":
+    "contents": "read" # for checkout
+
+"jobs":
+    "semantic-release":
+        "name": "Semantic Release"
+        "if": "github.repository == 'anolilab/cirrus'"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        # Gate npm publishing behind a GitHub Environment so secrets are scoped and
+        # required-reviewer rules (configured in repo settings) can apply.
+        "environment": "release"
+        "permissions":
+            "contents": "write" # to publish a GitHub release + push lockfile sync
+            "issues": "write" # to comment on released issues
+            "pull-requests": "write" # to comment on released pull requests
+            "id-token": "write" # to enable OIDC for npm provenance
+
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            # Persist credentials so multi-semantic-release can push tags/release commits.
+            - "name": "Git checkout" # zizmor: ignore[artipacked]
+              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "with":
+                  "fetch-depth": 0
+                  "token": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+              "env":
+                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
+                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
+                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+
+            - "name": "Setup pnpm"
+              "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
+              "with":
+                  "version": "10.32.1"
+                  "run_install": false
+
+            - "name": "Use Node.js 22.14"
+              "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
+              "with":
+                  "node-version": "22.14"
+                  "registry-url": "https://registry.npmjs.org"
+
+            - "name": "Resolve pnpm store path"
+              "id": "pnpm-store"
+              "shell": "bash"
+              "run": |
+                  echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+            - "name": "Restore pnpm store"
+              "id": "pnpm-cache"
+              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+              "with":
+                  "path": "${{ steps.pnpm-store.outputs.path }}"
+                  "key": "pnpm-store-release-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}"
+                  "restore-keys": |
+                      pnpm-store-release-${{ runner.os }}-
+                      pnpm-store-${{ runner.os }}-
+
+            - "name": "Install dependencies"
+              "run": "pnpm install --frozen-lockfile"
+
+            - "name": "Save pnpm store"
+              "if": "steps.pnpm-cache.outputs.cache-hit != 'true'"
+              "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+              "with":
+                  "path": "${{ steps.pnpm-store.outputs.path }}"
+                  "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
+
+            - "name": "Build packages"
+              # Build everything before releasing — multi-semantic-release uses each package's
+              # files: in package.json to publish, and those typically include dist/.
+              "run": "pnpm run build:packages"
+
+            - "name": "Multi semantic release"
+              "env":
+                  "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+                  "GH_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
+                  "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}"
+                  "GIT_AUTHOR_NAME": "github-actions-shell"
+                  "GIT_AUTHOR_EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "GIT_COMMITTER_NAME": "github-actions-shell"
+                  "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
+              "run": "pnpm exec multi-semantic-release"
+
+            # multi-semantic-release pushes per-package `chore(release)` commits that bump
+            # each package.json (and any cross-package dependency ranges), but
+            # @semantic-release/git only stages per-package assets — pnpm-lock.yaml lives at
+            # the root and drifts. Frozen-lockfile installs on the next push then fail with
+            # ERR_PNPM_OUTDATED_LOCKFILE. Refresh here.
+            - "name": "Refresh pnpm-lock.yaml against released manifests"
+              "if": "success()"
+              "shell": "bash"
+              # --no-frozen-lockfile is intentional: this step exists to regenerate the
+              # lockfile after multi-semantic-release bumps versions.
+              # --ignore-scripts prevents any postinstall from running with the release
+              # token in env (belt-and-suspenders alongside --lockfile-only).
+              "run": "pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts"
+
+            - "name": "Commit refreshed lockfile"
+              "if": "success()"
+              "uses": "stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9" # v7.1.0
+              "with":
+                  "file_pattern": "pnpm-lock.yaml"
+                  "commit_message": "chore(deps): sync pnpm-lock.yaml with released manifests [skip ci]"
+                  "commit_user_name": "github-actions-shell"
+                  "commit_user_email": "github-actions[bot]@users.noreply.github.com"
+                  "commit_author": "github-actions-shell <github-actions[bot]@users.noreply.github.com>"

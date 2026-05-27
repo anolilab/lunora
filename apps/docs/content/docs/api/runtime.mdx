@@ -1,0 +1,88 @@
+---
+title: "@cirrus/runtime"
+description: The Worker entrypoint — createWorker, RPC envelope, shard routing.
+---
+
+`@cirrus/runtime` is the low-level Worker runtime. Your project's
+`src/server/index.ts` defaults to a single `export default createWorker({ … })`
+call — that's the entrypoint Wrangler boots.
+
+```ts
+import { createWorker } from "@cirrus/runtime";
+import { schema } from "../../cirrus/schema";
+import * as messages from "../../cirrus/messages";
+import { MyShardDO } from "./shard";
+
+export default createWorker({
+    schema,
+    functions: { messages },
+    bindings: { SHARD: "SHARD", D1: "D1", R2: "UPLOADS" },
+    durableObjects: { SHARD: MyShardDO },
+});
+
+export { MyShardDO };
+```
+
+## `createWorker(options)`
+
+Returns a `{ fetch }` object suitable for the Worker's default export.
+Internally it:
+
+1. Decodes the RPC envelope (`POST /_cirrus/rpc`).
+2. Routes to the right `ShardDO` via [`resolveShard`](#resolveShard).
+3. Validates the function args (via `@cirrus/values`).
+4. Invokes the registered `query`/`mutation`/`action`.
+5. Encodes the response back into the envelope.
+
+Options:
+
+| Option           | Required | Purpose                                                           |
+| ---------------- | -------- | ----------------------------------------------------------------- |
+| `schema`         | yes      | The result of `defineSchema(...)`                                 |
+| `functions`      | yes      | Map of `cirrus/<file>.ts` modules                                 |
+| `bindings`       | yes      | Logical → wrangler binding name (`SHARD`, `D1`, `R2`, etc.)       |
+| `durableObjects` | yes      | Logical → DO class (must be re-exported from the Worker file)     |
+| `addOns`         | no       | `{ auth, mail, scheduler, storage }` — mounts the matching routes |
+
+## `defineRpcEnvelope`
+
+Helper for building a custom transport (e.g. a CLI driver). Wraps a
+JSON-serializable payload in the same envelope `@cirrus/client` speaks:
+
+```ts
+const envelope = defineRpcEnvelope({ functionPath: "messages:send", args: { … } });
+```
+
+## `RpcEnvelope` / `RpcContext` / `Route` / `WorkerOptions`
+
+Type-only exports. `WorkerOptions` is the options bag of `createWorker`;
+`RpcContext` is what an add-on's `Route` handler receives.
+
+## `resolveShard(env, namespace, shardKey)`
+
+Resolves a `{ id, stub }` pair pointing at the right `ShardDO` for the given
+shard key. The runtime calls this for you, but it's exported so add-ons can
+piggyback on the same routing.
+
+```ts
+const { stub } = resolveShard(env, "SHARD", channelId);
+```
+
+## `ShardNamespaceLike` / `ResolvedShard` / `ExecutionContextLike`
+
+Structural type aliases over the corresponding `@cloudflare/workers-types`
+shapes — they exist so unit tests can pass plain mock objects without
+pulling in the full Workers types.
+
+## `CirrusError` / `toErrorResponse` / `CirrusErrorBody`
+
+The runtime's typed error class. Throwing a `CirrusError(code, message)`
+inside a handler causes a `{ error: { code, message, ... } }` body to come
+back over RPC instead of an HTTP 500. `toErrorResponse(err)` is the same
+mapping exposed for add-ons.
+
+## See also
+
+- [@cirrus/do](/docs/api/do)
+- [@cirrus/d1](/docs/api/d1)
+- [Architecture](/docs/architecture)

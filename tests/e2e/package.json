@@ -1,0 +1,24 @@
+{
+    "name": "@cirrus/e2e",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "sideEffects": false,
+    "description": "End-to-end Playwright + Miniflare test suite for the Cirrus playground app.",
+    "scripts": {
+        "e2e": "playwright test",
+        "e2e:ui": "playwright test --ui",
+        "e2e:debug": "playwright test --debug",
+        "e2e:headed": "playwright test --headed",
+        "lint:types": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@playwright/test": "catalog:e2e",
+        "@types/node": "catalog:types",
+        "cross-env": "catalog:dev",
+        "miniflare": "catalog:cloudflare",
+        "playwright": "catalog:e2e",
+        "typescript": "catalog:tsc",
+        "wrangler": "catalog:cloudflare"
+    }
+}

@@ -1,0 +1,89 @@
+# CodeRabbit Configuration
+# https://docs.coderabbit.ai/reference/configuration/
+
+"language": "en-US"
+
+"chat":
+    "auto_reply": true
+
+"reviews":
+    "high_level_summary": true
+    "poem": false
+    "review_status": true
+    "collapse_walkthrough": false
+    "auto_review":
+        "enabled": true
+        "ignore_title_keywords":
+            - "WIP"
+            - "DO NOT MERGE"
+        "drafts": false
+        "base_branches":
+            - "main"
+            - "alpha"
+
+    # Review profile: "chill" (default) or "assertive" (more detailed)
+    "profile": "chill"
+
+    # Path filters - include/exclude specific paths
+    "path_filters":
+        - "packages/**"
+        - "apps/**"
+        - "tools/**"
+        - "scripts/**"
+        - ".github/**"
+        - "!**/__tests__/**"
+        - "!**/__fixtures__/**"
+        - "!**/*.test.ts"
+        - "!**/*.test.js"
+        - "!**/*.spec.ts"
+        - "!**/*.spec.js"
+        - "!**/node_modules/**"
+        - "!**/dist/**"
+        - "!**/build/**"
+        - "!**/.vis/**"
+        - "!**/.task-runner/**"
+
+    # Path-specific instructions
+    "path_instructions":
+        - "path": "*"
+          "instructions": "All character sets need to be in UTF-8.\n
+              Lines need to end with LF (line feed).\n
+              Spaces need to be utilized for indentation instead of tabs.\n
+              A newline must be inserted at the end of the file.\n
+              Trim all trailing whitespaces.\n
+              Ensure that lines align visually.\n"
+        - "path": "__tests__/**.*"
+          "instructions": |
+              "Assess the unit test code employing the Vitest testing framework. Confirm that:
+              - The tests adhere to Vitest's established best practices.
+              - Test descriptions are sufficiently detailed to clarify the purpose of each test."
+        - "path": "packages/**/*.ts"
+          "instructions": |
+              Review TypeScript code following the project's coding guidelines:
+              - Use ES module syntax
+              - Follow DRY principles
+              - Ensure proper TypeScript types
+              - Check for performance optimizations
+              - Verify error handling
+              - The code adheres to best practices associated with nodejs.
+        - "path": "apps/**/*.ts"
+          "instructions": |
+              Review application code for:
+              - Best practices and potential issues
+              - Proper error handling
+              - Performance considerations
+        - "path": "packages/**/src/**/*.ts"
+          "instructions": |
+              Review library source code:
+              - Ensure modularity and reusability
+              - Check for proper exports
+              - Verify TypeScript types are correct
+              - The code adheres to best practices recommended for performance.
+              - Ensure code follows project patterns
+
+    # Configure integrated tools
+    "tools":
+        "eslint":
+            "enabled": true
+        "gitleaks":
+            "enabled": true

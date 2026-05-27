@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="Cirrus — type-safe real-time backend on your own Cloudflare account">
+    <rect width="1200" height="630" fill="#0B0F19" />
+    <!-- Subtle decorative streaks (low opacity, hint at the mark scale) -->
+    <g opacity="0.06">
+        <path d="M0 80 H1200" stroke="#FFFFFF" stroke-width="2" />
+        <path d="M0 540 H1200" stroke="#FFFFFF" stroke-width="2" />
+    </g>
+    <!-- Large triple-streak mark, left side -->
+    <g transform="translate(96, 200)">
+        <path d="M0 0 H400" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round" />
+        <path d="M0 60 H320" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round" />
+        <path d="M0 120 H240" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round" />
+    </g>
+    <!-- Wordmark, right side -->
+    <text
+        x="560"
+        y="330"
+        font-family="Inter Tight, Inter, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+        font-size="148"
+        font-weight="600"
+        letter-spacing="-6"
+        fill="#FFFFFF"
+    >cirrus</text>
+    <!-- Accent dot on "i" -->
+    <circle cx="664" cy="200" r="13" fill="#7CC4FF" />
+    <!-- Tagline -->
+    <text
+        x="560"
+        y="400"
+        font-family="Inter, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+        font-size="32"
+        font-weight="400"
+        fill="#C9D2E3"
+    >Type-safe real-time backend on your own</text>
+    <text
+        x="560"
+        y="442"
+        font-family="Inter, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+        font-size="32"
+        font-weight="400"
+        fill="#C9D2E3"
+    >Cloudflare account. Vite-first.</text>
+    <!-- Footer URL -->
+    <text
+        x="96"
+        y="568"
+        font-family="JetBrains Mono, Menlo, Consolas, monospace"
+        font-size="22"
+        font-weight="400"
+        fill="#7CC4FF"
+    >github.com/anolilab/cirrus</text>
+</svg>

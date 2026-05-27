@@ -1,0 +1,65 @@
+---
+title: Architecture
+description: How Worker, ShardDO, SchedulerDO, D1, R2 and Queues fit together.
+---
+
+A Cirrus deployment is a small constellation of Cloudflare primitives glued
+together by `@cirrus/runtime`. Each piece is single-purpose and replaceable.
+
+```text
+            ┌────────────────────────────────────────────────┐
+            │                  Worker (Edge)                 │
+            │    @cirrus/runtime · createWorker({ ... })     │
+            └────────────────────────┬───────────────────────┘
+                                     │
+        ┌────────────────┬───────────┼────────────┬───────────────┐
+        ▼                ▼           ▼            ▼               ▼
+   ShardDO ×N        SchedulerDO     D1          R2          Queues
+   (SQLite)         (alarms)     (.global())  (files)     (background)
+```
+
+## Tier 1 — Shard-local
+
+`ShardDO` is the workhorse. Every non-global table lives inside it. Default
+sharding routes to a single `__root__` DO; `.shardBy(field)` partitions the
+namespace so each value of `field` gets its own DO with its own SQLite,
+its own CPU budget and its own hibernation timer.
+
+Reasoning rules:
+
+- **Real-time subscriptions stay in-process.** A delta never crosses DO
+  boundaries — the mutation that wrote the row is also the broadcast source.
+- **Single-region writes.** A DO is pinned to a region near its creator;
+  writes are strongly consistent within that region.
+- **Account-unlimited.** You can have millions of `ShardDO` instances per
+  account.
+
+## Tier 2 — Global (D1)
+
+`.global()` tables move to Cloudflare D1. Use this for identities, billing,
+cross-tenant audit logs — anything that needs to be queryable across shards.
+Reads can be served by regional replicas; writes route to the primary.
+`@cirrus/d1` threads the `withSession(bookmark)` API so your client gets
+read-your-writes without a sticky-session router.
+
+## Tier 3 — Blob + async
+
+- **R2** — `@cirrus/storage` issues signed URLs; the browser uploads
+  directly without proxying through the Worker.
+- **Queues** — for fire-and-forget work; Cirrus emits jobs from a mutation
+  via `ctx.queue.send(...)`. Idempotency is on you.
+- **KV** — useful for edge-cached config and feature flags. Cirrus does not
+  ship a wrapper; use the binding directly.
+
+## Why this beats single-DO
+
+Zeroback's single-DO model dies at **10 GB SQLite + ~1 000 req/s**. Cirrus's
+opt-in sharding moves both ceilings to **`N × 10 GB`** and **`N × 1 000 req/s`**
+without changing your call sites. The cost is purely tooling: codegen has to
+know how to address shards, and the docs have to be honest about cross-shard
+queries being fan-out.
+
+## See also
+
+- [Sharding](/docs/concepts/sharding)
+- [Limits](/docs/limits)

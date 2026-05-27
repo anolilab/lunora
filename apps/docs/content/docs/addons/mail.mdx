@@ -1,0 +1,102 @@
+---
+title: "@cirrus/mail"
+description: Transactional email via Resend or any @visulima/email transport.
+---
+
+`@cirrus/mail` wraps `@visulima/email` so you can send transactional email
+from inside an `action`. It ships with a Resend-backed default transport,
+accepts any transport you wire yourself, and can render React Email
+templates inline.
+
+```ts
+import { createMailer } from "@cirrus/mail";
+
+export const mailer = createMailer({
+    apiKey: env.RESEND_API_KEY,
+    from: "Cirrus <noreply@cirrus.dev>",
+});
+```
+
+Pass a custom `transport` to swap providers; pass a Cloudflare `queue`
+binding to enable deferred sends via `mailer.queue(...)`.
+
+## Sending from an action
+
+```ts
+import { action, v } from "@cirrus/server";
+
+import { mailer } from "./mail";
+
+export const welcomeEmail = action({
+    args: { userId: v.id("users") },
+    handler: async (ctx, { userId }) => {
+        const user = await ctx.runQuery("users:get", { userId });
+
+        await mailer.send({
+            to: user.email,
+            subject: "Welcome to Cirrus",
+            html: `<p>Hi ${user.name} — your account is ready.</p>`,
+        });
+    },
+});
+```
+
+## React Email templates
+
+Pass a `@react-email/components` element through the `react` field. The
+mailer renders it via `renderEmail` (a `@react-email/render` wrapper) and
+fills in `html` + `text` if you didn't provide them yourself:
+
+```ts
+import Welcome from "../emails/Welcome";
+
+await mailer.send({
+    to: user.email,
+    subject: "Welcome",
+    react: <Welcome name={user.name} />,
+});
+```
+
+## Queueing
+
+`mailer.queue(options)` serialises the rendered payload and hands it to the
+Cloudflare Queue binding you passed as `queue`. React elements are NOT
+structured-cloneable, so the queue body always carries pre-rendered html/
+text — never the original JSX.
+
+A consumer Worker can re-hydrate the payload with `consumeQueuedSend`:
+
+```ts
+import { consumeQueuedSend, createMailer } from "@cirrus/mail";
+
+export default {
+    queue: async (batch, env) => {
+        const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "..." });
+
+        for (const message of batch.messages) {
+            const payload = consumeQueuedSend(message.body);
+            await mailer.send(payload);
+        }
+    },
+};
+```
+
+## Public API
+
+| Export                                                                                               | Purpose                                                      |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `createMailer(options)`                                                                              | Build a `Mailer` (Resend-backed unless you pass `transport`) |
+| `renderEmail(element)`                                                                               | Render a React Email element to `{ html, text }`             |
+| `toQueuedPayload(payload)`                                                                           | Internal helper exposed for custom queue setups              |
+| `consumeQueuedSend(body)`                                                                            | Re-hydrate a queued payload on the consumer side             |
+| `Mailer`, `MailTransport`, `SendOpts`, `SendPayload`, `QueueLike`, `CirrusMailOptions`, `QueuedSend` | Type-only                                                    |
+
+## Testing
+
+Build your own stub transport — `{ send: async () => ({ id: "stub" }) }` is
+enough — and pass it as `transport`. No network, no flakes, no API keys.
+
+## See also
+
+- [@cirrus/scheduler](/docs/addons/scheduler) — useful for delayed sends
+- [Concepts: queries & mutations](/docs/concepts/queries-mutations)

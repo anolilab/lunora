@@ -1,0 +1,62 @@
+---
+title: Deployment
+description: Wrangler bindings, secrets, and the deploy flow.
+---
+
+Cirrus apps deploy as a single Cloudflare Worker plus Durable Object class,
+D1 database, and R2 bucket bindings. There is nothing else to provision —
+no separate API service, no platform sign-up.
+
+## `wrangler.jsonc`
+
+```jsonc
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "my-cirrus-app",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "my-cirrus-app", "database_id": "<from-wrangler-d1-create>" }],
+    "r2_buckets": [{ "binding": "FILES", "bucket_name": "my-cirrus-files" }],
+}
+```
+
+## Secrets
+
+Set with `wrangler secret put`:
+
+```bash
+wrangler secret put AUTH_SECRET
+wrangler secret put RESEND_API_KEY
+wrangler secret put STORAGE_SECRET
+```
+
+Cirrus never logs secret values; the `wrangler-validator` plugin warns if a
+binding marked `secret: true` in your schema is missing from your secret list.
+
+## Deploy
+
+```bash
+pnpm cirrus deploy
+```
+
+This runs:
+
+1. `cirrus codegen` (no-op if up-to-date)
+2. D1 migration runner against the bound database
+3. `wrangler deploy` against the resolved Worker
+
+CI should run `cirrus codegen --check` first so a stale `_generated/` is a
+build failure, not a deploy that silently uses old types.
+
+## See also
+
+- [Limits](/docs/limits)
+- [Architecture](/docs/architecture)

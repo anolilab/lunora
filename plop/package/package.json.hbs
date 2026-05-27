@@ -1,0 +1,93 @@
+{
+    "name": "@visulima/{{packageName}}",
+    "version": "0.0.0",
+    "description": "{{description}}",
+    "keywords": [
+        "visulima",
+        "{{packageName}}"
+    ],
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "funding": [
+        {
+            "type": "github",
+            "url": "https://github.com/sponsors/prisis"
+        },
+        {
+            "type": "consulting",
+            "url": "https://anolilab.com/support"
+        }
+    ],
+    "homepage": "https://visulima.com/packages/{{packageName}}",
+    "license": "MIT",
+    "sideEffects": false,
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "CHANGELOG.md"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/visulima/visulima.git",
+        "directory": "packages/{{category}}/{{packageName}}"
+    },
+    "bugs": {
+        "url": "https://github.com/visulima/visulima/issues"
+    },
+    "scripts": {
+        "build": "packem build --development",
+        "build:prod": "packem build --production",
+        "clean": "rimraf node_modules dist .eslintcache",
+        "dev": "pnpm run build --watch",
+        "lint:attw": "attw --pack",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --cache --concurrency auto --fix",
+        "lint:package-json": "publint --strict",
+        "lint:prettier": "prettier --config=prettier.config.js --check .",
+        "lint:prettier:fix": "prettier --config=prettier.config.js --write .",
+        "lint:types": "tsc --noEmit --project tsconfig.json",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage",
+        "test:ui": "vitest --ui --coverage.enabled=true",
+        "test:watch": "vitest"
+    },
+    "devDependencies": {
+        "@anolilab/eslint-config": "^16.4.2",
+        "@anolilab/semantic-release-pnpm": "3.0.0-alpha.2",
+        "@anolilab/semantic-release-preset": "12.0.0-alpha.2",
+        "@arethetypeswrong/cli": "^0.18.2",
+        "@secretlint/secretlint-rule-preset-recommend": "^11.2.5",
+        "@total-typescript/ts-reset": "^0.6.1",
+        "@types/node": "24.10.1",
+        "@visulima/packem": "2.0.0-alpha.54",
+        "@vitest/coverage-v8": "^4.0.9",
+        "@vitest/ui": "^4.0.9",
+        "conventional-changelog-conventionalcommits": "9.1.0",
+        "esbuild": "^0.27.0",
+        "eslint": "9.39.1",
+        "prettier": "^3.6.2",
+        "publint": "^0.3.15",
+        "rimraf": "^6.1.0",
+        "secretlint": "11.2.5",
+        "semantic-release": "^25.0.2",
+        "typescript": "^5.9.3",
+        "vitest": "^4.0.9"
+    },
+    "engines": {
+        "node": ">=22.21 <=25.*"
+    },
+    "publishConfig": {
+        "access": "public",
+        "provenance": true
+    }
+}

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 100" fill="none" role="img" aria-label="Cirrus">
+    <rect width="480" height="100" fill="transparent" />
+    <!-- Mark -->
+    <g transform="translate(8, 20)">
+        <path d="M0 12 H120" stroke="#0B0F19" stroke-width="7" stroke-linecap="round" />
+        <path d="M0 32 H100" stroke="#0B0F19" stroke-width="7" stroke-linecap="round" />
+        <path d="M0 52 H78" stroke="#0B0F19" stroke-width="7" stroke-linecap="round" />
+    </g>
+    <!-- Wordmark -->
+    <text
+        x="160"
+        y="76"
+        font-family="Inter Tight, Inter, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+        font-size="76"
+        font-weight="600"
+        letter-spacing="-3"
+        fill="#0B0F19"
+    >cirrus</text>
+    <!-- Accent dot on "i" -->
+    <circle cx="213" cy="24" r="6.5" fill="#7CC4FF" />
+</svg>

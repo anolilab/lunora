@@ -1,0 +1,59 @@
+---
+title: Getting started
+description: Scaffold a Cirrus app and run the dev loop in under a minute.
+---
+
+The fastest way to start a Cirrus project is the official template. It wires
+up Vite, the codegen plugin, a starter schema and a working Worker entrypoint
+pointing at a `wrangler.jsonc` you can deploy straight to your own account.
+
+## Requirements
+
+- **Node** `^22.14.0 || >=24.10.0`
+- **pnpm** `>=10.32.1`
+- A Cloudflare account (Free plan works for development)
+
+## Scaffold
+
+```bash
+pnpm create cirrus@latest my-app
+cd my-app
+pnpm install
+pnpm dev
+```
+
+The CLI lays down the standard layout:
+
+```text
+my-app/
+├── cirrus/
+│   ├── schema.ts          # defineSchema / defineTable
+│   ├── messages.ts        # query / mutation / action
+│   └── _generated/        # codegen output (don't edit)
+├── src/
+│   ├── server/index.ts    # createWorker + ShardDO subclass
+│   └── client/main.tsx    # CirrusProvider + your React app
+├── wrangler.jsonc         # DO + D1 + R2 bindings
+└── vite.config.ts         # cirrus() Vite plugin
+```
+
+## Run
+
+`pnpm dev` boots Vite + Wrangler in one terminal. Edits to `cirrus/schema.ts`
+trigger codegen and a typed-API HMR within ~200 ms. Throw inside a handler
+and the `@visulima/vite-overlay` integration shows a mapped source frame.
+
+## Deploy
+
+```bash
+pnpm cirrus deploy
+```
+
+Under the hood this calls `wrangler deploy`, runs pending D1 migrations and
+publishes the Worker — everything lives on your account, addressable via your
+own `*.workers.dev` hostname or a custom domain.
+
+## See also
+
+- [Concepts: schema](/docs/concepts/schema)
+- [Deployment](/docs/deployment)

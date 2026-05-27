@@ -1,0 +1,28 @@
+{
+    "name": "@cirrus/docs",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "build": "next build",
+        "dev": "next dev",
+        "lint:types": "tsc --noEmit",
+        "start": "next start"
+    },
+    "dependencies": {
+        "fumadocs-core": "catalog:docs",
+        "fumadocs-mdx": "catalog:docs",
+        "fumadocs-ui": "catalog:docs",
+        "next": "catalog:docs",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend",
+        "tailwindcss": "catalog:docs"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "typescript": "catalog:tsc"
+    }
+}

@@ -1,0 +1,30 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "cirrus-playground",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "d1_databases": [
+        {
+            "binding": "DB",
+            "database_name": "cirrus-playground",
+            "database_id": "<replace-with-d1-create-id>",
+        },
+    ],
+    "r2_buckets": [
+        {
+            "binding": "FILES",
+            "bucket_name": "cirrus-playground-files",
+        },
+    ],
+    "vars": {
+        "PUBLIC_STORAGE_BASE_URL": "https://files.example.com",
+    },
+}

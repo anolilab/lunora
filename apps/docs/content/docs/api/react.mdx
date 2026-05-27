@@ -1,0 +1,62 @@
+---
+title: "@cirrus/react"
+description: React 18+/19 hooks built on @cirrus/client.
+---
+
+`@cirrus/react` ships the official React bindings. It's a thin layer over
+`@cirrus/client` that maps the cache to `useSyncExternalStore`, so
+concurrent React works correctly out of the box.
+
+```tsx
+import { CirrusClient } from "@cirrus/client";
+import { CirrusProvider, useMutation, useQuery } from "@cirrus/react";
+import { api } from "@/cirrus/_generated/api";
+
+const client = new CirrusClient({ url: import.meta.env.VITE_CIRRUS_URL });
+
+const Root = () => (
+    <CirrusProvider client={client}>
+        <Chat channelId="general" />
+    </CirrusProvider>
+);
+```
+
+## `<CirrusProvider client={...}>`
+
+Mounts the shared `CirrusClient` for the subtree. Required at the root.
+
+## `useQuery(fn, args, options?)`
+
+Subscribes to a query. Returns `T | undefined` (undefined until the first
+response). Pass `"skip"` for `args` to short-circuit (no network call).
+Multiple `useQuery` calls with identical args share a single underlying
+network call via the in-memory cache.
+
+```tsx
+const messages = useQuery(api.messages.list, { channelId });
+const profile = useQuery(api.users.me, signedIn ? {} : "skip");
+```
+
+## `useMutation(fn)`
+
+Returns a callable with a `.pending` property:
+
+```tsx
+const send = useMutation(api.messages.send);
+await send({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
+```
+
+## `useSubscription(fn, args)`
+
+Lower-level. Surfaces `{ data, error }` so you can render error states
+without a separate `useState`.
+
+## `useAuth()`
+
+Returns `{ user, token, setToken(next) }`. Call `setToken(jwt)` after a
+sign-in flow; subsequent RPC calls carry the token automatically.
+
+## See also
+
+- [@cirrus/client](/docs/api/client)
+- [Add-on: auth](/docs/addons/auth)

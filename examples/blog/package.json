@@ -1,0 +1,38 @@
+{
+    "name": "@cirrus-example/blog",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "build": "vite build",
+        "codegen": "cirrus codegen",
+        "deploy": "wrangler deploy",
+        "dev": "vite",
+        "lint:types": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@cirrus/auth": "workspace:*",
+        "@cirrus/client": "workspace:*",
+        "@cirrus/d1": "workspace:*",
+        "@cirrus/do": "workspace:*",
+        "@cirrus/react": "workspace:*",
+        "@cirrus/runtime": "workspace:*",
+        "@cirrus/scheduler": "workspace:*",
+        "@cirrus/server": "workspace:*",
+        "@cirrus/storage": "workspace:*",
+        "@cirrus/vite": "workspace:*",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend"
+    },
+    "devDependencies": {
+        "@cirrus/cli": "workspace:*",
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
+        "wrangler": "catalog:cloudflare"
+    }
+}
