@@ -7,9 +7,7 @@
     "files": [
         "bin",
         "dist",
-        "plop-templates",
         "src",
-        "templates",
         "README.md",
         "LICENSE.md"
     ],
@@ -40,8 +38,8 @@
         "@visulima/fs": "4.1.0",
         "@visulima/pail": "3.2.2",
         "@visulima/path": "2.0.5",
+        "giget": "3.2.0",
         "jsonc-parser": "catalog:vite",
-        "plop": "4.0.5",
         "ts-morph": "catalog:tooling",
         "tsx": "catalog:dev"
     },

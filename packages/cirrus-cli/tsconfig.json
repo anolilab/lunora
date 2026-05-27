@@ -7,5 +7,5 @@
         "types": ["node"]
     },
     "include": ["src/**/*", "__tests__/**/*"],
-    "exclude": ["__tests__/fixtures/**", "**/__fixtures__/**", "plop-templates/**", "templates/**"]
+    "exclude": ["__tests__/fixtures/**", "**/__fixtures__/**"]
 }

@@ -81,7 +81,7 @@ The CLI binary is `cirrus`. The npm scope is `@cirrus/*`. The "main" server pack
 | `@cirrus/client`    | Browser SDK: WebSocket, optimistic updates, offline queue.                                                                                                                                   |
 | `@cirrus/react`     | `useQuery` / `useMutation` / `useSubscription` / `useAuth`.                                                                                                                                  |
 | `@cirrus/vite`      | Vite plugin over `@cloudflare/vite-plugin` — codegen, wrangler validator, error overlay.                                                                                                     |
-| `@cirrus/cli`       | CLI subcommands: `init`, `new`, `dev`, `deploy`, `codegen`, `run`, `reset`, `migrate`.                                                                                                       |
+| `@cirrus/cli`       | CLI subcommands: `init`, `dev`, `deploy`, `codegen`, `run`, `reset`, `migrate`.                                                                                                              |
 | `@cirrus/auth`      | Cookie-session auth: PBKDF2 email/password + OAuth (PKCE) scaffolding, D1-backed; sessions persisted in `SessionDO`.                                                                         |
 | `@cirrus/mail`      | Resend adapter, TSX templates, queue-backed sends.                                                                                                                                           |
 | `@cirrus/storage`   | R2 typed buckets, signed URLs.                                                                                                                                                               |
@@ -123,6 +123,23 @@ Hook chain (`.husky/pre-commit`) uses `set -e`, so a secret detection aborts bef
 ### Release
 
 Independent per-package versioning via `multi-semantic-release`. All 15 packages under `packages/` ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive version bumps; the `semantic-release.yml` workflow generates per-package changelogs and publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
+
+### Internal scaffolding (`vis generate`)
+
+The CLI no longer ships a `cirrus new` subcommand. Internal scaffolding — adding a query/mutation/action/table to `cirrus/`, or scaffolding a fresh `@cirrus/<name>` workspace package — is done with `vis generate`. Templates live at `.vis/templates/cirrus-*.ts` and are discovered automatically.
+
+```bash
+vis generate cirrus-query --name=listMessages              # → cirrus/listMessages.ts
+vis generate cirrus-mutation --name=sendMessage
+vis generate cirrus-action --name=syncWithStripe
+vis generate cirrus-table --name=invoices                  # AST-merges into cirrus/schema.ts (creates it if missing)
+vis generate cirrus-package --name=foo --description='…'   # → packages/cirrus-foo/
+vis generate --list                                         # show all available generators
+```
+
+**Heads-up on the `--name` flag:** vis's CLI parser treats space-separated `--name listMessages` as `--name=true` + a stray positional. **Always use the `--name=value` form.** Same for any other string option on `vis generate`.
+
+End-user scaffolding (`cirrus init`) is unaffected — it fetches whole-project templates remotely via `giget` from `gh:anolilab/cirrus/templates/<type>#alpha`.
 
 Research the codebase before editing. Never change code you haven't read.
 

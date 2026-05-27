@@ -3,20 +3,26 @@
 # Phase 5 verification gate: simulate a user who's never seen this repo.
 #
 # What this catches that the in-workspace `initSmoke.test.ts` cannot:
-#   - `@cirrus/cli` ships with the right `files` whitelist (e.g. the
-#     `templates/` directory must be inside the tarball, not just on disk).
+#   - `@cirrus/cli` ships with the right `files` whitelist (giget + the
+#     bin shim + dist must all survive packing).
 #   - The `bin/cirrus.mjs` shim + `tsx` loader still work when the cli is
 #     installed flat under `node_modules/.bin/` outside any workspace.
 #   - `cirrus init -t vite` then `cirrus codegen` runs end-to-end against
 #     the freshly-scaffolded project using only the packed tarball.
 #
+# Templates now live at the monorepo root (`/templates/`) and are fetched
+# remotely by giget at runtime. To keep this script offline-deterministic
+# we invoke `cirrus init --from "$REPO_ROOT/templates"` so it copies from
+# disk instead of hitting GitHub.
+#
 # What this does NOT cover:
+#   - The remote giget fetch itself — that needs network + a published
+#     template ref, covered by a separate online smoke once /templates
+#     lands on the alpha branch.
 #   - Booting the Vite + workerd dev server (requires a real Cloudflare
 #     environment and a long-running process; covered manually).
 #   - Installing the scaffold's @cirrus/* runtime deps from npm — none of
-#     them are published yet. We rewrite the scaffold's deps to file:
-#     tarball refs and run a `pnpm install`, but the durable signal is
-#     "the cli ran end-to-end", not "the scaffold compiles".
+#     them are published yet.
 #
 # Exits non-zero on any failure. Output is verbose so CI logs explain
 # where things broke.
@@ -78,16 +84,16 @@ test -x node_modules/.bin/cirrus || {
     exit 1
 }
 
-echo "==> Sanity: the templates/ directory survived packaging"
-test -d node_modules/@cirrus/cli/templates/vite || {
-    echo "ERROR: @cirrus/cli/templates/vite/ missing in the tarball — fix the 'files' whitelist"
+echo "==> Sanity: monorepo templates root exists"
+test -d "$REPO_ROOT/templates/vite" || {
+    echo "ERROR: $REPO_ROOT/templates/vite missing — templates moved to monorepo root in this build"
     exit 1
 }
 
-echo "==> Running 'cirrus init -t vite' into $PROJECT_DIR"
+echo "==> Running 'cirrus init -t vite --from $REPO_ROOT/templates' into $PROJECT_DIR"
 mkdir -p "$(dirname "$PROJECT_DIR")"
 cd "$(dirname "$PROJECT_DIR")"
-"$INSTALL_DIR/node_modules/.bin/cirrus" init -t vite "$(basename "$PROJECT_DIR")"
+"$INSTALL_DIR/node_modules/.bin/cirrus" init -t vite --from "$REPO_ROOT/templates" "$(basename "$PROJECT_DIR")"
 
 echo "==> Asserting scaffold structure"
 for required in \

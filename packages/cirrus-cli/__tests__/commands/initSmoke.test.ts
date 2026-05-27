@@ -3,16 +3,22 @@
  * the toolchain. Rather than booting Vite (slow + flaky) we compose-test the
  * pieces a real `cirrus dev` would invoke:
  *
- *   1. `cirrus init -t vite`     → scaffolds the project
+ *   1. `cirrus init -t vite`     → scaffolds the project (offline, via --from)
  *   2. `runCodegen`              → parses schema + function files
  *   3. `validateWranglerProject` → asserts bindings line up with the schema
  *
  * If any step throws, the scaffold is broken — exactly the failure a fresh
  * `cirrus init && cirrus dev` would hit on a clean machine.
+ *
+ * The unit suite must work offline, so we use `--from` to point at the local
+ * templates root rather than hitting GitHub through giget. The remote-fetch
+ * path is exercised by `scripts/clean-machine-smoke.sh` against the packed
+ * tarball.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { runCodegen } from "@cirrus/codegen";
 import { validateWranglerProject } from "@cirrus/config";
@@ -28,6 +34,9 @@ const silentLogger = (): Logger => ({
     warn: () => {},
 });
 
+const testDirectory = dirname(fileURLToPath(import.meta.url));
+const templatesRoot = resolve(testDirectory, "..", "..", "..", "..", "templates");
+
 let workdir: string;
 
 beforeEach(() => {
@@ -39,9 +48,10 @@ afterEach(() => {
 });
 
 describe("cirrus init → codegen → wrangler validator (Phase 5 smoke)", () => {
-    test("vite template produces a project that codegen + wrangler validator accept", () => {
-        const result = runInitCommand({
+    test("vite template produces a project that codegen + wrangler validator accept", async () => {
+        const result = await runInitCommand({
             cwd: workdir,
+            from: templatesRoot,
             logger: silentLogger(),
             name: "smoke-app",
             templateType: "vite",
@@ -74,9 +84,10 @@ describe("cirrus init → codegen → wrangler validator (Phase 5 smoke)", () =>
         expect(wranglerResult.problems).toEqual([]);
     });
 
-    test("standalone template produces a project that codegen + wrangler validator accept", () => {
-        const result = runInitCommand({
+    test("standalone template produces a project that codegen + wrangler validator accept", async () => {
+        const result = await runInitCommand({
             cwd: workdir,
+            from: templatesRoot,
             logger: silentLogger(),
             name: "worker-smoke",
             templateType: "standalone",

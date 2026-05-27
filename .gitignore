@@ -62,8 +62,11 @@ typings/
 # Optional textlint cache
 .textlintcache
 
-# vis (task-runner) cache + run history
-.vis/
+# vis (task-runner) cache + run history.
+# Templates under .vis/templates/ are checked in — vis discovers native
+# templates from there for `vis generate`.
+.vis/*
+!.vis/templates/
 .task-runner/
 
 # Package build output

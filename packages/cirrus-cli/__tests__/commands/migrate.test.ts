@@ -42,7 +42,11 @@ describe("cirrus migrate generate", () => {
         });
 
         expect(result.code).toBe(1);
-        expect(errors.join("\n")).toContain("schema not found");
+
+        const message = errors.join("\n");
+
+        expect(message).toContain("schema not found");
+        expect(message).toContain("vis generate cirrus-table --name=<name>");
     });
 
     test("first run on a global table emits CREATE TABLE", () => {

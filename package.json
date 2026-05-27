@@ -57,6 +57,7 @@
         "husky": "catalog:lint",
         "prettier": "catalog:lint",
         "rimraf": "catalog:node",
+        "ts-morph": "catalog:tooling",
         "tsx": "catalog:dev",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"

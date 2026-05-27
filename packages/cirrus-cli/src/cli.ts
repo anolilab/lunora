@@ -10,25 +10,11 @@ import { runDevCommand } from "./commands/dev.js";
 import type { Template } from "./commands/init.js";
 import { runInitCommand } from "./commands/init.js";
 import { runMigrateGenerateCommand } from "./commands/migrate.js";
-import type { GeneratorKind } from "./commands/new.js";
-import { runNewCommand } from "./commands/new.js";
 import { runResetCommand } from "./commands/reset.js";
 import { runRpcCommand } from "./commands/run.js";
 import { createLogger } from "./util/logger.js";
 
-export const COMMANDS = ["init", "dev", "codegen", "deploy", "run", "reset", "new", "migrate"] as const;
-
-const GENERATOR_KINDS: ReadonlySet<GeneratorKind> = new Set<GeneratorKind>([
-    "action",
-    "mutation",
-    "package",
-    "query",
-    "table",
-]);
-
-const isGeneratorKind = (value: unknown): value is GeneratorKind => {
-    return typeof value === "string" && GENERATOR_KINDS.has(value as GeneratorKind);
-};
+export const COMMANDS = ["init", "dev", "codegen", "deploy", "run", "reset", "migrate"] as const;
 
 export type CommandName = (typeof COMMANDS)[number];
 
@@ -84,7 +70,7 @@ interface BuildCliResult {
  * options to the front of argv. We need to know which options take a value
  * so we can keep "option value" pairs together during the reorder.)
  */
-const BOOLEAN_OPTIONS = new Set<string>(["no-vite", "all"]);
+const BOOLEAN_OPTIONS = new Set<string>(["all", "no-vite"]);
 
 const isOptionToken = (token: string): boolean => {
     return token.startsWith("-");
@@ -154,7 +140,6 @@ const reorderArgvOptionsFirst = (argv: ReadonlyArray<string>): string[] => {
     return [head as string, ...options, ...positionals];
 };
 
-// eslint-disable-next-line sonarjs/cognitive-complexity
 const buildCli = (options: RunCliOptions): BuildCliResult => {
     const rawArgv = options.argv ?? process.argv.slice(2);
     const argv = reorderArgvOptionsFirst(rawArgv);
@@ -186,13 +171,25 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 description: "Template to scaffold (vite | standalone | next)",
                 defaultValue: "vite",
             },
+            {
+                name: "from",
+                type: String,
+                description: "Local templates root to copy from (offline-friendly; expects <type>/ subdirs)",
+            },
+            {
+                name: "source",
+                type: String,
+                description: "Override the remote template source (e.g. gh:owner/repo/sub#ref)",
+            },
         ],
-        execute: ({ argument, options: parsed }) => {
+        execute: async ({ argument, options: parsed }) => {
             const name = argument[0];
             const templateRaw = parsed.template ?? "vite";
             const template: Template = isTemplate(templateRaw) ? templateRaw : "vite";
+            const from = typeof parsed.from === "string" && parsed.from.length > 0 ? parsed.from : undefined;
+            const source = typeof parsed.source === "string" && parsed.source.length > 0 ? parsed.source : undefined;
 
-            const result = runInitCommand({ cwd, logger, name, templateType: template });
+            const result = await runInitCommand({ cwd, from, logger, name, source, templateType: template });
 
             exitCode.value = result.code;
         },
@@ -301,45 +298,6 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.addCommand({
-        name: "new",
-        description: "Scaffold a query, mutation, action, table, or new package",
-        argument: { name: "kindAndName", description: "<kind> <name> — kind is query|mutation|action|table|package", type: String },
-        options: [
-            { name: "category", type: String, description: "Category tag for new packages (default: add-on)" },
-            { name: "description", type: String, description: "Description for new packages" },
-        ],
-        execute: ({ argument, options: parsed }) => {
-            const kind = argument[0];
-            const name = argument[1];
-
-            if (!kind || !name) {
-                logger.error("missing arguments. Usage: cirrus new <kind> <name>");
-                exitCode.value = 1;
-
-                return;
-            }
-
-            if (!isGeneratorKind(kind)) {
-                logger.error(`unknown generator kind: "${kind}" — expected one of query|mutation|action|table|package`);
-                exitCode.value = 1;
-
-                return;
-            }
-
-            const result = runNewCommand({
-                category: toStringOrUndefined(parsed.category),
-                cwd,
-                description: toStringOrUndefined(parsed.description),
-                kind,
-                logger,
-                name,
-            });
-
-            exitCode.value = result.code;
-        },
-    });
-
-    cli.addCommand({
         name: "migrate",
         description: "Generate D1 migration SQL by diffing cirrus/schema.ts against the snapshot",
         argument: { name: "subcommandAndName", description: "<subcommand> [name] — only `generate` is supported", type: String },
@@ -375,12 +333,12 @@ Usage: cirrus <command> [options]
 
 Commands:
   init [name] [-t <template>]   Scaffold a new Cirrus project (templates: vite, standalone, next)
+       [--from <path>] [--source <src>]  Use a local templates dir or override the remote source
   dev  [--port <n>] [--no-vite] Run the dev server (Vite + wrangler, or wrangler alone)
   codegen                       Run codegen for cirrus/ functions and schema
   deploy [--env <name>]         Codegen, validate wrangler, then wrangler deploy
   run <fn> [--args <json>]      Send a single RPC to a running Cirrus Worker
        [--shard <key>] [--url <url>]
-  new <kind> <name>             Scaffold query|mutation|action|table|package (use --category/--description for packages)
   migrate generate [name]       Diff cirrus/schema.ts against the snapshot and emit migration SQL
   reset [--all]                 Clear local Miniflare state (and .cirrus-cache with --all)
 

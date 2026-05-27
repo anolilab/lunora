@@ -15,7 +15,9 @@ export default createConfig(
             "**/playwright-report/**",
             "**/.playwright-mcp/**",
             "**/coverage/**",
-            "**/.vis/**",
+            "**/.vis/cache/**",
+            "**/.vis/last-failures/**",
+            "**/.vis/last-summary.json",
             "**/.task-runner/**",
             "**/.vercel/**",
             "**/.wrangler/**",
@@ -23,8 +25,6 @@ export default createConfig(
             "**/.husky/**",
             "**/.worktrees/**",
             "apps/playground/cirrus/_generated/**",
-            "plop/**/*.hbs",
-            "**/plop-templates/**",
             "**/CHANGELOG.md",
             "pnpm-lock.yaml",
             "pnpm-workspace.yaml",
@@ -42,8 +42,7 @@ export default createConfig(
             "**/source.config.ts",
             "scripts/**",
             "tools/**",
-            "plopfile.js",
-            "**/plopfile.js",
+            "templates/**",
             "commitlint.config.cjs",
             ".github/commit-convention.md",
         ],
@@ -239,6 +238,18 @@ export default createConfig(
         files: ["**/*.md", "**/*.md/**"],
         rules: {
             "markdown/fenced-code-language": "off",
+        },
+    },
+    // vis generators: live at the workspace root and import `@visulima/vis`
+    // and `ts-morph` from the root devDeps; their closest package.json has no
+    // direct entry for those, so `import/no-extraneous-dependencies` misfires.
+    // Same reason `jsdoc/text-escaping` trips on `@cirrus/<name>` in the
+    // generator headers.
+    {
+        files: [".vis/templates/**/*.ts"],
+        rules: {
+            "import/no-extraneous-dependencies": "off",
+            "jsdoc/text-escaping": "off",
         },
     },
 );

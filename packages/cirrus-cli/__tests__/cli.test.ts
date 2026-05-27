@@ -1,10 +1,14 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { COMMANDS, runCli } from "../src/cli.js";
+
+const testDirectory = dirname(fileURLToPath(import.meta.url));
+const templatesRoot = resolve(testDirectory, "..", "..", "..", "templates");
 
 describe("cirrus CLI entry", () => {
     let stdout: string;
@@ -82,7 +86,10 @@ describe("cirrus CLI entry", () => {
         });
 
         test("`init <name> -t standalone` selects the standalone template", async () => {
-            const code = await runCli({ argv: ["init", "argv_app", "-t", "standalone"], cwd: workdir });
+            const code = await runCli({
+                argv: ["init", "argv_app", "-t", "standalone", "--from", templatesRoot],
+                cwd: workdir,
+            });
 
             expect(code).toBe(0);
 
@@ -94,7 +101,10 @@ describe("cirrus CLI entry", () => {
         });
 
         test("`init <name> --template standalone` (long-form) selects the standalone template", async () => {
-            const code = await runCli({ argv: ["init", "argv_long", "--template", "standalone"], cwd: workdir });
+            const code = await runCli({
+                argv: ["init", "argv_long", "--template", "standalone", "--from", templatesRoot],
+                cwd: workdir,
+            });
 
             expect(code).toBe(0);
 
@@ -104,7 +114,10 @@ describe("cirrus CLI entry", () => {
         });
 
         test("`init <name> --template=standalone` (equals form) selects the standalone template", async () => {
-            const code = await runCli({ argv: ["init", "argv_equals", "--template=standalone"], cwd: workdir });
+            const code = await runCli({
+                argv: ["init", "argv_equals", "--template=standalone", "--from", templatesRoot],
+                cwd: workdir,
+            });
 
             expect(code).toBe(0);
 
@@ -114,7 +127,10 @@ describe("cirrus CLI entry", () => {
         });
 
         test("default template (no `-t` flag) is vite", async () => {
-            const code = await runCli({ argv: ["init", "argv_default"], cwd: workdir });
+            const code = await runCli({
+                argv: ["init", "argv_default", "--from", templatesRoot],
+                cwd: workdir,
+            });
 
             expect(code).toBe(0);
 

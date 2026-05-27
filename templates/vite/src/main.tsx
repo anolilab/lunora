@@ -20,14 +20,14 @@ const Chat = () => {
                     setDraft("");
                 }}
             >
-                <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Say something" />
+                <input onChange={(event) => setDraft(event.target.value)} placeholder="Say something" value={draft} />
                 <button type="submit">Send</button>
             </form>
         </div>
     );
 };
 
-const root = document.getElementById("root");
+const root = document.querySelector("#root");
 
 if (root) {
     createRoot(root).render(

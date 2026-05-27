@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
@@ -14,6 +15,10 @@ const silentLogger = (): Logger => ({
     warn: () => {},
 });
 
+// __tests__/commands/ -> package root -> monorepo root -> templates/
+const testDirectory = dirname(fileURLToPath(import.meta.url));
+const templatesRoot = resolve(testDirectory, "..", "..", "..", "..", "templates");
+
 let workdir: string;
 
 beforeEach(() => {
@@ -25,9 +30,10 @@ afterEach(() => {
 });
 
 describe("cirrus init", () => {
-    test("vite template scaffolds expected files", () => {
-        const result = runInitCommand({
+    test("vite template scaffolds expected files", async () => {
+        const result = await runInitCommand({
             cwd: workdir,
+            from: templatesRoot,
             logger: silentLogger(),
             name: "my-app",
             templateType: "vite",
@@ -48,9 +54,10 @@ describe("cirrus init", () => {
         expect(existsSync(join(target, "README.md"))).toBe(true);
     });
 
-    test("substitutes {{name}} placeholders", () => {
-        runInitCommand({
+    test("substitutes {{name}} placeholders", async () => {
+        await runInitCommand({
             cwd: workdir,
+            from: templatesRoot,
             logger: silentLogger(),
             name: "rainbow",
             templateType: "vite",
@@ -65,9 +72,10 @@ describe("cirrus init", () => {
         expect(main).toContain("rainbow");
     });
 
-    test("vite template package.json references all cirrus packages", () => {
-        runInitCommand({
+    test("vite template package.json references all cirrus packages", async () => {
+        await runInitCommand({
             cwd: workdir,
+            from: templatesRoot,
             logger: silentLogger(),
             name: "demo",
             templateType: "vite",
@@ -84,9 +92,10 @@ describe("cirrus init", () => {
         expect(pkg).toContain("wrangler");
     });
 
-    test("standalone template has no frontend files", () => {
-        const result = runInitCommand({
+    test("standalone template has no frontend files", async () => {
+        const result = await runInitCommand({
             cwd: workdir,
+            from: templatesRoot,
             logger: silentLogger(),
             name: "worker-only",
             templateType: "standalone",
@@ -102,11 +111,12 @@ describe("cirrus init", () => {
         expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
     });
 
-    test("next template is not yet available", () => {
+    test("next template is not yet available", async () => {
         const warnings: string[] = [];
 
-        const result = runInitCommand({
+        const result = await runInitCommand({
             cwd: workdir,
+            from: templatesRoot,
             logger: { ...silentLogger(), warn: (msg) => warnings.push(msg) },
             name: "soon",
             templateType: "next",
@@ -116,9 +126,10 @@ describe("cirrus init", () => {
         expect(warnings.join("\n")).toContain("not yet available");
     });
 
-    test("refuses to scaffold into a non-empty target", () => {
-        runInitCommand({
+    test("refuses to scaffold into a non-empty target", async () => {
+        await runInitCommand({
             cwd: workdir,
+            from: templatesRoot,
             logger: silentLogger(),
             name: "dup",
             templateType: "vite",
@@ -126,8 +137,9 @@ describe("cirrus init", () => {
 
         const errors: string[] = [];
 
-        const result = runInitCommand({
+        const result = await runInitCommand({
             cwd: workdir,
+            from: templatesRoot,
             logger: { ...silentLogger(), error: (msg) => errors.push(msg) },
             name: "dup",
             templateType: "vite",
@@ -135,5 +147,20 @@ describe("cirrus init", () => {
 
         expect(result.code).toBe(1);
         expect(errors.join("\n")).toContain("not empty");
+    });
+
+    test("--from with missing template reports a helpful error", async () => {
+        const errors: string[] = [];
+
+        const result = await runInitCommand({
+            cwd: workdir,
+            from: join(workdir, "does-not-exist"),
+            logger: { ...silentLogger(), error: (msg) => errors.push(msg) },
+            name: "broken",
+            templateType: "vite",
+        });
+
+        expect(result.code).toBe(1);
+        expect(errors.join("\n")).toContain("template not found in local source");
     });
 });

@@ -29,10 +29,10 @@ export interface MigrateGenerateCommandOptions {
 
 export interface MigrateGenerateCommandResult {
     code: number;
-    /** Absolute path to the migration file (empty string when nothing was written). */
-    migrationFile: string;
     /** Whether the diff was empty (no changes detected). */
     empty: boolean;
+    /** Absolute path to the migration file (empty string when nothing was written). */
+    migrationFile: string;
 }
 
 const SNAPSHOT_FILENAME = ".snapshot.json";
@@ -78,7 +78,7 @@ export const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions
     const schemaPath = join(cwd, "cirrus", "schema.ts");
 
     if (!existsSync(schemaPath)) {
-        options.logger.error(`schema not found: ${schemaPath} — run \`cirrus new table <name>\` to create one`);
+        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate cirrus-table --name=<name>\` to create one`);
 
         return { code: 1, empty: true, migrationFile: "" };
     }
@@ -126,9 +126,7 @@ export const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions
     options.logger.success(`wrote ${migrationFile}`);
 
     if (diff.unsupported.length > 0) {
-        options.logger.warn(
-            `${diff.unsupported.length} unsupported diff(s) — see the comment block in ${filename} and write the SQL manually`,
-        );
+        options.logger.warn(`${diff.unsupported.length} unsupported diff(s) — see the comment block in ${filename} and write the SQL manually`);
     }
 
     return { code: 0, empty: false, migrationFile };

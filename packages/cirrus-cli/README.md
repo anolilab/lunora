@@ -24,14 +24,14 @@ Workspace dependencies: [`@cirrus/codegen`](../cirrus-codegen), [`@cirrus/config
 cirrus <command> [options]
 ```
 
-| Command   | Description                                                          |
-| --------- | -------------------------------------------------------------------- |
-| `init`    | Scaffold a new Cirrus project from a template                        |
-| `dev`     | Run the dev server (Vite + wrangler concurrently, or wrangler alone) |
-| `codegen` | Re-emit `_generated/{api,server,dataModel}.ts` from `cirrus/`        |
-| `deploy`  | Run codegen, validate `wrangler.jsonc`, then `wrangler deploy`       |
+| Command   | Description                                                             |
+| --------- | ----------------------------------------------------------------------- |
+| `init`    | Scaffold a new Cirrus project from a template                           |
+| `dev`     | Run the dev server (Vite + wrangler concurrently, or wrangler alone)    |
+| `codegen` | Re-emit `_generated/{api,server,dataModel}.ts` from `cirrus/`           |
+| `deploy`  | Run codegen, validate `wrangler.jsonc`, then `wrangler deploy`          |
 | `run`     | POST a single RPC to a running Worker (default `http://localhost:8787`) |
-| `reset`   | Clear local Miniflare state (and `.cirrus-cache` with `--all`)       |
+| `reset`   | Clear local Miniflare state (and `.cirrus-cache` with `--all`)          |
 
 ### `cirrus init`
 
@@ -41,7 +41,7 @@ cirrus init my-app -t standalone  # wrangler-only template
 cirrus init my-app -t next        # not yet available — exits with code 1
 ```
 
-Templates live in `plop-templates/{vite,standalone}/`. `next` is reserved but not yet shipped — the command warns and re-suggests `-t vite` or `-t standalone`.
+Templates live at the monorepo root in `/templates/{vite,standalone}/` and are fetched at runtime via [`giget`](https://github.com/unjs/giget) from `gh:anolilab/cirrus/templates/<type>#alpha`. Pass `--from <path>` to copy from a local templates root instead (offline-friendly). `next` is reserved but not yet shipped — the command warns and re-suggests `-t vite` or `-t standalone`.
 
 Sample output:
 
