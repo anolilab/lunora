@@ -24,16 +24,16 @@
  */
 
 /** Default TTL for new sessions (7 days), matching `@cirrus/auth`. */
-export const SESSION_DO_TTL_DEFAULT = 7 * 24 * 60 * 60;
+export const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;
 
 /**
  * Persisted session payload. Stored under `s:${token}` so the token never
  * leaves the cookie — we only ever look up by exact match.
  */
 export interface SessionRecord {
-    userId: string;
     createdAt: number;
     expiresAt: number;
+    userId: string;
 }
 
 /**
@@ -42,14 +42,14 @@ export interface SessionRecord {
  */
 interface SessionDOState {
     storage: {
+        delete: (key: string) => Promise<boolean | number>;
         get: <T = unknown>(key: string) => Promise<T | undefined>;
         put: <T = unknown>(key: string, value: T) => Promise<void>;
-        delete: (key: string) => Promise<boolean | number>;
     };
 }
 
 const jsonResponse = (status: number, body: unknown): Response =>
-    new Response(JSON.stringify(body), {
+    Response.json(body, {
         status,
         headers: { "content-type": "application/json" },
     });
@@ -72,7 +72,7 @@ export class SessionDO {
         const url = new URL(request.url);
 
         if (request.method === "POST" && url.pathname === "/create") {
-            let body: { token?: unknown; userId?: unknown; ttlSeconds?: unknown };
+            let body: { token?: unknown; ttlSeconds?: unknown; userId?: unknown };
 
             try {
                 body = (await request.json()) as typeof body;

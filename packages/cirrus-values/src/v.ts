@@ -1,5 +1,5 @@
-import { describeValue, formatPath, ValidationError } from "./errors.js";
 import type { ValidationPath } from "./errors.js";
+import { describeValue, formatPath, ValidationError } from "./errors.js";
 
 /** Branded id type, e.g. `Id<"users">`. */
 export type Id<TableName extends string> = string & { readonly __table: TableName };
@@ -8,16 +8,30 @@ export type Id<TableName extends string> = string & { readonly __table: TableNam
  * Runtime "kind" tag attached to every validator. Codegen and reflective tools
  * use this to inspect the shape without crawling the closure.
  */
-export type ValidatorKind = "any" | "array" | "bigint" | "boolean" | "bytes" | "id" | "literal" | "null" | "number" | "object" | "optional" | "record" | "string" | "union";
+export type ValidatorKind
+    = | "any"
+        | "array"
+        | "bigint"
+        | "boolean"
+        | "bytes"
+        | "id"
+        | "literal"
+        | "null"
+        | "number"
+        | "object"
+        | "optional"
+        | "record"
+        | "string"
+        | "union";
 
 export interface Validator<T = unknown> {
-    readonly kind: ValidatorKind;
-
     readonly __type: T;
 
-    parse(value: unknown): T;
+    readonly kind: ValidatorKind;
 
-    safeParse(value: unknown): { error: ValidationError; ok: false } | { ok: true; value: T };
+    parse: (value: unknown) => T;
+
+    safeParse: (value: unknown) => { error: ValidationError; ok: false } | { ok: true; value: T };
 }
 
 /** Extract the TS type a validator describes. */
@@ -29,13 +43,13 @@ interface ParseContext {
 
 interface InternalValidator<T> extends Validator<T> {
     /** @internal */
-    _parse(value: unknown, context: ParseContext): T;
-    /** @internal */
     readonly _meta?: Record<string, unknown>;
+    /** @internal */
+    _parse: (value: unknown, context: ParseContext) => T;
 }
 
 function fail(context: ParseContext, expected: string, received: unknown): never {
-    const path = context.path;
+    const { path } = context;
     const receivedDescription = describeValue(received);
 
     throw new ValidationError(`Expected ${expected} at ${formatPath(path)}, received ${receivedDescription}`, {
@@ -170,8 +184,8 @@ const array = <V extends Validator>(inner: V): Validator<Array<Infer<V>>> => {
 
             const out: Array<Infer<V>> = [];
 
-            for (let index = 0; index < value.length; index += 1) {
-                out.push(innerInternal._parse(value[index], { path: [...context.path, index] }));
+            for (const [index, element] of value.entries()) {
+                out.push(innerInternal._parse(element, { path: [...context.path, index] }));
             }
 
             return out;
@@ -181,9 +195,9 @@ const array = <V extends Validator>(inner: V): Validator<Array<Infer<V>>> => {
 };
 
 type ObjectShape = Record<string, Validator>;
-type ObjectShapeType<S extends ObjectShape> = { [K in keyof S as undefined extends Infer<S[K]> ? never : K]: Infer<S[K]> } & {
+type ObjectShapeType<S extends ObjectShape> = {
     [K in keyof S as undefined extends Infer<S[K]> ? K : never]?: Infer<S[K]>;
-};
+} & { [K in keyof S as undefined extends Infer<S[K]> ? never : K]: Infer<S[K]> };
 
 const objectValidator = <S extends ObjectShape>(shape: S): Validator<ObjectShapeType<S>> => {
     return createValidator<ObjectShapeType<S>>(
@@ -197,7 +211,7 @@ const objectValidator = <S extends ObjectShape>(shape: S): Validator<ObjectShape
             const out: Record<string, unknown> = {};
 
             for (const key of Object.keys(shape)) {
-                const child = toInternal(shape[key] as Validator<unknown>);
+                const child = toInternal(shape[key] as Validator);
                 const fieldValue = input[key];
 
                 if (fieldValue === undefined && child.kind === "optional") {
@@ -278,13 +292,28 @@ const optional = <V extends Validator>(inner: V): Validator<Infer<V> | undefined
     );
 };
 
-const any = (): Validator<unknown> => createValidator<unknown>("any", (value) => value);
+const any = (): Validator => createValidator<unknown>("any", (value) => value);
 
 /**
  * Validator/codec namespace. Each factory returns a {@link Validator} with a
  * runtime `parse`/`safeParse` plus a phantom `__type` field for inference.
  */
-export const v = {
+export const v: {
+    any: typeof any;
+    array: typeof array;
+    bigint: typeof bigintValidator;
+    boolean: typeof boolean;
+    bytes: typeof bytes;
+    id: typeof id;
+    literal: typeof literal;
+    null: typeof nullValidator;
+    number: typeof number;
+    object: typeof objectValidator;
+    optional: typeof optional;
+    record: typeof record;
+    string: typeof string;
+    union: typeof union;
+} = {
     any,
     array,
     bigint: bigintValidator,

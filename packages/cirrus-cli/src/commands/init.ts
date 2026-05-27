@@ -36,7 +36,7 @@ const isTextFile = (filePath: string): boolean => {
 };
 
 const substitute = (content: string, name: string): string => {
-    return content.replace(/\{\{name\}\}/gu, name);
+    return content.replaceAll('{{name}}', name);
 };
 
 const collectFiles = (dir: string): ReadonlyArray<string> => {
@@ -52,8 +52,8 @@ const collectFiles = (dir: string): ReadonlyArray<string> => {
 const defaultTemplateRoot = (): string => {
     const here = dirname(fileURLToPath(import.meta.url));
 
-    // src/commands -> package root -> plop-templates/
-    return resolve(here, "..", "..", "plop-templates");
+    // src/commands -> package root -> templates/
+    return resolve(here, "..", "..", "templates");
 };
 
 export const runInitCommand = (options: InitCommandOptions): InitCommandResult => {

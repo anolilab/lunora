@@ -20,9 +20,9 @@ import { Project } from "ts-morph";
 
 import { join } from "./path.js";
 
-export const REQUIRED_COMPATIBILITY_DATE = "2026-04-07";
+export const REQUIRED_COMPATIBILITY_DATE: string = "2026-04-07";
 
-export const REQUIRED_FLAG = "web_socket_auto_reply_to_close";
+export const REQUIRED_FLAG: string = "web_socket_auto_reply_to_close";
 
 interface WranglerDurableObjectBinding {
     class_name?: string;
@@ -98,7 +98,7 @@ export const validateWranglerConfig = (wrangler: WranglerConfig | undefined, sch
  * `validateWrangler(wranglerJson, schema)` returning
  * `{ valid, errors, warnings }`.
  */
-export const validateWrangler = validateWranglerConfig;
+export const validateWrangler: typeof validateWranglerConfig = validateWranglerConfig;
 
 export interface WranglerProjectValidationOptions {
     projectRoot: string;

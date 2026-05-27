@@ -28,7 +28,7 @@ const wantJson = (): boolean => {
     return flag === "1" || flag === "true";
 };
 
-const sharedPail = createPail({
+const sharedPail: ReturnType<typeof createPail> = createPail({
     reporters: [wantJson() ? new JsonReporter() : new PrettyReporter()],
     scope: ["cirrus"],
     stderr: process.stderr,
@@ -46,4 +46,4 @@ export const createLogger = (): Logger => {
 };
 
 /** Direct access to the underlying pail instance for advanced use-cases. */
-export const pail = sharedPail;
+export const pail: typeof sharedPail = sharedPail;
