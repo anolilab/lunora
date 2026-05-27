@@ -1,0 +1,11 @@
+// Test-only wrangler config consumed by `@cloudflare/vitest-pool-workers`.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "cirrus-d1-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "d1_databases": [
+        { "binding": "DB", "database_name": "cirrus-d1-test", "database_id": "00000000-0000-0000-0000-000000000000" },
+    ],
+}
