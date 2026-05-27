@@ -5,7 +5,9 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App.js";
 
-const url = (import.meta.env.VITE_CIRRUS_URL as string | undefined) ?? "http://localhost:8787";
+// `@cloudflare/vite-plugin` serves the Worker on the same origin as Vite,
+// so default to `location.origin` rather than a separate workerd port.
+const url = (import.meta.env.VITE_CIRRUS_URL as string | undefined) ?? globalThis.location.origin;
 const client = new CirrusClient({ url });
 
 const root = document.querySelector("#root");

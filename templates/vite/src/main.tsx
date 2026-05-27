@@ -32,7 +32,7 @@ const root = document.querySelector("#root");
 if (root) {
     createRoot(root).render(
         <StrictMode>
-            <CirrusProvider url="http://localhost:8787">
+            <CirrusProvider url={globalThis.location.origin}>
                 <Chat />
             </CirrusProvider>
         </StrictMode>,
