@@ -9,7 +9,7 @@ import type { Id } from "./dataModel.js";
 export interface ApiTypes {
     messages: {
         list: FunctionReference<"query", { channelId: Id<"channels">; limit?: number }, unknown>;
-        send: FunctionReference<"mutation", { channelId: Id<"channels">; text: string }, unknown>;
+        send: FunctionReference<"mutation", { channelId: Id<"channels">; text: string; kind: "text" | "image"; tags: Record<string, string> }, unknown>;
     };
 }
 

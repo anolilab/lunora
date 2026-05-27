@@ -8,8 +8,13 @@ export const list = query({
 });
 
 export const send = mutation({
-    args: { channelId: v.id("channels"), text: v.string() },
+    args: {
+        channelId: v.id("channels"),
+        text: v.string(),
+        kind: v.union(v.literal("text"), v.literal("image")),
+        tags: v.record(v.string(), v.string()),
+    },
     handler: async (_context, args) => {
-        return { channelId: args.channelId, text: args.text };
+        return { channelId: args.channelId, text: args.text, kind: args.kind, tags: args.tags };
     },
 });

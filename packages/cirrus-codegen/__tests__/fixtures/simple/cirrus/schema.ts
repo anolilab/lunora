@@ -11,6 +11,8 @@ export const schema = defineSchema({
     users: defineTable({
         email: v.string(),
         name: v.string(),
+        role: v.literal("admin"),
+        prefs: v.record(v.string(), v.string()),
     })
         .global()
         .index("by_email", ["email"], { unique: true }),

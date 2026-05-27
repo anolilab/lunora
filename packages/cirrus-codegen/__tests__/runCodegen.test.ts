@@ -47,6 +47,23 @@ describe("runCodegen", () => {
         expect(result.generated.api).toContain("export const api = anyApi as unknown as ApiTypes;");
     });
 
+    test("emits literal validators as TS literal types and record as Record<K, V>", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        // dataModel.ts: literal -> "admin", record -> Record<string, string>.
+        expect(result.generated.dataModel).toContain('role: "admin";');
+        expect(result.generated.dataModel).toContain("prefs: Record<string, string>;");
+
+        // api.ts: literal inside a union -> "text" | "image"; record passes through.
+        expect(result.generated.api).toContain('kind: "text" | "image"');
+        expect(result.generated.api).toContain("tags: Record<string, string>");
+
+        // Regression guard: if either kind ever falls through to the default
+        // `unknown` we'd see the field type drop to `unknown`.
+        expect(result.generated.api).not.toContain("kind: unknown");
+        expect(result.generated.dataModel).not.toContain("prefs: unknown");
+    });
+
     test("emits server.ts that re-exports @cirrus/server factories", () => {
         const result = runCodegen({ projectRoot: workdir });
 

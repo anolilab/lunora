@@ -23,6 +23,11 @@ const validatorToType = (validator: ValidatorIR): string => {
         case "id": {
             return `Id<"${validator.tableName ?? "_unknown_"}">`;
         }
+        case "literal": {
+            // `literalValue` is the verbatim source text (e.g. `"admin"`, `42`,
+            // `true`, `null`) — already a valid TS literal type.
+            return validator.literalValue ?? "unknown";
+        }
         case "null": {
             return "null";
         }
@@ -38,6 +43,12 @@ const validatorToType = (validator: ValidatorIR): string => {
         }
         case "optional": {
             return `${validator.inner ? validatorToType(validator.inner) : "unknown"} | undefined`;
+        }
+        case "record": {
+            const key = validator.keyType ? validatorToType(validator.keyType) : "string";
+            const value = validator.valueType ? validatorToType(validator.valueType) : "unknown";
+
+            return `Record<${key}, ${value}>`;
         }
         case "string": {
             return "string";

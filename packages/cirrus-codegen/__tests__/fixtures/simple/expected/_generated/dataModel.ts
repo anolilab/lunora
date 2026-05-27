@@ -17,6 +17,8 @@ export interface Doc_users {
     _creationTime: number;
     email: string;
     name: string;
+    role: "admin";
+    prefs: Record<string, string>;
 }
 
 export interface DataModel {
