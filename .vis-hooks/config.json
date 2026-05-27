@@ -1,0 +1,9 @@
+{
+    "version": 1,
+    "stages": {
+        "pre-commit": [
+            { "id": "vis-secrets", "entry": "vis secrets --staged", "passFilenames": false },
+            { "id": "vis-staged", "entry": "vis staged", "passFilenames": false }
+        ]
+    }
+}

@@ -1,7 +1,5 @@
 #!/bin/sh
 
-. "$(dirname "$0")/common.sh"
-
 echo --------------------------------------------
 echo Starting Git hook: prepare-commit-msg
 # if we hve a cmd that is running pnpx cz that means finalize and commit

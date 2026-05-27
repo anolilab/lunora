@@ -5,88 +5,17 @@ settings:
   excludeLinksFromLockfile: false
 
 catalogs:
-  auth:
-    better-auth:
-      specifier: ^1.6.11
-      version: 1.6.11
   build:
     '@babel/core':
       specifier: ^7.29.7
       version: 7.29.7
-    '@visulima/packem':
-      specifier: 2.0.0-alpha.78
-      version: 2.0.0-alpha.78
-    esbuild:
-      specifier: ^0.28.0
-      version: 0.28.0
-  cloudflare:
-    '@cloudflare/vitest-pool-workers':
-      specifier: ^0.16.10
-      version: 0.16.10
-    '@cloudflare/workers-types':
-      specifier: ^4.20260527.1
-      version: 4.20260527.1
-    miniflare:
-      specifier: ^4.20260526.0
-      version: 4.20260526.0
-    wrangler:
-      specifier: ^4.95.0
-      version: 4.95.0
   dev:
     '@anolilab/semantic-release-preset':
       specifier: ^13.4.16
       version: 13.4.16
-    cross-env:
-      specifier: ^10.1.0
-      version: 10.1.0
     tsx:
       specifier: ^4.22.3
       version: 4.22.3
-  docs:
-    fumadocs-core:
-      specifier: ^16.9.1
-      version: 16.9.1
-    fumadocs-mdx:
-      specifier: ^15.0.9
-      version: 15.0.9
-    fumadocs-ui:
-      specifier: ^16.9.1
-      version: 16.9.1
-    next:
-      specifier: ^16.2.6
-      version: 16.2.6
-    tailwindcss:
-      specifier: ^4.3.0
-      version: 4.3.0
-  e2e:
-    '@playwright/test':
-      specifier: ^1.60.0
-      version: 1.60.0
-    playwright:
-      specifier: ^1.60.0
-      version: 1.60.0
-  frontend:
-    '@testing-library/dom':
-      specifier: ^10.4.1
-      version: 10.4.1
-    '@testing-library/react':
-      specifier: ^16.3.2
-      version: 16.3.2
-    '@types/react':
-      specifier: ^19.2.15
-      version: 19.2.15
-    '@types/react-dom':
-      specifier: ^19.2.3
-      version: 19.2.3
-    jsdom:
-      specifier: ^29.1.1
-      version: 29.1.1
-    react:
-      specifier: ^19.2.6
-      version: 19.2.6
-    react-dom:
-      specifier: ^19.2.6
-      version: 19.2.6
   lint:
     '@anolilab/eslint-config':
       specifier: 27.0.2
@@ -97,19 +26,9 @@ catalogs:
     eslint:
       specifier: 10.4.0
       version: 10.4.0
-    husky:
-      specifier: ^9.1.7
-      version: 9.1.7
     prettier:
       specifier: 3.8.3
       version: 3.8.3
-  mail:
-    '@react-email/render':
-      specifier: 2.0.8
-      version: 2.0.8
-    '@visulima/email':
-      specifier: 1.0.0-alpha.32
-      version: 1.0.0-alpha.32
   node:
     rimraf:
       specifier: 6.1.3
@@ -152,19 +71,6 @@ catalogs:
     '@types/node':
       specifier: 25.9.1
       version: 25.9.1
-  vite:
-    '@cloudflare/vite-plugin':
-      specifier: ^1.39.0
-      version: 1.39.0
-    '@visulima/vite-overlay':
-      specifier: ^1.3.7
-      version: 1.3.7
-    jsonc-parser:
-      specifier: ^3.3.1
-      version: 3.3.1
-    vite:
-      specifier: ^8.0.14
-      version: 8.0.14
 
 importers:
 
@@ -209,9 +115,6 @@ importers:
       eslint:
         specifier: catalog:lint
         version: 10.4.0(jiti@2.7.0)
-      husky:
-        specifier: catalog:lint
-        version: 9.1.7
       prettier:
         specifier: catalog:lint
         version: 3.8.3
@@ -7092,11 +6995,6 @@ packages:
   human-signals@8.0.1:
     resolution: {integrity: sha512-eKCa6bwnJhvxj14kZk5NCPc6Hb6BdsU9DZcOnmQKSnO1VKrfV0zCvtttPZUsBvjmNDn8rpcJfpwSYnHBjc95MQ==}
     engines: {node: '>=18.18.0'}
-
-  husky@9.1.7:
-    resolution: {integrity: sha512-5gs5ytaNjBrh5Ow3zrvdUUY+0VxIuWVL4i9irt6friV+BqdCfmV11CQTWMiBYWHbXhco+J1kHfTOUkePhCDvMA==}
-    engines: {node: '>=18'}
-    hasBin: true
 
   ical-generator@10.2.0:
     resolution: {integrity: sha512-XR5FsiDWCsz5MwBwMA/sQqR3A9H240xkXIeXOabV7uNAiieP+TA9rleVvlwPLRXMz+CXME8cGuDd7cdnE5At6w==}
@@ -15558,8 +15456,6 @@ snapshots:
   human-signals@5.0.0: {}
 
   human-signals@8.0.1: {}
-
-  husky@9.1.7: {}
 
   ical-generator@10.2.0(@types/node@25.9.1)(moment@2.30.1):
     optionalDependencies:
