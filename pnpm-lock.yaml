@@ -871,6 +871,9 @@ importers:
 
   packages/cirrus-storage:
     devDependencies:
+      '@cloudflare/vitest-pool-workers':
+        specifier: catalog:cloudflare
+        version: 0.16.10(@cloudflare/workers-types@4.20260526.1)(@vitest/runner@4.1.7)(@vitest/snapshot@4.1.7)(vitest@4.1.7(@types/node@25.9.1)(jsdom@29.1.1)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3)))
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260526.1
@@ -889,6 +892,9 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.7(@types/node@25.9.1)(jsdom@29.1.1)(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.95.0(@cloudflare/workers-types@4.20260526.1)
 
   packages/cirrus-values:
     devDependencies:
