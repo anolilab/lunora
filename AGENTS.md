@@ -64,7 +64,33 @@ Cirrus exposes a Convex-style functional API on top of Cloudflare Workers and Du
 
 ## Package Structure
 
-Every package follows the same layout:
+### Naming
+
+The CLI binary is `cirrus`. The npm scope is `@cirrus/*`. The "main" server package is **`@cirrus/server`** (directory `packages/cirrus-server/`) — it exports `defineSchema`, `query`, `mutation`, `action`, and the function-context types. There is no `@cirrus/cirrus`. When the docs or plan refer to the "main runtime package", it means `@cirrus/server`.
+
+### Packages
+
+| Package             | Role                                                                                                                                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- | ------ | ------- | --- | ------- |
+| `@cirrus/server`    | Main API: `defineSchema`, `defineTable`, `query`, `mutation`, `action`.                                                                                                                      |
+| `@cirrus/values`    | `v.*` validators, return-type inference.                                                                                                                                                     |
+| `@cirrus/runtime`   | Worker entry: RPC router, shard resolver, query coordinator.                                                                                                                                 |
+| `@cirrus/do`        | `ShardDO` (SQLite, OCC, hibernated WS subscriptions) and `SessionDO`.                                                                                                                        |
+| `@cirrus/d1`        | D1 adapter for `.global()` tables; wraps the Sessions API for read-your-writes.                                                                                                              |
+| `@cirrus/codegen`   | Emits `_generated/{api,server,dataModel}.ts` from `schema.ts`.                                                                                                                               |
+| `@cirrus/client`    | Browser SDK: WebSocket, optimistic updates, offline queue.                                                                                                                                   |
+| `@cirrus/react`     | `useQuery` / `useMutation` / `useSubscription` / `useAuth`.                                                                                                                                  |
+| `@cirrus/vite`      | Vite plugin over `@cloudflare/vite-plugin` — codegen, wrangler validator, error overlay.                                                                                                     |
+| `@cirrus/cli`       | `cirrus init                                                                                                                                                                                 | dev | deploy | codegen | run | reset`. |
+| `@cirrus/auth`      | better-auth adapter, sessions in `SessionDO`.                                                                                                                                                |
+| `@cirrus/mail`      | Resend adapter, TSX templates, queue-backed sends.                                                                                                                                           |
+| `@cirrus/storage`   | R2 typed buckets, signed URLs.                                                                                                                                                               |
+| `@cirrus/scheduler` | `runAfter` / `runAt` + Cron Triggers via `SchedulerDO`.                                                                                                                                      |
+| `@cirrus/config`    | **Internal.** Shared `wrangler.jsonc` validator used by `@cirrus/cli` and `@cirrus/vite`. Published for transparency; consumers depend on the CLI or Vite plugin and let those call into it. |
+
+### Layout
+
+Every package follows the same shape:
 
 - `src/index.ts` — main export
 - `__tests__/` — Vitest tests (`.test.ts` or `.spec.ts`)
@@ -72,6 +98,7 @@ Every package follows the same layout:
 - `tsconfig.json` — extends `../../tsconfig.base.json`
 - `project.json` — vis metadata with tags (e.g., `type:package`, `category:runtime`)
 - `package.json` — ESM (`"type": "module"`), `"sideEffects": false`, conditional exports
+- `.releaserc.json` — extends `@anolilab/semantic-release-preset/pnpm` (multi-semantic-release picks it up)
 
 ### Vis Tags on `project.json`
 
@@ -95,7 +122,7 @@ Hook chain (`.husky/pre-commit`) uses `set -e`, so a secret detection aborts bef
 
 ### Release
 
-Independent per-package versioning via `multi-semantic-release`. Each package gets a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm` once it is ready to publish.
+Independent per-package versioning via `multi-semantic-release`. All 15 packages under `packages/` ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive version bumps; the `semantic-release.yml` workflow generates per-package changelogs and publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
 
 Research the codebase before editing. Never change code you haven't read.
 
