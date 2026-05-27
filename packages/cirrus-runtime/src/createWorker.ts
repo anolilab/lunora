@@ -1,6 +1,7 @@
 import { CirrusError, toErrorResponse } from "./errors.js";
-import { resolveShard } from "./resolveShard.js";
+import type { FanOutSpec, QueryCoordinator } from "./queryCoordinator.js";
 import type { ShardNamespaceLike } from "./resolveShard.js";
+import { resolveShard } from "./resolveShard.js";
 
 /**
  * Wire-format RPC envelope. Posted to `POST /_cirrus/rpc`.
@@ -8,35 +9,31 @@ import type { ShardNamespaceLike } from "./resolveShard.js";
  * `functionPath` is the `<file>:<function>` identifier emitted by codegen,
  * e.g. `"messages:list"`. `shardKey` is optional — when omitted the runtime
  * routes to {@link WorkerOptions.defaultShardKey} (default `"__root__"`).
+ *
+ * `fanOut` opts the envelope into cross-shard routing via the
+ * {@link WorkerOptions.queryCoordinator}; mutually exclusive with
+ * `shardKey` (specifying both is a 400 — fan-out *is* the shard choice).
  */
 export interface RpcEnvelope {
-    functionPath: string;
     args?: Record<string, unknown>;
+    fanOut?: FanOutSpec;
+    functionPath: string;
     shardKey?: string;
 }
 
 export interface ExecutionContextLike {
-    waitUntil: (promise: Promise<unknown>) => void;
     passThroughOnException: () => void;
+    waitUntil: (promise: Promise<unknown>) => void;
 }
 
 export type Route = (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> | Response;
 
 export interface WorkerOptions {
-    /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
-    shardDO: ShardNamespaceLike;
     /**
      * D1 binding for `.global()` tables. Currently unused by the routing
      * layer; downstream packages will read it from `env.DB` directly.
      */
     d1?: unknown;
-    /**
-     * Map of routes for custom HTTP handlers (auth callbacks etc.). Keys can
-     * be either `"METHOD path"` (e.g. `"GET /healthz"`) or just `"path"`
-     * (e.g. `"/healthz"`) — the runtime will match the more specific form
-     * first.
-     */
-    routes?: Record<string, Route>;
     /** Default shard key used when an envelope omits one. */
     defaultShardKey?: string;
     /**
@@ -45,12 +42,27 @@ export interface WorkerOptions {
      * instead of returning a synthetic 500.
      */
     passThroughOnException?: boolean;
+    /**
+     * Coordinator for cross-shard RPCs. When absent, envelopes with
+     * `fanOut` set are rejected with a 400. Construct via
+     * `createQueryCoordinator({ registry })`.
+     */
+    queryCoordinator?: QueryCoordinator;
+    /**
+     * Map of routes for custom HTTP handlers (auth callbacks etc.). Keys can
+     * be either `"METHOD path"` (e.g. `"GET /healthz"`) or just `"path"`
+     * (e.g. `"/healthz"`) — the runtime will match the more specific form
+     * first.
+     */
+    routes?: Record<string, Route>;
+    /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
+    shardDO: ShardNamespaceLike;
 }
 
 export interface RpcContext {
-    request: Request;
-    env: unknown;
     ctx: ExecutionContextLike;
+    env: unknown;
+    request: Request;
     shardKey: string;
 }
 
@@ -92,7 +104,10 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             }
 
             const envelope = await parseEnvelope(request);
-            const shardKey = envelope.shardKey ?? defaultShard;
+
+            if (envelope.fanOut && envelope.shardKey) {
+                throw new CirrusError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
+            }
 
             // Forward selected headers from the inbound request so the DO can
             // honour auth, sessions, and D1 read-your-writes consistency.
@@ -113,11 +128,34 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                 forwardedHeaders["x-d1-bookmark"] = bookmark;
             }
 
+            if (envelope.fanOut) {
+                if (!options.queryCoordinator) {
+                    throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
+                        code: "BAD_REQUEST",
+                        status: 400,
+                    });
+                }
+
+                const result = await options.queryCoordinator.fanOut(options.shardDO, {
+                    args: envelope.args ?? {},
+                    fanOut: envelope.fanOut,
+                    functionPath: envelope.functionPath,
+                    headers: forwardedHeaders,
+                });
+
+                return Response.json(result, {
+                    headers: { "content-type": "application/json" },
+                    status: 200,
+                });
+            }
+
+            const shardKey = envelope.shardKey ?? defaultShard;
+
             // Re-emit the RPC body to the shard at its `/rpc` route.
             const forwarded = new Request(`https://shard.internal/rpc`, {
-                method: "POST",
+                body: JSON.stringify({ args: envelope.args ?? {}, functionPath: envelope.functionPath }),
                 headers: forwardedHeaders,
-                body: JSON.stringify({ functionPath: envelope.functionPath, args: envelope.args ?? {} }),
+                method: "POST",
             });
 
             const response = await forwardToShard(options.shardDO, shardKey, forwarded);
@@ -171,8 +209,9 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     const envelope = body as RpcEnvelope;
 
     return {
-        functionPath: envelope.functionPath,
         args: envelope.args ?? {},
+        fanOut: envelope.fanOut,
+        functionPath: envelope.functionPath,
         shardKey: envelope.shardKey,
     };
 };

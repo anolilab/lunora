@@ -2,8 +2,17 @@ export type { ExecutionContextLike, Route, RpcContext, RpcEnvelope, WorkerOption
 export { createWorker, defineRpcEnvelope } from "./createWorker.js";
 export type { CirrusErrorBody } from "./errors.js";
 export { CirrusError, toErrorResponse } from "./errors.js";
-export type { QueryCoordinatorOptions } from "./queryCoordinator.js";
-export { createQueryCoordinator } from "./queryCoordinator.js";
+export type {
+    FanOutRequest,
+    FanOutResult,
+    FanOutSpec,
+    MergeStrategy,
+    QueryCoordinator,
+    QueryCoordinatorOptions,
+    ShardError,
+    ShardRegistry,
+} from "./queryCoordinator.js";
+export { createQueryCoordinator, createStaticShardRegistry } from "./queryCoordinator.js";
 export type { ResolvedShard, ShardNamespaceLike } from "./resolveShard.js";
 export { resolveShard } from "./resolveShard.js";
 
