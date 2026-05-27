@@ -3,16 +3,17 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { ShardDO, type ShardDOState } from "../src/ShardDO.js";
 import { ConflictError } from "../src/transaction.js";
 
-interface FakeSql {
-    exec: ReturnType<typeof vi.fn>;
-}
+type ExecMock = ((query: string) => unknown) & {
+    mock: { calls: unknown[][] };
+    mockImplementation: (impl: (query: string) => unknown) => ExecMock;
+};
 
 interface FakeState extends ShardDOState {
     sockets: never[];
-    storage: { sql: FakeSql };
+    storage: { sql: { exec: ExecMock } };
 }
 
-const createFakeState = (sqlExec: ReturnType<typeof vi.fn> = vi.fn()): FakeState => {
+const createFakeState = (sqlExec: ExecMock = vi.fn() as unknown as ExecMock): FakeState => {
     const state: FakeState = {
         sockets: [],
         storage: { sql: { exec: sqlExec } },
@@ -64,11 +65,11 @@ class TestShardDO extends ShardDO {
 }
 
 describe("shardDO.runInTransaction", () => {
-    let exec: ReturnType<typeof vi.fn>;
+    let exec: ExecMock;
     let shard: TestShardDO;
 
     beforeEach(() => {
-        exec = vi.fn();
+        exec = vi.fn() as unknown as ExecMock;
         shard = new TestShardDO(createFakeState(exec));
     });
 
