@@ -3,23 +3,23 @@
  * compatible with the real workers-types value as well as unit-test doubles.
  */
 export interface D1DatabaseLike {
-    withSession: (bookmark?: string) => D1SessionLike;
-    prepare: (sql: string) => D1PreparedStatementLike;
     batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
     exec?: (sql: string) => Promise<unknown>;
+    prepare: (sql: string) => D1PreparedStatementLike;
+    withSession: (bookmark?: string) => D1SessionLike;
 }
 
 export interface D1SessionLike {
-    prepare: (sql: string) => D1PreparedStatementLike;
     getBookmark: () => string | null;
+    prepare: (sql: string) => D1PreparedStatementLike;
 }
 
 export interface D1PreparedStatementLike {
+    all: <T = unknown>() => Promise<{ results: T[]; success: boolean }>;
     bind: (...values: unknown[]) => D1PreparedStatementLike;
     first: <T = unknown>(column?: string) => Promise<T | null>;
-    all: <T = unknown>() => Promise<{ results: T[]; success: boolean }>;
-    run: <T = unknown>() => Promise<{ results?: T[]; success: boolean; meta?: Record<string, unknown> }>;
     raw: <T = unknown>() => Promise<T[][]>;
+    run: <T = unknown>() => Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }>;
 }
 
 /**
@@ -30,6 +30,13 @@ export interface D1PreparedStatementLike {
  */
 export class D1Client {
     private readonly db: D1DatabaseLike;
+
+    /**
+     * SQL string -> prepared statement. Prepared statements are reusable in
+     * D1; preparing the same SQL twice forces the worker to round-trip the
+     * statement plan. Caching is per-instance so unit-test isolation holds.
+     */
+    private readonly stmtCache = new Map<string, D1PreparedStatementLike>();
 
     constructor(db: D1DatabaseLike) {
         this.db = db;
@@ -45,9 +52,24 @@ export class D1Client {
         return new D1Session(session);
     }
 
-    /** Escape hatch for callers that don't need a session. */
+    /**
+     * Prepare a statement, reusing a cached one when the SQL text matches.
+     * `bind()` on a prepared statement returns a new bound statement and
+     * leaves the underlying prepared plan reusable, so cache hits are safe
+     * even when the previous caller already called `.bind(...).run()`.
+     */
     public prepare(sql: string): D1PreparedStatementLike {
-        return this.db.prepare(sql);
+        const cached = this.stmtCache.get(sql);
+
+        if (cached) {
+            return cached;
+        }
+
+        const stmt = this.db.prepare(sql);
+
+        this.stmtCache.set(sql, stmt);
+
+        return stmt;
     }
 
     /** Direct access to the underlying binding (advanced use only). */
@@ -60,24 +82,43 @@ export class D1Client {
 export class D1Session {
     private readonly session: D1SessionLike;
 
+    /** See {@link D1Client.stmtCache}. Scoped per session. */
+    private readonly stmtCache = new Map<string, D1PreparedStatementLike>();
+
     constructor(session: D1SessionLike) {
         this.session = session;
     }
 
     public prepare(sql: string): D1PreparedStatementLike {
-        return this.session.prepare(sql);
+        const cached = this.stmtCache.get(sql);
+
+        if (cached) {
+            return cached;
+        }
+
+        const stmt = this.session.prepare(sql);
+
+        this.stmtCache.set(sql, stmt);
+
+        return stmt;
     }
 
-    public async run<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ results?: T[]; success: boolean; meta?: Record<string, unknown> }> {
-        return this.session.prepare(sql).bind(...binds).run<T>();
+    public async run<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }> {
+        return this.prepare(sql)
+            .bind(...binds)
+            .run<T>();
     }
 
     public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ results: T[]; success: boolean }> {
-        return this.session.prepare(sql).bind(...binds).all<T>();
+        return this.prepare(sql)
+            .bind(...binds)
+            .all<T>();
     }
 
     public async first<T = unknown>(sql: string, ...binds: unknown[]): Promise<T | null> {
-        return this.session.prepare(sql).bind(...binds).first<T>();
+        return this.prepare(sql)
+            .bind(...binds)
+            .first<T>();
     }
 
     /**

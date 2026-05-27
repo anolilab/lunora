@@ -14,7 +14,7 @@ export class CirrusError extends Error {
 
     public readonly status: number;
 
-    constructor(message: string, options: { code: string; status?: number; cause?: unknown } = { code: "INTERNAL" }) {
+    constructor(message: string, options: { cause?: unknown; code: string; status?: number } = { code: "INTERNAL" }) {
         super(message, { cause: options.cause });
         this.name = "CirrusError";
         this.code = options.code;
@@ -24,17 +24,47 @@ export class CirrusError extends Error {
     public toResponse(): Response {
         const body: CirrusErrorBody = { error: { code: this.code, message: this.message } };
 
-        return new Response(JSON.stringify(body), {
+        return Response.json(body, {
             status: this.status,
             headers: { "content-type": "application/json" },
         });
     }
 }
 
+/**
+ * Structural match for `ConflictError` from `@cirrus/do`. We deliberately
+ * avoid importing the class so `@cirrus/runtime` stays free of a hard
+ * dependency on the DO package — the contract is the public shape
+ * (`name === "ConflictError"`, numeric `status`, string `code`).
+ */
+const isStructuralConflictError = (error: unknown): error is { code: string; message: string; name: string; status: number } => {
+    if (!error || typeof error !== "object") {
+        return false;
+    }
+
+    const candidate = error as { code?: unknown; message?: unknown; name?: unknown; status?: unknown };
+
+    return (
+        candidate.name === "ConflictError"
+        && typeof candidate.code === "string"
+        && typeof candidate.status === "number"
+        && typeof candidate.message === "string"
+    );
+};
+
 /** Convert any thrown value into a JSON error response. */
 export const toErrorResponse = (error: unknown): Response => {
     if (error instanceof CirrusError) {
         return error.toResponse();
+    }
+
+    if (isStructuralConflictError(error)) {
+        const body: CirrusErrorBody = { error: { code: error.code, message: error.message } };
+
+        return Response.json(body, {
+            status: error.status,
+            headers: { "content-type": "application/json" },
+        });
     }
 
     // Do NOT echo arbitrary error.message values to clients — they may
@@ -45,7 +75,7 @@ export const toErrorResponse = (error: unknown): Response => {
 
     const body: CirrusErrorBody = { error: { code: "INTERNAL", message: "Internal error" } };
 
-    return new Response(JSON.stringify(body), {
+    return Response.json(body, {
         status: 500,
         headers: { "content-type": "application/json" },
     });

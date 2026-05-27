@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { CirrusError, toErrorResponse } from "../src/errors.js";
 
-describe("CirrusError", () => {
+describe("cirrusError", () => {
     test("defaults to 500 INTERNAL when no status is provided", () => {
         const err = new CirrusError("boom", { code: "INTERNAL" });
 
@@ -41,5 +41,20 @@ describe("CirrusError", () => {
 
         expect(response.status).toBe(500);
         await expect(response.json()).resolves.toEqual({ error: { code: "INTERNAL", message: "Internal error" } });
+    });
+
+    test("toErrorResponse maps a structural ConflictError shape to 409", async () => {
+        // Structurally identical to what `@cirrus/do` throws — the runtime
+        // does not take a hard dependency on that package, so we recognise
+        // the shape (name + numeric status + string code) instead.
+        const conflict = Object.assign(new Error("stale version"), {
+            name: "ConflictError",
+            code: "CONFLICT",
+            status: 409,
+        });
+        const response = toErrorResponse(conflict);
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({ error: { code: "CONFLICT", message: "stale version" } });
     });
 });

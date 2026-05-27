@@ -1,3 +1,4 @@
+import { ConflictError, type TransactionSqlLike } from "./transaction.js";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
 
 /**
@@ -12,20 +13,26 @@ import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope,
  * production code now matches the workerd shape.
  */
 export interface ShardDOState {
+    acceptWebSocket: (ws: WebSocket, tags?: string[]) => void;
+    getWebSockets: (tag?: string) => WebSocket[];
+    /** Optional pointer to the DO instance id so we can detect `__root__`. */
+    id?: { name?: string };
     storage: {
         sql: {
+            [key: string]: unknown;
             /**
              * Current size of the SQLite database in bytes. Backed by a real
              * getter on the runtime — read on every access.
              */
             readonly databaseSize?: number;
-            [key: string]: unknown;
+            /**
+             * Run a SQL statement without parameters — used by the
+             * transaction helper for BEGIN / COMMIT / ROLLBACK. The runtime
+             * exposes this as `state.storage.sql.exec(...)`.
+             */
+            exec?: (query: string) => unknown;
         };
     };
-    acceptWebSocket: (ws: WebSocket, tags?: string[]) => void;
-    getWebSockets: (tag?: string) => WebSocket[];
-    /** Optional pointer to the DO instance id so we can detect `__root__`. */
-    id?: { name?: string };
 }
 
 /**
@@ -41,8 +48,8 @@ export interface ShardDOState {
  * is informational; the runtime calls are guarded with optional chaining.
  */
 export interface HibernatableWebSocket {
-    serializeAttachment?: (value: unknown) => void;
     deserializeAttachment?: () => unknown;
+    serializeAttachment?: (value: unknown) => void;
 }
 
 /**
@@ -83,6 +90,13 @@ export abstract class ShardDO {
 
     protected env: unknown;
 
+    /**
+     * Tracks BEGIN/COMMIT nesting so we can reject nested transactions —
+     * SQLite-in-DO does not support them and the runtime would crash with
+     * "cannot start a transaction within a transaction".
+     */
+    private transactionDepth: number = 0;
+
     constructor(state: ShardDOState, env: unknown) {
         this.state = state;
         this.env = env;
@@ -91,6 +105,57 @@ export abstract class ShardDO {
     /** SQLite handle scoped to this Durable Object. */
     protected get sql(): unknown {
         return this.state.storage.sql;
+    }
+
+    /**
+     * Run `handler` inside a SQLite transaction. Commits if it resolves;
+     * rolls back if it throws. The `ConflictError` re-throw lets the
+     * runtime translate optimistic-concurrency failures into a 409 response.
+     *
+     * Nested calls are refused with a `CirrusError`-shaped object — SQLite
+     * in Durable Objects does not support nested transactions, so we fail
+     * loudly rather than silently flattening them.
+     */
+    protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
+        if (this.transactionDepth > 0) {
+            throw Object.assign(new Error("nested transactions are not supported in SQLite-in-DO"), {
+                name: "CirrusError",
+                code: "NESTED_TRANSACTION",
+                status: 500,
+            });
+        }
+
+        const sqlHandle = this.state.storage.sql as TransactionSqlLike | undefined;
+
+        if (!sqlHandle || typeof sqlHandle.exec !== "function") {
+            throw Object.assign(new Error("storage.sql is not available on this ShardDO state"), {
+                name: "CirrusError",
+                code: "SQL_UNAVAILABLE",
+                status: 500,
+            });
+        }
+
+        this.transactionDepth = 1;
+        sqlHandle.exec("BEGIN");
+
+        try {
+            const value = await handler();
+
+            sqlHandle.exec("COMMIT");
+
+            return value;
+        } catch (error) {
+            try {
+                sqlHandle.exec("ROLLBACK");
+            } catch {
+                // The rollback itself may fail if the connection is in a
+                // bad state — swallow it so the original error propagates.
+            }
+
+            throw error;
+        } finally {
+            this.transactionDepth = 0;
+        }
     }
 
     /**
@@ -155,8 +220,8 @@ export abstract class ShardDO {
 
         ShardDO.rootSizeWarned = true;
         console.warn(
-            `[@cirrus/do] __root__ Durable Object SQLite size is ${size} bytes (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). ` +
-                "Plan a `.shardBy()` migration before you hit the wall. See https://cirrus.dev/docs/concepts/sharding for guidance.",
+            `[@cirrus/do] __root__ Durable Object SQLite size is ${size} bytes (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). `
+            + "Plan a `.shardBy()` migration before you hit the wall. See https://cirrus.dev/docs/concepts/sharding for guidance.",
         );
     }
 
@@ -170,6 +235,10 @@ export abstract class ShardDO {
         // Structural duck-typing so this package does not need a runtime
         // dependency on `@cirrus/values` or `@cirrus/runtime`. The shapes
         // below are the public surface of those error types.
+        if (error instanceof ConflictError) {
+            return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
+        }
+
         if (error && typeof error === "object" && (error as { name?: string }).name === "ValidationError") {
             const message = error instanceof Error ? error.message : "validation failed";
 
@@ -215,8 +284,6 @@ export abstract class ShardDO {
         if (envelope.type === "unsubscribe") {
             this.unsubscribe(ws, envelope.id);
             ws.send(JSON.stringify({ type: "ack", id: envelope.id }));
-
-            return;
         }
     }
 
@@ -349,7 +416,7 @@ export abstract class ShardDO {
 }
 
 const jsonResponse = (body: unknown, status = 200): Response =>
-    new Response(JSON.stringify(body), {
+    Response.json(body, {
         status,
         headers: { "content-type": "application/json" },
     });

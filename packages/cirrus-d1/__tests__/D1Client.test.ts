@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { D1Client } from "../src/D1Client.js";
 import type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "../src/D1Client.js";
+import { D1Client } from "../src/D1Client.js";
 
 const createStmt = (returnValue: { results: unknown[]; success: boolean } = { results: [], success: true }): D1PreparedStatementLike => {
     const stmt: D1PreparedStatementLike = {
@@ -20,7 +20,7 @@ const createSession = (bookmark: string | null): D1SessionLike => ({
     getBookmark: vi.fn(() => bookmark),
 });
 
-describe("D1Client", () => {
+describe("d1Client", () => {
     test("withSession() forwards no bookmark when none is provided", () => {
         const session = createSession("bookmark-new");
         const db: D1DatabaseLike = {
@@ -78,6 +78,69 @@ describe("D1Client", () => {
 
         expect(session.prepare).toHaveBeenCalledWith("UPDATE foo SET name = ? WHERE id = ?");
         expect(stmt.bind).toHaveBeenCalledWith("Ada", 7);
-        expect(stmt.run).toHaveBeenCalled();
+        expect(stmt.run).toHaveBeenCalledWith();
+    });
+
+    test("session.prepare caches by SQL: same query -> one underlying prepare", async () => {
+        const stmt = createStmt();
+        const session: D1SessionLike = {
+            prepare: vi.fn(() => stmt),
+            getBookmark: () => null,
+        };
+        const db: D1DatabaseLike = {
+            withSession: () => session,
+            prepare: vi.fn(() => createStmt()),
+        };
+
+        const handle = new D1Client(db).withSession();
+
+        await handle.run("SELECT 1");
+        await handle.all("SELECT 1");
+        await handle.first("SELECT 1");
+
+        expect(session.prepare).toHaveBeenCalledTimes(1);
+        expect(session.prepare).toHaveBeenCalledWith("SELECT 1");
+    });
+
+    test("session.prepare returns distinct entries for different SQL text", async () => {
+        const stmtA = createStmt();
+        const stmtB = createStmt();
+        let call = 0;
+        const session: D1SessionLike = {
+            prepare: vi.fn((_: string) => {
+                call += 1;
+
+                return call === 1 ? stmtA : stmtB;
+            }),
+            getBookmark: () => null,
+        };
+        const db: D1DatabaseLike = {
+            withSession: () => session,
+            prepare: vi.fn(() => createStmt()),
+        };
+
+        const handle = new D1Client(db).withSession();
+
+        await handle.run("SELECT 1");
+        await handle.run("SELECT 2");
+        await handle.run("SELECT 1");
+        await handle.run("SELECT 2");
+
+        expect(session.prepare).toHaveBeenCalledTimes(2);
+    });
+
+    test("d1Client.prepare (non-session escape hatch) also caches by SQL", () => {
+        const dbPrepare = vi.fn(() => createStmt());
+        const db: D1DatabaseLike = {
+            withSession: vi.fn(() => createSession(null)),
+            prepare: dbPrepare,
+        };
+
+        const client = new D1Client(db);
+        const a = client.prepare("SELECT count(*) FROM t");
+        const b = client.prepare("SELECT count(*) FROM t");
+
+        expect(dbPrepare).toHaveBeenCalledTimes(1);
+        expect(a).toBe(b);
     });
 });
