@@ -171,7 +171,8 @@ describe("wranglerValidatorPlugin", () => {
         expect(() => callConfigResolved(plugin)).toThrow(/compatibility_date/u);
     });
 
-    test("throws when web_socket_auto_reply_to_close flag is missing", () => {
+    test("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", () => {
+        // The flag became the default on 2026-04-07; workerd warns when it's set redundantly.
         writeSchema(SCHEMA_NO_GLOBAL);
         writeFileSync(
             join(workdir, "wrangler.jsonc"),
@@ -189,7 +190,7 @@ describe("wranglerValidatorPlugin", () => {
 
         const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => callConfigResolved(plugin)).toThrow(/web_socket_auto_reply_to_close/u);
+        expect(() => callConfigResolved(plugin)).not.toThrow();
     });
 
     test("supports jsonc comments and trailing commas", () => {

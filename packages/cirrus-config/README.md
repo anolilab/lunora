@@ -45,8 +45,8 @@ const { problems, wranglerPath, report } = validateWranglerProject({ projectRoot
 Both entry points enforce the bindings that a Cirrus Worker needs at runtime:
 
 - `durable_objects.bindings` must include `{ name: "SHARD", class_name: "ShardDO" }`
-- `compatibility_flags` must include `"web_socket_auto_reply_to_close"`
 - `compatibility_date` must be `>= "2026-04-07"`
+- `compatibility_flags` must include `"web_socket_auto_reply_to_close"` only when `compatibility_date < "2026-04-07"`; on/after that date the flag is workerd's default and should be omitted (workerd warns if it's set redundantly)
 - If the schema declares any `.global()` table, `d1_databases` must include a binding named `"DB"`
 
 These constants are exported as `REQUIRED_FLAG` and `REQUIRED_COMPATIBILITY_DATE` for tests and tooling.

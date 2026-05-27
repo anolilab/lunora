@@ -89,14 +89,17 @@ describe("validateWranglerConfig (pure)", () => {
         expect(report.errors.some((line) => /SHARD.+ShardDO/u.test(line))).toBe(true);
     });
 
-    test("reports a missing compatibility flag", () => {
+    test("does not require the compatibility flag when compatibility_date is recent enough", () => {
+        // web_socket_auto_reply_to_close became the default on REQUIRED_COMPATIBILITY_DATE,
+        // so it should not be required (and workerd warns when it's set redundantly).
         const report = validateWranglerConfig({
             compatibility_date: REQUIRED_COMPATIBILITY_DATE,
             compatibility_flags: ["nodejs_compat"],
             durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
         });
 
-        expect(report.errors.some((line) => line.includes(REQUIRED_FLAG))).toBe(true);
+        expect(report.valid).toBe(true);
+        expect(report.errors.some((line) => line.includes(REQUIRED_FLAG))).toBe(false);
     });
 
     test("reports an outdated compatibility_date", () => {

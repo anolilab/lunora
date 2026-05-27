@@ -16,7 +16,7 @@ const VALID_WRANGLER = `{
     "name": "cirrus-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
-    "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
+    "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },

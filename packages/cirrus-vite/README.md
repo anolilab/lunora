@@ -50,7 +50,7 @@ The `cirrus(options)` factory composes up to four plugins in order:
 
 1. **`cirrus:codegen`** — runs [`@cirrus/codegen`](../cirrus-codegen) on `buildStart`. In dev mode, watches the schema directory and re-runs codegen on add/change/unlink, debounced 100ms. Test files (`*.test.ts`, `*.spec.ts`, anything under `__tests__/`) and files inside `_generated/` are filtered out. On a successful rerun the generated modules are invalidated in the module graph and the browser receives a `full-reload`.
 
-2. **`cirrus:wrangler-validator`** — runs at `configResolved` and fails the dev server / build with helpful errors when `wrangler.jsonc` is missing the SHARD durable object, the `web_socket_auto_reply_to_close` compatibility flag, a recent-enough `compatibility_date`, or the `DB` D1 binding when any table is `.global()`. Disable with `validateWrangler: false` (not recommended).
+2. **`cirrus:wrangler-validator`** — runs at `configResolved` and fails the dev server / build with helpful errors when `wrangler.jsonc` is missing the SHARD durable object, a recent-enough `compatibility_date` (`>= 2026-04-07`), the `web_socket_auto_reply_to_close` compatibility flag when `compatibility_date` predates 2026-04-07, or the `DB` D1 binding when any table is `.global()`. Disable with `validateWrangler: false` (not recommended).
 
 3. **`@visulima/vite-overlay`** — dynamically imported. If the package isn't installed the plugin is silently a no-op. Disable explicitly with `overlay: false`.
 

@@ -69,16 +69,20 @@ export const validateWranglerConfig = (wrangler: WranglerConfig | undefined, sch
         errors.push('durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" }');
     }
 
-    const flags = wrangler.compatibility_flags ?? [];
-
-    if (!flags.includes(REQUIRED_FLAG)) {
-        errors.push(`compatibility_flags must include "${REQUIRED_FLAG}"`);
-    }
-
     const compatibilityDate = wrangler.compatibility_date ?? "";
 
     if (compatibilityDate < REQUIRED_COMPATIBILITY_DATE) {
         errors.push(`compatibility_date must be >= "${REQUIRED_COMPATIBILITY_DATE}" (got "${compatibilityDate || "<missing>"}")`);
+    }
+
+    // `web_socket_auto_reply_to_close` became the default on 2026-04-07, which
+    // is the same date REQUIRED_COMPATIBILITY_DATE enforces — so requiring it
+    // explicitly is redundant and workerd now warns when it's set. Listing the
+    // flag is still accepted, so we don't error if it's present.
+    const flags = wrangler.compatibility_flags ?? [];
+
+    if (compatibilityDate && compatibilityDate < REQUIRED_COMPATIBILITY_DATE && !flags.includes(REQUIRED_FLAG)) {
+        errors.push(`compatibility_flags must include "${REQUIRED_FLAG}"`);
     }
 
     if (schema?.hasGlobalTable) {
