@@ -5,7 +5,7 @@ import { Project } from "ts-morph";
 
 import { discoverFunctions } from "./discoverFunctions.js";
 import { discoverSchema } from "./discoverSchema.js";
-import { emitApi, emitDataModel, emitServer } from "./emit.js";
+import { emitApi, emitDataModel, emitDrizzleSchema, emitServer } from "./emit.js";
 
 export interface CodegenOptions {
     /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
@@ -15,7 +15,13 @@ export interface CodegenOptions {
 }
 
 export interface CodegenResult {
-    generated: { api: string; dataModel: string; server: string };
+    generated: {
+        api: string;
+        dataModel: string;
+        drizzleGlobal: string;
+        drizzleShard: string;
+        server: string;
+    };
     outputDirectory: string;
 }
 
@@ -79,6 +85,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
     const serverContent = emitServer(functions);
+    const drizzleFiles = emitDrizzleSchema(schema);
 
     const outputDirectory = join(cirrusDirectory, "_generated");
 
@@ -89,9 +96,17 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     writeIfChanged(join(outputDirectory, "dataModel.ts"), dataModelContent);
     writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
     writeIfChanged(join(outputDirectory, "server.ts"), serverContent);
+    writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
+    writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
 
     return {
-        generated: { api: apiContent, dataModel: dataModelContent, server: serverContent },
+        generated: {
+            api: apiContent,
+            dataModel: dataModelContent,
+            drizzleGlobal: drizzleFiles.global,
+            drizzleShard: drizzleFiles.shard,
+            server: serverContent,
+        },
         outputDirectory,
     };
 };

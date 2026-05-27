@@ -1,3 +1,6 @@
+import type { DurableObjectStorage } from "@cloudflare/workers-types";
+import { drizzle as drizzleDO, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
+
 import { ConflictError, type TransactionSqlLike } from "./transaction.js";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
 
@@ -91,6 +94,14 @@ export abstract class ShardDO {
     protected env: unknown;
 
     /**
+     * Lazily-built drizzle handle over `state.storage`. Memoised so a single
+     * DO instance reuses the same dialect across handler calls. The drizzle
+     * DO driver only touches `storage.sql`, so test doubles only need to
+     * supply that field — see {@link ShardDOState}.
+     */
+    private drizzleHandle: DrizzleSqliteDODatabase<Record<string, unknown>> | undefined;
+
+    /**
      * Tracks BEGIN/COMMIT nesting so we can reject nested transactions —
      * SQLite-in-DO does not support them and the runtime would crash with
      * "cannot start a transaction within a transaction".
@@ -123,6 +134,26 @@ export abstract class ShardDO {
     }
 
     /**
+     * Drizzle handle scoped to this Durable Object's SQLite storage. Use this
+     * for typed queries against generated `sqliteTable` schemas. The handle
+     * participates in {@link runInTransaction} via drizzle's own `transaction`
+     * helper — there is no need to call `db.transaction(...)` directly from
+     * subclasses; wrap your work in `runInTransaction` and use `this.db`
+     * inside the handler instead.
+     */
+    protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>> {
+        if (this.drizzleHandle) {
+            return this.drizzleHandle;
+        }
+
+        // The drizzle DO driver introspects `storage.sql` only; the structural
+        // projection here matches what tests already supply.
+        this.drizzleHandle = drizzleDO(this.state.storage as unknown as DurableObjectStorage, { logger: false });
+
+        return this.drizzleHandle;
+    }
+
+    /**
      * Run `handler` inside a SQLite transaction. Commits if it resolves;
      * rolls back if it throws. The `ConflictError` re-throw lets the
      * runtime translate optimistic-concurrency failures into a 409 response.
@@ -130,6 +161,12 @@ export abstract class ShardDO {
      * Nested calls are refused with a `CirrusError`-shaped object — SQLite
      * in Durable Objects does not support nested transactions, so we fail
      * loudly rather than silently flattening them.
+     *
+     * Drizzle queries issued via {@link db} inside the handler participate
+     * in this transaction implicitly — drizzle and the BEGIN/COMMIT below
+     * both write through the same `state.storage.sql` handle, so the tx
+     * boundary is shared. Do **not** call `this.db.transaction(...)` from
+     * inside a handler; that would attempt a nested SQLite transaction.
      */
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
         if (this.transactionDepth > 0) {

@@ -9,13 +9,13 @@
  *
  *  - `env.DB.withSession(bookmark)` returns a real session whose bookmark
  *    changes after a write.
- *  - `MigrationRunner` correctly bootstraps `_cirrus_migrations` and is
- *    idempotent across re-runs against a real SQLite store.
+ *  - `MigrationRunner` correctly bootstraps `__drizzle_migrations` via the
+ *    drizzle d1 batch path and is idempotent across re-runs against a real
+ *    SQLite store. Guards against drizzle-internal regressions in the batch
+ *    `_prepare()`/`stmt.bind()` chain that unit-test doubles can't catch.
  */
-import { SELF, env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, test } from "vitest";
-
-import type { Env } from "./test-worker.js";
 
 // `env` is typed via the `Cloudflare.Env` augmentation in `./env.d.ts`.
 
@@ -27,18 +27,18 @@ const dropUsers = async (): Promise<void> => {
     }
 
     try {
-        await env.DB.prepare("DROP TABLE IF EXISTS _cirrus_migrations").run();
+        await env.DB.prepare("DROP TABLE IF EXISTS __drizzle_migrations").run();
     } catch {
         /* table may not exist */
     }
 };
 
-describe("D1 (workerd)", () => {
+describe("d1 (workerd)", () => {
     beforeEach(async () => {
         await dropUsers();
     });
 
-    test("MigrationRunner applies migrations against a real D1 database and is idempotent", async () => {
+    test("migrationRunner applies migrations against a real D1 database and is idempotent", async () => {
         const migrations = [
             { version: 1, name: "init", sql: "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)" },
             { version: 2, name: "add_email", sql: "ALTER TABLE users ADD COLUMN email TEXT" },
@@ -61,10 +61,44 @@ describe("D1 (workerd)", () => {
         expect(second.applied).toEqual([]);
         expect(second.skipped.map((m) => m.version)).toEqual([1, 2]);
 
-        // The migration left a usable schema behind.
-        const row = await env.DB.prepare("SELECT version FROM _cirrus_migrations ORDER BY version DESC LIMIT 1").first<{ version: number }>();
+        // The drizzle-canonical tracking table is content-addressed: one row per
+        // unique migration SQL hash. Verifying via raw D1 (not the drizzle
+        // handle) ensures the data actually landed on disk.
+        const rows = await env.DB.prepare("SELECT hash FROM __drizzle_migrations ORDER BY id").all<{ hash: string }>();
 
-        expect(row?.version).toBe(2);
+        expect(rows.results).toHaveLength(2);
+        expect(rows.results.every((row) => /^[0-9a-f]{64}$/u.test(row.hash))).toBe(true);
+    });
+
+    test("migrationRunner applies multi-statement migrations atomically via drizzle batch", async () => {
+        // Two CREATE TABLEs in one migration — exercises the `;`-split + batch
+        // path. If drizzle's `SQLiteRaw._prepare()` / `stmt.bind()` chain ever
+        // regresses, this test fails at the workerd boundary where unit-test
+        // fakes can't catch it.
+        const migrations = [
+            {
+                version: 1,
+                name: "two_tables",
+                sql: "CREATE TABLE users (id TEXT PRIMARY KEY);\nCREATE TABLE posts (id TEXT PRIMARY KEY, author TEXT NOT NULL);",
+            },
+        ];
+
+        const result = await SELF.fetch("https://test/migrate", {
+            method: "POST",
+            body: JSON.stringify({ migrations }),
+        }).then((r) => r.json() as Promise<{ applied: { version: number }[]; skipped: { version: number }[] }>);
+
+        expect(result.applied.map((m) => m.version)).toEqual([1]);
+
+        // Both tables present — the batch executed end-to-end.
+        const users = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").first<{ name: string }>();
+        const posts = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='posts'").first<{ name: string }>();
+
+        expect(users?.name).toBe("users");
+        expect(posts?.name).toBe("posts");
+
+        // Cleanup so other tests don't see the extra `posts` table.
+        await env.DB.prepare("DROP TABLE IF EXISTS posts").run();
     });
 
     test("withSession() returns a real D1 bookmark after a write", async () => {
@@ -73,7 +107,7 @@ describe("D1 (workerd)", () => {
         const insert = await SELF.fetch("https://test/insert", {
             method: "POST",
             body: JSON.stringify({ id: "u1", name: "Ada" }),
-        }).then((r) => r.json() as Promise<{ ok: boolean; bookmark: string | null }>);
+        }).then((r) => r.json() as Promise<{ bookmark: string | null; ok: boolean }>);
 
         expect(insert.ok).toBe(true);
 
@@ -82,12 +116,12 @@ describe("D1 (workerd)", () => {
         // when supplied, round-trips back through the next read without error.
         const list = await SELF.fetch("https://test/list", {
             headers: insert.bookmark ? { "x-d1-bookmark": insert.bookmark } : {},
-        }).then((r) => r.json() as Promise<{ rows: { id: string; name: string }[]; bookmark: string | null }>);
+        }).then((r) => r.json() as Promise<{ bookmark: string | null; rows: { id: string; name: string }[] }>);
 
         expect(list.rows).toEqual([{ id: "u1", name: "Ada" }]);
     });
 
-    test("D1Client.prepare() works against the real binding for raw SQL", async () => {
+    test("d1Client.prepare() works against the real binding for raw SQL", async () => {
         await env.DB.prepare("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)").run();
         await env.DB.prepare("INSERT INTO users (id, name) VALUES (?, ?)").bind("u2", "Linus").run();
 

@@ -6,6 +6,7 @@
 **/.next
 **/dist
 **/__fixtures__
+**/__tests__/fixtures
 
 **/CHANGELOG.md
 

@@ -80,6 +80,8 @@ catalogs:
     "tailwindcss": ^4.3.0
   auth:
     "better-auth": ^1.6.11
+  drizzle:
+    drizzle-orm: ^0.45.2
 
 preferWorkspacePackages: true
 

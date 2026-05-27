@@ -100,7 +100,7 @@ describe("runCodegen", () => {
         expect(result.generated.server).toContain("FUNCTION_NOT_FOUND");
     });
 
-    test("writes all three files into _generated/", () => {
+    test("writes all generated files into _generated/", () => {
         runCodegen({ projectRoot: workdir });
 
         const generatedDirectory = join(workdir, "cirrus", "_generated");
@@ -108,6 +108,56 @@ describe("runCodegen", () => {
         expect(existsSync(join(generatedDirectory, "api.ts"))).toBe(true);
         expect(existsSync(join(generatedDirectory, "server.ts"))).toBe(true);
         expect(existsSync(join(generatedDirectory, "dataModel.ts"))).toBe(true);
+        expect(existsSync(join(generatedDirectory, "drizzle.global.ts"))).toBe(true);
+        expect(existsSync(join(generatedDirectory, "drizzle.shard.ts"))).toBe(true);
+    });
+
+    test("emits drizzle.global.ts containing only `.global()` tables", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        // `users` is .global() — must appear here.
+        expect(result.generated.drizzleGlobal).toContain('export const users = sqliteTable("users"');
+        expect(result.generated.drizzleGlobal).toContain('uniqueIndex("by_email").on(t.email)');
+
+        // `messages` is shardBy — must NOT appear in global file.
+        expect(result.generated.drizzleGlobal).not.toContain('sqliteTable("messages"');
+    });
+
+    test("emits drizzle column mappings for optional/array/bigint/bytes", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        // `attachments` table covers the long-tail validator → drizzle column mappings.
+        expect(result.generated.drizzleGlobal).toContain('export const attachments = sqliteTable("attachments"');
+
+        // v.bytes() → blob with mode: "buffer".
+        expect(result.generated.drizzleGlobal).toContain('bytes: blob("bytes", { mode: "buffer" }).notNull()');
+
+        // v.bigint() → blob with mode: "bigint".
+        expect(result.generated.drizzleGlobal).toContain('size: blob("size", { mode: "bigint" }).notNull()');
+
+        // v.array(...) → json text column with `.$type<Array<…>>()`.
+        expect(result.generated.drizzleGlobal).toContain('tags: text("tags", { mode: "json" }).$type<Array<string>>().notNull()');
+
+        // v.optional(...) drops `.notNull()`.
+        expect(result.generated.drizzleGlobal).toContain('title: text("title"),');
+        expect(result.generated.drizzleGlobal).not.toContain('title: text("title").notNull()');
+
+        // v.id("users") inside a same-bucket table → `.references(() => users._id)`.
+        expect(result.generated.drizzleGlobal).toContain('ownerId: text("ownerId").references(() => users._id).notNull()');
+    });
+
+    test("emits drizzle.shard.ts containing shardBy/root tables", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        expect(result.generated.drizzleShard).toContain('export const messages = sqliteTable("messages"');
+        expect(result.generated.drizzleShard).toContain('index("by_channel").on(t.channelId)');
+
+        // Implicit _id + _creationTime columns are always emitted.
+        expect(result.generated.drizzleShard).toContain('_id: text("_id").primaryKey()');
+        expect(result.generated.drizzleShard).toContain('_creationTime: integer("_creationTime").notNull()');
+
+        // `users` is global — must NOT appear in shard file.
+        expect(result.generated.drizzleShard).not.toContain('sqliteTable("users"');
     });
 
     test("output matches committed expected/ files (snapshot)", () => {
@@ -116,10 +166,14 @@ describe("runCodegen", () => {
         const expectedApi = readFileSync(join(expectedDirectory, "api.ts"), "utf8");
         const expectedServer = readFileSync(join(expectedDirectory, "server.ts"), "utf8");
         const expectedDataModel = readFileSync(join(expectedDirectory, "dataModel.ts"), "utf8");
+        const expectedDrizzleGlobal = readFileSync(join(expectedDirectory, "drizzle.global.ts"), "utf8");
+        const expectedDrizzleShard = readFileSync(join(expectedDirectory, "drizzle.shard.ts"), "utf8");
 
         expect(result.generated.api).toBe(expectedApi);
         expect(result.generated.server).toBe(expectedServer);
         expect(result.generated.dataModel).toBe(expectedDataModel);
+        expect(result.generated.drizzleGlobal).toBe(expectedDrizzleGlobal);
+        expect(result.generated.drizzleShard).toBe(expectedDrizzleShard);
     });
 
     test("throws when schema.ts is missing", () => {

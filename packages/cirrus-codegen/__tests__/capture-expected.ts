@@ -19,6 +19,8 @@ mkdirSync(expectedDirectory, { recursive: true });
 writeFileSync(join(expectedDirectory, "api.ts"), result.generated.api, "utf8");
 writeFileSync(join(expectedDirectory, "server.ts"), result.generated.server, "utf8");
 writeFileSync(join(expectedDirectory, "dataModel.ts"), result.generated.dataModel, "utf8");
+writeFileSync(join(expectedDirectory, "drizzle.global.ts"), result.generated.drizzleGlobal, "utf8");
+writeFileSync(join(expectedDirectory, "drizzle.shard.ts"), result.generated.drizzleShard, "utf8");
 
 // eslint-disable-next-line no-console
 console.log("Wrote expected fixtures to", expectedDirectory);

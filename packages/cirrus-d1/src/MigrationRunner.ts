@@ -1,92 +1,105 @@
+import { sql } from "drizzle-orm";
+
 import type { D1DatabaseLike } from "./D1Client.js";
+import { D1Client } from "./D1Client.js";
 
 export interface Migration {
-    /** Monotonically increasing integer used to order and dedupe migrations. */
-    version: number;
     /** Human-readable name, e.g. `001_init` (used in logs). */
     name: string;
     /** Raw SQL to apply. Should be idempotent where possible. */
     sql: string;
-}
-
-const TRACKING_TABLE_SQL = `
-    CREATE TABLE IF NOT EXISTS _cirrus_migrations (
-        version  INTEGER PRIMARY KEY,
-        name     TEXT    NOT NULL,
-        applied_at TEXT  NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-`;
-
-export interface MigrationRunnerResult {
-    applied: { version: number; name: string }[];
-    skipped: { version: number; name: string }[];
+    /** Monotonically increasing integer used to order migrations. */
+    version: number;
 }
 
 /**
- * Sequentially applies pending migrations against a D1 database. Applied
- * versions are tracked in the `_cirrus_migrations` table.
+ * Drizzle's canonical migration-tracking table. The column shape matches
+ * `drizzle-orm/migrator`'s `MigrationConfig`, so a future swap to drizzle-kit
+ * journal-based migrations can read the same table without a data migration.
+ *
+ * - `hash` is the SHA-256 of the migration SQL — content-addressed dedup.
+ * - `created_at` is wall-clock millis at apply time (NUMERIC per drizzle).
+ */
+const TRACKING_TABLE_NAME = "__drizzle_migrations";
+const TRACKING_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${TRACKING_TABLE_NAME} (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at NUMERIC)`;
+
+export interface MigrationRunnerResult {
+    applied: { name: string; version: number }[];
+    skipped: { name: string; version: number }[];
+}
+
+/**
+ * Sequentially applies pending migrations against a D1 database via the
+ * drizzle-orm/d1 driver. Each migration is hashed (SHA-256 over its SQL
+ * text); the hash is stored in `__drizzle_migrations`, so re-applying the
+ * same SQL under a different `version` is rejected and identical migrations
+ * are skipped idempotently.
  */
 export class MigrationRunner {
-    private readonly db: D1DatabaseLike;
+    private readonly client: D1Client;
 
     private readonly migrations: Migration[];
 
-    constructor(db: D1DatabaseLike, migrations: Migration[]) {
-        this.db = db;
-        // Defensive: ensure callers can't accidentally feed us out-of-order versions.
+    /**
+     * Accepts either a {@link D1Client} (preferred — gets typed batches +
+     * drizzle handle for free) or a raw `D1DatabaseLike` binding (wrapped on
+     * the caller's behalf so existing `@cirrus/cli` callers keep working).
+     */
+    constructor(db: D1Client | D1DatabaseLike, migrations: Migration[]) {
+        this.client = db instanceof D1Client ? db : new D1Client(db);
         this.migrations = [...migrations].sort((a, b) => a.version - b.version);
         this.assertUniqueVersions();
+        this.assertUniqueSql();
     }
 
     public async run(): Promise<MigrationRunnerResult> {
-        await this.db.prepare(TRACKING_TABLE_SQL).run();
+        await this.client.drizzle.run(sql.raw(TRACKING_TABLE_DDL));
 
-        const appliedRows = await this.db
-            .prepare("SELECT version FROM _cirrus_migrations")
-            .all<{ version: number }>();
-        const appliedVersions = new Set((appliedRows.results ?? []).map((row) => row.version));
+        const appliedRows = await this.client.drizzle.all<{ hash: string }>(sql.raw(`SELECT hash FROM ${TRACKING_TABLE_NAME}`));
+        const appliedHashes = new Set(appliedRows.map((row) => row.hash));
 
-        const applied: { version: number; name: string }[] = [];
-        const skipped: { version: number; name: string }[] = [];
+        const applied: { name: string; version: number }[] = [];
+        const skipped: { name: string; version: number }[] = [];
 
         for (const migration of this.migrations) {
-            if (appliedVersions.has(migration.version)) {
+            const hash = await hashMigration(migration.sql);
+
+            if (appliedHashes.has(hash)) {
                 skipped.push({ version: migration.version, name: migration.name });
 
                 continue;
             }
 
-            await this.applyOne(migration);
+            await this.applyOne(migration, hash);
             applied.push({ version: migration.version, name: migration.name });
         }
 
         return { applied, skipped };
     }
 
-    private async applyOne(migration: Migration): Promise<void> {
+    private async applyOne(migration: Migration, hash: string): Promise<void> {
         // D1 lacks user-level BEGIN/COMMIT, but `batch` runs statements
         // atomically. Split on `;` boundaries that aren't trivially empty.
-        const statements = migration.sql
-            .split(/;\s*(?:\r?\n|$)/u)
+        const statementTexts = migration.sql
+            .split(/;\s*(?:\n|$)/u)
             .map((part) => part.trim())
-            .filter((part) => part.length > 0)
-            .map((stmt) => this.db.prepare(stmt));
+            .filter((part) => part.length > 0);
 
-        statements.push(
-            this.db
-                .prepare("INSERT INTO _cirrus_migrations (version, name) VALUES (?, ?)")
-                .bind(migration.version, migration.name),
-        );
+        // Inline the tracking row as a literal SQL fragment (no params). drizzle's
+        // `SQLiteRaw._prepare()` returns itself but has no `.stmt`, so when batch
+        // sees params it crashes at `stmt.bind(...)`. Matching drizzle's own d1
+        // migrator: build the INSERT entirely via `sql.raw()` so params.length is
+        // 0 and drizzle falls back to `this.client.prepare(sql).bind()`.
+        // `hash` is hex from SHA-256; safe to inline as a literal.
+        const insertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at) VALUES ('${hash}', ${Date.now()})`;
 
-        if (this.db.batch) {
-            await this.db.batch(statements);
+        const items = [...statementTexts.map((text) => this.client.drizzle.run(sql.raw(text))), this.client.drizzle.run(sql.raw(insertSql))];
 
-            return;
-        }
-
-        for (const stmt of statements) {
-            await stmt.run();
-        }
+        // At runtime each `db.run(sql.raw(...))` is a `SQLiteRaw` instance —
+        // it satisfies drizzle's BatchItem contract via its `_prepare()` method,
+        // even though the TS signature claims `Promise<RunResult>`. The cast
+        // bridges that runtime/type-system gap; without it tsc rejects the call.
+        await this.client.batch(items as unknown as Parameters<typeof this.client.batch>[0]);
     }
 
     private assertUniqueVersions(): void {
@@ -100,4 +113,33 @@ export class MigrationRunner {
             seen.add(m.version);
         }
     }
+
+    private assertUniqueSql(): void {
+        // Catch the most common authoring mistake: a copy-paste migration with
+        // a bumped version but identical SQL. Hash collisions are checked at
+        // apply time too (against the tracking table), but failing fast at
+        // construction means the CLI surfaces the problem before any I/O.
+        const seen = new Map<string, number>();
+
+        for (const m of this.migrations) {
+            const previousVersion = seen.get(m.sql);
+
+            if (previousVersion !== undefined) {
+                throw new Error(`Migrations ${previousVersion} and ${m.version} have identical SQL — bump the content, not just the version.`);
+            }
+
+            seen.set(m.sql, m.version);
+        }
+    }
 }
+
+/**
+ * SHA-256 of the migration SQL, hex-encoded. Available natively in both the
+ * Workers runtime (`crypto.subtle`) and Node 22+, so no platform shim needed.
+ */
+const hashMigration = async (text: string): Promise<string> => {
+    const bytes = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+};

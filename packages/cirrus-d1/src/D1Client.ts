@@ -1,3 +1,8 @@
+import type { D1Database } from "@cloudflare/workers-types";
+import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
+import type { DrizzleD1Database } from "drizzle-orm/d1";
+import { drizzle as drizzleD1 } from "drizzle-orm/d1";
+
 /**
  * Minimal structural projection of `D1Database` to keep the adapter
  * compatible with the real workers-types value as well as unit-test doubles.
@@ -10,6 +15,7 @@ export interface D1DatabaseLike {
 }
 
 export interface D1SessionLike {
+    batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
     getBookmark: () => string | null;
     prepare: (sql: string) => D1PreparedStatementLike;
 }
@@ -27,6 +33,10 @@ export interface D1PreparedStatementLike {
  * `client.withSession(bookmark)` so reads are bookmark-pinned for read-your-
  * writes consistency across replicas; callers should echo the bookmark
  * returned by {@link D1Session.getBookmark} via the `x-d1-bookmark` header.
+ *
+ * The class also exposes drizzle-typed accessors (`drizzle`, `drizzleSession`,
+ * `batch`) for callers that want to build queries against generated
+ * `sqliteTable` schemas instead of raw SQL strings.
  */
 export class D1Client {
     private readonly db: D1DatabaseLike;
@@ -37,6 +47,12 @@ export class D1Client {
      * statement plan. Caching is per-instance so unit-test isolation holds.
      */
     private readonly stmtCache = new Map<string, D1PreparedStatementLike>();
+
+    /**
+     * Lazily-built drizzle handle over the bare binding. Memoised so a single
+     * `D1Client` reuses the same dialect/session machinery across calls.
+     */
+    private drizzleHandle: DrizzleD1Database<Record<string, unknown>> | undefined;
 
     constructor(db: D1DatabaseLike) {
         this.db = db;
@@ -70,6 +86,50 @@ export class D1Client {
         this.stmtCache.set(sql, stmt);
 
         return stmt;
+    }
+
+    /**
+     * Drizzle handle over the bare `env.DB` binding. Used for typed queries
+     * against generated `sqliteTable` schemas; does **not** participate in the
+     * D1 Sessions API (no bookmark pinning). For bookmark-scoped reads, use
+     * {@link drizzleSession} instead.
+     */
+    public get drizzle(): DrizzleD1Database<Record<string, unknown>> {
+        if (this.drizzleHandle) {
+            return this.drizzleHandle;
+        }
+
+        // Structural cast: `D1DatabaseLike` projects exactly the methods
+        // `drizzle-orm/d1` introspects (`prepare`, `batch`). The runtime
+        // binding ships the full `D1Database` shape; tests pass doubles that
+        // match the projection.
+        this.drizzleHandle = drizzleD1(this.db as unknown as D1Database, { logger: false });
+
+        return this.drizzleHandle;
+    }
+
+    /**
+     * Drizzle handle scoped to a D1 Sessions-API session. The bookmark, when
+     * supplied, opts into read-your-writes consistency for follow-up reads on
+     * the same session.
+     *
+     * A `D1DatabaseSession` exposes the same `prepare` / `batch` surface
+     * drizzle calls into, so a single `unknown` cast lets us treat the session
+     * as a `D1Database` for driver-construction purposes.
+     */
+    public drizzleSession(bookmark?: string): DrizzleD1Database<Record<string, unknown>> {
+        const session = bookmark === undefined ? this.db.withSession() : this.db.withSession(bookmark);
+
+        return drizzleD1(session as unknown as D1Database, { logger: false });
+    }
+
+    /**
+     * Atomic batch over the drizzle d1 driver. Mirrors `db.batch([...])`
+     * exactly; exposed on the client so callers don't need to hold a drizzle
+     * handle just to run a typed batch.
+     */
+    public async batch<U extends BatchItem<"sqlite">, T extends Readonly<[U, ...U[]]>>(items: T): Promise<BatchResponse<T>> {
+        return this.drizzle.batch(items);
     }
 
     /** Direct access to the underlying binding (advanced use only). */

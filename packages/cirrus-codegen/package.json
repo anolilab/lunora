@@ -34,6 +34,7 @@
         "@cirrus/values": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "drizzle-orm": "catalog:drizzle",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"

@@ -17,7 +17,7 @@ describe("emitApi", () => {
         // `_generated/api.ts` (which IS `_generated/`).
         const functions: ReadonlyArray<FunctionIR> = [
             {
-                args: [],
+                args: {},
                 exportName: "list",
                 filePath: "channels",
                 kind: "query",
@@ -34,7 +34,7 @@ describe("emitApi", () => {
     test("leaves absolute `import('@scope/pkg')` qualifiers untouched", () => {
         const functions: ReadonlyArray<FunctionIR> = [
             {
-                args: [],
+                args: {},
                 exportName: "getCtx",
                 filePath: "ctx",
                 kind: "query",
@@ -50,7 +50,7 @@ describe("emitApi", () => {
     test("rewrites the `_generated/` prefix even without a leading `./`", () => {
         const functions: ReadonlyArray<FunctionIR> = [
             {
-                args: [],
+                args: {},
                 exportName: "list",
                 filePath: "messages",
                 kind: "query",

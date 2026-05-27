@@ -25,6 +25,9 @@
         "lint:types": "tsc --noEmit",
         "test": "vitest run"
     },
+    "dependencies": {
+        "drizzle-orm": "catalog:drizzle"
+    },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
