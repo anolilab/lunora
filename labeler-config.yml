@@ -2,4 +2,4 @@
 # Run `node scripts/generate-labeler-config.js` after adding/renaming packages.
 "package: runtime":
     - "changed-files":
-          - "any-glob-to-any-file": "packages/cirrus-runtime/**/*"
+          - "any-glob-to-any-file": "packages/runtime/**/*"

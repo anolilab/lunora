@@ -143,21 +143,21 @@ All packages are published under the [`@cirrus`](https://www.npmjs.com/org/cirru
 
 | Package                                             | What it does                                                                       |
 | --------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [`@cirrus/server`](./packages/cirrus-server/)       | `defineSchema`, `query`, `mutation`, `action` — the Convex-style function API.     |
-| [`@cirrus/runtime`](./packages/cirrus-runtime/)     | Worker entry layer. Parses the RPC envelope, resolves shards, mounts HTTP routes.  |
-| [`@cirrus/do`](./packages/cirrus-do/)               | `ShardDO` + `SessionDO` base classes (SQLite + WebSocket Hibernation API).         |
-| [`@cirrus/d1`](./packages/cirrus-d1/)               | D1 adapter with per-request Sessions API and a sequential migration runner.        |
-| [`@cirrus/client`](./packages/cirrus-client/)       | Framework-agnostic client: reactive queries, offline queue, reconnect.             |
-| [`@cirrus/react`](./packages/cirrus-react/)         | React bindings: `<CirrusProvider>`, `useQuery`, `useMutation`, `useSubscription`.  |
-| [`@cirrus/values`](./packages/cirrus-values/)       | The `v.*` validator builder + `ValidationError`. Pure, dependency-free.            |
-| [`@cirrus/codegen`](./packages/cirrus-codegen/)     | Discovers your `schema.ts` + functions, emits `_generated/api.ts` and friends.     |
-| [`@cirrus/vite`](./packages/cirrus-vite/)           | Vite plugin: codegen, wrangler validation, error overlay, workerd dev integration. |
-| [`@cirrus/cli`](./packages/cirrus-cli/)             | `init`, `dev`, `deploy`, `run`, `reset`, `codegen` — the standalone CLI.           |
-| [`@cirrus/config`](./packages/cirrus-config/)       | Wrangler config validator (compatibility date, required flags, schema info).       |
-| [`@cirrus/auth`](./packages/cirrus-auth/)           | Cookie-session auth: email/password + OAuth (PKCE) scaffolding, D1-backed.         |
-| [`@cirrus/mail`](./packages/cirrus-mail/)           | Transactional email via `@visulima/email` (Resend by default, others swappable).   |
-| [`@cirrus/storage`](./packages/cirrus-storage/)     | R2 file storage adapter with worker-signed URLs.                                   |
-| [`@cirrus/scheduler`](./packages/cirrus-scheduler/) | Delayed and scheduled function invocation (Queues-backed).                         |
+| [`@cirrus/server`](./packages/server/)       | `defineSchema`, `query`, `mutation`, `action` — the Convex-style function API.     |
+| [`@cirrus/runtime`](./packages/runtime/)     | Worker entry layer. Parses the RPC envelope, resolves shards, mounts HTTP routes.  |
+| [`@cirrus/do`](./packages/do/)               | `ShardDO` + `SessionDO` base classes (SQLite + WebSocket Hibernation API).         |
+| [`@cirrus/d1`](./packages/d1/)               | D1 adapter with per-request Sessions API and a sequential migration runner.        |
+| [`@cirrus/client`](./packages/client/)       | Framework-agnostic client: reactive queries, offline queue, reconnect.             |
+| [`@cirrus/react`](./packages/react/)         | React bindings: `<CirrusProvider>`, `useQuery`, `useMutation`, `useSubscription`.  |
+| [`@cirrus/values`](./packages/values/)       | The `v.*` validator builder + `ValidationError`. Pure, dependency-free.            |
+| [`@cirrus/codegen`](./packages/codegen/)     | Discovers your `schema.ts` + functions, emits `_generated/api.ts` and friends.     |
+| [`@cirrus/vite`](./packages/vite/)           | Vite plugin: codegen, wrangler validation, error overlay, workerd dev integration. |
+| [`@cirrus/cli`](./packages/cli/)             | `init`, `dev`, `deploy`, `run`, `reset`, `codegen` — the standalone CLI.           |
+| [`@cirrus/config`](./packages/config/)       | Wrangler config validator (compatibility date, required flags, schema info).       |
+| [`@cirrus/auth`](./packages/auth/)           | Cookie-session auth: email/password + OAuth (PKCE) scaffolding, D1-backed.         |
+| [`@cirrus/mail`](./packages/mail/)           | Transactional email via `@visulima/email` (Resend by default, others swappable).   |
+| [`@cirrus/storage`](./packages/storage/)     | R2 file storage adapter with worker-signed URLs.                                   |
+| [`@cirrus/scheduler`](./packages/scheduler/) | Delayed and scheduled function invocation (Queues-backed).                         |
 
 ## Status
 

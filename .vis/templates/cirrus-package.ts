@@ -1,6 +1,6 @@
 /**
  * `vis generate cirrus-package` — scaffold a new `@cirrus/<name>` workspace
- * package under `packages/cirrus-<name>/`.
+ * package under `packages/<name>/`.
  *
  * Only useful inside the Cirrus monorepo (it writes a project.json with vis
  * tags, a .releaserc.json extending the anolilab pnpm preset, etc.). End
@@ -89,7 +89,7 @@ export default defineConfig({
 `;
 
 const projectJson = (name: string, category: string): string => `{
-    "name": "cirrus-${name}",
+    "name": "${name}",
     "tags": [
         "type:package",
         "category:${category}"
@@ -188,9 +188,9 @@ export default createTemplate({
             // The package folder is nested under `dest_dir` (which the CLI
             // resolves to either --to or this template's `destination`). So
             // running `vis generate cirrus-package --to=packages` from the
-            // monorepo root puts everything under packages/cirrus-<name>/.
+            // monorepo root puts everything under packages/<name>/.
             files: {
-                [`cirrus-${pkgName}`]: {
+                [pkgName]: {
                     ".releaserc.json": releaseRc,
                     "package.json": pkgJson(pkgName, description),
                     "packem.config.ts": packemConfig,

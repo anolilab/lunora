@@ -3,7 +3,7 @@
  */
 import { createTemplate } from "@visulima/vis/generate";
 
-import { camelCase } from "./_helpers/case.js";
+import { camelCase, FILE_NAME_CASE_VALUES, formatFileName, isFileNameCase } from "./_helpers/case.js";
 
 export default createTemplate({
     about: {
@@ -11,8 +11,14 @@ export default createTemplate({
         name: "cirrus-mutation",
     },
     options: {
+        fileNameCase: {
+            choices: FILE_NAME_CASE_VALUES,
+            default: "camel",
+            prompt: "Filename case (camel, kebab, pascal, snake) — the export stays camelCase",
+            type: "string",
+        },
         name: {
-            prompt: "Mutation name (will be camelCased into the export and the filename)",
+            prompt: "Mutation name (camelCased for the export; filename uses --fileNameCase)",
             required: true,
             type: "string",
         },
@@ -20,11 +26,13 @@ export default createTemplate({
     produce: ({ options }) => {
         const raw = String(options.name);
         const camel = camelCase(raw);
+        const style = isFileNameCase(options.fileNameCase) ? options.fileNameCase : "camel";
+        const fileName = formatFileName(raw, style);
 
         return {
             files: {
                 cirrus: {
-                    [`${camel}.ts`]: `import { mutation, v } from "@cirrus/server";
+                    [`${fileName}.ts`]: `import { mutation, v } from "@cirrus/server";
 
 /**
  * ${raw} mutation.

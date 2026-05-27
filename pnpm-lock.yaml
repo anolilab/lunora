@@ -270,34 +270,34 @@ importers:
     dependencies:
       '@cirrus/auth':
         specifier: workspace:*
-        version: link:../../packages/cirrus-auth
+        version: link:../../packages/auth
       '@cirrus/client':
         specifier: workspace:*
-        version: link:../../packages/cirrus-client
+        version: link:../../packages/client
       '@cirrus/d1':
         specifier: workspace:*
-        version: link:../../packages/cirrus-d1
+        version: link:../../packages/d1
       '@cirrus/do':
         specifier: workspace:*
-        version: link:../../packages/cirrus-do
+        version: link:../../packages/do
       '@cirrus/react':
         specifier: workspace:*
-        version: link:../../packages/cirrus-react
+        version: link:../../packages/react
       '@cirrus/runtime':
         specifier: workspace:*
-        version: link:../../packages/cirrus-runtime
+        version: link:../../packages/runtime
       '@cirrus/scheduler':
         specifier: workspace:*
-        version: link:../../packages/cirrus-scheduler
+        version: link:../../packages/scheduler
       '@cirrus/server':
         specifier: workspace:*
-        version: link:../../packages/cirrus-server
+        version: link:../../packages/server
       '@cirrus/storage':
         specifier: workspace:*
-        version: link:../../packages/cirrus-storage
+        version: link:../../packages/storage
       '@cirrus/vite':
         specifier: workspace:*
-        version: link:../../packages/cirrus-vite
+        version: link:../../packages/vite
       better-auth:
         specifier: catalog:auth
         version: 1.6.11(@cloudflare/workers-types@4.20260527.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260527.1)(kysely@0.28.17))(next@16.2.6(@babel/core@7.29.7)(@playwright/test@1.60.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(vitest@4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.9.0)))
@@ -310,10 +310,10 @@ importers:
     devDependencies:
       '@cirrus/codegen':
         specifier: workspace:*
-        version: link:../../packages/cirrus-codegen
+        version: link:../../packages/codegen
       '@cirrus/config':
         specifier: workspace:*
-        version: link:../../packages/cirrus-config
+        version: link:../../packages/config
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260527.1
@@ -343,34 +343,34 @@ importers:
     dependencies:
       '@cirrus/auth':
         specifier: workspace:*
-        version: link:../../packages/cirrus-auth
+        version: link:../../packages/auth
       '@cirrus/client':
         specifier: workspace:*
-        version: link:../../packages/cirrus-client
+        version: link:../../packages/client
       '@cirrus/d1':
         specifier: workspace:*
-        version: link:../../packages/cirrus-d1
+        version: link:../../packages/d1
       '@cirrus/do':
         specifier: workspace:*
-        version: link:../../packages/cirrus-do
+        version: link:../../packages/do
       '@cirrus/react':
         specifier: workspace:*
-        version: link:../../packages/cirrus-react
+        version: link:../../packages/react
       '@cirrus/runtime':
         specifier: workspace:*
-        version: link:../../packages/cirrus-runtime
+        version: link:../../packages/runtime
       '@cirrus/scheduler':
         specifier: workspace:*
-        version: link:../../packages/cirrus-scheduler
+        version: link:../../packages/scheduler
       '@cirrus/server':
         specifier: workspace:*
-        version: link:../../packages/cirrus-server
+        version: link:../../packages/server
       '@cirrus/storage':
         specifier: workspace:*
-        version: link:../../packages/cirrus-storage
+        version: link:../../packages/storage
       '@cirrus/vite':
         specifier: workspace:*
-        version: link:../../packages/cirrus-vite
+        version: link:../../packages/vite
       better-auth:
         specifier: catalog:auth
         version: 1.6.11(@cloudflare/workers-types@4.20260527.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260527.1)(kysely@0.28.17))(next@16.2.6(@babel/core@7.29.7)(@playwright/test@1.60.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(vitest@4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.9.0)))
@@ -383,7 +383,7 @@ importers:
     devDependencies:
       '@cirrus/cli':
         specifier: workspace:*
-        version: link:../../packages/cirrus-cli
+        version: link:../../packages/cli
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260527.1
@@ -410,22 +410,22 @@ importers:
     dependencies:
       '@cirrus/client':
         specifier: workspace:*
-        version: link:../../packages/cirrus-client
+        version: link:../../packages/client
       '@cirrus/do':
         specifier: workspace:*
-        version: link:../../packages/cirrus-do
+        version: link:../../packages/do
       '@cirrus/react':
         specifier: workspace:*
-        version: link:../../packages/cirrus-react
+        version: link:../../packages/react
       '@cirrus/runtime':
         specifier: workspace:*
-        version: link:../../packages/cirrus-runtime
+        version: link:../../packages/runtime
       '@cirrus/server':
         specifier: workspace:*
-        version: link:../../packages/cirrus-server
+        version: link:../../packages/server
       '@cirrus/vite':
         specifier: workspace:*
-        version: link:../../packages/cirrus-vite
+        version: link:../../packages/vite
       react:
         specifier: catalog:frontend
         version: 19.2.6
@@ -435,7 +435,7 @@ importers:
     devDependencies:
       '@cirrus/cli':
         specifier: workspace:*
-        version: link:../../packages/cirrus-cli
+        version: link:../../packages/cli
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260527.1
@@ -462,22 +462,22 @@ importers:
     dependencies:
       '@cirrus/client':
         specifier: workspace:*
-        version: link:../../packages/cirrus-client
+        version: link:../../packages/client
       '@cirrus/do':
         specifier: workspace:*
-        version: link:../../packages/cirrus-do
+        version: link:../../packages/do
       '@cirrus/react':
         specifier: workspace:*
-        version: link:../../packages/cirrus-react
+        version: link:../../packages/react
       '@cirrus/runtime':
         specifier: workspace:*
-        version: link:../../packages/cirrus-runtime
+        version: link:../../packages/runtime
       '@cirrus/server':
         specifier: workspace:*
-        version: link:../../packages/cirrus-server
+        version: link:../../packages/server
       '@cirrus/vite':
         specifier: workspace:*
-        version: link:../../packages/cirrus-vite
+        version: link:../../packages/vite
       react:
         specifier: catalog:frontend
         version: 19.2.6
@@ -487,7 +487,7 @@ importers:
     devDependencies:
       '@cirrus/cli':
         specifier: workspace:*
-        version: link:../../packages/cirrus-cli
+        version: link:../../packages/cli
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260527.1
@@ -510,7 +510,7 @@ importers:
         specifier: catalog:cloudflare
         version: 4.95.0(@cloudflare/workers-types@4.20260527.1)
 
-  packages/cirrus-auth:
+  packages/auth:
     dependencies:
       better-auth:
         specifier: catalog:auth
@@ -535,17 +535,17 @@ importers:
         specifier: catalog:test
         version: 4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))
 
-  packages/cirrus-cli:
+  packages/cli:
     dependencies:
       '@cirrus/codegen':
         specifier: workspace:*
-        version: link:../cirrus-codegen
+        version: link:../codegen
       '@cirrus/config':
         specifier: workspace:*
-        version: link:../cirrus-config
+        version: link:../config
       '@cirrus/vite':
         specifier: workspace:*
-        version: link:../cirrus-vite
+        version: link:../vite
       '@visulima/boxen':
         specifier: 2.0.10
         version: 2.0.10
@@ -593,14 +593,14 @@ importers:
         specifier: catalog:test
         version: 4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))
 
-  packages/cirrus-client:
+  packages/client:
     devDependencies:
       '@cirrus/do':
         specifier: workspace:*
-        version: link:../cirrus-do
+        version: link:../do
       '@cirrus/runtime':
         specifier: workspace:*
-        version: link:../cirrus-runtime
+        version: link:../runtime
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
         version: 0.16.10(@cloudflare/workers-types@4.20260527.1)(@vitest/runner@4.1.7)(@vitest/snapshot@4.1.7)(vitest@4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3)))
@@ -626,7 +626,7 @@ importers:
         specifier: catalog:cloudflare
         version: 4.95.0(@cloudflare/workers-types@4.20260527.1)
 
-  packages/cirrus-codegen:
+  packages/codegen:
     dependencies:
       ts-morph:
         specifier: catalog:tooling
@@ -634,10 +634,10 @@ importers:
     devDependencies:
       '@cirrus/server':
         specifier: workspace:*
-        version: link:../cirrus-server
+        version: link:../server
       '@cirrus/values':
         specifier: workspace:*
-        version: link:../cirrus-values
+        version: link:../values
       '@types/node':
         specifier: catalog:types
         version: 25.9.1
@@ -657,11 +657,11 @@ importers:
         specifier: catalog:test
         version: 4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))
 
-  packages/cirrus-config:
+  packages/config:
     dependencies:
       '@cirrus/codegen':
         specifier: workspace:*
-        version: link:../cirrus-codegen
+        version: link:../codegen
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1
@@ -685,7 +685,7 @@ importers:
         specifier: catalog:test
         version: 4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))
 
-  packages/cirrus-d1:
+  packages/d1:
     dependencies:
       drizzle-orm:
         specifier: catalog:drizzle
@@ -716,7 +716,7 @@ importers:
         specifier: catalog:cloudflare
         version: 4.95.0(@cloudflare/workers-types@4.20260527.1)
 
-  packages/cirrus-do:
+  packages/do:
     dependencies:
       drizzle-orm:
         specifier: catalog:drizzle
@@ -747,7 +747,7 @@ importers:
         specifier: catalog:cloudflare
         version: 4.95.0(@cloudflare/workers-types@4.20260527.1)
 
-  packages/cirrus-mail:
+  packages/mail:
     dependencies:
       '@react-email/render':
         specifier: catalog:mail
@@ -781,11 +781,11 @@ importers:
         specifier: catalog:test
         version: 4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))
 
-  packages/cirrus-react:
+  packages/react:
     dependencies:
       '@cirrus/client':
         specifier: workspace:*
-        version: link:../cirrus-client
+        version: link:../client
     devDependencies:
       '@testing-library/dom':
         specifier: catalog:frontend
@@ -824,7 +824,7 @@ importers:
         specifier: catalog:test
         version: 4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))
 
-  packages/cirrus-runtime:
+  packages/runtime:
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -851,7 +851,7 @@ importers:
         specifier: catalog:cloudflare
         version: 4.95.0(@cloudflare/workers-types@4.20260527.1)
 
-  packages/cirrus-scheduler:
+  packages/scheduler:
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -878,11 +878,11 @@ importers:
         specifier: catalog:cloudflare
         version: 4.95.0(@cloudflare/workers-types@4.20260527.1)
 
-  packages/cirrus-server:
+  packages/server:
     dependencies:
       '@cirrus/values':
         specifier: workspace:*
-        version: link:../cirrus-values
+        version: link:../values
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -900,7 +900,7 @@ importers:
         specifier: catalog:test
         version: 4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))
 
-  packages/cirrus-storage:
+  packages/storage:
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -927,7 +927,7 @@ importers:
         specifier: catalog:cloudflare
         version: 4.95.0(@cloudflare/workers-types@4.20260527.1)
 
-  packages/cirrus-values:
+  packages/values:
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -945,14 +945,14 @@ importers:
         specifier: catalog:test
         version: 4.1.7(@types/node@25.9.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))
 
-  packages/cirrus-vite:
+  packages/vite:
     dependencies:
       '@cirrus/codegen':
         specifier: workspace:*
-        version: link:../cirrus-codegen
+        version: link:../codegen
       '@cirrus/config':
         specifier: workspace:*
-        version: link:../cirrus-config
+        version: link:../config
       '@cloudflare/vite-plugin':
         specifier: catalog:vite
         version: 1.39.0(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))(workerd@1.20260526.1)(wrangler@4.95.0(@cloudflare/workers-types@4.20260527.1))

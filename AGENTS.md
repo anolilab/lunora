@@ -66,7 +66,7 @@ Cirrus exposes a Convex-style functional API on top of Cloudflare Workers and Du
 
 ### Naming
 
-The CLI binary is `cirrus`. The npm scope is `@cirrus/*`. The "main" server package is **`@cirrus/server`** (directory `packages/cirrus-server/`) — it exports `defineSchema`, `query`, `mutation`, `action`, and the function-context types. There is no `@cirrus/cirrus`. When the docs or plan refer to the "main runtime package", it means `@cirrus/server`.
+The CLI binary is `cirrus`. The npm scope is `@cirrus/*`. The "main" server package is **`@cirrus/server`** (directory `packages/server/`) — it exports `defineSchema`, `query`, `mutation`, `action`, and the function-context types. There is no `@cirrus/cirrus`. When the docs or plan refer to the "main runtime package", it means `@cirrus/server`.
 
 ### Packages
 
@@ -133,7 +133,7 @@ vis generate cirrus-query --name=listMessages              # → cirrus/listMess
 vis generate cirrus-mutation --name=sendMessage
 vis generate cirrus-action --name=syncWithStripe
 vis generate cirrus-table --name=invoices                  # AST-merges into cirrus/schema.ts (creates it if missing)
-vis generate cirrus-package --name=foo --description='…'   # → packages/cirrus-foo/
+vis generate cirrus-package --name=foo --description='…'   # → packages/foo/
 vis generate --list                                         # show all available generators
 ```
 

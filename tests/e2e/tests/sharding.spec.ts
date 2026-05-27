@@ -4,7 +4,7 @@ import { expect, test } from "../fixtures/cirrus.js";
  * Sharding E2E — proves `shardBy("channelId")` routes each channel's writes
  * to its own DO and the `messages.list` query never sees foreign rows.
  *
- * The unit tests in `packages/cirrus-do/__tests__` already verify the DO
+ * The unit tests in `packages/do/__tests__` already verify the DO
  * routing math, but they can't catch a regression where the *client* mints
  * the wrong shard hint or the *server* falls back to a single DO. This test
  * round-trips through the full pipe.

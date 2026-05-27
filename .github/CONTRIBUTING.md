@@ -108,8 +108,8 @@ Pre-commit hooks (Husky + `vis staged` / `vis secrets`, configured in the `stage
 
 ## Adding a new package
 
-1. Pick the closest existing package to copy from (`packages/cirrus-runtime/` is a good template for runtime code; `packages/cirrus-values/` for pure utility libs).
-2. Copy it into `packages/cirrus-<name>/` and rename:
+1. Pick the closest existing package to copy from (`packages/runtime/` is a good template for runtime code; `packages/values/` for pure utility libs).
+2. Copy it into `packages/<name>/` and rename:
     - `package.json` → set `"name": "@cirrus/<name>"`, clear `version`/`description`, update keywords.
     - `project.json` → update `"name"`, `"sourceRoot"`, and vis tags. Every package gets `type:package` and a `category:<slug>` tag (see [`AGENTS.md`](../AGENTS.md) for the categories).
     - `README.md` → write a 4–8 line description plus a minimal example.
