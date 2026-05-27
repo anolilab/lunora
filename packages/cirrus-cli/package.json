@@ -1,0 +1,54 @@
+{
+    "name": "@cirrus/cli",
+    "version": "0.0.0",
+    "type": "module",
+    "sideEffects": false,
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "bin": {
+        "cirrus": "./bin/cirrus.mjs"
+    },
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "bin",
+        "dist",
+        "plop-templates",
+        "src",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "scripts": {
+        "build": "packem build",
+        "build:prod": "packem build",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@cirrus/codegen": "workspace:*",
+        "@cirrus/config": "workspace:*",
+        "@cirrus/vite": "workspace:*",
+        "@visulima/boxen": "2.0.10",
+        "@visulima/cerebro": "2.1.5",
+        "@visulima/colorize": "1.4.29",
+        "@visulima/fs": "4.1.0",
+        "@visulima/pail": "3.2.2",
+        "@visulima/path": "2.0.5",
+        "jsonc-parser": "catalog:vite",
+        "plop": "4.0.5",
+        "ts-morph": "catalog:tooling",
+        "tsx": "catalog:dev"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "esbuild": "catalog:build",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    }
+}

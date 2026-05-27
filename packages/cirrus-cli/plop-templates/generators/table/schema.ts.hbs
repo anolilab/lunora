@@ -1,0 +1,10 @@
+import { defineSchema, defineTable, v } from "@cirrus/server";
+
+export const schema = defineSchema({
+    {{camelCase name}}: defineTable({
+        // Add your column validators here.
+        // Example:
+        // text: v.string(),
+        // createdAt: v.number(),
+    }),
+});

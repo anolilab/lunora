@@ -1,0 +1,25 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "cirrus dev",
+        "build": "vite build",
+        "codegen": "cirrus codegen",
+        "deploy": "cirrus deploy"
+    },
+    "dependencies": {
+        "@cirrus/client": "^0.0.0",
+        "@cirrus/react": "^0.0.0",
+        "@cirrus/runtime": "^0.0.0",
+        "@cirrus/server": "^0.0.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0"
+    },
+    "devDependencies": {
+        "@cirrus/vite": "^0.0.0",
+        "vite": "^8.0.0",
+        "wrangler": "^4.0.0"
+    }
+}

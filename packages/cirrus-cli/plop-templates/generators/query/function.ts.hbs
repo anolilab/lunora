@@ -1,0 +1,21 @@
+import { query, v } from "@cirrus/server";
+
+/**
+ * {{name}} query.
+ *
+ * Replace the args validators and the handler body with your own logic.
+ * Run `cirrus codegen` (or keep `pnpm dev` running) to regenerate the
+ * typed API after you save this file.
+ */
+export const {{camelCase name}} = query({
+    args: {
+        // Add your argument validators here:
+        // limit: v.optional(v.number()),
+    },
+    handler: async (ctx, args) => {
+        // ctx.db: read-only database accessor
+        // ctx.auth: optional caller identity
+        // ctx.storage: read-only file storage
+        return { ok: true, args };
+    },
+});
