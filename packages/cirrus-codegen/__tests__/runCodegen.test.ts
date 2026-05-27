@@ -30,7 +30,7 @@ describe("runCodegen", () => {
         expect(result.generated.dataModel).toContain("export interface Doc_messages");
         expect(result.generated.dataModel).toContain("export interface Doc_users");
         expect(result.generated.dataModel).toContain('_id: Id<"messages">');
-        expect(result.generated.dataModel).toContain("channelId: Id<\"channels\">;");
+        expect(result.generated.dataModel).toContain('channelId: Id<"channels">;');
         expect(result.generated.dataModel).toContain("text: string;");
     });
 
@@ -52,6 +52,19 @@ describe("runCodegen", () => {
 
         expect(result.generated.server).toContain('export { action, mutation, query } from "@cirrus/server"');
         expect(result.generated.server).toContain('export type { ActionCtx, MutationCtx, QueryCtx } from "@cirrus/server"');
+    });
+
+    test("emits server.ts dispatch table keyed by `<namespace>:<fnName>`", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        // The namespace must match the sanitized form `emitApi` uses so the
+        // client-side `__cirrusRef` and the server-side dispatch key agree.
+        expect(result.generated.server).toContain('import * as cirrus_messages_0 from "../messages.js"');
+        expect(result.generated.server).toContain("export const CIRRUS_FUNCTIONS:");
+        expect(result.generated.server).toContain('"messages:list": cirrus_messages_0.list');
+        expect(result.generated.server).toContain('"messages:send": cirrus_messages_0.send');
+        expect(result.generated.server).toContain("export const dispatchCirrusFunction =");
+        expect(result.generated.server).toContain("FUNCTION_NOT_FOUND");
     });
 
     test("writes all three files into _generated/", () => {

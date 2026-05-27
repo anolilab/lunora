@@ -8,10 +8,10 @@ import { discoverSchema } from "./discoverSchema.js";
 import { emitApi, emitDataModel, emitServer } from "./emit.js";
 
 export interface CodegenOptions {
-    /** Project root containing the `cirrus/` directory. */
-    projectRoot: string;
     /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
     cirrusDirectory?: string;
+    /** Project root containing the `cirrus/` directory. */
+    projectRoot: string;
 }
 
 export interface CodegenResult {
@@ -78,7 +78,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
-    const serverContent = emitServer();
+    const serverContent = emitServer(functions);
 
     const outputDirectory = join(cirrusDirectory, "_generated");
 
