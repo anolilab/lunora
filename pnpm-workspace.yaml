@@ -23,14 +23,10 @@ catalogs:
     tsx: ^4.20.3
   lint:
     "@anolilab/eslint-config": 27.0.2
-    "@anolilab/lint-staged-config": 11.0.1
     "@anolilab/prettier-config": 10.0.1
-    "@secretlint/secretlint-rule-preset-recommend": 13.0.2
     eslint: 10.4.0
     husky: ^9.1.7
-    lint-staged: ^17.0.5
     prettier: 3.8.3
-    secretlint: 13.0.2
   node:
     fast-glob: ^3.3.3
     rimraf: 6.1.3

@@ -104,7 +104,7 @@ pnpm lint:prettier:fix
 pnpm lint:types         # tsc --noEmit
 ```
 
-Pre-commit hooks (Husky + lint-staged, configured in [`.lintstagedrc.js`](../.lintstagedrc.js)) run `sort-package-json`, `secretlint`, `tsc --noEmit`, and ESLint on staged files. Don't `--no-verify` past them.
+Pre-commit hooks (Husky + `vis staged` / `vis secrets`, configured in the `staged` and `secrets` blocks of [`vis.config.ts`](../vis.config.ts)) run Prettier, ESLint, and a secrets scan on staged files. Don't `--no-verify` past them.
 
 ## Adding a new package
 

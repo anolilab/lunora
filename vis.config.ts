@@ -78,4 +78,13 @@ export default defineConfig({
     taskRunner: {
         parallel: 5,
     },
+    staged: {
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["pnpm exec prettier --write", "pnpm exec eslint --fix --no-warn-ignored"],
+        "**/*.{md,mdx}": ["pnpm exec prettier --write"],
+    },
+    secrets: {
+        walk: {
+            excludePatterns: [".pnpm-store/**", "**/.vis/**", "**/__fixtures__/**", "**/CHANGELOG.md"],
+        },
+    },
 });

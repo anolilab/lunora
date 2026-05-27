@@ -42,7 +42,6 @@
     "devDependencies": {
         "@anolilab/commitlint-config": "catalog:prod",
         "@anolilab/eslint-config": "catalog:lint",
-        "@anolilab/lint-staged-config": "catalog:lint",
         "@anolilab/multi-semantic-release": "catalog:prod",
         "@anolilab/prettier-config": "catalog:lint",
         "@anolilab/semantic-release-preset": "catalog:dev",
@@ -53,7 +52,6 @@
         "cz-conventional-changelog": "catalog:prod",
         "eslint": "catalog:lint",
         "husky": "catalog:lint",
-        "lint-staged": "catalog:lint",
         "@visulima/tabular": "catalog:prod",
         "@visulima/vis": "catalog:prod",
         "prettier": "catalog:lint",

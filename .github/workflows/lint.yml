@@ -144,8 +144,8 @@
             - "name": "Lint (prettier)"
               "run": "pnpm run lint:prettier"
 
-    "secretlint":
-        "name": "Secretlint"
+    "secrets":
+        "name": "Secrets"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 15
         "steps":
@@ -199,9 +199,10 @@
                   "path": "${{ steps.pnpm-store.outputs.path }}"
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
 
-            - "name": "Run secretlint"
-              # secretlint is pulled in via the lint catalog (pnpm-workspace.yaml).
-              "run": 'pnpm exec secretlint --secretlintignore .secretlintignore "**/*"'
+            - "name": "Run vis secrets"
+              # Scans the workspace using gitleaks-compatible rules.
+              # Excludes configured in vis.config.ts under `secrets.walk`.
+              "run": "pnpm exec vis secrets"
 
     "textlint":
         "name": "Textlint"
