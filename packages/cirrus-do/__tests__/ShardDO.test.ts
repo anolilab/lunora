@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "../src/ShardDO.js";
 import type { ShardDOState } from "../src/ShardDO.js";
+import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "../src/ShardDO.js";
 import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "../src/types.js";
 
 /**
@@ -11,14 +11,14 @@ import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "../s
  * adapter shim the workerd integration tests used to need.
  */
 interface FakeWebSocket {
-    sent: string[];
-    closed: boolean;
-    attachment: SocketAttachment | undefined;
-    send: (data: string) => void;
-    close: (code?: number, reason?: string) => void;
-    serializeAttachment: (value: unknown) => void;
-    deserializeAttachment: () => unknown;
     addEventListener?: never;
+    attachment: SocketAttachment | undefined;
+    close: (code?: number, reason?: string) => void;
+    closed: boolean;
+    deserializeAttachment: () => unknown;
+    send: (data: string) => void;
+    sent: string[];
+    serializeAttachment: (value: unknown) => void;
 }
 
 const createFakeWebSocket = (): FakeWebSocket => {
@@ -44,8 +44,8 @@ const createFakeWebSocket = (): FakeWebSocket => {
 };
 
 interface FakeStateOptions {
-    idName?: string;
     databaseSize?: number;
+    idName?: string;
 }
 
 const createFakeState = (options: FakeStateOptions = {}): ShardDOState & { sockets: FakeWebSocket[] } => {
@@ -65,7 +65,7 @@ const createFakeState = (options: FakeStateOptions = {}): ShardDOState & { socke
 };
 
 class TestShard extends ShardDO {
-    public rpcCalls: { functionPath: string; args: Record<string, unknown> }[] = [];
+    public rpcCalls: { args: Record<string, unknown>; functionPath: string }[] = [];
 
     public rpcResult: unknown = { ok: true };
 
@@ -89,7 +89,7 @@ class TestShard extends ShardDO {
     }
 }
 
-describe("ShardDO", () => {
+describe("shardDO", () => {
     let state: ReturnType<typeof createFakeState>;
     let shard: TestShard;
 
@@ -169,9 +169,9 @@ describe("ShardDO", () => {
         const other = createFakeWebSocket();
         const unrelated = createFakeWebSocket();
 
-        shard.registerSocket(matching, { subs: { "a": { table: "messages" } } });
-        shard.registerSocket(other, { subs: { "b": { table: "messages" } } });
-        shard.registerSocket(unrelated, { subs: { "c": { table: "documents" } } });
+        shard.registerSocket(matching, { subs: { a: { table: "messages" } } });
+        shard.registerSocket(other, { subs: { b: { table: "messages" } } });
+        shard.registerSocket(unrelated, { subs: { c: { table: "documents" } } });
 
         shard.emit({ table: "messages", op: "insert", key: "m1", row: { id: "m1" } });
 
@@ -179,6 +179,81 @@ describe("ShardDO", () => {
         expect(other.sent).toHaveLength(1);
         expect(unrelated.sent).toHaveLength(0);
         expect(JSON.parse(matching.sent[0]!)).toMatchObject({ type: "delta", id: "a", delta: { table: "messages", op: "insert" } });
+    });
+
+    test("broadcastDelta filters by query.args — same key matches, different value skips", () => {
+        const channelA = createFakeWebSocket();
+        const channelB = createFakeWebSocket();
+        const noFilter = createFakeWebSocket();
+
+        shard.registerSocket(channelA, { subs: { "ch-a": { table: "messages", args: { channelId: "A" } } } });
+        shard.registerSocket(channelB, { subs: { "ch-b": { table: "messages", args: { channelId: "B" } } } });
+        shard.registerSocket(noFilter, { subs: { all: { table: "messages" } } });
+
+        shard.emit({ table: "messages", op: "insert", key: "m1", row: { id: "m1", channelId: "A", text: "hi" } });
+
+        expect(channelA.sent).toHaveLength(1);
+        expect(channelB.sent).toHaveLength(0);
+        expect(noFilter.sent).toHaveLength(1);
+    });
+
+    test("broadcastDelta delivers to every subscriber when delta.row is missing (delete fallback)", () => {
+        const channelA = createFakeWebSocket();
+        const channelB = createFakeWebSocket();
+
+        shard.registerSocket(channelA, { subs: { "ch-a": { table: "messages", args: { channelId: "A" } } } });
+        shard.registerSocket(channelB, { subs: { "ch-b": { table: "messages", args: { channelId: "B" } } } });
+
+        shard.emit({ table: "messages", op: "delete", key: "m1" });
+
+        expect(channelA.sent).toHaveLength(1);
+        expect(channelB.sent).toHaveLength(1);
+    });
+
+    test("broadcastDelta skips when query.args requires a key absent from the row", () => {
+        const wsA = createFakeWebSocket();
+
+        shard.registerSocket(wsA, { subs: { "ch-a": { table: "messages", args: { channelId: "A" } } } });
+
+        // `channelId` is missing from the row entirely — strict equality
+        // against `undefined` rejects.
+        shard.emit({ table: "messages", op: "insert", key: "m1", row: { id: "m1", text: "hi" } });
+
+        expect(wsA.sent).toHaveLength(0);
+    });
+
+    test("matchesSubscription is overridable — subclass can implement custom predicates", () => {
+        class PrefixShard extends TestShard {
+            // Match only when `row.text` starts with `args.prefix`.
+            protected override matchesSubscription(
+                query: { args?: Record<string, unknown>; table: string },
+                delta: { row?: Record<string, unknown>; table: string },
+            ): boolean {
+                if (query.table !== delta.table) {
+                    return false;
+                }
+
+                const prefix = query.args?.["prefix"];
+                const text = delta.row?.["text"];
+
+                if (typeof prefix !== "string" || typeof text !== "string") {
+                    return false;
+                }
+
+                return text.startsWith(prefix);
+            }
+        }
+
+        const custom = new PrefixShard(state, {});
+        const ws = createFakeWebSocket();
+
+        custom.registerSocket(ws, { subs: { p: { table: "messages", args: { prefix: "hi" } } } });
+
+        custom.emit({ table: "messages", op: "insert", key: "m1", row: { id: "m1", text: "hi there" } });
+        custom.emit({ table: "messages", op: "insert", key: "m2", row: { id: "m2", text: "bye" } });
+
+        expect(ws.sent).toHaveLength(1);
+        expect(JSON.parse(ws.sent[0]!)).toMatchObject({ type: "delta", id: "p" });
     });
 
     test("webSocketClose clears attachment without re-closing the socket", async () => {
@@ -195,7 +270,7 @@ describe("ShardDO", () => {
     });
 });
 
-describe("ShardDO __root__ 1 GB warning", () => {
+describe("shardDO __root__ 1 GB warning", () => {
     beforeEach(() => {
         // The "warned once" flag is process-global; reset between tests so
         // each case can observe the very first emission.

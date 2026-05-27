@@ -330,11 +330,49 @@ export abstract class ShardDO {
     }
 
     /**
+     * Decide whether a single subscription is interested in a mutation
+     * delta. The default implementation checks the table name, then runs a
+     * shallow-equality predicate over `query.args` against `delta.row`. A
+     * subscription with no `args` matches every row in the table.
+     *
+     * Subclasses can override this to implement range queries, joins, or
+     * full-text matching — anything more elaborate than equality. When
+     * `delta.row` is undefined (delete events without row data) we fall back
+     * to a broadcast so subscribers know to refetch; trying to filter
+     * against missing data would silently drop legitimate notifications.
+     */
+    protected matchesSubscription(query: SubscriptionQuery, delta: MutationDelta): boolean {
+        if (query.table !== delta.table) {
+            return false;
+        }
+
+        const { args } = query;
+
+        if (!args) {
+            return true;
+        }
+
+        const { row } = delta;
+
+        if (!row) {
+            return true;
+        }
+
+        for (const [key, expected] of Object.entries(args)) {
+            if (row[key] !== expected) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Broadcast a mutation delta to every subscriber whose registered query
-     * targets the affected table. The wire payload includes the per-socket
-     * subscription id, so we serialise once per `(socket, sub)` pair — but
-     * the structural delta body itself is identical, so we build a payload
-     * keyed by `subId` lazily.
+     * targets the affected table _and_ matches its args. The wire payload
+     * includes the per-socket subscription id, so we serialise once per
+     * `(socket, sub)` pair — but the structural delta body itself is
+     * identical, so we build a payload keyed by `subId` lazily.
      */
     protected broadcastDelta(delta: MutationDelta): void {
         const sockets = this.state.getWebSockets();
@@ -347,7 +385,7 @@ export abstract class ShardDO {
             const attachment = this.readAttachment(ws);
 
             for (const [subId, query] of Object.entries(attachment.subs)) {
-                if (query.table !== delta.table) {
+                if (!this.matchesSubscription(query, delta)) {
                     continue;
                 }
 
