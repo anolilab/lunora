@@ -69,8 +69,19 @@ class TestShard extends ShardDO {
 
     public rpcResult: unknown = { ok: true };
 
+    /** Bookmark observed by `handleRpc` on the most recent request. */
+    public observedInboundBookmark: string | undefined;
+
+    /** When set, `handleRpc` echoes this value via `setOutboundBookmark`. */
+    public bookmarkToEmit: string | undefined;
+
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
         this.rpcCalls.push({ functionPath, args });
+        this.observedInboundBookmark = this.getInboundBookmark();
+
+        if (this.bookmarkToEmit !== undefined) {
+            this.setOutboundBookmark(this.bookmarkToEmit);
+        }
 
         return this.rpcResult;
     }
@@ -254,6 +265,95 @@ describe("shardDO", () => {
 
         expect(ws.sent).toHaveLength(1);
         expect(JSON.parse(ws.sent[0]!)).toMatchObject({ type: "delta", id: "p" });
+    });
+
+    test("exposes inbound x-d1-bookmark to handleRpc via getInboundBookmark()", async () => {
+        const request = new Request("https://shard.internal/rpc", {
+            method: "POST",
+            body: JSON.stringify({ functionPath: "users:get", args: { id: "u1" } }),
+            headers: { "content-type": "application/json", "x-d1-bookmark": "bm-123" },
+        });
+
+        await shard.fetch(request);
+
+        expect(shard.observedInboundBookmark).toBe("bm-123");
+    });
+
+    test("echoes setOutboundBookmark on the response x-d1-bookmark header", async () => {
+        shard.bookmarkToEmit = "bm-after-write";
+        const request = new Request("https://shard.internal/rpc", {
+            method: "POST",
+            body: JSON.stringify({ functionPath: "users:create", args: {} }),
+            headers: { "content-type": "application/json" },
+        });
+
+        const response = await shard.fetch(request);
+
+        expect(response.headers.get("x-d1-bookmark")).toBe("bm-after-write");
+    });
+
+    test("omits x-d1-bookmark when the handler does not call setOutboundBookmark", async () => {
+        const request = new Request("https://shard.internal/rpc", {
+            method: "POST",
+            body: JSON.stringify({ functionPath: "users:read", args: {} }),
+            headers: { "content-type": "application/json" },
+        });
+
+        const response = await shard.fetch(request);
+
+        expect(response.headers.get("x-d1-bookmark")).toBeNull();
+    });
+
+    test("does not leak inbound bookmark from a previous request to the next", async () => {
+        // First request: bookmark present, handler observes it.
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "users:read", args: {} }),
+                headers: { "content-type": "application/json", "x-d1-bookmark": "bm-1" },
+            }),
+        );
+
+        expect(shard.observedInboundBookmark).toBe("bm-1");
+
+        // Second request: no bookmark on the wire — handler must see undefined,
+        // not the stale value left by the first call.
+        shard.observedInboundBookmark = "polluted";
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "users:read", args: {} }),
+                headers: { "content-type": "application/json" },
+            }),
+        );
+
+        expect(shard.observedInboundBookmark).toBeUndefined();
+    });
+
+    test("clears outbound bookmark between requests so a stale value never re-emits", async () => {
+        shard.bookmarkToEmit = "bm-once";
+        const first = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "users:create", args: {} }),
+                headers: { "content-type": "application/json" },
+            }),
+        );
+
+        expect(first.headers.get("x-d1-bookmark")).toBe("bm-once");
+
+        // Second handler invocation does not set a bookmark — the response
+        // must not carry the previous request's value.
+        shard.bookmarkToEmit = undefined;
+        const second = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "users:read", args: {} }),
+                headers: { "content-type": "application/json" },
+            }),
+        );
+
+        expect(second.headers.get("x-d1-bookmark")).toBeNull();
     });
 
     test("webSocketClose clears attachment without re-closing the socket", async () => {

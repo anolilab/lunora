@@ -97,6 +97,21 @@ export abstract class ShardDO {
      */
     private transactionDepth: number = 0;
 
+    /**
+     * Per-request D1 Sessions API bookmark, read from the inbound
+     * `x-d1-bookmark` header at the top of `fetch` and exposed to handlers
+     * via {@link getInboundBookmark}. Cleared between requests so a stale
+     * bookmark from a previous client never leaks into the next session.
+     */
+    private currentRequestBookmark: string | undefined;
+
+    /**
+     * Per-request D1 bookmark to echo on the outbound response. Handlers
+     * call {@link setOutboundBookmark} after a global-table write so the
+     * client can pin subsequent reads on the same replica.
+     */
+    private currentResponseBookmark: string | undefined;
+
     constructor(state: ShardDOState, env: unknown) {
         this.state = state;
         this.env = env;
@@ -178,6 +193,12 @@ export abstract class ShardDO {
                 return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
             }
 
+            // Stash the inbound D1 bookmark for the duration of the handler
+            // call so `getInboundBookmark()` returns the right value. Clear
+            // it on exit so the next request starts fresh.
+            this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
+            this.currentResponseBookmark = undefined;
+
             try {
                 const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
 
@@ -186,13 +207,36 @@ export abstract class ShardDO {
                 // cheap stat call, not a full table scan.
                 this.maybeWarnRootSize();
 
-                return jsonResponse({ result });
+                return jsonResponse({ result }, 200, this.currentResponseBookmark);
             } catch (error: unknown) {
                 return this.errorToResponse(error);
+            } finally {
+                this.currentRequestBookmark = undefined;
+                this.currentResponseBookmark = undefined;
             }
         }
 
         return new Response("Not found", { status: 404 });
+    }
+
+    /**
+     * Returns the D1 Sessions API bookmark forwarded by the client on this
+     * request, or `undefined` when none was supplied. Handlers pass this
+     * into `db.withSession(bookmark)` to opt into read-your-writes
+     * consistency across replicas.
+     */
+    protected getInboundBookmark(): string | undefined {
+        return this.currentRequestBookmark;
+    }
+
+    /**
+     * Record the post-write D1 bookmark that should be echoed back to the
+     * client on the outbound `x-d1-bookmark` header. Safe to call multiple
+     * times — the last value wins; only the most recent write's bookmark
+     * is meaningful for downstream read pinning.
+     */
+    protected setOutboundBookmark(bookmark: string | undefined): void {
+        this.currentResponseBookmark = bookmark;
     }
 
     /**
@@ -453,8 +497,12 @@ export abstract class ShardDO {
     }
 }
 
-const jsonResponse = (body: unknown, status = 200): Response =>
-    Response.json(body, {
-        status,
-        headers: { "content-type": "application/json" },
-    });
+const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+
+    if (bookmark) {
+        headers["x-d1-bookmark"] = bookmark;
+    }
+
+    return Response.json(body, { status, headers });
+};
