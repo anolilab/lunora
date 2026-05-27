@@ -47,6 +47,22 @@ describe("runCodegen", () => {
         expect(result.generated.api).toContain("export const api = anyApi as unknown as ApiTypes;");
     });
 
+    test("emits per-table index and searchIndex name unions in dataModel.ts", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        // Indexes: messages -> "by_channel", users -> "by_email".
+        expect(result.generated.dataModel).toContain("export interface IndexNamesByTable");
+        expect(result.generated.dataModel).toContain('messages: "by_channel";');
+        expect(result.generated.dataModel).toContain('users: "by_email";');
+        expect(result.generated.dataModel).toContain("export type IndexName<T extends keyof DataModel>");
+
+        // Search indexes: messages -> "by_text", users -> never.
+        expect(result.generated.dataModel).toContain("export interface SearchIndexNamesByTable");
+        expect(result.generated.dataModel).toContain('messages: "by_text";');
+        expect(result.generated.dataModel).toContain("users: never;");
+        expect(result.generated.dataModel).toContain("export type SearchIndexName<T extends keyof DataModel>");
+    });
+
     test("emits literal validators as TS literal types and record as Record<K, V>", () => {
         const result = runCodegen({ projectRoot: workdir });
 

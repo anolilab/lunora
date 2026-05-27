@@ -27,3 +27,22 @@ export interface DataModel {
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
+
+/**
+ * Per-table index name union. `never` for tables without secondary indexes.
+ * Used by `TableReader.withIndex()` to constrain callers to declared names.
+ */
+export interface IndexNamesByTable {
+    messages: "by_channel";
+    users: "by_email";
+}
+
+export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
+
+/** Per-table search-index name union. `never` for tables without searchIndex. */
+export interface SearchIndexNamesByTable {
+    messages: "by_text";
+    users: never;
+}
+
+export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];

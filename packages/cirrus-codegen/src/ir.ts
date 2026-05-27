@@ -51,6 +51,13 @@ export interface FunctionIR {
     /** Path relative to `<projectRoot>/cirrus/` without extension, e.g. "messages". */
     filePath: string;
     kind: "action" | "mutation" | "query";
+    /**
+     * Serialized TS source for the handler's return type, with `Promise<T>`
+     * unwrapped so callers see `T` directly. Defaults to `"unknown"` when
+     * ts-morph cannot resolve the type (typically because the consuming
+     * project lacks a tsconfig that can reach `@cirrus/server`).
+     */
+    returnType: string;
 }
 
 export interface ProjectIR {
