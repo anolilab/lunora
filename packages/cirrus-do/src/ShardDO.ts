@@ -167,6 +167,27 @@ export abstract class ShardDO {
      * both write through the same `state.storage.sql` handle, so the tx
      * boundary is shared. Do **not** call `this.db.transaction(...)` from
      * inside a handler; that would attempt a nested SQLite transaction.
+     *
+     * Why raw BEGIN/COMMIT/ROLLBACK strings instead of `this.db.transaction(handler)`?
+     * Two reasons, both verified against drizzle-orm 0.45.2's
+     * `durable-sqlite/session.js`:
+     *
+     *   1. The DO driver does NOT issue BEGIN/COMMIT/ROLLBACK SQL — it
+     *      delegates to `state.storage.transactionSync(callback)`, the
+     *      DO platform's native transaction primitive. Swapping in
+     *      `db.transaction()` would silently change the wire-level
+     *      contract observed by tests and any tooling that intercepts
+     *      `storage.sql`.
+     *
+     *   2. `transactionSync` invokes the callback synchronously and does
+     *      not await its return value. Drizzle's `transaction()` matches
+     *      that — it passes the tx handle through and then returns.
+     *      Handing it an async handler would let the transaction commit
+     *      before the handler resolves, breaking the `() => Promise<T> | T`
+     *      contract.
+     *
+     * The raw-SQL approach below is async-safe and gives the
+     * connection-scoped semantics SQLite-in-DO is designed for.
      */
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
         if (this.transactionDepth > 0) {
