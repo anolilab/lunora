@@ -1,0 +1,55 @@
+{
+    "name": "@cirrus/react",
+    "version": "0.0.0",
+    "type": "module",
+    "sideEffects": false,
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "scripts": {
+        "build": "packem build",
+        "build:prod": "packem build",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@cirrus/client": "workspace:*"
+    },
+    "peerDependencies": {
+        "react": "^18 || ^19",
+        "react-dom": "^18 || ^19"
+    },
+    "peerDependenciesMeta": {
+        "react": {
+            "optional": false
+        },
+        "react-dom": {
+            "optional": false
+        }
+    },
+    "devDependencies": {
+        "@testing-library/dom": "catalog:frontend",
+        "@testing-library/react": "catalog:frontend",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "@visulima/packem": "catalog:build",
+        "esbuild": "catalog:build",
+        "jsdom": "catalog:frontend",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    }
+}
