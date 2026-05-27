@@ -7,7 +7,7 @@
  * the runtime R2 surface workerd exposes.
  */
 import { env } from "cloudflare:test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
 import { createStorage } from "../../src/createStorage.js";
 import type { R2BucketLike } from "../../src/types.js";
@@ -24,7 +24,10 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
         });
 
         expect(putResult.key).toBe("greetings/hello.txt");
-        expect(putResult.etag).toBe(true);
+
+        expectTypeOf(putResult.etag).toBeString();
+
+        expect(putResult.etag.length).toBeGreaterThan(0);
 
         const got = await sut.download("greetings/hello.txt");
 
