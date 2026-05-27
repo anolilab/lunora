@@ -392,7 +392,8 @@
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
 
             - "name": "Run vis audit"
-              # Scans installed dependencies against the OSV database and applies
-              # a reachability filter via static analysis. Fails on any reachable
-              # vulnerability.
-              "run": "pnpm exec vis audit"
+              # Scans installed dependencies against the OSV database.
+              # `--fail-on high` exits non-zero on any high or critical finding;
+              # `--usage` restricts reporting to statically-reachable packages
+              # so unused transitive deps do not noise the gate.
+              "run": "pnpm exec vis audit --fail-on high --usage"

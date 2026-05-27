@@ -86,13 +86,12 @@ Shared dependency versions are managed via pnpm catalogs in `pnpm-workspace.yaml
 
 ### Pre-commit Hooks
 
-Husky + lint-staged runs on commit:
+Husky drives two `@visulima/vis` commands on commit (configured in `vis.config.ts`):
 
-- `sort-package-json` on `package.json` files
-- `secretlint` on all files
-- `tsc --noEmit` on `.ts` files (per-package tsconfig)
-- ESLint on test files
-- Fixtures (`__fixtures__/`) are excluded
+- `vis secrets --staged` — gitleaks-compatible scan over staged files; excludes from `secrets.walk.excludePatterns`.
+- `vis staged` — runs the per-glob commands declared in the top-level `staged` block (Prettier + ESLint on code, Prettier on Markdown).
+
+Hook chain (`.husky/pre-commit`) uses `set -e`, so a secret detection aborts before staged-file linting runs.
 
 ### Release
 
