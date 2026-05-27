@@ -9,6 +9,7 @@
         "dist",
         "plop-templates",
         "src",
+        "templates",
         "README.md",
         "LICENSE.md"
     ],

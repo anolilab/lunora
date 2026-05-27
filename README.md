@@ -32,7 +32,7 @@ pnpm dev
 Three visible files in a fresh app:
 
 ```ts
-// convex/schema.ts
+// cirrus/schema.ts
 import { defineSchema, defineTable, v } from "@cirrus/server";
 
 export default defineSchema({
@@ -45,7 +45,7 @@ export default defineSchema({
 ```
 
 ```ts
-// convex/messages.ts
+// cirrus/messages.ts
 import { query, mutation, v } from "@cirrus/server";
 
 export const list = query({
@@ -64,7 +64,7 @@ export const send = mutation({
 ```tsx
 // src/App.tsx
 import { useQuery, useMutation } from "@cirrus/react";
-import { api } from "../convex/_generated/api";
+import { api } from "../cirrus/_generated/api";
 
 export default function App() {
     const messages = useQuery(api.messages.list) ?? [];
