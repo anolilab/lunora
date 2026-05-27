@@ -18,7 +18,6 @@ catalogs:
     "@anolilab/semantic-release-preset": ^13.4.10
     "@total-typescript/ts-reset": ^0.6.1
     "@tsconfig/node22": ^22.0.5
-    audit-ci: 7.1.0
     cross-env: ^10.1.0
     tsx: ^4.20.3
   lint:
