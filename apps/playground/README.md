@@ -87,7 +87,5 @@ WebSocket within ~10 ms locally.
 ## Deferred for v0.2
 
 - Real auth route handler wiring (the `Login.tsx` form posts to a stub).
-- Actual D1 read/write inside `ShardDO.handleRpc` (we currently dispatch to
-  a stub `ctx.db`).
 - Generated `api.*` references — the client uses `anyApi` until codegen
   produces typed references for this project.

@@ -3,8 +3,8 @@ import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 
-export { SchedulerDO } from "./SchedulerDO.js";
-export { ShardDO } from "./ShardDO.js";
+export { SchedulerDO } from "./scheduler-do.js";
+export { ShardDO } from "./shard-do.js";
 
 interface Env {
     AUTH_SECRET?: string;
@@ -40,6 +40,15 @@ const buildAuth = (env: Env): CirrusAuth => {
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         d1: env.DB,
+        resolveIdentity: async (request) => {
+            if (!auth) {
+                return null;
+            }
+
+            const session = await auth.api.getSession({ headers: request.headers });
+
+            return { userId: session?.user?.id ?? null };
+        },
         routes: {} as Record<string, Route>,
         shardDO: env.SHARD,
     });

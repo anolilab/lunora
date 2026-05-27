@@ -1,20 +1,40 @@
-import type { ShardDOState } from "@cirrus/do";
-import { ShardDO as ShardDOBase } from "@cirrus/do";
+import type { SchemaLike, ShardDOState, SqlExec } from "@cirrus/do";
+import { createShardCtxDb, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";
 
 import { joinRoom, listCursors, updateCursor } from "../../cirrus/cursors.js";
+import schema from "../../cirrus/schema.js";
+
+type FunctionKind = "action" | "mutation" | "query";
 
 type RegisteredFn = {
     readonly args: Record<string, unknown>;
     readonly handler: (ctx: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown;
+    readonly kind?: FunctionKind;
 };
 
 const REGISTRY: Record<string, RegisteredFn> = {
-    "cursors:listCursors": listCursors as unknown as RegisteredFn,
     "cursors:joinRoom": joinRoom as unknown as RegisteredFn,
+    "cursors:listCursors": listCursors as unknown as RegisteredFn,
     "cursors:updateCursor": updateCursor as unknown as RegisteredFn,
 };
 
+const dispatch = async (expected: FunctionKind, functionPath: string, args: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
+    const fn = REGISTRY[functionPath];
+
+    if (!fn) {
+        throw new Error(`unknown function: ${functionPath}`);
+    }
+
+    if (fn.kind && fn.kind !== expected) {
+        throw new Error(`ctx.run${expected[0]!.toUpperCase()}${expected.slice(1)}: "${functionPath}" is registered as a ${fn.kind}, not a ${expected}`);
+    }
+
+    return fn.handler(ctx, args);
+};
+
 export class ShardDO extends ShardDOBase {
+    private migrated = false;
+
     public constructor(state: ShardDOState, env: unknown) {
         super(state, env);
     }
@@ -26,42 +46,69 @@ export class ShardDO extends ShardDOBase {
             throw new Error(`unknown function: ${functionPath}`);
         }
 
+        this.ensureMigrated();
+
         return fn.handler(this.buildCtx(), args);
     }
 
+    private ensureMigrated(): void {
+        if (this.migrated) {
+            return;
+        }
+
+        runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike);
+        this.migrated = true;
+    }
+
     private buildCtx(): unknown {
-        return {
-            auth: { userId: null, getIdentity: async () => null },
-            db: {
-                get: async () => null,
-                query: () => {
-                    return {
-                        collect: async () => [],
-                        filter() {
-                            return this;
-                        },
-                        first: async () => null,
-                        take: async () => [],
-                        withIndex() {
-                            return this;
-                        },
-                    };
-                },
-                insert: async () => "id_stub" as unknown,
-                patch: async () => undefined,
-                replace: async () => undefined,
-                delete: async () => undefined,
+        const userId = this.getCurrentUserId();
+        const identity = this.getCurrentIdentity();
+
+        const ctx: Record<string, unknown> = {
+            auth: {
+                getIdentity: async () => identity,
+                userId,
             },
-            scheduler: { runAfter: async () => "stub", runAt: async () => "stub" },
-            storage: {
-                delete: async () => undefined,
-                getSignedUrl: async (key: string) => `https://files.example.com/${key}`,
-                getUrl: (key: string) => `https://files.example.com/${key}`,
-            },
+            db: createShardCtxDb({
+                broadcast: (delta) => this.broadcastDelta(delta),
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            }),
             fetch: globalThis.fetch.bind(globalThis),
-            runAction: async () => undefined as unknown,
-            runMutation: async () => undefined as unknown,
-            runQuery: async () => undefined as unknown,
+            scheduler: {
+                cancel: async () => {
+                    throw new Error("ctx.scheduler: this example does not bind a SchedulerDO");
+                },
+                runAfter: async () => {
+                    throw new Error("ctx.scheduler: this example does not bind a SchedulerDO");
+                },
+                runAt: async () => {
+                    throw new Error("ctx.scheduler: this example does not bind a SchedulerDO");
+                },
+            },
+            storage: {
+                delete: async () => {
+                    throw new Error("ctx.storage: this example does not bind an R2 bucket");
+                },
+                download: async () => {
+                    throw new Error("ctx.storage: this example does not bind an R2 bucket");
+                },
+                getSignedUrl: async () => {
+                    throw new Error("ctx.storage: this example does not bind an R2 bucket");
+                },
+                list: async () => {
+                    throw new Error("ctx.storage: this example does not bind an R2 bucket");
+                },
+                upload: async () => {
+                    throw new Error("ctx.storage: this example does not bind an R2 bucket");
+                },
+            },
         };
+
+        ctx.runAction = (fn: { __cirrusRef: string }, fnArgs: Record<string, unknown>) => dispatch("action", fn.__cirrusRef, fnArgs, ctx);
+        ctx.runMutation = (fn: { __cirrusRef: string }, fnArgs: Record<string, unknown>) => dispatch("mutation", fn.__cirrusRef, fnArgs, ctx);
+        ctx.runQuery = (fn: { __cirrusRef: string }, fnArgs: Record<string, unknown>) => dispatch("query", fn.__cirrusRef, fnArgs, ctx);
+
+        return ctx;
     }
 }

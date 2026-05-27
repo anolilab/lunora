@@ -2,9 +2,12 @@ import type { CirrusAuth } from "@cirrus/auth";
 import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
+import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
+import type { R2BucketLike } from "@cirrus/storage";
+import { buildSignedUrl } from "@cirrus/storage";
 
-export { SchedulerDO } from "./SchedulerDO.js";
-export { ShardDO } from "./ShardDO.js";
+export { SchedulerDO } from "./scheduler-do.js";
+export { ShardDO } from "./shard-do.js";
 
 interface Env {
     AUTH_SECRET?: string;
@@ -20,8 +23,10 @@ interface Env {
      */
     CIRRUS_E2E?: string;
     DB: unknown;
-    FILES: unknown;
-    SCHEDULER: ShardNamespaceLike;
+    FILES: R2BucketLike;
+    /** Public base URL R2 objects resolve against — used to mint signed URLs. */
+    PUBLIC_STORAGE_BASE_URL?: string;
+    SCHEDULER: ShardNamespaceLike & DurableObjectNamespaceLike;
     SHARD: ShardNamespaceLike;
     STORAGE_SECRET?: string;
 }
@@ -53,6 +58,15 @@ const buildAuth = (env: Env): CirrusAuth => {
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         d1: env.DB,
+        resolveIdentity: async (request) => {
+            if (!auth) {
+                return null;
+            }
+
+            const session = await auth.api.getSession({ headers: request.headers });
+
+            return { userId: session?.user?.id ?? null };
+        },
         // The runtime's route map can stay empty: better-auth routes are
         // dispatched ahead of the worker by the `handleAuthRequest` hook.
         routes: {} as Record<string, Route>,
@@ -90,11 +104,41 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     }
 
     if (url.pathname === "/test/sign" && request.method === "POST") {
-        return Response.json({ url: null, error: "not implemented in playground build" }, { status: 501 });
+        if (!env.STORAGE_SECRET || !env.PUBLIC_STORAGE_BASE_URL) {
+            return Response.json({ error: "STORAGE_SECRET and PUBLIC_STORAGE_BASE_URL must both be configured", url: null }, { status: 500 });
+        }
+
+        const body = (await request.json().catch(() => null)) as { key?: string; method?: "GET" | "PUT"; expiresInSeconds?: number } | null;
+
+        if (!body?.key) {
+            return Response.json({ error: "`key` is required", url: null }, { status: 400 });
+        }
+
+        const signed = await buildSignedUrl({
+            baseUrl: env.PUBLIC_STORAGE_BASE_URL,
+            expiresInSeconds: body.expiresInSeconds,
+            key: body.key,
+            method: body.method ?? "GET",
+            secret: env.STORAGE_SECRET,
+        });
+
+        return Response.json({ url: signed });
     }
 
     if (url.pathname === "/test/schedule" && request.method === "POST") {
-        return Response.json({ jobId: null, error: "not implemented in playground build" }, { status: 501 });
+        const body = (await request.json().catch(() => null)) as { functionPath?: string; args?: Record<string, unknown>; delayMs?: number; scheduledFor?: number } | null;
+
+        if (!body?.functionPath) {
+            return Response.json({ error: "`functionPath` is required", jobId: null }, { status: 400 });
+        }
+
+        const originUrl = new URL(request.url).origin;
+        const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl });
+        const scheduledFor = body.scheduledFor ?? Date.now() + (body.delayMs ?? 0);
+
+        const result = await scheduler.runAt(scheduledFor, { __cirrusRef: body.functionPath }, body.args ?? {});
+
+        return Response.json({ jobId: result.id, scheduledFor: result.scheduledFor });
     }
 
     if (url.pathname === "/test/job-status" && request.method === "GET") {
