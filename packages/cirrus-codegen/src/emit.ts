@@ -233,11 +233,7 @@ export const CIRRUS_FUNCTIONS: Record<string, RegisteredCirrusFunction> = {${dis
  * object (404) when the path is unknown — the runtime's structural error
  * mapper turns that into the right HTTP status.
  */
-export const dispatchCirrusFunction = async (
-    functionPath: string,
-    context: unknown,
-    args: Record<string, unknown>,
-): Promise<unknown> => {
+export const dispatchCirrusFunction = async (functionPath: string, context: unknown, args: Record<string, unknown>): Promise<unknown> => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
     if (!registered) {
