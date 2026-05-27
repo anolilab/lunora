@@ -26,10 +26,15 @@
         "test": "vitest run"
     },
     "devDependencies": {
+        "@cirrus/do": "workspace:*",
+        "@cirrus/runtime": "workspace:*",
+        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
     }
 }
