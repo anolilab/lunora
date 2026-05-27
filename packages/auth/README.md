@@ -1,6 +1,8 @@
 # @cirrus/auth
 
-Cookie-session authentication adapter for the Cirrus framework. v0.1 ships a minimal in-house surface (email/password + OAuth provider scaffolding) backed by D1 tables and PBKDF2 password hashing via `crypto.subtle`. A future v0.2 will swap the internals for [`better-auth`](https://www.better-auth.com/) without changing the public API.
+Cookie-session authentication adapter for the Cirrus framework. Built on top of
+[`better-auth`](https://www.better-auth.com/), with sessions persisted in the
+`SessionDO` shipped by `@cirrus/do` and a D1-backed user store.
 
 ```ts
 import { createAuth, providers } from "@cirrus/auth";
@@ -14,7 +16,33 @@ const auth = createAuth({
 const routes = auth.routes();
 ```
 
+## Identity inside a Cirrus function
+
+Wire `auth.resolveIdentity` into the runtime so every RPC reaching a `ShardDO`
+carries the resolved user:
+
+```ts
+import { createWorker } from "@cirrus/runtime";
+
+export default createWorker({
+    shardDO: env.SHARD_DO,
+    resolveIdentity: (request) => auth.resolveIdentity(request, env),
+});
+```
+
+`resolveIdentity` returns either `null` (no session) or `{ userId, ...extraClaims }`.
+The runtime forwards `userId` on the `x-cirrus-userid` header and, when extra
+claims are present, JSON-serialises them onto `x-cirrus-identity`. Inside a
+function, `ctx.auth.userId` and `ctx.auth.getIdentity()` give you the resolved
+identity — they read from the request the runtime forwarded into the DO.
+
 ## Status
 
-- Sessions live in D1 (`auth_sessions`, `auth_users`); the planned `SessionDO` pinning lands in v0.2.
-- OAuth providers stub the provider-side token exchange so end-to-end tests stay green without external calls. The PKCE redirect dance is implemented; the token call is marked with a `TODO`.
+- Sessions live in `SessionDO` (one DO per active session) and are mirrored to
+  D1 (`auth_sessions`, `auth_users`) so cold reads don't need the DO to be
+  warm.
+- Password hashing uses PBKDF2 via `crypto.subtle`; OAuth providers complete
+  the full PKCE redirect + token-exchange dance.
+- Bearer tokens are accepted on both the `Authorization` header and the
+  `?token=` query parameter — see the `CIRRUS_WS_BEARER` note in `@cirrus/do`
+  for the WebSocket upgrade caveat.
