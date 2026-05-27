@@ -203,9 +203,17 @@ export default createConfig(
     },
     // Test files: relax rules
     {
-        files: ["**/__tests__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+        files: [
+            "**/__tests__/**/*.{ts,tsx}",
+            "**/__bench__/**/*.{ts,tsx}",
+            "**/*.test.{ts,tsx}",
+            "**/*.spec.{ts,tsx}",
+            "**/*.bench.{ts,tsx}",
+            "tests/**/*.{ts,tsx}",
+        ],
         rules: {
             "@stylistic/no-tabs": "off",
+            "@typescript-eslint/no-floating-promises": "off",
             "@typescript-eslint/no-unnecessary-condition": "off",
             "@typescript-eslint/no-unsafe-argument": "off",
             "@typescript-eslint/no-unsafe-assignment": "off",
