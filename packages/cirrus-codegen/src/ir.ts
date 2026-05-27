@@ -1,22 +1,22 @@
 /** Reflective representation of a single validator call from the schema. */
 export interface ValidatorIR {
-    /** Kind of validator (string, number, id, object, optional, array, union, literal, record, ...). */
-    kind: string;
-    /** For `v.id("table")` — the table name. */
-    tableName?: string;
     /** For `v.optional(inner)` / `v.array(inner)`. */
     inner?: ValidatorIR;
-    /** For `v.object({...})`. */
-    shape?: Record<string, ValidatorIR>;
-    /** For `v.union(a, b, ...)`. */
-    members?: ValidatorIR[];
-    /** For `v.literal(value)` — the literal value as source text. */
-    literalValue?: string;
     /** For `v.record(key, value)`. */
     keyType?: ValidatorIR;
-    valueType?: ValidatorIR;
+    /** Kind of validator (string, number, id, object, optional, array, union, literal, record, ...). */
+    kind: string;
+    /** For `v.literal(value)` — the literal value as source text. */
+    literalValue?: string;
+    /** For `v.union(a, b, ...)`. */
+    members?: ValidatorIR[];
+    /** For `v.object({...})`. */
+    shape?: Record<string, ValidatorIR>;
     /** Verbatim source text — used in emitted code when we can't reconstruct from AST. */
     sourceText?: string;
+    /** For `v.id("table")` — the table name. */
+    tableName?: string;
+    valueType?: ValidatorIR;
 }
 
 export interface IndexIR {
@@ -25,9 +25,18 @@ export interface IndexIR {
     unique?: boolean;
 }
 
+export interface SearchIndexIR {
+    /** Primary text-search field. */
+    field: string;
+    /** Optional filter fields surfaced alongside the FTS column. */
+    filterFields?: ReadonlyArray<string>;
+    name: string;
+}
+
 export interface TableIR {
     indexes: ReadonlyArray<IndexIR>;
     name: string;
+    searchIndexes: ReadonlyArray<SearchIndexIR>;
     shape: Record<string, ValidatorIR>;
     shardMode: "global" | "root" | { field: string; kind: "shardBy" };
 }

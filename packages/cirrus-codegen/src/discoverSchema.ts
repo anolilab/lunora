@@ -1,11 +1,12 @@
-import { Node, Project, SyntaxKind } from "ts-morph";
-import type { Expression, SourceFile } from "ts-morph";
+import type { Expression, Project, SourceFile } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
-import type { IndexIR, SchemaIR, TableIR, ValidatorIR } from "./ir.js";
+import type { IndexIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR } from "./ir.js";
 import { parseObjectShape } from "./parseValidator.js";
 
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const indexes: IndexIR[] = [];
+    const searchIndexes: SearchIndexIR[] = [];
     let shardMode: TableIR["shardMode"] = "root";
     let shape: Record<string, ValidatorIR> = {};
     let current: Expression = expression;
@@ -39,14 +40,60 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
                         }
                     }
 
-                    const fields = fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression)
-                        ? fieldsExpression.getElements().filter((element): element is Expression => Node.isStringLiteral(element)).map((element) => (element as ReturnType<typeof fieldsExpression.getElements>[number] & { getLiteralText(): string }).getLiteralText())
-                        : [];
+                    const fields
+                        = fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression)
+                            ? fieldsExpression
+                                .getElements()
+                                .filter((element): element is Expression => Node.isStringLiteral(element))
+                                .map((element) =>
+                                    (element as ReturnType<typeof fieldsExpression.getElements>[number] & { getLiteralText: () => string }).getLiteralText(),
+                                )
+                            : [];
 
                     indexes.push({
                         fields,
                         name: indexName && Node.isStringLiteral(indexName) ? indexName.getLiteralText() : "_unnamed_",
                         unique,
+                    });
+
+                    break;
+                }
+
+                case "searchIndex": {
+                    const indexName = args[0];
+                    const optionsExpression = args[1];
+                    let field = "_unknown_";
+                    let filterFields: string[] | undefined;
+
+                    if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
+                        const fieldProperty = optionsExpression.getProperty("field");
+
+                        if (fieldProperty && Node.isPropertyAssignment(fieldProperty)) {
+                            const initializer = fieldProperty.getInitializer();
+
+                            if (initializer && Node.isStringLiteral(initializer)) {
+                                field = initializer.getLiteralText();
+                            }
+                        }
+
+                        const filterProperty = optionsExpression.getProperty("filterFields");
+
+                        if (filterProperty && Node.isPropertyAssignment(filterProperty)) {
+                            const initializer = filterProperty.getInitializer();
+
+                            if (initializer && Node.isArrayLiteralExpression(initializer)) {
+                                filterFields = initializer
+                                    .getElements()
+                                    .filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element))
+                                    .map((element) => element.getLiteralText());
+                            }
+                        }
+                    }
+
+                    searchIndexes.push({
+                        field,
+                        filterFields,
+                        name: indexName && Node.isStringLiteral(indexName) ? indexName.getLiteralText() : "_unnamed_",
                     });
 
                     break;
@@ -60,8 +107,9 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
                     break;
                 }
 
-                default:
+                default: {
                     break;
+                }
             }
 
             current = callee.getExpression();
@@ -79,7 +127,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         }
     }
 
-    return { indexes, name, shape, shardMode };
+    return { indexes, name, searchIndexes, shape, shardMode };
 };
 
 /**
@@ -89,13 +137,11 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
 export const discoverSchema = (project: Project, schemaPath: string): SchemaIR => {
     const file: SourceFile = project.addSourceFileAtPath(schemaPath);
 
-    const defineSchemaCall = file
-        .getDescendantsOfKind(SyntaxKind.CallExpression)
-        .find((call) => {
-            const callee = call.getExpression();
+    const defineSchemaCall = file.getDescendantsOfKind(SyntaxKind.CallExpression).find((call) => {
+        const callee = call.getExpression();
 
-            return Node.isIdentifier(callee) && callee.getText() === "defineSchema";
-        });
+        return Node.isIdentifier(callee) && callee.getText() === "defineSchema";
+    });
 
     if (!defineSchemaCall) {
         throw new Error(`defineSchema() not found in ${schemaPath}`);

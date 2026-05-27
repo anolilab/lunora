@@ -6,7 +6,8 @@ export const schema = defineSchema({
         text: v.string(),
     })
         .shardBy("channelId")
-        .index("by_channel", ["channelId"]),
+        .index("by_channel", ["channelId"])
+        .searchIndex("by_text", { field: "text", filterFields: ["channelId"] }),
 
     users: defineTable({
         email: v.string(),
