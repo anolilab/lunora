@@ -4,7 +4,7 @@
  * call in `cirrus/schema.ts`. We do AST-level editing (rather than text-level
  * regex) so we preserve formatting, comments and trailing-comma idioms.
  */
-import { Project, type PropertyAssignment, SyntaxKind } from "ts-morph";
+import { type CallExpression, Project, type PropertyAssignment, SyntaxKind } from "ts-morph";
 
 /**
  * Render the default `defineTable({ ... })` block for the named table. Used
@@ -28,7 +28,7 @@ export const formatTableBlock = (tableName: string): string => {
  * The caller is responsible for not double-adding a table that already
  * exists (we don't error here — that's a friendlier concern higher up).
  */
-// eslint-disable-next-line sonarjs/cognitive-complexity
+
 export const appendTableToSchema = (source: string, tableName: string, _block: string): string | undefined => {
     const project = new Project({
         useInMemoryFileSystem: true,
@@ -60,7 +60,7 @@ export const appendTableToSchema = (source: string, tableName: string, _block: s
     const args = defineSchemaCall.getArguments();
     const tablesArg = args[0];
 
-    if (!tablesArg || tablesArg.getKind() !== SyntaxKind.ObjectLiteralExpression) {
+    if (tablesArg?.getKind() !== SyntaxKind.ObjectLiteralExpression) {
         return undefined;
     }
 
