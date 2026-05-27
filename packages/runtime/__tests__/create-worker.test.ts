@@ -192,4 +192,111 @@ describe("createWorker", () => {
         expect(namespace.idFromName).not.toHaveBeenCalled();
         expect(stub.fetch).toHaveBeenCalled();
     });
+
+    test("forwards resolveIdentity userId on the x-cirrus-userid header", async () => {
+        const worker = createWorker({
+            shardDO: shard.namespace,
+            resolveIdentity: () => ({ userId: "user_42" }),
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+            }),
+            {},
+            fakeCtx,
+        );
+
+        expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBe("user_42");
+        expect(shard.calls[0]!.request.headers.get("x-cirrus-identity")).toBeNull();
+    });
+
+    test("omits identity headers when resolveIdentity returns null", async () => {
+        const worker = createWorker({
+            shardDO: shard.namespace,
+            resolveIdentity: () => null,
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+            }),
+            {},
+            fakeCtx,
+        );
+
+        expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBeNull();
+        expect(shard.calls[0]!.request.headers.get("x-cirrus-identity")).toBeNull();
+    });
+
+    test("serialises extra identity claims as JSON on x-cirrus-identity", async () => {
+        const worker = createWorker({
+            shardDO: shard.namespace,
+            resolveIdentity: () => ({ userId: "user_42", email: "u@example.com", roles: ["admin"] }),
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+            }),
+            {},
+            fakeCtx,
+        );
+
+        expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBe("user_42");
+        const identityHeader = shard.calls[0]!.request.headers.get("x-cirrus-identity");
+
+        expect(identityHeader).not.toBeNull();
+        expect(JSON.parse(identityHeader!)).toEqual({ email: "u@example.com", roles: ["admin"] });
+    });
+
+    test("does not invoke resolveIdentity when fanOut request would 400 (no coordinator)", async () => {
+        const resolveIdentity = vi.fn(() => ({ userId: "user_42" }));
+        const worker = createWorker({
+            shardDO: shard.namespace,
+            resolveIdentity,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { kind: "all" } }),
+            }),
+            {},
+            fakeCtx,
+        );
+
+        expect(res.status).toBe(400);
+        expect(resolveIdentity).not.toHaveBeenCalled();
+    });
+
+    test("propagates resolved identity headers through the fan-out coordinator", async () => {
+        const fanOut = vi.fn(async (_namespace, args: { headers: Record<string, string> }) => ({
+            received: args.headers,
+        }));
+
+        const worker = createWorker({
+            shardDO: shard.namespace,
+            queryCoordinator: { fanOut: fanOut as never, registry: {} as never },
+            resolveIdentity: () => ({ userId: "user_42", email: "u@example.com" }),
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { kind: "all" } }),
+            }),
+            {},
+            fakeCtx,
+        );
+
+        expect(fanOut).toHaveBeenCalledOnce();
+        const headers = fanOut.mock.calls[0]![1].headers;
+
+        expect(headers["x-cirrus-userid"]).toBe("user_42");
+        expect(JSON.parse(headers["x-cirrus-identity"]!)).toEqual({ email: "u@example.com" });
+    });
 });

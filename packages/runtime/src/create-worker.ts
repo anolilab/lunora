@@ -28,6 +28,24 @@ export interface ExecutionContextLike {
 
 export type Route = (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> | Response;
 
+/**
+ * Identity resolved from the inbound request by {@link WorkerOptions.resolveIdentity}.
+ *
+ * The `userId` field is special — it becomes `ctx.auth.userId` inside the
+ * Durable Object. Any other keys (`email`, `name`, custom roles, etc.) are
+ * forwarded verbatim as `ctx.auth.getIdentity()`'s return value.
+ *
+ * Return `null` to signal that the request is anonymous; the runtime will
+ * skip both `x-cirrus-userid` and `x-cirrus-identity` headers, and
+ * `ctx.auth.userId` will be `undefined` on the shard side.
+ */
+export interface ResolvedIdentity {
+    /** Stable user identifier (e.g. `"user_2k3..."` or `"u_42"`). */
+    userId: string;
+    /** Arbitrary additional claims. Must be JSON-serialisable. */
+    [key: string]: unknown;
+}
+
 export interface WorkerOptions {
     /**
      * D1 binding for `.global()` tables. Currently unused by the routing
@@ -48,6 +66,16 @@ export interface WorkerOptions {
      * `createQueryCoordinator({ registry })`.
      */
     queryCoordinator?: QueryCoordinator;
+    /**
+     * Resolve the calling identity from the inbound RPC request. Called once
+     * per RPC (and per fan-out) before the request is forwarded to the
+     * shard. The returned `userId` becomes `ctx.auth.userId` on the shard
+     * side; remaining keys (`email`, role flags, etc.) are JSON-encoded and
+     * forwarded as `x-cirrus-identity` so `ctx.auth.getIdentity()` can
+     * return them. Returning `null` (or omitting this option) means
+     * anonymous — no identity headers are injected.
+     */
+    resolveIdentity?: (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     /**
      * Map of routes for custom HTTP handlers (auth callbacks etc.). Keys can
      * be either `"METHOD path"` (e.g. `"GET /healthz"`) or just `"path"`
@@ -109,6 +137,17 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                 throw new CirrusError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
             }
 
+            // Refuse fan-out envelopes that arrive without a coordinator
+            // configured BEFORE we invoke `resolveIdentity` — otherwise the
+            // hook would be called for a request that's already destined for
+            // a 400, wasting any DB/IO it performs to look up the user.
+            if (envelope.fanOut && !options.queryCoordinator) {
+                throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
+                    code: "BAD_REQUEST",
+                    status: 400,
+                });
+            }
+
             // Forward selected headers from the inbound request so the DO can
             // honour auth, sessions, and D1 read-your-writes consistency.
             const forwardedHeaders: Record<string, string> = { "content-type": "application/json" };
@@ -128,15 +167,28 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                 forwardedHeaders["x-d1-bookmark"] = bookmark;
             }
 
-            if (envelope.fanOut) {
-                if (!options.queryCoordinator) {
-                    throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
-                        code: "BAD_REQUEST",
-                        status: 400,
-                    });
-                }
+            if (options.resolveIdentity) {
+                const identity = await options.resolveIdentity(request, env);
 
-                const result = await options.queryCoordinator.fanOut(options.shardDO, {
+                if (identity && typeof identity.userId === "string" && identity.userId.length > 0) {
+                    forwardedHeaders["x-cirrus-userid"] = identity.userId;
+
+                    // Strip `userId` from the envelope so the DO doesn't see it
+                    // twice. The rest of the identity (claims like email/name
+                    // /roles) is JSON-encoded so handlers can read it via
+                    // `ctx.auth.getIdentity()`.
+                    const { userId: _userId, ...extra } = identity;
+
+                    if (Object.keys(extra).length > 0) {
+                        forwardedHeaders["x-cirrus-identity"] = JSON.stringify(extra);
+                    }
+                }
+            }
+
+            if (envelope.fanOut) {
+                // Coordinator presence was checked above.
+                const coordinator = options.queryCoordinator!;
+                const result = await coordinator.fanOut(options.shardDO, {
                     args: envelope.args ?? {},
                     fanOut: envelope.fanOut,
                     functionPath: envelope.functionPath,
