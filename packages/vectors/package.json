@@ -21,8 +21,8 @@
         "LICENSE.md"
     ],
     "scripts": {
-        "build": "packem build",
-        "build:prod": "packem build",
+        "build": "pnpm exec packem build",
+        "build:prod": "pnpm exec packem build",
         "lint:types": "tsc --noEmit",
         "test": "vitest run"
     },
