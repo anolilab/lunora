@@ -6,6 +6,7 @@ export type {
     IdGenerator,
     IndexDefinitionLike,
     IndexRangeBuilderLike,
+    ReadHook,
     SchemaLike,
     SqlCursor,
     SqlExec,
@@ -18,7 +19,7 @@ export type {
 export { createShardCtxDb, runShardMigrations } from "./ctx-db.js";
 export type { SessionRecord } from "./session-do.js";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
-export type { HibernatableWebSocket, ShardDOState } from "./shard-do.js";
+export type { HibernatableWebSocket, ShardDOState, SubscriptionOutcome } from "./shard-do.js";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "./shard-do.js";
 export type { TransactionSqlLike } from "./transaction.js";
 export { ConflictError } from "./transaction.js";

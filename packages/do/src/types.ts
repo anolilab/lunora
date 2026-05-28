@@ -1,6 +1,12 @@
 export interface SubscriptionQuery {
     args?: Record<string, unknown>;
-    table: string;
+    /**
+     * `<namespace>:<fn>` reference to the query the server re-executes on
+     * writes, pushing the full result via a `{ type: "data" }` envelope.
+     */
+    functionPath?: string;
+    /** Legacy table name used by {@link MutationDelta} broadcast matching. */
+    table?: string;
 }
 
 export interface SubscriptionEnvelope {

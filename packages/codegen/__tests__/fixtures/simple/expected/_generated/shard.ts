@@ -89,6 +89,22 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return registered.handler(this.buildCtx(), args);
         }
 
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {
+            const registered = CIRRUS_FUNCTIONS[functionPath];
+
+            if (!registered || registered.kind !== "query") {
+                return null;
+            }
+
+            this.ensureMigrated();
+
+            const tables = new Set<string>();
+            const ctx = this.buildCtx({ onRead: (table) => tables.add(table) });
+            const result = await registered.handler(ctx, args);
+
+            return { result, tables };
+        }
+
         private ensureMigrated(): void {
             if (this.migrated) {
                 return;
@@ -98,15 +114,16 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.migrated = true;
         }
 
-        private buildCtx(): unknown {
+        private buildCtx(options: { onRead?: (table: string) => void } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             const userId = this.getCurrentUserId();
             const identity = this.getCurrentIdentity();
 
             const db: DatabaseWriterLike = createShardCtxDb({
                 broadcast: (delta) => {
-                    this.broadcastDelta(delta);
+                    this.recordChangedTable(delta.table);
                 },
+                onRead: options.onRead,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
             });

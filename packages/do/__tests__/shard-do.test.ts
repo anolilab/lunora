@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { ShardDOState } from "../src/shard-do.js";
+import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do.js";
 import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "../src/shard-do.js";
 import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "../src/types.js";
 
@@ -105,6 +105,69 @@ class TestShard extends ShardDO {
     public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment = { subs: {} }): void {
         this.state.acceptWebSocket(ws as unknown as WebSocket);
         ws.serializeAttachment(attachment);
+    }
+}
+
+/**
+ * Exercises the server-side re-execution path (`functionPath` subscriptions):
+ * `executeSubscription` stands in for the codegen-generated override that
+ * re-runs a query and reports which tables it read. Writes are simulated by
+ * having `handleRpc` record a changed table, which `fetch` flushes.
+ */
+class ReexecShard extends ShardDO {
+    /** functionPath -> the outcome `executeSubscription` should return next. */
+    public readonly outcomes = new Map<string, SubscriptionOutcome>();
+
+    /** Number of times `executeSubscription` ran (initial push + refreshes). */
+    public execCount = 0;
+
+    /** userId visible inside the most recent `handleRpc` call. */
+    public userIdDuringRpc: string | undefined;
+
+    /** userId visible inside the most recent `executeSubscription` call. */
+    public userIdDuringExec: string | undefined;
+
+    /** When set, `handleRpc` records this table as changed (simulates a write). */
+    public changedTableOnRpc: string | undefined;
+
+    public override async handleRpc(): Promise<unknown> {
+        this.userIdDuringRpc = this.getCurrentUserId();
+
+        if (this.changedTableOnRpc !== undefined) {
+            this.recordChangedTable(this.changedTableOnRpc);
+        }
+
+        return { ok: true };
+    }
+
+    protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        void args;
+        this.execCount += 1;
+        this.userIdDuringExec = this.getCurrentUserId();
+
+        const outcome = this.outcomes.get(functionPath);
+
+        // Clone the table set so the production code can't mutate the fixture.
+        return Promise.resolve(outcome ? { result: outcome.result, tables: new Set(outcome.tables) } : null);
+    }
+
+    public driveMessage(ws: FakeWebSocket, envelope: SubscriptionEnvelope): Promise<void> {
+        return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
+    }
+
+    public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment = { subs: {} }): void {
+        this.state.acceptWebSocket(ws as unknown as WebSocket);
+        ws.serializeAttachment(attachment);
+    }
+
+    public writeRpc(headers: Record<string, string> = {}): Promise<Response> {
+        return this.fetch(
+            new Request("https://shard.internal/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "cursors:updateCursor", args: {} }),
+                headers: { "content-type": "application/json", ...headers },
+            }),
+        );
     }
 }
 
@@ -580,5 +643,134 @@ describe("shardDO upgrade gating", () => {
         const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
 
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/?token=s3cret"));
+    });
+});
+
+describe("shardDO subscription re-execution", () => {
+    let state: ReturnType<typeof createFakeState>;
+
+    beforeEach(() => {
+        state = createFakeState();
+    });
+
+    const subscribe = async (shard: ReexecShard, ws: FakeWebSocket): Promise<void> => {
+        await shard.driveMessage(ws, {
+            type: "subscribe",
+            id: "sub-1",
+            query: { functionPath: "cursors:listCursors", args: { roomId: "lobby" }, table: "cursors" },
+        });
+    };
+
+    test("pushes the initial full result on subscribe, then the refreshed result on a write to a read table", async () => {
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "ack", id: "sub-1" });
+        expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "data", id: "sub-1", data: [{ sessionId: "a", x: 0, y: 0 }] });
+
+        // A write moves the cursor: the next re-execution returns the new view.
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 50, y: 80 }], tables: new Set(["cursors"]) });
+        shard.changedTableOnRpc = "cursors";
+
+        await shard.writeRpc();
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ type: "data", id: "sub-1", data: [{ sessionId: "a", x: 50, y: 80 }] });
+    });
+
+    test("re-executes but does not re-send when the result is byte-identical", async () => {
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        const sentBefore = ws.sent.length;
+        const execBefore = shard.execCount;
+
+        // Same table changed, but the query result is unchanged.
+        shard.changedTableOnRpc = "cursors";
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(execBefore + 1); // re-ran the query
+        expect(ws.sent.length).toBe(sentBefore); // identical → deduped, no push
+    });
+
+    test("skips re-execution entirely when the write touches a table the subscription never read", async () => {
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        const execBefore = shard.execCount;
+
+        shard.changedTableOnRpc = "documents";
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(execBefore); // memo tables don't intersect → not re-run
+    });
+
+    test("re-executes anonymously — the writer's identity never leaks into the pushed view", async () => {
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 1, y: 1 }], tables: new Set(["cursors"]) });
+        shard.changedTableOnRpc = "cursors";
+
+        await shard.writeRpc({ "x-cirrus-userid": "user_42" });
+
+        expect(shard.userIdDuringRpc).toBe("user_42"); // the write saw the caller's identity
+        expect(shard.userIdDuringExec).toBeUndefined(); // the re-execution did not
+    });
+
+    test("legacy subscriptions without functionPath get no initial push and never re-execute", async () => {
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+
+        await shard.driveMessage(ws, { type: "subscribe", id: "legacy", query: { table: "messages" } });
+
+        expect(ws.sent).toHaveLength(1);
+        expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "ack", id: "legacy" });
+
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(0);
+    });
+
+    test("drops the subscription memo on unsubscribe so a later re-subscribe re-pushes", async () => {
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+        await shard.driveMessage(ws, { type: "unsubscribe", id: "sub-1" });
+
+        const sentBefore = ws.sent.length;
+
+        // Re-subscribe with the same id: a fresh memo means the initial result
+        // is pushed again rather than deduped against the dropped one.
+        await subscribe(shard, ws);
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ type: "data", id: "sub-1", data: [{ sessionId: "a", x: 0, y: 0 }] });
+        expect(ws.sent.length).toBeGreaterThan(sentBefore);
     });
 });

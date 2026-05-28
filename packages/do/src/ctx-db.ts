@@ -71,6 +71,13 @@ export interface ValidatorLike {
 /** Notifies hibernated subscribers that a row in `table` changed. */
 export type BroadcastDelta = (delta: MutationDelta) => void;
 
+/**
+ * Records that a query touched `table`. Wired only during subscription
+ * re-execution so the DO learns which tables a query depends on; the normal
+ * mutation path leaves it unset (default no-op) to avoid spurious reads.
+ */
+export type ReadHook = (table: string) => void;
+
 /** Pluggable wall clock — defaults to `Date.now`. */
 export type Clock = () => number;
 
@@ -96,6 +103,7 @@ export interface CtxDbOptions {
     broadcast?: BroadcastDelta;
     clock?: Clock;
     idGenerator?: IdGenerator;
+    onRead?: ReadHook;
     onWrite?: WriteHook;
     schema: SchemaLike;
     sql: SqlExec;
@@ -364,6 +372,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
+    const onRead = options.onRead ?? (() => undefined);
     const onWrite = options.onWrite ?? (() => undefined);
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
@@ -376,6 +385,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 return null;
             }
 
+            onRead(tableName);
+
             const cursor = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
             const rows = cursor.toArray();
 
@@ -383,6 +394,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         query(tableName) {
+            onRead(tableName);
+
             return buildReader(sql, schema, tableName);
         },
 

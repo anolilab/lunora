@@ -69,6 +69,22 @@ export const ROOT_DO_SIZE_WARN_BYTES = 1_073_741_824;
 export const ROOT_SHARD_NAME = "__root__";
 
 /**
+ * Result of re-executing a subscription's query: the full value to push to
+ * the client plus the set of tables the query read (so future writes know
+ * whether this subscription needs re-running).
+ */
+export interface SubscriptionOutcome {
+    result: unknown;
+    tables: Set<string>;
+}
+
+/** Per-(socket, subscription) memo of the last pushed result + its table deps. */
+interface SubscriptionMemo {
+    lastJson: string;
+    tables: Set<string>;
+}
+
+/**
  * Base class for shard Durable Objects.
  *
  * Concrete subclasses implement {@link handleRpc} and may emit deltas via
@@ -139,6 +155,20 @@ export abstract class ShardDO {
      * worker. Surfaced to handlers via {@link getCurrentIdentity}.
      */
     private currentRequestIdentity: Record<string, unknown> | undefined;
+
+    /**
+     * Tables written during the current request, accumulated by
+     * {@link recordChangedTable} and drained by {@link flushChangedTables}
+     * once the RPC handler returns. Null when nothing has been written.
+     */
+    private pendingChangedTables: Set<string> | null = null;
+
+    /**
+     * Last result pushed per (socket, subscription), keyed by the live
+     * `WebSocket`. In-memory only — a cold DO simply re-runs and re-pushes
+     * once after hibernation, which is correct (the client dedups on value).
+     */
+    private readonly subMemos = new WeakMap<WebSocket, Map<string, SubscriptionMemo>>();
 
     constructor(state: ShardDOState, env: unknown) {
         this.state = state;
@@ -284,7 +314,14 @@ export abstract class ShardDO {
                 // cheap stat call, not a full table scan.
                 this.maybeWarnRootSize();
 
-                return jsonResponse({ result }, 200, this.currentResponseBookmark);
+                // Capture the response before flushing — `flushChangedTables`
+                // clears the request identity, but the bookmark header was
+                // already baked into the response above.
+                const response = jsonResponse({ result }, 200, this.currentResponseBookmark);
+
+                await this.flushChangedTables();
+
+                return response;
             } catch (error: unknown) {
                 return this.errorToResponse(error);
             } finally {
@@ -419,6 +456,19 @@ export abstract class ShardDO {
             this.subscribe(ws, envelope.id, envelope.query);
             ws.send(JSON.stringify({ type: "ack", id: envelope.id }));
 
+            // Push the initial result immediately so the client renders without
+            // waiting for the first write. Legacy (delta-only) subscriptions omit
+            // `functionPath`, in which case there's nothing to re-execute.
+            const { functionPath } = envelope.query;
+
+            if (functionPath) {
+                const outcome = await this.executeSubscription(functionPath, envelope.query.args ?? {});
+
+                if (outcome) {
+                    this.pushSubscriptionData(ws, envelope.id, outcome);
+                }
+            }
+
             return;
         }
 
@@ -468,6 +518,7 @@ export abstract class ShardDO {
 
         delete attachment.subs[subId];
         (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+        this.subMemos.get(ws)?.delete(subId);
     }
 
     /**
@@ -536,6 +587,110 @@ export abstract class ShardDO {
                     /* socket may have been closed mid-broadcast */
                 }
             }
+        }
+    }
+
+    /**
+     * Re-run the query named by `functionPath` and return its full result plus
+     * the set of tables it read. The base implementation has no function
+     * registry, so it returns `null`; codegen emits an override that dispatches
+     * through `CIRRUS_FUNCTIONS` with an `onRead`-tracking ctx.
+     */
+    protected executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        void functionPath;
+        void args;
+
+        return Promise.resolve(null);
+    }
+
+    /**
+     * Note that `table` changed during the current request. The generated DO
+     * wires this in place of {@link broadcastDelta} so writes drive server-side
+     * subscription re-execution rather than raw-delta fan-out.
+     */
+    protected recordChangedTable(table: string): void {
+        this.pendingChangedTables ??= new Set<string>();
+        this.pendingChangedTables.add(table);
+    }
+
+    /**
+     * Drain the tables changed during this request and refresh every affected
+     * subscription. Runs after the RPC handler resolves, from `fetch`.
+     */
+    private async flushChangedTables(): Promise<void> {
+        const changed = this.pendingChangedTables;
+
+        this.pendingChangedTables = null;
+
+        if (!changed || changed.size === 0) {
+            return;
+        }
+
+        // Subscriptions are anonymous (the WS upgrade resolves no identity), so
+        // re-run without the mutating user's identity — otherwise one user's
+        // write would push that user's filtered view to every other subscriber.
+        this.currentRequestUserId = undefined;
+        this.currentRequestIdentity = undefined;
+
+        await this.refreshSubscriptions(changed);
+    }
+
+    private async refreshSubscriptions(changed: Set<string>): Promise<void> {
+        for (const ws of this.state.getWebSockets()) {
+            const attachment = this.readAttachment(ws);
+
+            for (const [subId, query] of Object.entries(attachment.subs)) {
+                const { functionPath } = query;
+
+                if (!functionPath) {
+                    continue;
+                }
+
+                const memo = this.subMemos.get(ws)?.get(subId);
+
+                if (memo && !setsIntersect(memo.tables, changed)) {
+                    continue;
+                }
+
+                const outcome = await this.executeSubscription(functionPath, query.args ?? {});
+
+                if (!outcome) {
+                    continue;
+                }
+
+                this.pushSubscriptionData(ws, subId, outcome);
+            }
+        }
+    }
+
+    /**
+     * Send a `{ type: "data" }` envelope for a subscription, skipping the send
+     * when the serialized result is byte-identical to the last push (so an
+     * unrelated write touching the same table doesn't spam the socket).
+     */
+    private pushSubscriptionData(ws: WebSocket, subId: string, outcome: SubscriptionOutcome): void {
+        let memos = this.subMemos.get(ws);
+
+        if (!memos) {
+            memos = new Map<string, SubscriptionMemo>();
+            this.subMemos.set(ws, memos);
+        }
+
+        const json = JSON.stringify(outcome.result ?? null);
+        const existing = memos.get(subId);
+
+        if (existing && existing.lastJson === json) {
+            existing.tables = outcome.tables;
+
+            return;
+        }
+
+        memos.set(subId, { lastJson: json, tables: outcome.tables });
+
+        try {
+            ws.send(`{"type":"data","id":${JSON.stringify(subId)},"data":${json}}`);
+        } catch {
+            /* socket may have been closed mid-broadcast */
         }
     }
 
@@ -619,6 +774,19 @@ export abstract class ShardDO {
         return { subs: {} };
     }
 }
+
+/** True if the two sets share at least one member. Iterates the smaller set. */
+const setsIntersect = (a: Set<string>, b: Set<string>): boolean => {
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+
+    for (const value of small) {
+        if (large.has(value)) {
+            return true;
+        }
+    }
+
+    return false;
+};
 
 const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
     const headers: Record<string, string> = { "content-type": "application/json" };
