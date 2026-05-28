@@ -47,7 +47,7 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
 
             const session = await auth.api.getSession({ headers: request.headers });
 
-            return { userId: session?.user?.id ?? null };
+            return session?.user?.id ? { userId: session.user.id } : null;
         },
         routes: {} as Record<string, Route>,
         shardDO: env.SHARD,

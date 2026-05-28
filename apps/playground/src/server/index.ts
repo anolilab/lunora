@@ -26,7 +26,7 @@ interface Env {
     FILES: R2BucketLike;
     /** Public base URL R2 objects resolve against — used to mint signed URLs. */
     PUBLIC_STORAGE_BASE_URL?: string;
-    SCHEDULER: ShardNamespaceLike & DurableObjectNamespaceLike;
+    SCHEDULER: DurableObjectNamespaceLike & ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
     STORAGE_SECRET?: string;
 }
@@ -65,7 +65,7 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
 
             const session = await auth.api.getSession({ headers: request.headers });
 
-            return { userId: session?.user?.id ?? null };
+            return session?.user?.id ? { userId: session.user.id } : null;
         },
         // The runtime's route map can stay empty: better-auth routes are
         // dispatched ahead of the worker by the `handleAuthRequest` hook.
@@ -108,7 +108,7 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
             return Response.json({ error: "STORAGE_SECRET and PUBLIC_STORAGE_BASE_URL must both be configured", url: null }, { status: 500 });
         }
 
-        const body = (await request.json().catch(() => null)) as { key?: string; method?: "GET" | "PUT"; expiresInSeconds?: number } | null;
+        const body = (await request.json().catch(() => null)) as { expiresInSeconds?: number; key?: string; method?: "GET" | "PUT" } | null;
 
         if (!body?.key) {
             return Response.json({ error: "`key` is required", url: null }, { status: 400 });
@@ -126,7 +126,12 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     }
 
     if (url.pathname === "/test/schedule" && request.method === "POST") {
-        const body = (await request.json().catch(() => null)) as { functionPath?: string; args?: Record<string, unknown>; delayMs?: number; scheduledFor?: number } | null;
+        const body = (await request.json().catch(() => null)) as {
+            args?: Record<string, unknown>;
+            delayMs?: number;
+            functionPath?: string;
+            scheduledFor?: number;
+        } | null;
 
         if (!body?.functionPath) {
             return Response.json({ error: "`functionPath` is required", jobId: null }, { status: 400 });
