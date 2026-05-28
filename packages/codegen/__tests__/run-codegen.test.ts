@@ -81,11 +81,38 @@ describe("runCodegen", () => {
         expect(result.generated.dataModel).not.toContain("prefs: unknown");
     });
 
-    test("emits server.ts that re-exports @cirrus/server factories", () => {
+    test("emits server.ts with project-typed query/mutation/action wrappers", () => {
         const result = runCodegen({ projectRoot: workdir });
 
-        expect(result.generated.server).toContain('export { action, mutation, query } from "@cirrus/server"');
-        expect(result.generated.server).toContain('export type { ActionCtx, MutationCtx, QueryCtx } from "@cirrus/server"');
+        // The base factories are imported under `*Base` aliases and re-bound to
+        // the schema-typed contexts (rather than re-exported verbatim).
+        expect(result.generated.server).toContain('import { action as actionBase, mutation as mutationBase, query as queryBase } from "@cirrus/server"');
+        expect(result.generated.server).toContain("export const query = queryBase as unknown as");
+        expect(result.generated.server).toContain("export const mutation = mutationBase as unknown as");
+        expect(result.generated.server).toContain("export const action = actionBase as unknown as");
+
+        // The typed contexts widen `db` to the generated per-table facade while
+        // intersecting the legacy structural reader/writer for back-compat.
+        expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db">');
+        expect(result.generated.server).toContain("readonly db: DatabaseReader & DatabaseReaderFacade;");
+        expect(result.generated.server).toContain("readonly db: DatabaseWriter & DatabaseWriterFacade;");
+        expect(result.generated.server).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade } from "./dataModel.js"');
+    });
+
+    test("emits per-table ctx.db facade types in dataModel.ts", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        // Insert shapes — system fields optional, user fields carried through.
+        expect(result.generated.dataModel).toContain("export interface Insert_messages");
+        expect(result.generated.dataModel).toContain("export type Insert<T extends keyof DataModel>");
+
+        // The typed `where` DSL + per-table reader/writer facades.
+        expect(result.generated.dataModel).toContain("export interface WhereOperators<T>");
+        expect(result.generated.dataModel).toContain("export type Where<TDoc>");
+        expect(result.generated.dataModel).toContain("export interface TableReaderFacade<T extends keyof DataModel>");
+        expect(result.generated.dataModel).toContain("export interface TableWriterFacade<T extends keyof DataModel>");
+        expect(result.generated.dataModel).toContain("export type DatabaseReaderFacade");
+        expect(result.generated.dataModel).toContain("export type DatabaseWriterFacade");
     });
 
     test("emits server.ts dispatch table keyed by `<namespace>:<fnName>`", () => {
@@ -296,5 +323,63 @@ describe("emitShard", () => {
         expect(output).not.toContain("createVectorSyncHook");
         expect(output).not.toContain("onWrite");
         expect(output).toContain("export const createShardDO");
+    });
+
+    test("binds `.global()` tables to the D1 facade and shard tables to the DO writer", () => {
+        const schema: SchemaIR = {
+            tables: [
+                {
+                    indexes: [],
+                    name: "messages",
+                    searchIndexes: [],
+                    shape: { text: { kind: "string" } },
+                    shardMode: { field: "channelId", kind: "shardBy" },
+                    vectorIndexes: [],
+                },
+                {
+                    indexes: [],
+                    name: "users",
+                    searchIndexes: [],
+                    shape: { email: { kind: "string" } },
+                    shardMode: "global",
+                    vectorIndexes: [],
+                },
+            ],
+            vectorIndexes: [],
+        };
+
+        const output = emitShard(schema);
+
+        // The D1 config thunk + fallback stub appear only because a `.global()` table exists.
+        expect(output).toContain("d1?: (env: Record<string, unknown>) => DatabaseWriterLike;");
+        expect(output).toContain("const globalDbStub: DatabaseWriterLike");
+        expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;");
+
+        // Backend selection by shardMode: shard table → DO writer, global table → D1 facade.
+        expect(output).toContain('facade["messages"] = bindTable(db, "messages");');
+        expect(output).toContain('facade["users"] = bindTable(globalDb, "users");');
+    });
+
+    test("omits the D1 facade plumbing when no table is `.global()`", () => {
+        const schema: SchemaIR = {
+            tables: [
+                {
+                    indexes: [],
+                    name: "messages",
+                    searchIndexes: [],
+                    shape: { text: { kind: "string" } },
+                    shardMode: "root",
+                    vectorIndexes: [],
+                },
+            ],
+            vectorIndexes: [],
+        };
+
+        const output = emitShard(schema);
+
+        expect(output).not.toContain("globalDbStub");
+        expect(output).not.toContain("config.d1");
+        expect(output).not.toContain("d1?:");
+        expect(output).toContain('facade["messages"] = bindTable(db, "messages");');
     });
 });

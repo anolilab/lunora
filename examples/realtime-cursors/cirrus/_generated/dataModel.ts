@@ -22,3 +22,107 @@ export interface DataModel {
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
+
+/**
+ * Per-table index name union. `never` for tables without secondary indexes.
+ * Used by `TableReader.withIndex()` to constrain callers to declared names.
+ */
+export interface IndexNamesByTable {
+    cursors: "by_room_session";
+}
+
+export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
+
+/** Per-table search-index name union. `never` for tables without searchIndex. */
+export interface SearchIndexNamesByTable {
+    cursors: never;
+}
+
+export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
+
+/** Union of declared vector index names. `never` when none are declared. */
+export type VectorIndexName = never;
+
+export interface Insert_cursors {
+    _id?: Id<"cursors">;
+    _creationTime?: number;
+    roomId: string;
+    sessionId: string;
+    name: string;
+    color: string;
+    x: number;
+    y: number;
+    lastSeen: number;
+}
+
+/** Per-table insert shape, accepted by `ctx.db.<table>.insert(...)`. */
+export interface InsertModel {
+    cursors: Insert_cursors;
+}
+
+export type Insert<T extends keyof DataModel> = InsertModel[T];
+
+/** Field-level operators for the typed `where` DSL (see `@cirrus/do`'s compiler). */
+export interface WhereOperators<T> {
+    contains?: string;
+    eq?: T;
+    gt?: T;
+    gte?: T;
+    in?: T[];
+    isNull?: boolean;
+    lt?: T;
+    lte?: T;
+    ne?: T;
+    notIn?: T[];
+}
+
+/** A typed `where` tree over a document's columns. */
+export type Where<TDoc> = {
+    [K in keyof TDoc]?: TDoc[K] | WhereOperators<TDoc[K]>;
+} & {
+    AND?: Array<Where<TDoc>>;
+    NOT?: Where<TDoc>;
+    OR?: Array<Where<TDoc>>;
+};
+
+/** One `{ field: "asc" | "desc" }` ordering entry; `orderBy` is an ordered list. */
+export type OrderBy<TDoc> = Partial<Record<keyof TDoc, "asc" | "desc">>;
+
+export interface QueryArgs<TDoc> {
+    cursor?: null | string;
+    limit?: number;
+    orderBy?: Array<OrderBy<TDoc>>;
+    where?: Where<TDoc>;
+}
+
+export interface QueryPage<TDoc> {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: TDoc[];
+}
+
+/** Read-only typed table accessor exposed on `QueryCtx.db.<table>`. */
+export interface TableReaderFacade<T extends keyof DataModel> {
+    count: (where?: Where<Doc<T>>) => Promise<number>;
+    findFirst: (args?: QueryArgs<Doc<T>>) => Promise<Doc<T> | null>;
+    findMany: (args?: QueryArgs<Doc<T>>) => Promise<QueryPage<Doc<T>>>;
+    get: (id: Id<T>) => Promise<Doc<T> | null>;
+}
+
+/** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
+export interface TableWriterFacade<T extends keyof DataModel> extends TableReaderFacade<T> {
+    delete: (id: Id<T>) => Promise<void>;
+    insert: (values: Insert<T>) => Promise<Id<T>>;
+    patch: (id: Id<T>, values: Partial<Insert<T>>) => Promise<void>;
+    replace: (id: Id<T>, values: Insert<T>) => Promise<void>;
+}
+
+/** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
+export type DatabaseReaderFacade = {
+    readonly [T in keyof DataModel]: TableReaderFacade<T>;
+};
+
+/** Per-table read-write facade — `ctx.db.<table>` on a `MutationCtx` / `ActionCtx`. */
+export type DatabaseWriterFacade = {
+    readonly [T in keyof DataModel]: TableWriterFacade<T>;
+};

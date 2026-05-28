@@ -3,10 +3,59 @@
 
 import * as cirrus_messages_0 from "../messages.js";
 
-export { action, mutation, query } from "@cirrus/server";
-export type { ActionCtx, MutationCtx, QueryCtx } from "@cirrus/server";
+import { action as actionBase, mutation as mutationBase, query as queryBase } from "@cirrus/server";
+import type {
+    ActionCtx as ActionCtxBase,
+    ArgsValidator,
+    DatabaseReader,
+    DatabaseWriter,
+    InferArgs,
+    MutationCtx as MutationCtxBase,
+    QueryCtx as QueryCtxBase,
+    RegisteredAction,
+    RegisteredMutation,
+    RegisteredQuery,
+} from "@cirrus/server";
+
+import type { DatabaseReaderFacade, DatabaseWriterFacade } from "./dataModel.js";
 
 export type { DataModel, Doc, Id } from "./dataModel.js";
+
+/**
+ * Project-typed contexts. The base contexts from `@cirrus/server` are
+ * untyped against the schema; here `db` is widened to the generated per-table
+ * facade (`ctx.db.<table>.findMany(...)`) while keeping the legacy structural
+ * `db.get`/`db.query` surface for back-compat.
+ */
+export interface QueryCtx extends Omit<QueryCtxBase, "db"> {
+    readonly db: DatabaseReader & DatabaseReaderFacade;
+}
+
+export interface MutationCtx extends Omit<MutationCtxBase, "db"> {
+    readonly db: DatabaseWriter & DatabaseWriterFacade;
+}
+
+export interface ActionCtx extends Omit<ActionCtxBase, "db"> {
+    readonly db: DatabaseWriter & DatabaseWriterFacade;
+}
+
+/** `query()` bound to this project's typed {@link QueryCtx}. */
+export const query = queryBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: QueryCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredQuery<A, R>;
+
+/** `mutation()` bound to this project's typed {@link MutationCtx}. */
+export const mutation = mutationBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: MutationCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredMutation<A, R>;
+
+/** `action()` bound to this project's typed {@link ActionCtx}. */
+export const action = actionBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredAction<A, R>;
 
 /**
  * Single registered function, narrowed to the shape `handleRpc` needs.

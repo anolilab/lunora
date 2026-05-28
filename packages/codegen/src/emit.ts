@@ -88,6 +88,32 @@ const renderArgsType = (args: Record<string, ValidatorIR>): string => {
         .join("; ")} }`;
 };
 
+/**
+ * A field is optional on **insert** when it is `v.optional(...)` or declares a
+ * `.default()`/`.$defaultFn()` (codegen records the latter as `column.hasDefault`).
+ */
+const isOptionalOnInsert = (validator: ValidatorIR): boolean => validator.kind === "optional" || Boolean(validator.column?.hasDefault);
+
+/**
+ * Render an `Insert_<table>` interface: the document shape as accepted by
+ * `ctx.db.<table>.insert(...)`. System fields (`_id`, `_creationTime`) are
+ * always optional (minted by the runtime); user fields follow
+ * {@link isOptionalOnInsert}.
+ */
+const renderInsertInterface = (table: TableIR): string => {
+    const fields = Object.entries(table.shape)
+        .map(([fieldName, validator]) => {
+            const inner = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+            const type = validatorToType(inner);
+
+            return isOptionalOnInsert(validator) ? `    ${fieldName}?: ${type};` : `    ${fieldName}: ${type};`;
+        })
+        .join("\n");
+    const body = fields ? `\n${fields}\n` : "";
+
+    return `export interface Insert_${table.name} {\n    _id?: Id<"${table.name}">;\n    _creationTime?: number;${body}}`;
+};
+
 /** Emit `_generated/dataModel.ts` — `Doc<"name">` + `Id<"name">` for every table. */
 export const emitDataModel = (schema: SchemaIR): string => {
     const tableNames = schema.tables.map((table) => `"${table.name}"`).join(" | ") || "never";
@@ -134,6 +160,9 @@ export const emitDataModel = (schema: SchemaIR): string => {
 
     const vectorIndexNames = schema.vectorIndexes.map((index) => `"${index.name}"`).join(" | ") || "never";
 
+    const insertInterfaces = schema.tables.map((table) => renderInsertInterface(table)).join("\n\n");
+    const insertMap = schema.tables.map((table) => `    ${table.name}: Insert_${table.name};`).join("\n");
+
     return `${GENERATED_HEADER}export type TableName = ${tableNames};
 
 export type Id<TName extends string> = string & { readonly __table: TName };
@@ -165,6 +194,80 @@ export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable
 
 /** Union of declared vector index names. \`never\` when none are declared. */
 export type VectorIndexName = ${vectorIndexNames};
+
+${insertInterfaces}
+
+/** Per-table insert shape, accepted by \`ctx.db.<table>.insert(...)\`. */
+export interface InsertModel {
+${insertMap}
+}
+
+export type Insert<T extends keyof DataModel> = InsertModel[T];
+
+/** Field-level operators for the typed \`where\` DSL (see \`@cirrus/do\`'s compiler). */
+export interface WhereOperators<T> {
+    contains?: string;
+    eq?: T;
+    gt?: T;
+    gte?: T;
+    in?: T[];
+    isNull?: boolean;
+    lt?: T;
+    lte?: T;
+    ne?: T;
+    notIn?: T[];
+}
+
+/** A typed \`where\` tree over a document's columns. */
+export type Where<TDoc> = {
+    [K in keyof TDoc]?: TDoc[K] | WhereOperators<TDoc[K]>;
+} & {
+    AND?: Array<Where<TDoc>>;
+    NOT?: Where<TDoc>;
+    OR?: Array<Where<TDoc>>;
+};
+
+/** One \`{ field: "asc" | "desc" }\` ordering entry; \`orderBy\` is an ordered list. */
+export type OrderBy<TDoc> = Partial<Record<keyof TDoc, "asc" | "desc">>;
+
+export interface QueryArgs<TDoc> {
+    cursor?: null | string;
+    limit?: number;
+    orderBy?: Array<OrderBy<TDoc>>;
+    where?: Where<TDoc>;
+}
+
+export interface QueryPage<TDoc> {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: TDoc[];
+}
+
+/** Read-only typed table accessor exposed on \`QueryCtx.db.<table>\`. */
+export interface TableReaderFacade<T extends keyof DataModel> {
+    count: (where?: Where<Doc<T>>) => Promise<number>;
+    findFirst: (args?: QueryArgs<Doc<T>>) => Promise<Doc<T> | null>;
+    findMany: (args?: QueryArgs<Doc<T>>) => Promise<QueryPage<Doc<T>>>;
+    get: (id: Id<T>) => Promise<Doc<T> | null>;
+}
+
+/** Read-write typed table accessor exposed on \`MutationCtx.db.<table>\` / \`ActionCtx.db.<table>\`. */
+export interface TableWriterFacade<T extends keyof DataModel> extends TableReaderFacade<T> {
+    delete: (id: Id<T>) => Promise<void>;
+    insert: (values: Insert<T>) => Promise<Id<T>>;
+    patch: (id: Id<T>, values: Partial<Insert<T>>) => Promise<void>;
+    replace: (id: Id<T>, values: Insert<T>) => Promise<void>;
+}
+
+/** Per-table read facade — \`ctx.db.<table>\` on a \`QueryCtx\`. */
+export type DatabaseReaderFacade = {
+    readonly [T in keyof DataModel]: TableReaderFacade<T>;
+};
+
+/** Per-table read-write facade — \`ctx.db.<table>\` on a \`MutationCtx\` / \`ActionCtx\`. */
+export type DatabaseWriterFacade = {
+    readonly [T in keyof DataModel]: TableWriterFacade<T>;
+};
 `;
 };
 
@@ -227,7 +330,7 @@ export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
     // Import only the dataModel helpers the rendered arg/return types actually
     // reference: `Doc` appears when a function returns documents, `Id` when it
     // takes or returns an id. Importing an unused one trips noUnusedLocals.
-    const dataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(`\\b${name}<`, "u").test(body));
+    const dataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(body));
     const dataModelImportLine = dataModelImports.length > 0 ? `\nimport type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
 
     return `${GENERATED_HEADER}import { anyApi } from "@cirrus/server/types";
@@ -286,10 +389,59 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>): string => {
     const dispatchBody = dispatchEntries.length > 0 ? `\n${dispatchEntries}\n` : "";
     const importBlock = importLines.length > 0 ? `${importLines}\n\n` : "";
 
-    return `${GENERATED_HEADER}${importBlock}export { action, mutation, query } from "@cirrus/server";
-export type { ActionCtx, MutationCtx, QueryCtx } from "@cirrus/server";
+    return `${GENERATED_HEADER}${importBlock}import { action as actionBase, mutation as mutationBase, query as queryBase } from "@cirrus/server";
+import type {
+    ActionCtx as ActionCtxBase,
+    ArgsValidator,
+    DatabaseReader,
+    DatabaseWriter,
+    InferArgs,
+    MutationCtx as MutationCtxBase,
+    QueryCtx as QueryCtxBase,
+    RegisteredAction,
+    RegisteredMutation,
+    RegisteredQuery,
+} from "@cirrus/server";
+
+import type { DatabaseReaderFacade, DatabaseWriterFacade } from "./dataModel.js";
 
 export type { DataModel, Doc, Id } from "./dataModel.js";
+
+/**
+ * Project-typed contexts. The base contexts from \`@cirrus/server\` are
+ * untyped against the schema; here \`db\` is widened to the generated per-table
+ * facade (\`ctx.db.<table>.findMany(...)\`) while keeping the legacy structural
+ * \`db.get\`/\`db.query\` surface for back-compat.
+ */
+export interface QueryCtx extends Omit<QueryCtxBase, "db"> {
+    readonly db: DatabaseReader & DatabaseReaderFacade;
+}
+
+export interface MutationCtx extends Omit<MutationCtxBase, "db"> {
+    readonly db: DatabaseWriter & DatabaseWriterFacade;
+}
+
+export interface ActionCtx extends Omit<ActionCtxBase, "db"> {
+    readonly db: DatabaseWriter & DatabaseWriterFacade;
+}
+
+/** \`query()\` bound to this project's typed {@link QueryCtx}. */
+export const query = queryBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: QueryCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredQuery<A, R>;
+
+/** \`mutation()\` bound to this project's typed {@link MutationCtx}. */
+export const mutation = mutationBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: MutationCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredMutation<A, R>;
+
+/** \`action()\` bound to this project's typed {@link ActionCtx}. */
+export const action = actionBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredAction<A, R>;
 
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
@@ -343,10 +495,14 @@ export const dispatchCirrusFunction = async (functionPath: string, context: unkn
  */
 export const emitShard = (schema: SchemaIR): string => {
     const hasVectors = schema.vectorIndexes.length > 0;
+    const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
 
-    const doTypeImports = ["DatabaseWriterLike", "SchemaLike", "ShardDOState", "SqlExec", ...(hasVectors ? ["WriteHook"] : [])];
+    const doTypeImports = ["DatabaseWriterLike", "QueryArgs", "SchemaLike", "ShardDOState", "SqlExec", "WhereInput", ...hasVectors ? ["WriteHook"] : []];
 
-    const importLines = [`import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`, `import { createShardCtxDb, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`];
+    const importLines = [
+        `import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`,
+        `import { createShardCtxDb, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`,
+    ];
 
     if (hasVectors) {
         importLines.push(
@@ -358,6 +514,46 @@ export const emitShard = (schema: SchemaIR): string => {
     importLines.push(``, `import schema from "../schema.js";`, `import { CIRRUS_FUNCTIONS } from "./server.js";`);
 
     const vectorsConfigField = hasVectors ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
+
+    // `.global()` tables live in D1, not the DO's SQLite. The runtime D1 binding
+    // arrives via an optional `d1` config thunk; when omitted (or for projects
+    // with no global tables), reads/writes to a global table hit `globalDbStub`
+    // and throw a descriptive error.
+    const d1ConfigField = hasGlobalTables ? `\n    d1?: (env: Record<string, unknown>) => DatabaseWriterLike;` : "";
+
+    const globalDbStub = hasGlobalTables
+        ? `
+const globalDbStub: DatabaseWriterLike = {
+    count: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+    delete: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+    findFirst: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+    findMany: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+    get: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+    insert: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+    patch: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+    query: () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+    replace: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+};
+`
+        : "";
 
     const vectorsStub = hasVectors
         ? `
@@ -401,21 +597,59 @@ const vectorsStub: VectorSearchLike = {
     const dbOptions = hasVectors
         ? `{
                 broadcast: (delta) => {
-                    this.broadcastDelta(delta);
+                    this.recordChangedTable(delta.table);
                 },
+                onRead: options.onRead,
                 onWrite,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
             }`
         : `{
                 broadcast: (delta) => {
-                    this.broadcastDelta(delta);
+                    this.recordChangedTable(delta.table);
                 },
+                onRead: options.onRead,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
             }`;
 
     const vectorsCtxField = hasVectors ? `\n                vectors,` : "";
+
+    const hasTables = schema.tables.length > 0;
+
+    // The per-table facade (`ctx.db.<table>.findMany(...)`) is a thin binding
+    // over the structural `DatabaseWriterLike`: it pins `tableName` so callers
+    // don't repeat it. `delete`/`get`/`patch`/`replace` address rows by id, so
+    // they pass straight through.
+    const bindTableHelper = hasTables
+        ? `
+const bindTable = (writer: DatabaseWriterLike, tableName: string) => ({
+    count: (where?: WhereInput) => writer.count(tableName, where),
+    delete: (id: string) => writer.delete(id),
+    findFirst: (args?: QueryArgs) => writer.findFirst(tableName, args),
+    findMany: (args?: QueryArgs) => writer.findMany(tableName, args),
+    get: (id: string) => writer.get(id),
+    insert: (values: Record<string, unknown>) => writer.insert(tableName, values),
+    patch: (id: string, values: Record<string, unknown>) => writer.patch(id, values),
+    replace: (id: string, values: Record<string, unknown>) => writer.replace(id, values),
+});
+`
+        : "";
+
+    // Build `globalDb` only when a `.global()` table exists; otherwise the
+    // binding (and the stub it falls back to) would be unused.
+    const globalDbLine = hasGlobalTables ? `\n            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;` : "";
+
+    const facadeBlock = hasTables
+        ? `\n            const facade = db as unknown as Record<string, unknown>;
+${schema.tables
+    .map(
+        (table) =>
+            `            facade[${JSON.stringify(table.name)}] = bindTable(${table.shardMode === "global" ? "globalDb" : "db"}, ${JSON.stringify(table.name)});`,
+    )
+    .join("\n")}
+`
+        : "";
 
     return `${GENERATED_HEADER}${importLines.join("\n")}
 
@@ -427,7 +661,7 @@ interface FunctionReference {
 
 export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${d1ConfigField}
 }
 
 const schedulerStub = {
@@ -462,7 +696,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${vectorsStub}
+${globalDbStub}${vectorsStub}${bindTableHelper}
 const dispatchRun = (expected: FunctionKind, functionPath: string, args: Record<string, unknown>, ctx: unknown): Promise<unknown> | unknown => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
@@ -501,6 +735,22 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return registered.handler(this.buildCtx(), args);
         }
 
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {
+            const registered = CIRRUS_FUNCTIONS[functionPath];
+
+            if (!registered || registered.kind !== "query") {
+                return null;
+            }
+
+            this.ensureMigrated();
+
+            const tables = new Set<string>();
+            const ctx = this.buildCtx({ onRead: (table) => tables.add(table) });
+            const result = await registered.handler(ctx, args);
+
+            return { result, tables };
+        }
+
         private ensureMigrated(): void {
             if (this.migrated) {
                 return;
@@ -510,13 +760,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.migrated = true;
         }
 
-        private buildCtx(): unknown {
+        private buildCtx(options: { onRead?: (table: string) => void } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             const userId = this.getCurrentUserId();
             const identity = this.getCurrentIdentity();
 ${vectorsBuild}
-            const db: DatabaseWriterLike = createShardCtxDb(${dbOptions});
-
+            const db: DatabaseWriterLike = createShardCtxDb(${dbOptions});${globalDbLine}
+${facadeBlock}
             const ctx: Record<string, unknown> = {
                 auth: {
                     getIdentity: async () => identity ?? null,
