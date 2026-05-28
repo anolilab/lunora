@@ -1,13 +1,13 @@
 import type { OfflineQueueOptions } from "./types.js";
 
 export interface QueuedMutation<T = unknown> {
-    readonly functionPath: string;
     readonly args: Record<string, unknown>;
-    readonly shardKey?: string;
-    /** Resolves once the mutation has been replayed against the server. */
-    readonly resolve: (value: T) => void;
+    readonly functionPath: string;
     /** Rejects if the mutation can no longer be replayed. */
     readonly reject: (error: unknown) => void;
+    /** Resolves once the mutation has been replayed against the server. */
+    readonly resolve: (value: T) => void;
+    readonly shardKey?: string;
 }
 
 /**
@@ -45,7 +45,7 @@ export class OfflineQueue {
     }
 
     public drain(): QueuedMutation[] {
-        const drained = this.items.slice();
+        const drained = [...this.items];
 
         this.items.length = 0;
 

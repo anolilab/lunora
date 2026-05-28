@@ -1,6 +1,9 @@
 import type { Logger } from "../util/logger.js";
 
-export type FetchLike = (input: string, init?: { body?: string; headers?: Record<string, string>; method?: string }) => Promise<{
+export type FetchLike = (
+    input: string,
+    init?: { body?: string; headers?: Record<string, string>; method?: string },
+) => Promise<{
     json: () => Promise<unknown>;
     ok: boolean;
     status: number;
@@ -41,10 +44,10 @@ export const runRpcCommand = async (options: RunCommandOptions): Promise<RunComm
     const baseUrl = (options.url ?? "http://localhost:8787").replace(/\/$/u, "");
     const requestUrl = `${baseUrl}/_cirrus/rpc`;
 
-    const fetchImpl: FetchLike = options.fetchImpl ?? ((globalThis as unknown as { fetch: FetchLike }).fetch);
+    const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
 
     if (typeof fetchImpl !== "function") {
-        throw new Error("no fetch implementation available — pass --fetch via dependency injection or run on Node >= 18");
+        throw new TypeError("no fetch implementation available — pass --fetch via dependency injection or run on Node >= 18");
     }
 
     let parsedArgs: unknown;

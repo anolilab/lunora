@@ -27,11 +27,12 @@ describe("createWorker (workerd)", () => {
         });
 
         expect(response.status).toBe(200);
+
         const forwarded = (await response.json()) as {
             authorization: string | null;
-            cookie: string | null;
+            body: { args: Record<string, unknown>; functionPath: string } | null;
             bookmark: string | null;
-            body: { functionPath: string; args: Record<string, unknown> } | null;
+            cookie: string | null;
         };
 
         expect(forwarded.authorization).toBe("Bearer test-token");
@@ -53,7 +54,7 @@ describe("createWorker (workerd)", () => {
         // The DO echoes only authorization/cookie/bookmark. Anything else
         // must be absent on the shard side. The structural assertion is
         // enough — we don't need to enumerate every disallowed header.
-        const forwarded = (await response.json()) as { authorization: string | null; cookie: string | null; bookmark: string | null };
+        const forwarded = (await response.json()) as { authorization: string | null; bookmark: string | null; cookie: string | null };
 
         expect(forwarded.authorization).toBeNull();
         expect(forwarded.cookie).toBeNull();
@@ -81,28 +82,37 @@ describe("createWorker (workerd)", () => {
 
     test("dispatches custom routes by 'METHOD path' key before falling through", async () => {
         const ok = await SELF.fetch("https://app.test/healthz");
+
         expect(ok.status).toBe(200);
         await expect(ok.text()).resolves.toBe("ok");
 
         // POST /echo-method is registered with the "METHOD path" form,
         // so a GET to the same path should NOT match.
         const wrongMethod = await SELF.fetch("https://app.test/echo-method");
+
         expect(wrongMethod.status).toBe(404);
 
         const rightMethod = await SELF.fetch("https://app.test/echo-method", { method: "POST" });
+
         expect(rightMethod.status).toBe(200);
+
         const echoed = (await rightMethod.json()) as { method: string; path: string };
+
         expect(echoed).toEqual({ method: "POST", path: "/echo-method" });
     });
 
-    test("CirrusError surfaces its code+status; generic errors are sanitized to INTERNAL 500", async () => {
+    test("cirrusError surfaces its code+status; generic errors are sanitized to INTERNAL 500", async () => {
         const cirrus = await SELF.fetch("https://app.test/boom-cirrus");
+
         expect(cirrus.status).toBe(403);
         await expect(cirrus.json()).resolves.toEqual({ error: { code: "FORBIDDEN", message: "nope" } });
 
         const generic = await SELF.fetch("https://app.test/boom-generic");
+
         expect(generic.status).toBe(500);
+
         const body = (await generic.json()) as { error: { code: string; message: string } };
+
         // Per audit H10: must NOT echo internal error.message contents.
         expect(body.error.code).toBe("INTERNAL");
         expect(body.error.message).toBe("Internal error");

@@ -11,12 +11,7 @@ export type {
     SchemaInfo,
     WranglerConfig,
     WranglerProjectValidationOptions as WranglerValidationOptions,
-    WranglerProjectValidationResult as WranglerValidationResult,
     WranglerValidationReport,
+    WranglerProjectValidationResult as WranglerValidationResult,
 } from "@cirrus/config";
-export {
-    REQUIRED_COMPATIBILITY_DATE,
-    REQUIRED_FLAG,
-    validateWranglerConfig,
-    validateWranglerProject as validateWrangler,
-} from "@cirrus/config";
+export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWranglerProject as validateWrangler, validateWranglerConfig } from "@cirrus/config";

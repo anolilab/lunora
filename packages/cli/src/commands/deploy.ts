@@ -9,11 +9,11 @@ import { validateWrangler } from "../util/wrangler-validator.js";
 export interface DeployCommandOptions {
     cwd?: string;
     env?: string;
+    /** Set to `false` to disable interactive spinners (test injection). */
+    interactive?: boolean;
     logger: Logger;
     skipCodegen?: boolean;
     spawner?: Spawner;
-    /** Set to `false` to disable interactive spinners (test injection). */
-    interactive?: boolean;
 }
 
 export interface DeployCommandResult {

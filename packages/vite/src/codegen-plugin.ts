@@ -90,8 +90,12 @@ export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
 
                 debounceTimer = setTimeout(() => {
                     const ok = runCodegenSafely(options, {
-                        error: (message: string) => server.config.logger.error(message),
-                        warn: (message: string) => server.config.logger.warn(message),
+                        error: (message: string) => {
+                            server.config.logger.error(message);
+                        },
+                        warn: (message: string) => {
+                            server.config.logger.warn(message);
+                        },
                     });
 
                     if (ok) {

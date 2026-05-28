@@ -1,6 +1,6 @@
 import type { ArgsOf, CirrusSchedulerOptions, FunctionReference, RunOptions, Scheduler } from "./types.js";
 
-const callDO = async <T,>(options: CirrusSchedulerOptions, path: string, body: unknown): Promise<T> => {
+const callDO = async <T>(options: CirrusSchedulerOptions, path: string, body: unknown): Promise<T> => {
     const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
     const response = await stub.fetch(`https://scheduler.internal${path}`, {
         method: "POST",
@@ -61,8 +61,7 @@ export const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
         return runAt(Date.now() + delayMs, fn, args, opts);
     };
 
-    const cancel = async (id: string): Promise<{ cancelled: boolean }> =>
-        callDO<{ cancelled: boolean }>(options, "/cancel", { id });
+    const cancel = async (id: string): Promise<{ cancelled: boolean }> => callDO<{ cancelled: boolean }>(options, "/cancel", { id });
 
     return { runAfter, runAt, cancel };
 };

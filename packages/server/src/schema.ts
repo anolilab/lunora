@@ -4,13 +4,13 @@ import type { IndexDefinition, Schema, SearchIndexDefinition, ShardMode, TableDe
 
 export interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     /** Mark this table as global (D1-backed, cross-shard). */
-    global(): TableBuilder<Shape>;
+    global: () => TableBuilder<Shape>;
     /** Add a secondary index. */
-    index(name: string, fields: ReadonlyArray<string>, options?: { unique?: boolean }): TableBuilder<Shape>;
+    index: (name: string, fields: ReadonlyArray<string>, options?: { unique?: boolean }) => TableBuilder<Shape>;
     /** Add a search index over a field with optional filter fields. */
-    searchIndex(name: string, options: { field: string; filterFields?: ReadonlyArray<string> }): TableBuilder<Shape>;
+    searchIndex: (name: string, options: { field: string; filterFields?: ReadonlyArray<string> }) => TableBuilder<Shape>;
     /** Route storage by the named field — one DO per distinct value. */
-    shardBy(field: keyof Shape & string): TableBuilder<Shape>;
+    shardBy: (field: keyof Shape & string) => TableBuilder<Shape>;
 }
 
 /**

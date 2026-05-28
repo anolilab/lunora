@@ -209,10 +209,8 @@ const referencesUnreachableLocalType = (type: Type, handlerFilePath: string, see
                 continue;
             }
 
-            if (Node.isInterfaceDeclaration(declaration) || Node.isTypeAliasDeclaration(declaration)) {
-                if (!declaration.isExported()) {
-                    return true;
-                }
+            if ((Node.isInterfaceDeclaration(declaration) || Node.isTypeAliasDeclaration(declaration)) && !declaration.isExported()) {
+                return true;
             }
         }
     }
@@ -305,8 +303,7 @@ export const discoverFunctions = (project: Project, cirrusDirectory: string): Fu
         if (prior && prior !== function_.filePath) {
             throw Object.assign(
                 new Error(
-                    `Namespace collision: "${prior}" and "${function_.filePath}" both resolve to "${namespace}". `
-                    + `Rename one of the files so the JS-identifier-sanitized names differ.`,
+                    `Namespace collision: "${prior}" and "${function_.filePath}" both resolve to "${namespace}". Rename one of the files so the JS-identifier-sanitized names differ.`,
                 ),
                 { code: "NAMESPACE_COLLISION", name: "CirrusError", paths: [prior, function_.filePath], status: 500 },
             );

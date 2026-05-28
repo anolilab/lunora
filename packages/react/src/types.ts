@@ -1,14 +1,12 @@
-import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf, User } from "@cirrus/client";
-
-export type { ArgsOf, CirrusClient, FunctionReference, ReturnOf, User };
+import type { User } from "@cirrus/client";
 
 export interface UseQueryOptions {
     shardKey?: string;
 }
 
 export interface UseMutationCallOptions<TCurrent = unknown, TValue = unknown> {
-    shardKey?: string;
     optimistic?: (current: TCurrent | undefined) => TValue;
+    shardKey?: string;
 }
 
 export interface UseSubscriptionResult<T> {
@@ -17,7 +15,9 @@ export interface UseSubscriptionResult<T> {
 }
 
 export interface UseAuthResult {
-    user: User | null;
+    setToken: (token: string | null) => void;
     token: string | null;
-    setToken(token: string | null): void;
+    user: User | null;
 }
+
+export { type ArgsOf, type CirrusClient, type FunctionReference, type ReturnOf, type User } from "@cirrus/client";

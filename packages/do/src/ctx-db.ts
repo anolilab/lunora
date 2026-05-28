@@ -119,7 +119,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
     return runner.call(sql, query, ...params);
 };
 
-const quoteIdentifier = (name: string): string => `"${name.replace(/"/gu, "\"\"")}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 const jsonPath = (field: string): string => {
     // Internal columns live alongside the doc; expose them via the
@@ -133,7 +133,7 @@ const jsonPath = (field: string): string => {
         return "_creationTime";
     }
 
-    return `json_extract(${DOC_COLUMN}, '$.${field.replace(/'/gu, "''")}')`;
+    return `json_extract(${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
 };
 
 const rowToDoc = (row: Record<string, unknown> | undefined): Record<string, unknown> | null => {
@@ -152,7 +152,7 @@ const rowToDoc = (row: Record<string, unknown> | undefined): Record<string, unkn
         parsed = {};
     }
 
-    const id = row["id"];
+    const { id } = row;
 
     if (typeof id === "string") {
         parsed["_id"] = id;
@@ -345,8 +345,8 @@ const tableNameFromId = (sql: SqlExec, schema: SchemaLike, id: string): string |
 };
 
 export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
-    const sql = options.sql;
-    const schema = options.schema;
+    const { sql } = options;
+    const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
@@ -422,7 +422,13 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
-            runSql(sql, `UPDATE ${quoteIdentifier(tableName)} SET _creationTime = ?, ${DOC_COLUMN} = ? WHERE id = ?`, creationTime, JSON.stringify(replaced), id);
+            runSql(
+                sql,
+                `UPDATE ${quoteIdentifier(tableName)} SET _creationTime = ?, ${DOC_COLUMN} = ? WHERE id = ?`,
+                creationTime,
+                JSON.stringify(replaced),
+                id,
+            );
 
             broadcast({ table: tableName, op: "update", key: id, row: replaced });
         },

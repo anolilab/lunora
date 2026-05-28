@@ -38,7 +38,7 @@ describe("validatorKindToSqlType", () => {
     });
 });
 
-describe("SQL renderers", () => {
+describe("sQL renderers", () => {
     test("renderCreateTable emits an `_id` primary key + columns", () => {
         const sql = renderCreateTable({
             name: "users",
@@ -79,7 +79,7 @@ describe("SQL renderers", () => {
 });
 
 describe("diffSnapshots", () => {
-    test("CREATE TABLE when a table appears", () => {
+    test("cREATE TABLE when a table appears", () => {
         const previous = snapshot({});
         const next = snapshot({
             users: {
@@ -98,7 +98,7 @@ describe("diffSnapshots", () => {
         expect(diff.unsupported).toHaveLength(0);
     });
 
-    test("CREATE TABLE includes its CREATE INDEX statements", () => {
+    test("cREATE TABLE includes its CREATE INDEX statements", () => {
         const previous = snapshot({});
         const next = snapshot({
             users: {
@@ -118,7 +118,7 @@ describe("diffSnapshots", () => {
         expect(diff.entries[1]?.sql).toContain("by_email");
     });
 
-    test("DROP TABLE when a table is removed", () => {
+    test("dROP TABLE when a table is removed", () => {
         const previous = snapshot({
             users: { name: "users", columns: {}, indexes: {} },
         });
@@ -131,7 +131,7 @@ describe("diffSnapshots", () => {
         expect(diff.entries[0]?.sql).toBe('DROP TABLE IF EXISTS "users";');
     });
 
-    test("ADD COLUMN when a column appears on an existing table", () => {
+    test("aDD COLUMN when a column appears on an existing table", () => {
         const previous = snapshot({
             users: { name: "users", columns: { email: { sqlType: "TEXT", nullable: false } }, indexes: {} },
         });
@@ -153,7 +153,7 @@ describe("diffSnapshots", () => {
         expect(diff.entries[0]?.sql).toContain('ADD COLUMN "nickname" TEXT');
     });
 
-    test("CREATE INDEX / DROP INDEX on column-stable tables", () => {
+    test("cREATE INDEX / DROP INDEX on column-stable tables", () => {
         const previous = snapshot({
             users: {
                 name: "users",
@@ -175,7 +175,7 @@ describe("diffSnapshots", () => {
         expect(kinds).toEqual(expect.arrayContaining(["createIndex", "dropIndex"]));
     });
 
-    test("DROP COLUMN is unsupported", () => {
+    test("dROP COLUMN is unsupported", () => {
         const previous = snapshot({
             users: {
                 name: "users",

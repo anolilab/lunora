@@ -36,11 +36,11 @@ const canonicalize = (key: string, exp: number, method: "GET" | "PUT"): string =
  * to validate the signature + expiry before streaming the R2 body.
  */
 export const buildSignedUrl = async (
-    args: {
+    args: SignedUrlOptions & {
         baseUrl: string;
-        secret: string;
         key: string;
-    } & SignedUrlOptions,
+        secret: string;
+    },
 ): Promise<string> => {
     const method = args.method ?? "GET";
     const expiresInSeconds = args.expiresInSeconds ?? 60 * 60;
@@ -56,10 +56,10 @@ export const buildSignedUrl = async (
 };
 
 export interface VerifyResult {
-    valid: boolean;
-    reason?: "expired" | "bad_signature" | "malformed";
     key?: string;
     method?: "GET" | "PUT";
+    reason?: "expired" | "bad_signature" | "malformed";
+    valid: boolean;
 }
 
 export const verifySignedUrl = async (input: string | URL, secret: string): Promise<VerifyResult> => {
@@ -91,12 +91,7 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
     const key = url.pathname.replace(/^\//, "").split("/").map(decodeURIComponent).join("/");
     const cryptoKey = await importHmacKey(secret);
     const sigBytes = fromBase64Url(sig);
-    const valid = await crypto.subtle.verify(
-        "HMAC",
-        cryptoKey,
-        sigBytes as unknown as BufferSource,
-        textEncoder.encode(canonicalize(key, exp, method)),
-    );
+    const valid = await crypto.subtle.verify("HMAC", cryptoKey, sigBytes as unknown as BufferSource, textEncoder.encode(canonicalize(key, exp, method)));
 
     if (!valid) {
         return { valid: false, reason: "bad_signature" };

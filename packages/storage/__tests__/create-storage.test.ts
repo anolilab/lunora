@@ -10,8 +10,8 @@ const fakeObject = (key: string, etag: string = "etag-1"): R2ObjectLike => ({
     httpMetadata: { contentType: "text/plain" },
 });
 
-const fakeBucket = (): R2BucketLike & { puts: { key: string; body: unknown; options?: unknown }[]; deletes: string[] } => {
-    const puts: { key: string; body: unknown; options?: unknown }[] = [];
+const fakeBucket = (): R2BucketLike & { deletes: string[]; puts: { body: unknown; key: string; options?: unknown }[] } => {
+    const puts: { body: unknown; key: string; options?: unknown }[] = [];
     const deletes: string[] = [];
 
     return {

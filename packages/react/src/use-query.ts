@@ -14,17 +14,13 @@ import type { UseQueryOptions } from "./types.js";
  * Multiple components calling `useQuery` with the same arguments share a
  * single underlying network call thanks to the shared cache in `cache.ts`.
  */
-export function useQuery<F extends FunctionReference>(
-    fn: F,
-    args: ArgsOf<F> | "skip",
-    options: UseQueryOptions = {},
-): ReturnOf<F> | undefined {
+export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "skip", options: UseQueryOptions = {}): ReturnOf<F> | undefined {
     const client = useCirrus();
     const cache = getCache(client);
 
     const skipped = args === "skip";
     const argsRecord = (skipped ? {} : (args as Record<string, unknown>)) ?? {};
-    const shardKey = options.shardKey;
+    const { shardKey } = options;
     const key = cache.keyOf(fn, argsRecord, shardKey);
 
     const releaseRef = useRef<(() => void) | null>(null);

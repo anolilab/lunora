@@ -7,13 +7,13 @@ import type { ScheduleRecord } from "./types.js";
  */
 export interface SchedulerDOState {
     storage: {
-        get: <T = unknown>(key: string) => Promise<T | undefined>;
-        put: <T = unknown>(entries: Record<string, T> | string, value?: T) => Promise<void>;
         delete: (key: string | string[]) => Promise<number | boolean>;
-        list: <T = unknown>(options?: { prefix?: string; limit?: number; end?: string }) => Promise<Map<string, T>>;
-        setAlarm: (scheduledTime: number | Date) => Promise<void> | void;
-        getAlarm: () => Promise<number | null>;
         deleteAlarm: () => Promise<void> | void;
+        get: <T = unknown>(key: string) => Promise<T | undefined>;
+        getAlarm: () => Promise<number | null>;
+        list: <T = unknown>(options?: { end?: string; limit?: number; prefix?: string }) => Promise<Map<string, T>>;
+        put: <T = unknown>(entries: Record<string, T> | string, value?: T) => Promise<void>;
+        setAlarm: (scheduledTime: number | Date) => Promise<void> | void;
     };
 }
 
@@ -42,11 +42,11 @@ const generateId = (): string => {
 };
 
 interface ScheduleRequestBody {
-    functionPath: string;
     args: Record<string, unknown>;
+    functionPath: string;
+    originUrl: string;
     scheduledFor: number;
     shardKey?: string;
-    originUrl: string;
 }
 
 interface CancelRequestBody {
@@ -88,10 +88,13 @@ export class SchedulerDO {
             return this.handleList();
         }
 
-        return new Response(JSON.stringify({ error: { code: "NOT_FOUND" } }), {
-            status: 404,
-            headers: { "content-type": "application/json" },
-        });
+        return Response.json(
+            { error: { code: "NOT_FOUND" } },
+            {
+                status: 404,
+                headers: { "content-type": "application/json" },
+            },
+        );
     }
 
     /** Called by the Workers runtime when the alarm previously set by `_rescheduleAlarm()` fires. */
@@ -128,11 +131,7 @@ export class SchedulerDO {
             // on the dispatch outcome.
             await this.state.storage.delete(this.indexKey(record.scheduledFor, record.id));
 
-            if (ok) {
-                await this.state.storage.delete(`${HEADER_PREFIX}${record.id}`);
-            } else {
-                await this.recordRetry(record);
-            }
+            await (ok ? this.state.storage.delete(`${HEADER_PREFIX}${record.id}`) : this.recordRetry(record));
         }
 
         await this.rescheduleAlarm();
@@ -145,7 +144,7 @@ export class SchedulerDO {
      * cases enter the retry pipeline via {@link recordRetry}.
      */
     protected async dispatch(record: ScheduleRecord): Promise<boolean> {
-        const originUrl = (record as ScheduleRecord & { originUrl?: string }).originUrl;
+        const { originUrl } = record as ScheduleRecord & { originUrl?: string };
 
         if (!originUrl) {
             return true;
@@ -177,7 +176,7 @@ export class SchedulerDO {
      * After {@link MAX_RETRY_ATTEMPTS} attempts the record is parked under a
      * `dead:` key for manual inspection.
      */
-    private async recordRetry(record: ScheduleRecord & { originUrl?: string; attempts?: number }): Promise<void> {
+    private async recordRetry(record: ScheduleRecord & { attempts?: number; originUrl?: string }): Promise<void> {
         const attempts = (record.attempts ?? 0) + 1;
 
         if (attempts > MAX_RETRY_ATTEMPTS) {
@@ -188,7 +187,7 @@ export class SchedulerDO {
 
         const delayMs = RETRY_BASE_DELAY_MS * 2 ** (attempts - 1);
         const nextScheduledFor = Date.now() + delayMs;
-        const retryRecord: ScheduleRecord & { originUrl?: string; attempts: number } = {
+        const retryRecord: ScheduleRecord & { attempts: number; originUrl?: string } = {
             ...record,
             attempts,
             scheduledFor: nextScheduledFor,
@@ -279,7 +278,7 @@ export class SchedulerDO {
     }
 
     private json(body: unknown, status: number = 200): Response {
-        return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+        return Response.json(body, { status, headers: { "content-type": "application/json" } });
     }
 
     private error(status: number, code: string, message: string): Response {

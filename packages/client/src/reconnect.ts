@@ -9,9 +9,9 @@ import type { ReconnectOptions } from "./types.js";
  */
 export interface ReconnectCalculator {
     /** Returns the delay to wait before the next reconnect attempt. */
-    next(): number;
+    next: () => number;
     /** Resets the backoff to the initial delay (call on successful reconnect). */
-    reset(): void;
+    reset: () => void;
 }
 
 export const createReconnect = (options: ReconnectOptions = {}, random: () => number = Math.random): ReconnectCalculator => {

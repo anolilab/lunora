@@ -12,7 +12,7 @@ export class ValidationError extends Error {
 
     public readonly received: string;
 
-    public constructor(message: string, options: { path: ValidationPath; expected: string; received: string }) {
+    public constructor(message: string, options: { expected: string; path: ValidationPath; received: string }) {
         super(message);
         this.name = "ValidationError";
         this.path = options.path;

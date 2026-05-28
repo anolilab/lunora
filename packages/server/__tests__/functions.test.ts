@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { action, mutation, query, v, ValidationError } from "../src/index.js";
 import type { ActionCtx, MutationCtx, QueryCtx } from "../src/index.js";
+import { action, mutation, query, v, ValidationError } from "../src/index.js";
 
 const makeQueryCtx = (): QueryCtx => ({
     auth: { getIdentity: async () => null, userId: null },
@@ -42,7 +42,7 @@ describe("query", () => {
         const result = await list.handler(makeQueryCtx(), { limit: 5 });
 
         expect(result).toBe(10);
-        expect(handler).toHaveBeenCalledOnce();
+        expect(handler).toHaveBeenCalledTimes(1);
     });
 
     test("throws ValidationError before handler runs on bad args", async () => {

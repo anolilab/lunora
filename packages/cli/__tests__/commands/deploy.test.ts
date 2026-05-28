@@ -10,7 +10,7 @@ import type { Logger } from "../../src/util/logger.js";
 import { createRecordingSpawner } from "../../src/util/spawn.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const fixtureRoot = join(here, "..", "..", "..", "cirrus-codegen", "__tests__", "fixtures", "simple");
+const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
 
 const VALID_WRANGLER = `{
     "name": "cirrus-app",

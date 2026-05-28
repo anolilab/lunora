@@ -1,19 +1,19 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { createWorker } from "../src/create-worker.js";
 import type { ExecutionContextLike } from "../src/create-worker.js";
+import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
 interface ShardSpy {
-    namespace: ShardNamespaceLike;
     /** Records the (shardKey, forwarded request) for each forward. */
-    calls: { shardKey: string; request: Request }[];
+    calls: { request: Request; shardKey: string }[];
+    namespace: ShardNamespaceLike;
     /** Override the stub response for the next call. */
     response: Response;
 }
 
 const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSpy => {
-    const calls: { shardKey: string; request: Request }[] = [];
+    const calls: { request: Request; shardKey: string }[] = [];
 
     const stubFor = (shardKey: string) => ({
         fetch: async (request: Request) => {
@@ -68,6 +68,7 @@ describe("createWorker", () => {
         expect(res.status).toBe(200);
         expect(shard.calls).toHaveLength(1);
         expect(shard.calls[0]!.shardKey).toBe("__root__");
+
         const body = await shard.calls[0]!.request.json();
 
         expect(body).toEqual({ functionPath: "messages:list", args: { limit: 5 } });
@@ -115,11 +116,7 @@ describe("createWorker", () => {
     test("maps malformed RPC JSON to 400", async () => {
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", { method: "POST", body: "{not json" }),
-            {},
-            fakeCtx,
-        );
+        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { method: "POST", body: "{not json" }), {}, fakeCtx);
 
         expect(res.status).toBe(400);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
@@ -128,11 +125,7 @@ describe("createWorker", () => {
     test("rejects missing functionPath", async () => {
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", { method: "POST", body: JSON.stringify({ args: {} }) }),
-            {},
-            fakeCtx,
-        );
+        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { method: "POST", body: JSON.stringify({ args: {} }) }), {}, fakeCtx);
 
         expect(res.status).toBe(400);
     });
@@ -164,7 +157,7 @@ describe("createWorker", () => {
 
         const res = await worker.fetch(new Request("https://app.example/auth/callback"), {}, fakeCtx);
 
-        expect(route).toHaveBeenCalledOnce();
+        expect(route).toHaveBeenCalledTimes(1);
         expect(res.status).toBe(200);
         expect(shard.calls).toHaveLength(0);
     });
@@ -247,6 +240,7 @@ describe("createWorker", () => {
         );
 
         expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBe("user_42");
+
         const identityHeader = shard.calls[0]!.request.headers.get("x-cirrus-identity");
 
         expect(identityHeader).not.toBeNull();
@@ -293,8 +287,9 @@ describe("createWorker", () => {
             fakeCtx,
         );
 
-        expect(fanOut).toHaveBeenCalledOnce();
-        const headers = fanOut.mock.calls[0]![1].headers;
+        expect(fanOut).toHaveBeenCalledTimes(1);
+
+        const { headers } = fanOut.mock.calls[0]![1];
 
         expect(headers["x-cirrus-userid"]).toBe("user_42");
         expect(JSON.parse(headers["x-cirrus-identity"]!)).toEqual({ email: "u@example.com" });

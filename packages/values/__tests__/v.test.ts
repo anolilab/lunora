@@ -1,10 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { v, ValidationError } from "../src/index.js";
 import type { Id, Infer } from "../src/index.js";
+import { v, ValidationError } from "../src/index.js";
 
 type Assert<T extends true> = T;
-type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends (<T>() => T extends Y ? 1 : 2) ? true : false;
+type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 
 describe("primitives", () => {
     test("string parses and rejects", () => {
@@ -156,7 +156,7 @@ describe("error paths", () => {
 });
 
 describe("type inference", () => {
-    test("Infer extracts TS type from validator", () => {
+    test("infer extracts TS type from validator", () => {
         const schema = v.object({
             age: v.number(),
             name: v.string(),

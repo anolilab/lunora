@@ -26,6 +26,7 @@ export const kebabCase = dashCase;
 
 export const pascalCase = (input: string): string => {
     const camel = camelCase(input);
+
     return camel.charAt(0).toUpperCase() + camel.slice(1);
 };
 
@@ -33,22 +34,25 @@ export const snakeCase = (input: string): string => dashCase(input).replaceAll("
 
 export type FileNameCase = "camel" | "kebab" | "pascal" | "snake";
 
-export const FILE_NAME_CASE_VALUES: readonly FileNameCase[] = ["camel", "kebab", "pascal", "snake"];
+export const FILE_NAME_CASE_VALUES: ReadonlyArray<FileNameCase> = ["camel", "kebab", "pascal", "snake"];
 
 export const isFileNameCase = (value: unknown): value is FileNameCase =>
-    typeof value === "string" && (FILE_NAME_CASE_VALUES as readonly string[]).includes(value);
+    typeof value === "string" && (FILE_NAME_CASE_VALUES as ReadonlyArray<string>).includes(value);
 
 export const formatFileName = (input: string, style: FileNameCase): string => {
     switch (style) {
-        case "kebab":
+        case "kebab": {
             return dashCase(input);
-        case "pascal":
+        }
+        case "pascal": {
             return pascalCase(input);
-        case "snake":
+        }
+        case "snake": {
             return snakeCase(input);
-        case "camel":
-        default:
+        }
+        default: {
             return camelCase(input);
+        }
     }
 };
 

@@ -1,12 +1,12 @@
 import type { FunctionReference } from "./types.js";
 
 export interface CronTriggerOptions {
-    /** Standard cron expression, e.g. `"0 * * * *"`. */
-    schedule: string;
-    /** The Cirrus function to invoke on each trigger fire. */
-    fn: FunctionReference;
     /** Args passed to the function. */
     args?: Record<string, unknown>;
+    /** The Cirrus function to invoke on each trigger fire. */
+    fn: FunctionReference;
+    /** Standard cron expression, e.g. `"0 * * * *"`. */
+    schedule: string;
 }
 
 export interface CronTriggerSnippet {
@@ -14,8 +14,8 @@ export interface CronTriggerSnippet {
     crons: string[];
     /** Routes the Worker should mount to receive the trigger dispatch. */
     dispatcher: {
-        functionPath: string;
         args: Record<string, unknown>;
+        functionPath: string;
     };
     /** Human-readable wrangler.jsonc snippet developers can copy/paste. */
     wranglerJsonc: string;

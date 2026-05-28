@@ -79,7 +79,9 @@ describe("wranglerValidatorPlugin", () => {
 
         const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => callConfigResolved(plugin)).not.toThrow();
+        expect(() => {
+            callConfigResolved(plugin);
+        }).not.toThrow();
     });
 
     test("throws when wrangler.jsonc is missing entirely", () => {
@@ -87,7 +89,9 @@ describe("wranglerValidatorPlugin", () => {
 
         const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => callConfigResolved(plugin)).toThrow(/wrangler\.jsonc not found/u);
+        expect(() => {
+            callConfigResolved(plugin);
+        }).toThrow(/wrangler\.jsonc not found/u);
     });
 
     test("throws when SHARD durable-object binding is missing", () => {
@@ -105,7 +109,9 @@ describe("wranglerValidatorPlugin", () => {
 
         const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => callConfigResolved(plugin)).toThrow(/SHARD.+ShardDO/u);
+        expect(() => {
+            callConfigResolved(plugin);
+        }).toThrow(/SHARD.+ShardDO/u);
     });
 
     test("throws when schema has .global() tables but D1 binding is missing", () => {
@@ -126,7 +132,9 @@ describe("wranglerValidatorPlugin", () => {
 
         const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => callConfigResolved(plugin)).toThrow(/d1_databases/u);
+        expect(() => {
+            callConfigResolved(plugin);
+        }).toThrow(/d1_databases/u);
     });
 
     test("does not require D1 when no table is global", () => {
@@ -147,7 +155,9 @@ describe("wranglerValidatorPlugin", () => {
 
         const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => callConfigResolved(plugin)).not.toThrow();
+        expect(() => {
+            callConfigResolved(plugin);
+        }).not.toThrow();
     });
 
     test("throws when compatibility_date is too old", () => {
@@ -168,7 +178,9 @@ describe("wranglerValidatorPlugin", () => {
 
         const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => callConfigResolved(plugin)).toThrow(/compatibility_date/u);
+        expect(() => {
+            callConfigResolved(plugin);
+        }).toThrow(/compatibility_date/u);
     });
 
     test("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", () => {
@@ -190,7 +202,9 @@ describe("wranglerValidatorPlugin", () => {
 
         const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => callConfigResolved(plugin)).not.toThrow();
+        expect(() => {
+            callConfigResolved(plugin);
+        }).not.toThrow();
     });
 
     test("supports jsonc comments and trailing commas", () => {
@@ -212,6 +226,8 @@ describe("wranglerValidatorPlugin", () => {
 
         const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => callConfigResolved(plugin)).not.toThrow();
+        expect(() => {
+            callConfigResolved(plugin);
+        }).not.toThrow();
     });
 });

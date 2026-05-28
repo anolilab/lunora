@@ -54,7 +54,7 @@ export const detectPackageManager = (startDirectory: string): PackageManager => 
 };
 
 /** Map a package manager to the argv pair that runs an installed CLI. */
-export const execArgsFor = (manager: PackageManager, command: string, args: ReadonlyArray<string>): { command: string; args: string[] } => {
+export const execArgsFor = (manager: PackageManager, command: string, args: ReadonlyArray<string>): { args: string[]; command: string } => {
     if (manager === "yarn") {
         return { command: "yarn", args: [command, ...args] };
     }

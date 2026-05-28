@@ -2,21 +2,21 @@ import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/clien
 import { vi } from "vitest";
 
 export interface MockClientHooks {
-    query: ReturnType<typeof vi.fn>;
-    mutation: ReturnType<typeof vi.fn>;
     action: ReturnType<typeof vi.fn>;
-    subscribe: ReturnType<typeof vi.fn>;
-    setAuthToken: ReturnType<typeof vi.fn>;
-    getAuthToken: ReturnType<typeof vi.fn>;
+    asClient: CirrusClient;
     close: ReturnType<typeof vi.fn>;
     /** Manually push a value to all active subscribers for `ref`. */
     emit: (ref: string, value: unknown) => void;
-    asClient: CirrusClient;
+    getAuthToken: ReturnType<typeof vi.fn>;
+    mutation: ReturnType<typeof vi.fn>;
+    query: ReturnType<typeof vi.fn>;
+    setAuthToken: ReturnType<typeof vi.fn>;
+    subscribe: ReturnType<typeof vi.fn>;
 }
 
 interface SubEntry {
-    ref: string;
     callback: (value: unknown) => void;
+    ref: string;
 }
 
 export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): MockClientHooks => {

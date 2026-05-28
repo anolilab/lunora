@@ -1,16 +1,16 @@
-import type { Mailer, QueueLike, SendOpts } from "./types.js";
+import type { Mailer, SendOpts } from "./types.js";
 
 /** Serializable representation of a `SendOpts` payload — drops the `react` field. */
 export interface QueuedSend {
-    to: string | string[];
-    subject: string;
-    from?: string;
-    html?: string;
-    text?: string;
-    cc?: string[];
     bcc?: string[];
-    replyTo?: string;
+    cc?: string[];
+    from?: string;
     headers?: Record<string, string>;
+    html?: string;
+    replyTo?: string;
+    subject: string;
+    text?: string;
+    to: string | string[];
 }
 
 export const toQueuedPayload = (opts: QueuedSend): QueuedSend => ({
@@ -51,4 +51,4 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
     return mailer.send(opts);
 };
 
-export type { QueueLike };
+export { type QueueLike } from "./types.js";

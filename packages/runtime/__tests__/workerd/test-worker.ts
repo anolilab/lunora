@@ -10,9 +10,9 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
+import type { Route } from "../../src/create-worker.js";
 import { createWorker } from "../../src/create-worker.js";
 import { CirrusError } from "../../src/errors.js";
-import type { Route } from "../../src/create-worker.js";
 
 export interface Env {
     SHARD: DurableObjectNamespace<TestShardDO>;
@@ -46,17 +46,20 @@ export class TestShardDO extends DurableObject<Env> {
             headers.set("x-d1-bookmark", replyBookmark);
         }
 
-        return new Response(JSON.stringify(forwarded), { status: 200, headers });
+        return Response.json(forwarded, { status: 200, headers });
     }
 }
 
 // Custom routes exercised by the workerd suite.
 const healthzRoute: Route = () => new Response("ok", { status: 200 });
 const echoMethodRoute: Route = (request) =>
-    new Response(JSON.stringify({ method: request.method, path: new URL(request.url).pathname }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-    });
+    Response.json(
+        { method: request.method, path: new URL(request.url).pathname },
+        {
+            status: 200,
+            headers: { "content-type": "application/json" },
+        },
+    );
 const throwsCirrusRoute: Route = () => {
     throw new CirrusError("nope", { code: "FORBIDDEN", status: 403 });
 };

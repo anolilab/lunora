@@ -8,5 +8,6 @@ test("exports VERSION", () => {
 
 test("exports the core factory and helpers", () => {
     expect(typeof createWorker).toBe("function");
+
     expect(defineRpcEnvelope({ functionPath: "x:y" })).toEqual({ functionPath: "x:y" });
 });

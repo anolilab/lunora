@@ -5,13 +5,13 @@ import { createCronTrigger } from "../src/cron.js";
 import type { DurableObjectNamespaceLike, FunctionReference } from "../src/types.js";
 
 interface CapturedCall {
-    url: string;
     body: Record<string, unknown>;
+    url: string;
 }
 
 const fakeNamespace = (
-    responses: Record<string, unknown> = { "/schedule": { id: "id-1", scheduledFor: 12345 }, "/cancel": { cancelled: true } },
-): { namespace: DurableObjectNamespaceLike; calls: CapturedCall[] } => {
+    responses: Record<string, unknown> = { "/schedule": { id: "id-1", scheduledFor: 12_345 }, "/cancel": { cancelled: true } },
+): { calls: CapturedCall[]; namespace: DurableObjectNamespaceLike } => {
     const calls: CapturedCall[] = [];
     const stub = {
         fetch: vi.fn(async (input: Request | string, init?: RequestInit) => {
@@ -23,7 +23,7 @@ const fakeNamespace = (
 
             const responseBody = responses[path] ?? { ok: true };
 
-            return new Response(JSON.stringify(responseBody), { status: 200, headers: { "content-type": "application/json" } });
+            return Response.json(responseBody, { status: 200, headers: { "content-type": "application/json" } });
         }),
     };
     const namespace: DurableObjectNamespaceLike = {
@@ -39,9 +39,7 @@ const fn: FunctionReference = { __cirrusRef: "messages.send" };
 describe("createScheduler", () => {
     test("requires a namespace + originUrl", () => {
         expect(() => createScheduler({} as never)).toThrow(/namespace/);
-        expect(() =>
-            createScheduler({ namespace: fakeNamespace().namespace } as never),
-        ).toThrow(/originUrl/);
+        expect(() => createScheduler({ namespace: fakeNamespace().namespace } as never)).toThrow(/originUrl/);
     });
 
     test("runAt() forwards the RPC envelope to SchedulerDO", async () => {
@@ -51,7 +49,7 @@ describe("createScheduler", () => {
 
         const result = await scheduler.runAt(at, fn, { userId: "u-1" });
 
-        expect(result).toEqual({ id: "id-1", scheduledFor: 12345 });
+        expect(result).toEqual({ id: "id-1", scheduledFor: 12_345 });
         expect(calls).toHaveLength(1);
         expect(calls[0]?.body).toEqual({
             functionPath: "messages.send",
@@ -75,13 +73,14 @@ describe("createScheduler", () => {
         const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
 
         const before = Date.now();
-        await scheduler.runAfter(5_000, fn, { x: 1 } as Record<string, unknown>, { shardKey: "u-1" });
+
+        await scheduler.runAfter(5000, fn, { x: 1 } as Record<string, unknown>, { shardKey: "u-1" });
         const after = Date.now();
 
         const scheduledFor = calls[0]?.body.scheduledFor as number;
 
-        expect(scheduledFor).toBeGreaterThanOrEqual(before + 5_000);
-        expect(scheduledFor).toBeLessThanOrEqual(after + 5_000);
+        expect(scheduledFor).toBeGreaterThanOrEqual(before + 5000);
+        expect(scheduledFor).toBeLessThanOrEqual(after + 5000);
         expect(calls[0]?.body.shardKey).toBe("u-1");
     });
 

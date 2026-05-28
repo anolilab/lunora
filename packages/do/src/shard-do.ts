@@ -362,8 +362,7 @@ export abstract class ShardDO {
 
         ShardDO.rootSizeWarned = true;
         console.warn(
-            `[@cirrus/do] __root__ Durable Object SQLite size is ${size} bytes (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). `
-            + "Plan a `.shardBy()` migration before you hit the wall. See https://cirrus.dev/docs/concepts/sharding for guidance.",
+            `[@cirrus/do] __root__ Durable Object SQLite size is ${size} bytes (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). Plan a \`.shardBy()\` migration before you hit the wall. See https://cirrus.dev/docs/concepts/sharding for guidance.`,
         );
     }
 
@@ -661,7 +660,7 @@ const extractBearerToken = (authorization: string | null): string | undefined =>
 
     const [scheme, ...rest] = authorization.split(" ");
 
-    if (!scheme || scheme.toLowerCase() !== "bearer") {
+    if (scheme?.toLowerCase() !== "bearer") {
         return undefined;
     }
 

@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import { mutation, query, v } from "../src/index.js";
+import { type Id, mutation, query, v } from "../src/index.js";
 
 /**
  * `query()`/`mutation()`/`action()` wrap the user's handler with the args
@@ -47,16 +47,16 @@ const heavyMutation = mutation({
 
 const sampleContext = {};
 
-const smallArgs = { id: "users:abc" };
+const smallArgs = { id: "users:abc" as Id<"users"> };
 const messageArgs = {
-    channelId: "channels:c1",
+    channelId: "channels:c1" as Id<"channels">,
     text: "hello",
     kind: "text" as const,
     tags: ["urgent"],
 };
 const heavyArgs = {
     user: {
-        id: "users:a",
+        id: "users:a" as Id<"users">,
         email: "a@b.c",
         name: "alice",
         age: 30,
@@ -86,7 +86,7 @@ describe("query/mutation dispatch", () => {
 describe("validation failure path", () => {
     bench("throws ValidationError on bad arg type", () => {
         try {
-            smallArgsQuery.handler(sampleContext, { id: 123 } as unknown as { id: string });
+            smallArgsQuery.handler(sampleContext, { id: 123 } as unknown as { id: Id<"users"> });
         } catch {
             /* expected — measuring the rejection cost */
         }

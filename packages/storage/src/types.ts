@@ -3,27 +3,27 @@
  * pass a plain object double; the real binding satisfies the same shape.
  */
 export interface R2BucketLike {
+    delete: (key: string) => Promise<void>;
+    get: (key: string) => Promise<R2ObjectBodyLike | null>;
+    list: (options?: { cursor?: string; limit?: number; prefix?: string }) => Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }>;
     put: (
         key: string,
         body: ReadableStream | ArrayBuffer | Blob | string | null,
-        options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> },
+        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
     ) => Promise<R2ObjectLike>;
-    get: (key: string) => Promise<R2ObjectBodyLike | null>;
-    delete: (key: string) => Promise<void>;
-    list: (options?: { prefix?: string; limit?: number; cursor?: string }) => Promise<{ objects: R2ObjectLike[]; cursor?: string; truncated?: boolean }>;
 }
 
 export interface R2ObjectLike {
-    key: string;
-    size: number;
+    customMetadata?: Record<string, string>;
     etag: string;
     httpMetadata?: { contentType?: string };
-    customMetadata?: Record<string, string>;
+    key: string;
+    size: number;
 }
 
 export interface R2ObjectBodyLike extends R2ObjectLike {
-    body: ReadableStream | null;
     arrayBuffer: () => Promise<ArrayBuffer>;
+    body: ReadableStream | null;
     text: () => Promise<string>;
 }
 
@@ -41,8 +41,8 @@ export interface UploadOptions {
 }
 
 export interface ListOptions {
-    limit?: number;
     cursor?: string;
+    limit?: number;
 }
 
 export interface SignedUrlOptions {
@@ -51,16 +51,9 @@ export interface SignedUrlOptions {
 }
 
 export interface Storage {
-    upload: (
-        key: string,
-        body: ReadableStream | ArrayBuffer | Blob,
-        opts?: UploadOptions,
-    ) => Promise<{ key: string; etag: string }>;
-    download: (key: string) => Promise<R2ObjectBodyLike | null>;
     delete: (key: string) => Promise<void>;
-    list: (
-        prefix?: string,
-        opts?: ListOptions,
-    ) => Promise<{ objects: R2ObjectLike[]; cursor?: string }>;
+    download: (key: string) => Promise<R2ObjectBodyLike | null>;
     getSignedUrl: (key: string, opts?: SignedUrlOptions) => Promise<string>;
+    list: (prefix?: string, opts?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[] }>;
+    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, opts?: UploadOptions) => Promise<{ etag: string; key: string }>;
 }

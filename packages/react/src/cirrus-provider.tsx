@@ -4,8 +4,8 @@ import { createContext, type ReactElement, type ReactNode, useContext } from "re
 const CirrusContext = createContext<CirrusClient | null>(null);
 
 export interface CirrusProviderProps {
-    client: CirrusClient;
     children: ReactNode;
+    client: CirrusClient;
 }
 
 export const CirrusProvider = ({ client, children }: CirrusProviderProps): ReactElement => {

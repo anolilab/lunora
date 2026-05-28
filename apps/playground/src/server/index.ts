@@ -73,6 +73,62 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         shardDO: env.SHARD,
     });
 
+const handleTestReset = async (env: Env): Promise<Response> => {
+    try {
+        const id = env.SHARD.idFromName("__e2e_reset__");
+        const stub = env.SHARD.get(id);
+
+        await stub.fetch(new Request("https://do/internal/reset", { method: "POST" }));
+    } catch {
+        // best-effort
+    }
+
+    return Response.json({ ok: true });
+};
+
+const handleTestSign = async (request: Request, env: Env): Promise<Response> => {
+    if (!env.STORAGE_SECRET || !env.PUBLIC_STORAGE_BASE_URL) {
+        return Response.json({ error: "STORAGE_SECRET and PUBLIC_STORAGE_BASE_URL must both be configured", url: null }, { status: 500 });
+    }
+
+    const body = (await request.json().catch(() => null)) as { expiresInSeconds?: number; key?: string; method?: "GET" | "PUT" } | null;
+
+    if (!body?.key) {
+        return Response.json({ error: "`key` is required", url: null }, { status: 400 });
+    }
+
+    const signed = await buildSignedUrl({
+        baseUrl: env.PUBLIC_STORAGE_BASE_URL,
+        expiresInSeconds: body.expiresInSeconds,
+        key: body.key,
+        method: body.method ?? "GET",
+        secret: env.STORAGE_SECRET,
+    });
+
+    return Response.json({ url: signed });
+};
+
+const handleTestSchedule = async (request: Request, env: Env): Promise<Response> => {
+    const body = (await request.json().catch(() => null)) as {
+        args?: Record<string, unknown>;
+        delayMs?: number;
+        functionPath?: string;
+        scheduledFor?: number;
+    } | null;
+
+    if (!body?.functionPath) {
+        return Response.json({ error: "`functionPath` is required", jobId: null }, { status: 400 });
+    }
+
+    const originUrl = new URL(request.url).origin;
+    const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl });
+    const scheduledFor = body.scheduledFor ?? Date.now() + (body.delayMs ?? 0);
+
+    const result = await scheduler.runAt(scheduledFor, { __cirrusRef: body.functionPath }, body.args ?? {});
+
+    return Response.json({ jobId: result.id, scheduledFor: result.scheduledFor });
+};
+
 /**
  * E2E-only test helpers. Each route is a no-op unless `env.CIRRUS_E2E ===
  * "true"`; in production traffic the dispatch falls through to the main
@@ -90,67 +146,25 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
         return null;
     }
 
-    if (url.pathname === "/test/reset" && request.method === "POST") {
-        try {
-            const id = env.SHARD.idFromName("__e2e_reset__");
-            const stub = env.SHARD.get(id);
+    const { method } = request;
 
-            await stub.fetch(new Request("https://do/internal/reset", { method: "POST" }));
-        } catch {
-            // best-effort
-        }
-
-        return Response.json({ ok: true });
+    if (url.pathname === "/test/reset" && method === "POST") {
+        return handleTestReset(env);
     }
 
-    if (url.pathname === "/test/sign" && request.method === "POST") {
-        if (!env.STORAGE_SECRET || !env.PUBLIC_STORAGE_BASE_URL) {
-            return Response.json({ error: "STORAGE_SECRET and PUBLIC_STORAGE_BASE_URL must both be configured", url: null }, { status: 500 });
-        }
-
-        const body = (await request.json().catch(() => null)) as { expiresInSeconds?: number; key?: string; method?: "GET" | "PUT" } | null;
-
-        if (!body?.key) {
-            return Response.json({ error: "`key` is required", url: null }, { status: 400 });
-        }
-
-        const signed = await buildSignedUrl({
-            baseUrl: env.PUBLIC_STORAGE_BASE_URL,
-            expiresInSeconds: body.expiresInSeconds,
-            key: body.key,
-            method: body.method ?? "GET",
-            secret: env.STORAGE_SECRET,
-        });
-
-        return Response.json({ url: signed });
+    if (url.pathname === "/test/sign" && method === "POST") {
+        return handleTestSign(request, env);
     }
 
-    if (url.pathname === "/test/schedule" && request.method === "POST") {
-        const body = (await request.json().catch(() => null)) as {
-            args?: Record<string, unknown>;
-            delayMs?: number;
-            functionPath?: string;
-            scheduledFor?: number;
-        } | null;
-
-        if (!body?.functionPath) {
-            return Response.json({ error: "`functionPath` is required", jobId: null }, { status: 400 });
-        }
-
-        const originUrl = new URL(request.url).origin;
-        const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl });
-        const scheduledFor = body.scheduledFor ?? Date.now() + (body.delayMs ?? 0);
-
-        const result = await scheduler.runAt(scheduledFor, { __cirrusRef: body.functionPath }, body.args ?? {});
-
-        return Response.json({ jobId: result.id, scheduledFor: result.scheduledFor });
+    if (url.pathname === "/test/schedule" && method === "POST") {
+        return handleTestSchedule(request, env);
     }
 
-    if (url.pathname === "/test/job-status" && request.method === "GET") {
+    if (url.pathname === "/test/job-status" && method === "GET") {
         return Response.json({ status: "unknown" });
     }
 
-    if (url.pathname === "/test/throw" && request.method === "POST") {
+    if (url.pathname === "/test/throw" && method === "POST") {
         return Response.json({ error: "simulated" }, { status: 500 });
     }
 

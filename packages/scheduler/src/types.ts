@@ -21,34 +21,24 @@ export interface RunOptions {
 }
 
 export interface ScheduleRecord {
-    id: string;
-    functionPath: string;
     args: Record<string, unknown>;
+    enqueuedAt: number;
+    functionPath: string;
+    id: string;
     scheduledFor: number;
     shardKey?: string;
-    enqueuedAt: number;
 }
 
 export interface Scheduler {
-    runAfter: <F extends FunctionReference>(
-        delayMs: number,
-        fn: F,
-        args: ArgsOf<F>,
-        opts?: RunOptions,
-    ) => Promise<{ id: string; scheduledFor: number }>;
-    runAt: <F extends FunctionReference>(
-        date: Date | number,
-        fn: F,
-        args: ArgsOf<F>,
-        opts?: RunOptions,
-    ) => Promise<{ id: string; scheduledFor: number }>;
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
+    runAfter: <F extends FunctionReference>(delayMs: number, fn: F, args: ArgsOf<F>, opts?: RunOptions) => Promise<{ id: string; scheduledFor: number }>;
+    runAt: <F extends FunctionReference>(date: Date | number, fn: F, args: ArgsOf<F>, opts?: RunOptions) => Promise<{ id: string; scheduledFor: number }>;
 }
 
 /** Subset of `DurableObjectNamespace` the package consumes. */
 export interface DurableObjectNamespaceLike {
-    idFromName: (name: string) => DurableObjectIdLike;
     get: (id: DurableObjectIdLike) => DurableObjectStubLike;
+    idFromName: (name: string) => DurableObjectIdLike;
 }
 
 export interface DurableObjectIdLike {
@@ -60,6 +50,8 @@ export interface DurableObjectStubLike {
 }
 
 export interface CirrusSchedulerOptions {
+    /** Optional named instance — useful for tenant isolation. Default `default`. */
+    instanceName?: string;
     /** Binding to the `SchedulerDO` durable object namespace. */
     namespace: DurableObjectNamespaceLike;
     /**
@@ -67,6 +59,4 @@ export interface CirrusSchedulerOptions {
      * dispatching scheduled functions back to the Worker on alarm fire.
      */
     originUrl: string;
-    /** Optional named instance — useful for tenant isolation. Default `default`. */
-    instanceName?: string;
 }

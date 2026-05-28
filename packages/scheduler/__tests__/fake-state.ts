@@ -1,13 +1,13 @@
 import type { SchedulerDOState } from "../src/scheduler-do.js";
 
 export const createFakeState = (): SchedulerDOState & {
-    storageMap: Map<string, unknown>;
     alarm: number | null;
+    storageMap: Map<string, unknown>;
 } => {
     const storageMap = new Map<string, unknown>();
     let alarm: number | null = null;
 
-    const state: SchedulerDOState & { storageMap: Map<string, unknown>; alarm: number | null } = {
+    const state: SchedulerDOState & { alarm: number | null; storageMap: Map<string, unknown> } = {
         storageMap,
         get alarm() {
             return alarm;
@@ -16,8 +16,8 @@ export const createFakeState = (): SchedulerDOState & {
             alarm = value;
         },
         storage: {
-            get: async <T = unknown,>(key: string) => storageMap.get(key) as T | undefined,
-            put: async <T = unknown,>(entries: Record<string, T> | string, value?: T) => {
+            get: async <T = unknown>(key: string) => storageMap.get(key) as T | undefined,
+            put: async <T = unknown>(entries: Record<string, T> | string, value?: T) => {
                 if (typeof entries === "string") {
                     storageMap.set(entries, value as unknown);
 
@@ -40,7 +40,7 @@ export const createFakeState = (): SchedulerDOState & {
 
                 return count;
             },
-            list: async <T = unknown,>(options: { prefix?: string; limit?: number } = {}) => {
+            list: async <T = unknown>(options: { limit?: number; prefix?: string } = {}) => {
                 const result = new Map<string, T>();
                 const prefix = options.prefix ?? "";
                 const keys = [...storageMap.keys()].filter((key) => key.startsWith(prefix)).sort();

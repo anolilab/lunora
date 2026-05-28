@@ -5,11 +5,7 @@
  * Generated declarations decorate this with phantom type parameters so the
  * client can infer args / return values per call site.
  */
-export interface FunctionReference<
-    _Kind extends "query" | "mutation" | "action" = "query" | "mutation" | "action",
-    _Args = unknown,
-    _Return = unknown,
-> {
+export interface FunctionReference<_Kind extends "query" | "mutation" | "action" = "query" | "mutation" | "action", _Args = unknown, _Return = unknown> {
     readonly __cirrusRef: string;
 }
 
@@ -26,14 +22,14 @@ export type Unsubscribe = () => void;
  * read-your-writes between a mutation and subsequent queries.
  */
 export interface BookmarkStorage {
-    get(): string | null;
-    set(value: string | null): void;
+    get: () => string | null;
+    set: (value: string | null) => void;
 }
 
 export interface ReconnectOptions {
     initialDelayMs?: number;
-    maxDelayMs?: number;
     jitter?: boolean;
+    maxDelayMs?: number;
 }
 
 export interface OfflineQueueOptions {
@@ -41,19 +37,19 @@ export interface OfflineQueueOptions {
 }
 
 export interface CirrusClientOptions {
-    url: string;
-    wsUrl?: string;
-    fetch?: typeof fetch;
-    WebSocket?: typeof WebSocket;
-    reconnect?: ReconnectOptions;
-    offlineQueue?: OfflineQueueOptions;
     bookmarkStorage?: BookmarkStorage;
+    fetch?: typeof fetch;
+    offlineQueue?: OfflineQueueOptions;
+    reconnect?: ReconnectOptions;
+    url: string;
+    WebSocket?: typeof WebSocket;
+    wsUrl?: string;
 }
 
 /** Wire envelope sent on `POST /_cirrus/rpc`. */
 export interface RpcEnvelope {
-    functionPath: string;
     args?: Record<string, unknown>;
+    functionPath: string;
     shardKey?: string;
 }
 
@@ -62,52 +58,52 @@ export type RpcResponseBody = { result: unknown } | { error: { code: string; mes
 
 /** Subscription protocol — client → server. */
 export interface ClientSubscribeMessage {
-    type: "subscribe";
     id: string;
-    query: { table: string; args?: Record<string, unknown> };
+    query: { args?: Record<string, unknown>; table: string };
+    type: "subscribe";
 }
 
 export interface ClientUnsubscribeMessage {
-    type: "unsubscribe";
     id: string;
+    type: "unsubscribe";
 }
 
 export interface ClientAckMessage {
-    type: "ack";
     id: string;
+    type: "ack";
 }
 
 export type ClientMessage = ClientSubscribeMessage | ClientUnsubscribeMessage | ClientAckMessage;
 
 /** Subscription protocol — server → client. */
 export interface ServerDataMessage {
-    type: "data" | "delta";
-    id: string;
     data?: unknown;
     delta?: unknown;
+    id: string;
+    type: "data" | "delta";
 }
 
 export interface ServerErrorMessage {
-    type: "error";
-    id?: string;
     error?: unknown;
+    id?: string;
     message?: string;
+    type: "error";
 }
 
 export interface ServerAckMessage {
-    type: "ack";
     id: string;
+    type: "ack";
 }
 
 export interface ServerCompleteMessage {
-    type: "complete";
     id: string;
+    type: "complete";
 }
 
 export type ServerMessage = ServerDataMessage | ServerErrorMessage | ServerAckMessage | ServerCompleteMessage;
 
 export interface User {
-    readonly id: string;
     readonly email?: string;
+    readonly id: string;
     readonly [key: string]: unknown;
 }

@@ -3,21 +3,21 @@ import type { FunctionReference } from "./types.js";
 export type SubscriptionCallback = (data: unknown) => void;
 
 export interface SubscriptionState {
-    readonly id: string;
-    readonly fn: FunctionReference;
-    readonly args: Record<string, unknown>;
-    readonly shardKey?: string;
-    readonly callbacks: Set<SubscriptionCallback>;
-    /** Last known value, used to short-circuit `useQuery`-style consumers. */
-    lastValue: unknown;
     /** True once the server has acked the subscription on the current socket. */
     acked: boolean;
+    readonly args: Record<string, unknown>;
+    readonly callbacks: Set<SubscriptionCallback>;
+    readonly fn: FunctionReference;
+    readonly id: string;
+    /** Last known value, used to short-circuit `useQuery`-style consumers. */
+    lastValue: unknown;
     /**
      * Monotonic counter incremented on every server-pushed delta or data.
      * Used by optimistic-update rollback to detect whether the server has
      * already moved past the value we'd otherwise restore.
      */
     serverVersion: number;
+    readonly shardKey?: string;
 }
 
 /**

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Bootstrap shim: execute the TypeScript CLI entry via tsx so users don't
 // need a build step. tsx is declared as a dependency of @cirrus/cli.
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = pathToFileURL(join(here, "..", "src", "cli.ts")).href;

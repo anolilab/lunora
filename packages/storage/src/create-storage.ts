@@ -6,11 +6,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         throw new Error("@cirrus/storage: `bucket` is required");
     }
 
-    const upload = async (
-        key: string,
-        body: ReadableStream | ArrayBuffer | Blob,
-        uploadOpts: UploadOptions = {},
-    ): Promise<{ key: string; etag: string }> => {
+    const upload = async (key: string, body: ReadableStream | ArrayBuffer | Blob, uploadOpts: UploadOptions = {}): Promise<{ etag: string; key: string }> => {
         const object = await options.bucket.put(key, body, {
             httpMetadata: uploadOpts.contentType ? { contentType: uploadOpts.contentType } : undefined,
             customMetadata: uploadOpts.customMetadata,
@@ -25,10 +21,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         await options.bucket.delete(key);
     };
 
-    const list = async (
-        prefix?: string,
-        listOpts: ListOptions = {},
-    ): Promise<{ objects: R2ObjectLike[]; cursor?: string }> => {
+    const list = async (prefix?: string, listOpts: ListOptions = {}): Promise<{ cursor?: string; objects: R2ObjectLike[] }> => {
         const result = await options.bucket.list({ prefix, limit: listOpts.limit, cursor: listOpts.cursor });
 
         return { objects: result.objects, cursor: result.cursor };

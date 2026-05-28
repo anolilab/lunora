@@ -36,10 +36,10 @@ export interface TableSnapshot {
 }
 
 export interface ColumnSnapshot {
-    /** SQLite type affinity, derived from the validator. */
-    sqlType: "BLOB" | "INTEGER" | "REAL" | "TEXT";
     /** True when the column accepts NULL (validator wrapped in v.optional). */
     nullable: boolean;
+    /** SQLite type affinity, derived from the validator. */
+    sqlType: "BLOB" | "INTEGER" | "REAL" | "TEXT";
 }
 
 export interface IndexSnapshot {
@@ -55,10 +55,10 @@ export interface SchemaSnapshot {
 
 export interface DiffEntry {
     kind: "addColumn" | "createIndex" | "createTable" | "dropIndex" | "dropTable";
-    /** Human-readable summary, used in migration headers. */
-    summary: string;
     /** Generated SQL for this delta (already terminated with `;`). */
     sql: string;
+    /** Human-readable summary, used in migration headers. */
+    summary: string;
 }
 
 export interface UnsupportedEntry {
@@ -229,7 +229,7 @@ const diffIndexes = (
 /**
  * Compute a {@link SchemaDiff} from two snapshots. Pure function — no I/O.
  */
-// eslint-disable-next-line sonarjs/cognitive-complexity
+
 export const diffSnapshots = (previous: SchemaSnapshot | undefined, next: SchemaSnapshot): SchemaDiff => {
     const previousTables = previous?.tables ?? {};
     const entries: DiffEntry[] = [];
@@ -293,28 +293,26 @@ export const renderMigrationFile = (name: string, diff: SchemaDiff, generatedAt:
     ];
 
     for (const entry of diff.entries) {
-        lines.push(`-- ${entry.summary}`);
-        lines.push(entry.sql);
-        lines.push("");
+        lines.push(`-- ${entry.summary}`, entry.sql, "");
     }
 
     if (diff.unsupported.length > 0) {
-        lines.push("-- ---------------------------------------------------------------");
-        lines.push("-- The following deltas are NOT auto-generated in v0.1.");
-        lines.push("-- Write the appropriate SQL below by hand:");
-        lines.push("--");
+        lines.push(
+            "-- ---------------------------------------------------------------",
+            "-- The following deltas are NOT auto-generated in v0.1.",
+            "-- Write the appropriate SQL below by hand:",
+            "--",
+        );
 
         for (const entry of diff.unsupported) {
             lines.push(`--   * ${entry.summary}`);
         }
 
-        lines.push("-- ---------------------------------------------------------------");
-        lines.push("");
+        lines.push("-- ---------------------------------------------------------------", "");
     }
 
     if (diff.empty) {
-        lines.push("-- No changes detected. Re-running `cirrus migrate generate` will overwrite this file.");
-        lines.push("");
+        lines.push("-- No changes detected. Re-running `cirrus migrate generate` will overwrite this file.", "");
     }
 
     return lines.join("\n");

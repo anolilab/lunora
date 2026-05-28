@@ -2,11 +2,11 @@
  * Compile-time only: this file is included by `tsc --noEmit` to exercise the
  * type surface. It is also imported by a no-op test so vitest counts it.
  */
-import { defineSchema, defineTable, mutation, query, v } from "../src/index.js";
 import type { Id, Infer } from "../src/index.js";
+import { defineSchema, defineTable, mutation, query, v } from "../src/index.js";
 
 type Assert<T extends true> = T;
-type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends (<T>() => T extends Y ? 1 : 2) ? true : false;
+type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 
 const schema = defineSchema({
     messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),

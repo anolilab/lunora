@@ -10,8 +10,8 @@ import type { SchemaLike, SqlCursor, SqlExec } from "../../src/ctx-db.js";
  */
 
 export interface FakeRow {
-    _creationTime: number;
     __doc__: string;
+    _creationTime: number;
     id: string;
 }
 
@@ -92,7 +92,7 @@ const parseFieldExpression = (expression: string): string => {
         return trimmed;
     }
 
-    const match = trimmed.match(jsonExtractPattern);
+    const match = jsonExtractPattern.exec(trimmed);
 
     if (!match) {
         throw new Error(`unsupported field expression in fake: ${expression}`);
@@ -114,7 +114,7 @@ const parseWhere = (clause: string): ParsedCondition[] => {
 
     for (const part of parts) {
         const trimmedPart = part.trim();
-        const match = trimmedPart.match(/^(.+?)\s*(=|>=|<=|>|<)\s*\?$/u);
+        const match = /^(.+?)\s*(=|>=|<=|[><])\s*\?$/u.exec(trimmedPart);
 
         if (!match) {
             throw new Error(`unsupported WHERE fragment in fake: ${part}`);
@@ -137,6 +137,14 @@ const conditionMatches = (row: FakeRow, condition: ParsedCondition, parameter: u
     const cmp = compareValues(fieldValue, parameter);
 
     switch (condition.comparator) {
+        case "<": {
+            return cmp < 0;
+        }
+
+        case "<=": {
+            return cmp <= 0;
+        }
+
         case "=": {
             return cmp === 0;
         }
@@ -147,14 +155,6 @@ const conditionMatches = (row: FakeRow, condition: ParsedCondition, parameter: u
 
         case ">=": {
             return cmp >= 0;
-        }
-
-        case "<": {
-            return cmp < 0;
-        }
-
-        case "<=": {
-            return cmp <= 0;
         }
 
         default: {
@@ -192,7 +192,12 @@ const sortRows = (rows: FakeRow[], orderClause: string | undefined): FakeRow[] =
     }
 
     const fields = splitTopLevelCommas(orderClause)
-        .map((segment) => segment.trim().replace(/\s+ASC$/u, "").trim())
+        .map((segment) =>
+            segment
+                .trim()
+                .replace(/\s+ASC$/u, "")
+                .trim(),
+        )
         .map(parseFieldExpression);
 
     return [...rows].sort((leftRow, rightRow) => {
@@ -222,7 +227,7 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
 
         state.statements.push(sqlString);
 
-        const createTableMatch = sqlString.match(CREATE_TABLE);
+        const createTableMatch = CREATE_TABLE.exec(sqlString);
 
         if (createTableMatch) {
             const tableName = createTableMatch[1]!;
@@ -234,7 +239,7 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
-        const createIndexMatch = sqlString.match(CREATE_INDEX);
+        const createIndexMatch = CREATE_INDEX.exec(sqlString);
 
         if (createIndexMatch) {
             const indexName = createIndexMatch[2]!;
@@ -250,7 +255,7 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
-        const insertMatch = sqlString.match(INSERT);
+        const insertMatch = INSERT.exec(sqlString);
 
         if (insertMatch) {
             const tableName = insertMatch[1]!;
@@ -267,7 +272,7 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
-        const updateDocMatch = sqlString.match(UPDATE_SET_DOC);
+        const updateDocMatch = UPDATE_SET_DOC.exec(sqlString);
 
         if (updateDocMatch) {
             const tableName = updateDocMatch[1]!;
@@ -282,7 +287,7 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
-        const updateBothMatch = sqlString.match(UPDATE_SET_DOC_AND_TIME);
+        const updateBothMatch = UPDATE_SET_DOC_AND_TIME.exec(sqlString);
 
         if (updateBothMatch) {
             const tableName = updateBothMatch[1]!;
@@ -297,7 +302,7 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
-        const deleteMatch = sqlString.match(DELETE_BY_ID);
+        const deleteMatch = DELETE_BY_ID.exec(sqlString);
 
         if (deleteMatch) {
             const tableName = deleteMatch[1]!;
@@ -308,17 +313,17 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
-        const probeMatch = sqlString.match(PROBE_ID);
+        const probeMatch = PROBE_ID.exec(sqlString);
 
         if (probeMatch) {
             const tableName = probeMatch[1]!;
             const [id] = params as [string];
             const row = state.tables.get(tableName)?.get(id);
 
-            return cursor<Record<string, unknown>>(row ? [{ "1": 1 }] : []);
+            return cursor<Record<string, unknown>>(row ? [{ 1: 1 }] : []);
         }
 
-        const selectByIdMatch = sqlString.match(SELECT_BY_ID);
+        const selectByIdMatch = SELECT_BY_ID.exec(sqlString);
 
         if (selectByIdMatch) {
             const tableName = selectByIdMatch[1]!;
@@ -328,7 +333,7 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>(row ? [row as unknown as Record<string, unknown>] : []);
         }
 
-        const selectAllMatch = sqlString.match(SELECT_ALL);
+        const selectAllMatch = SELECT_ALL.exec(sqlString);
 
         if (selectAllMatch) {
             const tableName = selectAllMatch[1]!;

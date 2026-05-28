@@ -14,10 +14,9 @@ export const overlayPlugin = async (): Promise<Plugin | ReadonlyArray<Plugin>> =
     try {
         const moduleExports: Record<string, unknown> = (await import("@visulima/vite-overlay")) as Record<string, unknown>;
 
-        const factory =
-            (moduleExports.default as ((...args: ReadonlyArray<unknown>) => Plugin | ReadonlyArray<Plugin>) | undefined) ??
-            (moduleExports.overlay as ((...args: ReadonlyArray<unknown>) => Plugin | ReadonlyArray<Plugin>) | undefined) ??
-            (moduleExports.viteOverlay as ((...args: ReadonlyArray<unknown>) => Plugin | ReadonlyArray<Plugin>) | undefined);
+        type OverlayFactory = (...args: ReadonlyArray<unknown>) => Plugin | ReadonlyArray<Plugin>;
+
+        const factory = (moduleExports.default ?? moduleExports.overlay ?? moduleExports.viteOverlay) as OverlayFactory | undefined;
 
         if (typeof factory !== "function") {
             throw new TypeError("no recognized factory export");

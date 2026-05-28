@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { query, v } from "../src/index.js";
 import type { MutationCtx, QueryCtx, ReadOnlyStorage, Storage } from "../src/index.js";
+import { query, v } from "../src/index.js";
 
 /**
  * Asserts at compile time that `Lhs` and `Rhs` are mutually assignable.
@@ -11,7 +11,7 @@ import type { MutationCtx, QueryCtx, ReadOnlyStorage, Storage } from "../src/ind
 type Assert<T extends true> = T;
 type Extends<X, Y> = X extends Y ? true : false;
 
-describe("QueryCtx.storage / MutationCtx.storage", () => {
+describe("queryCtx.storage / MutationCtx.storage", () => {
     test("exposes the read-only storage surface (getSignedUrl, getUrl, download)", () => {
         // Build a minimal `ReadOnlyStorage` double and verify it satisfies
         // both `QueryCtx["storage"]` and `MutationCtx["storage"]`.
@@ -54,7 +54,7 @@ describe("QueryCtx.storage / MutationCtx.storage", () => {
     });
 
     test("a query handler can call ctx.storage.getSignedUrl", async () => {
-        const calls: Array<{ key: string; expiresInSeconds?: number }> = [];
+        const calls: Array<{ expiresInSeconds?: number; key: string }> = [];
 
         const storage: ReadOnlyStorage = {
             download: async () => null,

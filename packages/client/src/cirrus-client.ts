@@ -1,7 +1,7 @@
 import { createInMemoryBookmarkStorage } from "./bookmark.js";
 import { OfflineQueue } from "./offline-queue.js";
 import { createReconnect, type ReconnectCalculator } from "./reconnect.js";
-import { SubscriptionRegistry, type SubscriptionCallback, type SubscriptionState } from "./subscription.js";
+import { type SubscriptionCallback, SubscriptionRegistry, type SubscriptionState } from "./subscription.js";
 import type {
     ArgsOf,
     BookmarkStorage,
@@ -20,8 +20,8 @@ const WS_PATH = "/_cirrus/ws";
 type WSState = "idle" | "connecting" | "open" | "closed";
 
 interface MutationCallOptions<TCurrent, TValue> {
-    shardKey?: string;
     optimistic?: (current: TCurrent | undefined) => TValue;
+    shardKey?: string;
 }
 
 const deriveWsUrl = (url: string): string => {
@@ -119,11 +119,7 @@ export class CirrusClient {
         return (await this.rpc(fn.__cirrusRef, args as Record<string, unknown>, opts.shardKey, { attachBookmark: true })) as ReturnOf<F>;
     }
 
-    public async mutation<F extends FunctionReference>(
-        fn: F,
-        args: ArgsOf<F>,
-        opts: MutationCallOptions<unknown, ReturnOf<F>> = {},
-    ): Promise<ReturnOf<F>> {
+    public async mutation<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: MutationCallOptions<unknown, ReturnOf<F>> = {}): Promise<ReturnOf<F>> {
         const argsRecord = args as Record<string, unknown>;
 
         // Apply optimistic updates to any subscriber listening on this fn.
@@ -472,7 +468,7 @@ export class CirrusClient {
         }
 
         if (message.type === "data" || message.type === "delta") {
-            const id = message.id;
+            const { id } = message;
             const state = id ? this.subscriptions.getById(id) : undefined;
 
             if (!state) {
@@ -529,8 +525,12 @@ export class CirrusClient {
 
         for (const item of drained) {
             this.rpc(item.functionPath, item.args, item.shardKey, { captureBookmark: true }).then(
-                (value) => item.resolve(value),
-                (error) => item.reject(error),
+                (value) => {
+                    item.resolve(value);
+                },
+                (error) => {
+                    item.reject(error);
+                },
             );
         }
     }

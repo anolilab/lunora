@@ -9,7 +9,6 @@ import type { Env as TestEnv } from "./test-worker.ts";
 
 declare global {
     namespace Cloudflare {
-        // eslint-disable-next-line @typescript-eslint/no-empty-interface
         interface Env extends TestEnv {}
     }
 }

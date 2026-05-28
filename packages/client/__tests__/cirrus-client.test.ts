@@ -6,18 +6,18 @@ import type { FunctionReference } from "../src/types.js";
 // --- Test doubles -----------------------------------------------------------
 
 interface MockSocket {
-    url: string;
-    readyState: number;
-    sent: string[];
-    onopen?: ((event?: unknown) => void) | null;
-    onmessage?: ((event: { data: unknown }) => void) | null;
+    close: () => void;
     onclose?: ((event?: unknown) => void) | null;
     onerror?: ((event?: unknown) => void) | null;
+    onmessage?: ((event: { data: unknown }) => void) | null;
+    onopen?: ((event?: unknown) => void) | null;
     open: () => void;
+    readyState: number;
     receive: (payload: unknown) => void;
-    triggerClose: () => void;
-    close: () => void;
     send: (data: string) => void;
+    sent: string[];
+    triggerClose: () => void;
+    url: string;
 }
 
 const sockets: MockSocket[] = [];
@@ -84,7 +84,7 @@ const latestSocket = (): MockSocket => {
 const fn = (ref: string): FunctionReference => ({ __cirrusRef: ref });
 
 const jsonResponse = (body: unknown, init: ResponseInit = {}): Response => {
-    return new Response(JSON.stringify(body), {
+    return Response.json(body, {
         status: 200,
         headers: { "content-type": "application/json" },
         ...init,
@@ -101,7 +101,7 @@ afterEach(() => {
 
 // --- RPC --------------------------------------------------------------------
 
-describe("CirrusClient — queries & mutations", () => {
+describe("cirrusClient — queries & mutations", () => {
     test("query roundtrips through POST /_cirrus/rpc and unwraps the result", async () => {
         const fetchMock = vi.fn(async () => jsonResponse({ result: { hello: "world" } }));
 
@@ -114,7 +114,8 @@ describe("CirrusClient — queries & mutations", () => {
         const value = await client.query(fn("posts:list"), { limit: 10 });
 
         expect(value).toEqual({ hello: "world" });
-        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
         const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
 
         expect(requestUrl).toBe("https://app.example/_cirrus/rpc");
@@ -148,13 +149,16 @@ describe("CirrusClient — queries & mutations", () => {
             call += 1;
 
             if (call === 1) {
-                return new Response(JSON.stringify({ result: { ok: true } }), {
-                    status: 200,
-                    headers: {
-                        "content-type": "application/json",
-                        "x-d1-bookmark": "bm-123",
+                return Response.json(
+                    { result: { ok: true } },
+                    {
+                        status: 200,
+                        headers: {
+                            "content-type": "application/json",
+                            "x-d1-bookmark": "bm-123",
+                        },
                     },
-                });
+                );
             }
 
             // capture headers on the second (query) call
@@ -177,7 +181,7 @@ describe("CirrusClient — queries & mutations", () => {
         expect(headers["x-d1-bookmark"]).toBe("bm-123");
     });
 
-    test("Authorization header is attached when token is set", async () => {
+    test("authorization header is attached when token is set", async () => {
         const fetchMock = vi.fn(async () => jsonResponse({ result: null }));
 
         const client = new CirrusClient({
@@ -199,7 +203,7 @@ describe("CirrusClient — queries & mutations", () => {
 
 // --- Subscriptions ----------------------------------------------------------
 
-describe("CirrusClient — subscriptions", () => {
+describe("cirrusClient — subscriptions", () => {
     test("subscribe sends a subscribe envelope and delivers delta payloads", async () => {
         const fetchMock = vi.fn();
         const client = new CirrusClient({
@@ -216,6 +220,7 @@ describe("CirrusClient — subscriptions", () => {
         socket.open();
 
         expect(socket.sent).toHaveLength(1);
+
         const sub = JSON.parse(socket.sent[0]!);
 
         expect(sub.type).toBe("subscribe");
@@ -247,9 +252,11 @@ describe("CirrusClient — subscriptions", () => {
         const first = latestSocket();
 
         first.open();
+
         expect(first.sent).toHaveLength(1);
 
         first.triggerClose();
+
         expect(sockets).toHaveLength(1);
 
         vi.advanceTimersByTime(15);
@@ -258,7 +265,9 @@ describe("CirrusClient — subscriptions", () => {
         expect(second).not.toBe(first);
 
         second.open();
+
         expect(second.sent).toHaveLength(1);
+
         const env = JSON.parse(second.sent[0]!);
 
         expect(env.type).toBe("subscribe");
@@ -306,7 +315,7 @@ describe("CirrusClient — subscriptions", () => {
 
 // --- Offline queue ----------------------------------------------------------
 
-describe("CirrusClient — offline queue", () => {
+describe("cirrusClient — offline queue", () => {
     test("mutation issued while the socket is offline is queued and replayed on reconnect", async () => {
         vi.useFakeTimers();
         const fetchMock = vi.fn(async () => jsonResponse({ result: { id: "1" } }));
@@ -342,13 +351,13 @@ describe("CirrusClient — offline queue", () => {
         const value = await pending;
 
         expect(value).toEqual({ id: "1" });
-        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 });
 
 // --- Optimistic updates -----------------------------------------------------
 
-describe("CirrusClient — optimistic updates", () => {
+describe("cirrusClient — optimistic updates", () => {
     test("applies optimistic value immediately and rolls back on error", async () => {
         const fetchMock = vi.fn(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }, { status: 500 }));
         const client = new CirrusClient({
@@ -368,12 +377,19 @@ describe("CirrusClient — optimistic updates", () => {
         const subId = JSON.parse(socket.sent[0]!).id as string;
 
         socket.receive({ type: "delta", id: subId, delta: 5 });
+
         expect(received).toEqual([5]);
 
         await expect(
-            client.mutation(fn("counter:get"), {}, {
-                optimistic: (current) => (typeof current === "number" ? current + 1 : 1),
-            }),
+            client.mutation(
+                fn("counter:get"),
+                {},
+                {
+                    optimistic: (current) => {
+                        return typeof current === "number" ? current + 1 : 1;
+                    },
+                },
+            ),
         ).rejects.toMatchObject({ message: "fail" });
 
         // Optimistic value applied, then rolled back.

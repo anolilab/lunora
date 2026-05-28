@@ -3,17 +3,17 @@ import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/clien
 export type CacheStatus = "idle" | "loading" | "ready" | "error";
 
 interface CacheEntry {
-    /** Number of active consumers (useQuery / useSubscription mounts). */
-    refCount: number;
-    status: CacheStatus;
     data: unknown;
     error: Error | undefined;
     /** Subscriber callbacks to notify when this entry changes. */
     listeners: Set<() => void>;
-    /** WS unsubscribe for the active subscription, if one is open. */
-    unsubscribe: Unsubscribe | undefined;
     /** Polling timer when WS fallback is in effect. */
     pollTimer: ReturnType<typeof setInterval> | undefined;
+    /** Number of active consumers (useQuery / useSubscription mounts). */
+    refCount: number;
+    status: CacheStatus;
+    /** WS unsubscribe for the active subscription, if one is open. */
+    unsubscribe: Unsubscribe | undefined;
 }
 
 /**
@@ -100,13 +100,7 @@ export class QueryCache {
         }
     }
 
-    private beginFetch(
-        entry: CacheEntry,
-        fn: FunctionReference,
-        args: Record<string, unknown>,
-        shardKey: string | undefined,
-        pollIntervalMs: number,
-    ): void {
+    private beginFetch(entry: CacheEntry, fn: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined, pollIntervalMs: number): void {
         // Initial fetch (HTTP) so that even WS-less environments see a value.
         this.client
             .query(fn as FunctionReference, args, { shardKey })
@@ -126,12 +120,17 @@ export class QueryCache {
         // if the WS implementation is missing, the subscribe call still wires
         // the callback but never receives data.
         try {
-            entry.unsubscribe = this.client.subscribe(fn as FunctionReference, args, (value) => {
-                entry.status = "ready";
-                entry.data = value;
-                entry.error = undefined;
-                this.emit(entry);
-            }, { shardKey });
+            entry.unsubscribe = this.client.subscribe(
+                fn as FunctionReference,
+                args,
+                (value) => {
+                    entry.status = "ready";
+                    entry.data = value;
+                    entry.error = undefined;
+                    this.emit(entry);
+                },
+                { shardKey },
+            );
         } catch {
             // Fallback: poll over HTTP if subscribe is unavailable in this environment.
             entry.pollTimer = setInterval(() => {

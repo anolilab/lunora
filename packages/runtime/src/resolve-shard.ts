@@ -4,7 +4,6 @@
  * unit-test doubles without coupling to `@cloudflare/workers-types`.
  */
 export interface ShardNamespaceLike {
-    idFromName: (name: string) => unknown;
     get: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
     /**
      * `getByName` is the friendlier API but isn't on every workers-types
@@ -12,6 +11,7 @@ export interface ShardNamespaceLike {
      * `idFromName` + `get` for compatibility.
      */
     getByName?: (name: string) => { fetch: (request: Request) => Promise<Response> };
+    idFromName: (name: string) => unknown;
 }
 
 export interface ResolvedShard {

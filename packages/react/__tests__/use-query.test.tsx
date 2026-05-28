@@ -1,8 +1,8 @@
+import type { FunctionReference } from "@cirrus/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { describe, expect, test } from "vitest";
 
-import type { FunctionReference } from "@cirrus/client";
-import type { ReactElement } from "react";
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useQuery } from "../src/use-query.js";
 import { createMockClient } from "./mock-client.js";
@@ -31,7 +31,7 @@ describe("useQuery", () => {
             expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 1 }));
         });
 
-        expect(mock.query).toHaveBeenCalledOnce();
+        expect(mock.query).toHaveBeenCalledTimes(1);
     });
 
     test('"skip" short-circuits the query — no client call', () => {
@@ -62,16 +62,17 @@ describe("useQuery", () => {
             const nodes = screen.getAllByTestId("display");
 
             expect(nodes).toHaveLength(2);
+
             for (const node of nodes) {
                 expect(node.textContent).toBe(JSON.stringify({ count: 2 }));
             }
         });
 
-        expect(mock.query).toHaveBeenCalledOnce();
-        expect(mock.subscribe).toHaveBeenCalledOnce();
+        expect(mock.query).toHaveBeenCalledTimes(1);
+        expect(mock.subscribe).toHaveBeenCalledTimes(1);
     });
 
-    test("WS deltas update the displayed value", async () => {
+    test("wS deltas update the displayed value", async () => {
         const mock = createMockClient(() => 0);
 
         render(

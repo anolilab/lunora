@@ -21,10 +21,10 @@ describe("renderEmail", () => {
         // so assert on the surrounding text rather than the exact substring.
         expect(result.html).toContain("Alice");
         expect(result.html).toContain("Welcome");
-        expect(result.html.includes("<html")).toBe(true);
+        expect(result.html).toContain("<html");
         // react-email upper-cases <h1> headings in the plain text output.
         expect(result.text.toLowerCase()).toContain("welcome, alice!");
-        expect(result.text.includes("<h1>")).toBe(false);
+        expect(result.text).not.toContain("<h1>");
     });
 
     test("createMailer.send() renders react templates before handing off to transport", async () => {

@@ -15,14 +15,14 @@
 import { DurableObject } from "cloudflare:workers";
 
 import { SessionDO } from "../../src/session-do.js";
-import { ShardDO } from "../../src/shard-do.js";
 import type { ShardDOState } from "../../src/shard-do.js";
+import { ShardDO } from "../../src/shard-do.js";
 import type { MutationDelta } from "../../src/types.js";
 
 export interface Env {
-    SHARD: DurableObjectNamespace<TestShardDO>;
-    SESSION: DurableObjectNamespace<TestSessionDO>;
     CIRRUS_ALLOWED_ORIGINS?: string;
+    SESSION: DurableObjectNamespace<TestSessionDO>;
+    SHARD: DurableObjectNamespace<TestShardDO>;
 }
 
 export class TestShardDO extends DurableObject<Env> {
@@ -30,7 +30,7 @@ export class TestShardDO extends DurableObject<Env> {
 
     public rpcResult: unknown = { ok: true };
 
-    public lastRpcCall: { functionPath: string; args: Record<string, unknown> } | undefined;
+    public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
 
     constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
@@ -55,7 +55,11 @@ export class TestShardDO extends DurableObject<Env> {
 }
 
 class ConcreteShard extends ShardDO {
-    constructor(state: ShardDOState, env: unknown, private readonly outer: TestShardDO) {
+    constructor(
+        state: ShardDOState,
+        env: unknown,
+        private readonly outer: TestShardDO,
+    ) {
         super(state, env);
     }
 

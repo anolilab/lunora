@@ -1,5 +1,5 @@
-import { Node } from "ts-morph";
 import type { CallExpression, Expression, ObjectLiteralExpression } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { ValidatorIR } from "./ir.js";
 
@@ -53,8 +53,9 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
         case "bytes":
         case "null":
         case "number":
-        case "string":
+        case "string": {
             return { kind: member };
+        }
 
         case "array": {
             const first = args[0];
@@ -66,6 +67,17 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
             const first = args[0];
 
             return { kind: "id", tableName: first && Node.isStringLiteral(first) ? first.getLiteralText() : "_unknown_" };
+        }
+
+        case "literal": {
+            const first = args[0];
+
+            return {
+                kind: "literal",
+                // Captures the source text — for string/number/boolean/null literals
+                // this matches the TS type representation directly.
+                literalValue: first ? first.getText() : "undefined",
+            };
         }
 
         case "object": {
@@ -84,24 +96,6 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
             return { inner: first && Node.isExpression(first) ? parseValidator(first) : { kind: "any" }, kind: "optional" };
         }
 
-        case "union": {
-            return {
-                kind: "union",
-                members: args.filter((argument): argument is Expression => Node.isExpression(argument)).map((argument) => parseValidator(argument)),
-            };
-        }
-
-        case "literal": {
-            const first = args[0];
-
-            return {
-                kind: "literal",
-                // Captures the source text — for string/number/boolean/null literals
-                // this matches the TS type representation directly.
-                literalValue: first ? first.getText() : "undefined",
-            };
-        }
-
         case "record": {
             const first = args[0];
             const second = args[1];
@@ -113,10 +107,18 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
             };
         }
 
-        default:
+        case "union": {
+            return {
+                kind: "union",
+                members: args.filter((argument): argument is Expression => Node.isExpression(argument)).map((argument) => parseValidator(argument)),
+            };
+        }
+
+        default: {
             // Loud failure — silently emitting `unknown` masks codegen bugs.
             // `emit.ts` keeps a fallback case for safety, but this parser
             // must call out validator kinds it does not recognise.
             throw new Error(`Unsupported validator kind: ${member}`);
+        }
     }
 };

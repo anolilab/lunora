@@ -57,7 +57,13 @@ export const App = (): ReactElement => {
                 optimistic: (current) => {
                     const list = (current as Doc<"todos">[] | undefined) ?? [];
 
-                    return list.map((entry) => (entry._id === todo._id ? { ...entry, done: !entry.done } : entry));
+                    return list.map((entry) => {
+                        if (entry._id !== todo._id) {
+                            return entry;
+                        }
+
+                        return { ...entry, done: !entry.done };
+                    });
                 },
             },
         );

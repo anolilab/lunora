@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
 import type { BroadcastDelta, DatabaseWriterLike } from "../src/ctx-db.js";
+import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
 import { messagesSchema } from "./_helpers/fake-sql.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
@@ -106,12 +106,15 @@ describe("ctx-db against real SQLite — round-trips", () => {
         await writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
 
         await writer.patch("m_1", { text: "edited" });
+
         await expect(writer.get("m_1")).resolves.toMatchObject({ text: "edited", channelId: "c1" });
 
         await writer.replace("m_1", { channelId: "c2", text: "fresh", authorId: "u2" });
+
         await expect(writer.get("m_1")).resolves.toMatchObject({ _id: "m_1", channelId: "c2", text: "fresh", authorId: "u2" });
 
         await writer.delete("m_1");
+
         await expect(writer.get("m_1")).resolves.toBeNull();
     });
 });
@@ -119,7 +122,13 @@ describe("ctx-db against real SQLite — round-trips", () => {
 describe("ctx-db against real SQLite — queries", () => {
     test("collect() orders by _creationTime ascending", async () => {
         let now = 0;
-        const { writer } = setupWriter({ clock: () => (now += 10) });
+        const { writer } = setupWriter({
+            clock: () => {
+                now += 10;
+
+                return now;
+            },
+        });
 
         await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" });
         await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" });
@@ -147,7 +156,13 @@ describe("ctx-db against real SQLite — queries", () => {
 
     test("withIndex() range on _creationTime uses real numeric comparison", async () => {
         let now = 0;
-        const { writer } = setupWriter({ clock: () => (now += 10) });
+        const { writer } = setupWriter({
+            clock: () => {
+                now += 10;
+
+                return now;
+            },
+        });
 
         await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }); // t=10
         await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }); // t=20
@@ -163,7 +178,13 @@ describe("ctx-db against real SQLite — queries", () => {
 
     test("take(n) limits at the engine when there is no in-memory filter", async () => {
         let now = 0;
-        const { writer } = setupWriter({ clock: () => (now += 10) });
+        const { writer } = setupWriter({
+            clock: () => {
+                now += 10;
+
+                return now;
+            },
+        });
 
         await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" });
         await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" });
@@ -191,7 +212,13 @@ describe("ctx-db against real SQLite — queries", () => {
 
     test("first() returns the earliest row or null", async () => {
         let now = 0;
-        const { writer } = setupWriter({ clock: () => (now += 10) });
+        const { writer } = setupWriter({
+            clock: () => {
+                now += 10;
+
+                return now;
+            },
+        });
 
         await expect(writer.query("messages").first()).resolves.toBeNull();
 

@@ -522,8 +522,13 @@ describe("shardDO upgrade gating", () => {
         await expect(shard.fetch(request)).rejects.toThrow(/WebSocketPair/u);
     };
 
-    const upgradeRequest = (url: string, init?: RequestInit): Request =>
-        new Request(url, { ...init, headers: { ...(init?.headers ?? {}), Upgrade: "websocket" } });
+    const upgradeRequest = (url: string, init?: RequestInit): Request => {
+        const headers = new Headers(init?.headers);
+
+        headers.set("Upgrade", "websocket");
+
+        return new Request(url, { ...init, headers });
+    };
 
     test("allows upgrade when no origin allowlist and no bearer are configured", async () => {
         const shard = new TestShard(createFakeState(), {});
@@ -540,9 +545,7 @@ describe("shardDO upgrade gating", () => {
 
     test("rejects upgrade with 403 when origin not in allowlist", async () => {
         const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example" });
-        const response = await shard.fetch(
-            upgradeRequest("https://shard.internal/", { headers: { Origin: "https://evil.example" } }),
-        );
+        const response = await shard.fetch(upgradeRequest("https://shard.internal/", { headers: { Origin: "https://evil.example" } }));
 
         expect(response.status).toBe(403);
     });
@@ -550,10 +553,7 @@ describe("shardDO upgrade gating", () => {
     test("passes the gate when origin matches the allowlist", async () => {
         const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example,https://staging.example" });
 
-        await expectPassedGate(
-            shard,
-            upgradeRequest("https://shard.internal/", { headers: { Origin: "https://staging.example" } }),
-        );
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Origin: "https://staging.example" } }));
     });
 
     test("rejects upgrade with 403 when bearer required but missing", async () => {
@@ -565,9 +565,7 @@ describe("shardDO upgrade gating", () => {
 
     test("rejects upgrade with 403 when bearer token mismatches", async () => {
         const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
-        const response = await shard.fetch(
-            upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer wrong" } }),
-        );
+        const response = await shard.fetch(upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer wrong" } }));
 
         expect(response.status).toBe(403);
     });
@@ -575,10 +573,7 @@ describe("shardDO upgrade gating", () => {
     test("accepts bearer via Authorization header", async () => {
         const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
 
-        await expectPassedGate(
-            shard,
-            upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer s3cret" } }),
-        );
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer s3cret" } }));
     });
 
     test("accepts bearer via ?token query parameter as a browser escape hatch", async () => {

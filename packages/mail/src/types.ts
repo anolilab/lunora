@@ -19,28 +19,28 @@ export interface MailTransport {
 }
 
 export interface SendPayload {
-    to: string | string[];
-    subject: string;
-    from?: string;
-    html?: string;
-    text?: string;
-    cc?: string[];
     bcc?: string[];
-    replyTo?: string;
+    cc?: string[];
+    from?: string;
     headers?: Record<string, string>;
+    html?: string;
+    replyTo?: string;
+    subject: string;
+    text?: string;
+    to: string | string[];
 }
 
 export interface SendOpts {
-    to: string | string[];
-    subject: string;
-    react?: ReactElement;
-    html?: string;
-    text?: string;
-    cc?: string[];
     bcc?: string[];
-    replyTo?: string;
-    headers?: Record<string, string>;
+    cc?: string[];
     from?: string;
+    headers?: Record<string, string>;
+    html?: string;
+    react?: ReactElement;
+    replyTo?: string;
+    subject: string;
+    text?: string;
+    to: string | string[];
 }
 
 export interface CirrusMailOptions {
@@ -48,13 +48,13 @@ export interface CirrusMailOptions {
     apiKey?: string;
     /** Default sender (`Name <addr@host>` or bare email). */
     from: string;
-    /** Override the underlying transport. Useful for tests + multi-provider setups. */
-    transport?: MailTransport;
     /** Default queue binding for `mailer.queue()`. */
     queue?: QueueLike;
+    /** Override the underlying transport. Useful for tests + multi-provider setups. */
+    transport?: MailTransport;
 }
 
 export interface Mailer {
-    send: (opts: SendOpts) => Promise<{ id: string }>;
     queue: (opts: SendOpts) => Promise<{ queued: true }>;
+    send: (opts: SendOpts) => Promise<{ id: string }>;
 }

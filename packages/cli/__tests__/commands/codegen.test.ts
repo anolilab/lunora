@@ -10,7 +10,7 @@ import type { Logger } from "../../src/util/logger.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 // Reuse the same fixture that @cirrus/codegen uses for its own tests.
-const fixtureRoot = join(here, "..", "..", "..", "cirrus-codegen", "__tests__", "fixtures", "simple");
+const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
 
 const silentLogger = (): Logger => ({
     error: () => {},
@@ -46,7 +46,7 @@ describe("cirrus codegen", () => {
 
         runCodegenCommand({ cwd: workdir, logger: { ...silentLogger(), success: (msg) => success.push(msg) } });
 
-        expect(success.length).toBe(1);
+        expect(success).toHaveLength(1);
         expect(success[0]).toContain("_generated");
     });
 });

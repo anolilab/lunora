@@ -1,13 +1,15 @@
 import { describe, expect, test } from "vitest";
 
-import { SessionDO, SESSION_DO_TTL_DEFAULT } from "../src/session-do.js";
+import { SESSION_DO_TTL_DEFAULT, SessionDO } from "../src/session-do.js";
 
 /**
  * Tiny in-process double for `DurableObjectStorage`. We only model the three
  * methods SessionDO uses (`get`, `put`, `delete`) so a regression in the
  * SQL layer of a real DO can't hide behind a fat fake.
  */
-const createFakeStorage = (): { storage: { get: (k: string) => Promise<unknown>; put: (k: string, v: unknown) => Promise<void>; delete: (k: string) => Promise<boolean> } } => {
+const createFakeStorage = (): {
+    storage: { delete: (k: string) => Promise<boolean>; get: (k: string) => Promise<unknown>; put: (k: string, v: unknown) => Promise<void> };
+} => {
     const map = new Map<string, unknown>();
 
     return {
@@ -25,7 +27,7 @@ const createFakeStorage = (): { storage: { get: (k: string) => Promise<unknown>;
     };
 };
 
-describe("SessionDO", () => {
+describe("sessionDO", () => {
     test("create persists a record and returns it", async () => {
         const state = createFakeStorage();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -41,7 +43,7 @@ describe("SessionDO", () => {
 
         expect(response.status).toBe(201);
 
-        const body = (await response.json()) as { userId: string; expiresAt: number };
+        const body = (await response.json()) as { expiresAt: number; userId: string };
 
         expect(body.userId).toBe("u1");
         expect(body.expiresAt).toBeGreaterThan(Date.now());
@@ -71,6 +73,7 @@ describe("SessionDO", () => {
 
     test("get expires sessions lazily", async () => {
         const state = createFakeStorage();
+
         // Inject an already-expired record so the lazy-expire branch runs.
         await state.storage.put("s:dead", { userId: "u", createdAt: Date.now() - 10_000, expiresAt: Date.now() - 1 });
 
@@ -79,7 +82,7 @@ describe("SessionDO", () => {
         const response = await session.fetch(new Request("https://session.internal/get?token=dead"));
 
         expect(response.status).toBe(404);
-        expect(await state.storage.get("s:dead")).toBeUndefined();
+        await expect(state.storage.get("s:dead")).resolves.toBeUndefined();
     });
 
     test("revoke deletes the record idempotently", async () => {

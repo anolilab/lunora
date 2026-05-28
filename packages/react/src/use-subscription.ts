@@ -69,7 +69,6 @@ export function useSubscription<F extends FunctionReference>(
 
             return undefined;
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [client, fn.__cirrusRef, serialized, options.shardKey, skipped]);
 
     return state;

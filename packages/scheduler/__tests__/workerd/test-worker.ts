@@ -7,8 +7,8 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
-import { SchedulerDO } from "../../src/scheduler-do.js";
 import type { SchedulerDOState, SchedulerEnv } from "../../src/scheduler-do.js";
+import { SchedulerDO } from "../../src/scheduler-do.js";
 import type { ScheduleRecord } from "../../src/types.js";
 
 export interface Env {
@@ -38,8 +38,7 @@ const toSchedulerState = (ctx: DurableObjectState): SchedulerDOState => ({
 
             return ctx.storage.delete(keyOrKeys);
         },
-        list: <T = unknown>(options: { prefix?: string; limit?: number; end?: string } = {}) =>
-            ctx.storage.list<T>(options),
+        list: <T = unknown>(options: { end?: string; limit?: number; prefix?: string } = {}) => ctx.storage.list<T>(options),
         setAlarm: (time: number | Date) => ctx.storage.setAlarm(time),
         getAlarm: () => ctx.storage.getAlarm(),
         deleteAlarm: () => ctx.storage.deleteAlarm(),
@@ -69,7 +68,11 @@ export class TestSchedulerDO extends DurableObject<Env> {
 }
 
 class ConcreteScheduler extends SchedulerDO {
-    constructor(state: SchedulerDOState, env: SchedulerEnv, private readonly outer: TestSchedulerDO) {
+    constructor(
+        state: SchedulerDOState,
+        env: SchedulerEnv,
+        private readonly outer: TestSchedulerDO,
+    ) {
         super(state, env);
     }
 

@@ -1,20 +1,22 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
 import type { BroadcastDelta, DatabaseWriterLike } from "../src/ctx-db.js";
+import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
 import { createFakeSql, messagesSchema } from "./_helpers/fake-sql.js";
 
 const fixedTime = 1_700_000_000_000;
 
-const setupWriter = (overrides: {
-    broadcast?: BroadcastDelta;
-    clock?: () => number;
-    idGenerator?: () => string;
-} = {}): {
+const setupWriter = (
+    overrides: {
+        broadcast?: BroadcastDelta;
+        clock?: () => number;
+        idGenerator?: () => string;
+    } = {},
+): {
     deltas: Parameters<BroadcastDelta>[0][];
-    writer: DatabaseWriterLike;
-    state: ReturnType<typeof createFakeSql>["state"];
     sql: ReturnType<typeof createFakeSql>["sql"];
+    state: ReturnType<typeof createFakeSql>["state"];
+    writer: DatabaseWriterLike;
 } => {
     const { sql, state } = createFakeSql();
     const deltas: Parameters<BroadcastDelta>[0][] = [];
@@ -170,7 +172,15 @@ describe("createShardCtxDb — patch/replace/delete", () => {
 describe("createShardCtxDb — query()", () => {
     test("collect() returns every row ordered by _creationTime", async () => {
         let now = 1;
-        const { writer } = setupWriter({ clock: () => now++ });
+        const { writer } = setupWriter({
+            clock: () => {
+                const value = now;
+
+                now += 1;
+
+                return value;
+            },
+        });
 
         await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" });
         await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" });
@@ -182,7 +192,15 @@ describe("createShardCtxDb — query()", () => {
 
     test("take(n) limits the result size", async () => {
         let now = 1;
-        const { writer } = setupWriter({ clock: () => now++ });
+        const { writer } = setupWriter({
+            clock: () => {
+                const value = now;
+
+                now += 1;
+
+                return value;
+            },
+        });
 
         await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" });
         await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" });
@@ -195,7 +213,15 @@ describe("createShardCtxDb — query()", () => {
 
     test("first() returns the earliest row, or null when empty", async () => {
         let now = 1;
-        const { writer } = setupWriter({ clock: () => now++ });
+        const { writer } = setupWriter({
+            clock: () => {
+                const value = now;
+
+                now += 1;
+
+                return value;
+            },
+        });
 
         await expect(writer.query("messages").first()).resolves.toBeNull();
 
@@ -239,7 +265,15 @@ describe("createShardCtxDb — query()", () => {
 
     test("withIndex().gte() handles range filtering", async () => {
         let now = 1;
-        const { writer } = setupWriter({ clock: () => now++ });
+        const { writer } = setupWriter({
+            clock: () => {
+                const value = now;
+
+                now += 1;
+
+                return value;
+            },
+        });
 
         await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" });
         await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" });
@@ -267,7 +301,15 @@ describe("createShardCtxDb — query()", () => {
 
     test("take() with both filter and index runs the filter in JS", async () => {
         let now = 1;
-        const { writer } = setupWriter({ clock: () => now++ });
+        const { writer } = setupWriter({
+            clock: () => {
+                const value = now;
+
+                now += 1;
+
+                return value;
+            },
+        });
 
         await writer.insert("messages", { _id: "a", channelId: "c1", text: "keep", authorId: "u1" });
         await writer.insert("messages", { _id: "b", channelId: "c1", text: "skip", authorId: "u1" });

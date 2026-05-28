@@ -1,4 +1,5 @@
-import { ChildProcess, spawn as nodeSpawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
 import { join } from "@visulima/path";
@@ -91,10 +92,7 @@ export const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
  * provided logger (tagged by descriptor.tag), and resolve once both have
  * exited. SIGINT/SIGTERM in the parent is fanned out to both children.
  */
-const runConcurrent = async (
-    descriptors: ReadonlyArray<SpawnDescriptor & { tag?: string }>,
-    logger: Logger,
-): Promise<{ code: number }> => {
+const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?: string }>, logger: Logger): Promise<{ code: number }> => {
     const children: ChildProcess[] = [];
 
     const cleanup = (signal: NodeJS.Signals) => {
@@ -109,8 +107,12 @@ const runConcurrent = async (
         }
     };
 
-    const onSigint = () => cleanup("SIGTERM");
-    const onSigterm = () => cleanup("SIGTERM");
+    const onSigint = () => {
+        cleanup("SIGTERM");
+    };
+    const onSigterm = () => {
+        cleanup("SIGTERM");
+    };
 
     process.on("SIGINT", onSigint);
     process.on("SIGTERM", onSigterm);
@@ -144,8 +146,12 @@ const runConcurrent = async (
                 }
             };
 
-            child.stdout?.on("data", (chunk: Buffer) => onLine(chunk, "stdout"));
-            child.stderr?.on("data", (chunk: Buffer) => onLine(chunk, "stderr"));
+            child.stdout?.on("data", (chunk: Buffer) => {
+                onLine(chunk, "stdout");
+            });
+            child.stderr?.on("data", (chunk: Buffer) => {
+                onLine(chunk, "stderr");
+            });
 
             child.on("error", (error) => {
                 logger.error(`[${tag}] failed to start: ${error.message}`);
@@ -160,7 +166,9 @@ const runConcurrent = async (
 
     try {
         const codes = await Promise.all(promises);
-        const worst = codes.reduce((accumulator, code) => (code !== 0 ? code : accumulator), 0);
+        const worst = codes.reduce((accumulator, code) => {
+            return code === 0 ? accumulator : code;
+        }, 0);
 
         return { code: worst };
     } finally {

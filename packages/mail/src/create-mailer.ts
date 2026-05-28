@@ -1,23 +1,21 @@
 import { resendProvider } from "@visulima/email/providers/resend";
 
-import { renderEmail } from "./render.js";
 import { toQueuedPayload } from "./queue.js";
+import { renderEmail } from "./render.js";
 import type { CirrusMailOptions, Mailer, MailTransport, SendOpts, SendPayload } from "./types.js";
 
 /** `@visulima/email` models addresses as `{ email, name? }`. Accept either shape. */
 const toAddress = (input: string): { email: string; name?: string } => {
     const match = /^\s*(.*?)\s*<\s*([^>]+)\s*>\s*$/.exec(input);
 
-    if (match && match[1] && match[2]) {
+    if (match?.[1] && match[2]) {
         return { name: match[1], email: match[2] };
     }
 
     return { email: input.trim() };
 };
 
-const toAddressList = (
-    input: string | string[] | undefined,
-): { email: string; name?: string }[] | undefined => {
+const toAddressList = (input: string | string[] | undefined): { email: string; name?: string }[] | undefined => {
     if (input === undefined) {
         return undefined;
     }
@@ -73,18 +71,19 @@ export const createMailer = (options: CirrusMailOptions): Mailer => {
         throw new Error("@cirrus/mail: `from` is required");
     }
 
-    const transport = options.transport
-        ?? (() => {
-            if (!options.apiKey) {
-                throw new Error("@cirrus/mail: `apiKey` is required when no custom transport is supplied");
-            }
+    const buildDefaultTransport = (): MailTransport => {
+        if (!options.apiKey) {
+            throw new Error("@cirrus/mail: `apiKey` is required when no custom transport is supplied");
+        }
 
-            return createResendTransport(options.apiKey, options.from);
-        })();
+        return createResendTransport(options.apiKey, options.from);
+    };
+
+    const transport = options.transport ?? buildDefaultTransport();
 
     const buildPayload = async (opts: SendOpts): Promise<SendPayload> => {
-        let html = opts.html;
-        let text = opts.text;
+        let { html } = opts;
+        let { text } = opts;
 
         if (opts.react) {
             const rendered = await renderEmail(opts.react);

@@ -4,15 +4,12 @@ import type { Id, Infer, Validator } from "@cirrus/values";
 export type ArgsValidator = Record<string, Validator>;
 
 /** Infer the args object type from an {@link ArgsValidator}. */
-export type InferArgs<A extends ArgsValidator> = { [K in keyof A as undefined extends Infer<A[K]> ? never : K]: Infer<A[K]> } & {
+export type InferArgs<A extends ArgsValidator> = {
     [K in keyof A as undefined extends Infer<A[K]> ? K : never]?: Infer<A[K]>;
-};
+} & { [K in keyof A as undefined extends Infer<A[K]> ? never : K]: Infer<A[K]> };
 
 /** How a table is routed at runtime. */
-export type ShardMode =
-    | { kind: "global" }
-    | { field: string; kind: "shardBy" }
-    | { kind: "root" };
+export type ShardMode = { kind: "global" } | { field: string; kind: "shardBy" } | { kind: "root" };
 
 export interface IndexDefinition {
     fields: ReadonlyArray<string>;
@@ -58,42 +55,42 @@ export type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A,
  * actual SQL implementation lives in `@cirrus/do`; these are signatures only.
  */
 export interface DatabaseReader {
-    get<T extends string>(id: Id<T>): Promise<Record<string, unknown> | null>;
-    query<T extends string>(tableName: T): TableReader;
+    get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
+    query: <T extends string>(tableName: T) => TableReader;
 }
 
 export interface TableReader {
-    collect(): Promise<Array<Record<string, unknown>>>;
-    filter(predicate: (document: Record<string, unknown>) => boolean): TableReader;
-    first(): Promise<Record<string, unknown> | null>;
-    take(limit: number): Promise<Array<Record<string, unknown>>>;
-    withIndex(indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder): TableReader;
+    collect: () => Promise<Array<Record<string, unknown>>>;
+    filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReader;
+    first: () => Promise<Record<string, unknown> | null>;
+    take: (limit: number) => Promise<Array<Record<string, unknown>>>;
+    withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader;
 }
 
 export interface IndexRangeBuilder {
-    eq(field: string, value: unknown): IndexRangeBuilder;
-    gt(field: string, value: unknown): IndexRangeBuilder;
-    gte(field: string, value: unknown): IndexRangeBuilder;
-    lt(field: string, value: unknown): IndexRangeBuilder;
-    lte(field: string, value: unknown): IndexRangeBuilder;
+    eq: (field: string, value: unknown) => IndexRangeBuilder;
+    gt: (field: string, value: unknown) => IndexRangeBuilder;
+    gte: (field: string, value: unknown) => IndexRangeBuilder;
+    lt: (field: string, value: unknown) => IndexRangeBuilder;
+    lte: (field: string, value: unknown) => IndexRangeBuilder;
 }
 
 export interface DatabaseWriter extends DatabaseReader {
-    delete<T extends string>(id: Id<T>): Promise<void>;
-    insert<T extends string>(tableName: T, document: Record<string, unknown>): Promise<Id<T>>;
-    patch<T extends string>(id: Id<T>, patch: Record<string, unknown>): Promise<void>;
-    replace<T extends string>(id: Id<T>, document: Record<string, unknown>): Promise<void>;
+    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    insert: <T extends string>(tableName: T, document: Record<string, unknown>) => Promise<Id<T>>;
+    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
 }
 
 /** Authenticated identity surfaced into every context. */
 export interface AuthState {
+    getIdentity: () => Promise<Record<string, unknown> | null>;
     readonly userId: string | null;
-    getIdentity(): Promise<Record<string, unknown> | null>;
 }
 
 export interface Scheduler {
-    runAfter(delayMs: number, functionPath: string, args?: Record<string, unknown>): Promise<string>;
-    runAt(timestampMs: number, functionPath: string, args?: Record<string, unknown>): Promise<string>;
+    runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
 }
 
 /**
@@ -108,15 +105,15 @@ export interface Scheduler {
  */
 export interface ReadOnlyStorage {
     /** Fetch the body of an existing object. Returns `null` when absent. */
-    download(key: string): Promise<ReadableStream | null>;
+    download: (key: string) => Promise<ReadableStream | null>;
     /** Resolve a short-lived signed URL for an existing object. */
-    getSignedUrl(key: string, options?: { expiresInSeconds?: number }): Promise<string>;
+    getSignedUrl: (key: string, options?: { expiresInSeconds?: number }) => Promise<string>;
     /** Public URL pointing at the configured base for `key`. */
-    getUrl(key: string): string;
+    getUrl: (key: string) => string;
 }
 
 export interface Storage extends ReadOnlyStorage {
-    delete(key: string): Promise<void>;
+    delete: (key: string) => Promise<void>;
 }
 
 export interface QueryCtx {

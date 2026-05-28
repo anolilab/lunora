@@ -70,7 +70,9 @@ export class ShardDO extends ShardDOBase {
                 userId,
             },
             db: createShardCtxDb({
-                broadcast: (delta) => this.broadcastDelta(delta),
+                broadcast: (delta) => {
+                    this.broadcastDelta(delta);
+                },
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
             }),

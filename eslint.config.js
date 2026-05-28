@@ -169,7 +169,7 @@ export default createConfig(
     },
     // CLI commands: allow console.warn / console.error
     {
-        files: ["packages/cirrus-cli/**/*.{ts,tsx}", "packages/*/bin/**/*.{ts,mjs,js}"],
+        files: ["packages/cli/**/*.{ts,tsx}", "packages/*/bin/**/*.{ts,mjs,js}"],
         rules: {
             "n/no-process-exit": "off",
             "no-console": ["error", { allow: ["warn", "error", "info"] }],
@@ -177,7 +177,7 @@ export default createConfig(
     },
     // Codegen output / fixtures: allow `any` and loose typing
     {
-        files: ["**/_generated/**/*.{ts,tsx}", "**/__fixtures__/**/*.{ts,tsx}", "packages/cirrus-codegen/**/*.{ts,tsx}"],
+        files: ["**/_generated/**/*.{ts,tsx}", "**/__fixtures__/**/*.{ts,tsx}", "packages/codegen/**/*.{ts,tsx}"],
         rules: {
             "@typescript-eslint/no-explicit-any": "off",
             "@typescript-eslint/no-unsafe-argument": "off",
@@ -187,10 +187,10 @@ export default createConfig(
             "@typescript-eslint/no-unsafe-return": "off",
         },
     },
-    // React rules limited to cirrus-react package + apps
+    // React rules limited to the react package + apps
     {
         files: [
-            "packages/cirrus-react/**/*.{ts,tsx,js,jsx}",
+            "packages/react/**/*.{ts,tsx,js,jsx}",
             "apps/docs/**/*.{ts,tsx,js,jsx}",
             "apps/playground/**/*.{ts,tsx,js,jsx}",
             "examples/**/*.{ts,tsx,js,jsx}",

@@ -40,10 +40,10 @@ export type Route = (request: Request, env: unknown, ctx: ExecutionContextLike) 
  * `ctx.auth.userId` will be `undefined` on the shard side.
  */
 export interface ResolvedIdentity {
-    /** Stable user identifier (e.g. `"user_2k3..."` or `"u_42"`). */
-    userId: string;
     /** Arbitrary additional claims. Must be JSON-serialisable. */
     [key: string]: unknown;
+    /** Stable user identifier (e.g. `"user_2k3..."` or `"u_42"`). */
+    userId: string;
 }
 
 export interface WorkerOptions {

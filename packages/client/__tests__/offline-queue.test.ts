@@ -2,8 +2,8 @@ import { describe, expect, test, vi } from "vitest";
 
 import { OfflineQueue } from "../src/offline-queue.js";
 
-describe("OfflineQueue", () => {
-    test("FIFO drain order", () => {
+describe("offlineQueue", () => {
+    test("fIFO drain order", () => {
         const queue = new OfflineQueue();
         const order: string[] = [];
 
@@ -36,7 +36,7 @@ describe("OfflineQueue", () => {
         queue.enqueue({ functionPath: "new", args: {}, resolve: () => undefined, reject: () => undefined });
 
         expect(queue.size).toBe(2);
-        expect(rejected).toHaveBeenCalledOnce();
+        expect(rejected).toHaveBeenCalledTimes(1);
 
         const error = rejected.mock.calls[0]?.[0] as Error & { code?: string };
 

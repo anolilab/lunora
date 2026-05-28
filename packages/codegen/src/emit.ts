@@ -36,11 +36,15 @@ const validatorToType = (validator: ValidatorIR): string => {
             return "number";
         }
         case "object": {
-            return validator.shape
-                ? `{ ${Object.entries(validator.shape)
-                    .map(([key, child]) => `${key}: ${validatorToType(child)}`)
-                    .join("; ")} }`
-                : "Record<string, unknown>";
+            if (!validator.shape) {
+                return "Record<string, unknown>";
+            }
+
+            const fields = Object.entries(validator.shape)
+                .map(([key, child]) => `${key}: ${validatorToType(child)}`)
+                .join("; ");
+
+            return `{ ${fields} }`;
         }
         case "optional": {
             return `${validator.inner ? validatorToType(validator.inner) : "unknown"} | undefined`;
@@ -186,26 +190,26 @@ export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
     // Group functions by file path (namespace).
     const namespaces = new Map<string, FunctionIR[]>();
 
-    for (const function_ of functions) {
-        const list = namespaces.get(function_.filePath) ?? [];
+    for (const fn of functions) {
+        const list = namespaces.get(fn.filePath) ?? [];
 
-        list.push(function_);
-        namespaces.set(function_.filePath, list);
+        list.push(fn);
+        namespaces.set(fn.filePath, list);
     }
 
     const renderNamespace = ([file, list]: [string, FunctionIR[]]): string => {
         const members = list
-            .map((function_) => {
+            .map((fn) => {
                 // We emit `FunctionReference<Kind, ArgsObj, Return>` so the
                 // generated `api.*` references plug directly into
                 // `useQuery`/`useMutation` from `@cirrus/react` (and
                 // `client.query` / `client.mutation` from `@cirrus/client`).
                 // The phantom `Kind`/`Args`/`Return` parameters carry the
                 // info downstream hooks need to infer call signatures.
-                const argsType = renderArgsType(function_.args);
-                const returnType = relocateGeneratedImports(function_.returnType);
+                const argsType = renderArgsType(fn.args);
+                const returnType = relocateGeneratedImports(fn.returnType);
 
-                return `        ${function_.exportName}: FunctionReference<"${function_.kind}", ${argsType}, ${returnType}>;`;
+                return `        ${fn.exportName}: FunctionReference<"${fn.kind}", ${argsType}, ${returnType}>;`;
             })
             .join("\n");
 
@@ -247,16 +251,16 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>): string => {
     const moduleEntries = new Map<string, { alias: string; functions: FunctionIR[] }>();
     let moduleIndex = 0;
 
-    for (const function_ of functions) {
-        let entry = moduleEntries.get(function_.filePath);
+    for (const fn of functions) {
+        let entry = moduleEntries.get(fn.filePath);
 
         if (!entry) {
-            entry = { alias: moduleAlias(function_.filePath, moduleIndex), functions: [] };
-            moduleEntries.set(function_.filePath, entry);
+            entry = { alias: moduleAlias(fn.filePath, moduleIndex), functions: [] };
+            moduleEntries.set(fn.filePath, entry);
             moduleIndex += 1;
         }
 
-        entry.functions.push(function_);
+        entry.functions.push(fn);
     }
 
     const importLines = [...moduleEntries.entries()].map(([filePath, entry]) => `import * as ${entry.alias} from "../${filePath}.js";`).join("\n");
@@ -264,8 +268,7 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>): string => {
     const dispatchEntries = [...moduleEntries.entries()]
         .flatMap(([filePath, entry]) =>
             entry.functions.map(
-                (function_) =>
-                    `    "${sanitizeNamespace(filePath)}:${function_.exportName}": ${entry.alias}.${function_.exportName} as unknown as RegisteredCirrusFunction,`,
+                (fn) => `    "${sanitizeNamespace(filePath)}:${fn.exportName}": ${entry.alias}.${fn.exportName} as unknown as RegisteredCirrusFunction,`,
             ),
         )
         .join("\n");

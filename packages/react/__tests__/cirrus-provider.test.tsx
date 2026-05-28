@@ -11,7 +11,7 @@ const Probe = (): ReactElement => {
     return <div data-testid="probe">{typeof client.subscribe === "function" ? "ok" : "missing"}</div>;
 };
 
-describe("CirrusProvider", () => {
+describe("cirrusProvider", () => {
     test("useCirrus returns the provided client", () => {
         const mock = createMockClient();
 
@@ -26,7 +26,7 @@ describe("CirrusProvider", () => {
 
     test("useCirrus throws when used outside the provider", () => {
         // Suppress React's error logging for this test.
-        const error = console.error;
+        const { error } = console;
 
         console.error = (): void => undefined;
 

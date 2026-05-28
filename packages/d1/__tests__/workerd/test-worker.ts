@@ -6,23 +6,22 @@
  * exercise the Sessions API (`env.DB.withSession(bookmark)`), prepared
  * statements, and the `MigrationRunner` against a real D1 database.
  */
-import { D1Client } from "../../src/d1-client.js";
 import type { D1DatabaseLike } from "../../src/d1-client.js";
+import { D1Client } from "../../src/d1-client.js";
 import { MigrationRunner } from "../../src/migration-runner.js";
 
 export interface Env {
     DB: D1Database;
 }
 
-const json = (body: unknown, status = 200): Response =>
-    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const json = (body: unknown, status = 200): Response => Response.json(body, { status, headers: { "content-type": "application/json" } });
 
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);
 
         if (url.pathname === "/migrate" && request.method === "POST") {
-            const body = (await request.json()) as { migrations: { version: number; name: string; sql: string }[] };
+            const body = (await request.json()) as { migrations: { name: string; sql: string; version: number }[] };
             const runner = new MigrationRunner(env.DB as unknown as D1DatabaseLike, body.migrations);
             const result = await runner.run();
 
@@ -30,7 +29,7 @@ export default {
         }
 
         if (url.pathname === "/insert" && request.method === "POST") {
-            const body = (await request.json()) as { id: string; name: string; bookmark?: string };
+            const body = (await request.json()) as { bookmark?: string; id: string; name: string };
             const client = new D1Client(env.DB as unknown as D1DatabaseLike);
             const session = client.withSession(body.bookmark);
 

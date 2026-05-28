@@ -12,7 +12,7 @@ const silentLogger = (): Logger => ({
 });
 
 describe("cirrus run", () => {
-    test("POSTs the RPC payload to the configured URL", async () => {
+    test("pOSTs the RPC payload to the configured URL", async () => {
         const calls: { body: unknown; url: string }[] = [];
 
         const fetchImpl: FetchLike = async (url, init) => {

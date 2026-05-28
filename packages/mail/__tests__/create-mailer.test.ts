@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import { createMailer } from "../src/create-mailer.js";
 import type { MailTransport, QueueLike, SendPayload } from "../src/types.js";
 
-const fakeTransport = (id: string = "msg-1"): { transport: MailTransport; sent: SendPayload[] } => {
+const fakeTransport = (id: string = "msg-1"): { sent: SendPayload[]; transport: MailTransport } => {
     const sent: SendPayload[] = [];
     const transport: MailTransport = {
         send: vi.fn(async (payload: SendPayload) => {

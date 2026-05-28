@@ -30,7 +30,7 @@ const post = (path: string, body: unknown): Request =>
         body: JSON.stringify(body),
     });
 
-describe("SchedulerDO", () => {
+describe("schedulerDO", () => {
     test("/schedule persists a record and sets the alarm to the earliest pending task", async () => {
         const state = createFakeState();
         const scheduler = new TestScheduler(state, {});
@@ -45,11 +45,13 @@ describe("SchedulerDO", () => {
             }),
         );
 
-        const body = (await response.json()) as { id: string; scheduledFor: number };
+        const body = (await response.json()) as ScheduleResponseBody;
 
         expect(response.status).toBe(200);
         expect(body.scheduledFor).toBe(scheduledFor);
+
         expect(typeof body.id).toBe("string");
+
         expect(state.alarm).toBe(scheduledFor);
     });
 
@@ -57,7 +59,7 @@ describe("SchedulerDO", () => {
         const state = createFakeState();
         const scheduler = new TestScheduler(state, {});
         const later = Date.now() + 60_000;
-        const sooner = Date.now() + 1_000;
+        const sooner = Date.now() + 1000;
 
         await scheduler.fetch(post("/schedule", { functionPath: "a", args: {}, scheduledFor: later, originUrl: "https://x.test" }));
         await scheduler.fetch(post("/schedule", { functionPath: "b", args: {}, scheduledFor: sooner, originUrl: "https://x.test" }));
@@ -69,11 +71,9 @@ describe("SchedulerDO", () => {
         const state = createFakeState();
         const scheduler = new TestScheduler(state, {});
         const later = Date.now() + 60_000;
-        const sooner = Date.now() + 1_000;
+        const sooner = Date.now() + 1000;
 
-        const soonerResponse = await scheduler.fetch(
-            post("/schedule", { functionPath: "b", args: {}, scheduledFor: sooner, originUrl: "https://x.test" }),
-        );
+        const soonerResponse = await scheduler.fetch(post("/schedule", { functionPath: "b", args: {}, scheduledFor: sooner, originUrl: "https://x.test" }));
         const soonerBody = (await soonerResponse.json()) as { id: string };
 
         await scheduler.fetch(post("/schedule", { functionPath: "a", args: {}, scheduledFor: later, originUrl: "https://x.test" }));
@@ -81,7 +81,7 @@ describe("SchedulerDO", () => {
         expect(state.alarm).toBe(sooner);
 
         const cancelResponse = await scheduler.fetch(post("/cancel", { id: soonerBody.id }));
-        const cancelBody = (await cancelResponse.json()) as { cancelled: boolean };
+        const cancelBody = (await cancelResponse.json()) as CancelResponseBody;
 
         expect(cancelBody.cancelled).toBe(true);
         expect(state.alarm).toBe(later);
@@ -91,7 +91,7 @@ describe("SchedulerDO", () => {
         const state = createFakeState();
         const scheduler = new TestScheduler(state, {});
         const response = await scheduler.fetch(post("/cancel", { id: "missing" }));
-        const body = (await response.json()) as { cancelled: boolean };
+        const body = (await response.json()) as CancelResponseBody;
 
         expect(body.cancelled).toBe(false);
     });
@@ -101,7 +101,7 @@ describe("SchedulerDO", () => {
         const scheduler = new TestScheduler(state, {});
         const now = Date.now();
 
-        await scheduler.fetch(post("/schedule", { functionPath: "due", args: { x: 1 }, scheduledFor: now - 1_000, originUrl: "https://x.test" }));
+        await scheduler.fetch(post("/schedule", { functionPath: "due", args: { x: 1 }, scheduledFor: now - 1000, originUrl: "https://x.test" }));
         await scheduler.fetch(post("/schedule", { functionPath: "later", args: {}, scheduledFor: now + 60_000, originUrl: "https://x.test" }));
 
         await scheduler.alarm();
