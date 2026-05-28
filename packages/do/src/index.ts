@@ -28,6 +28,16 @@ export type { HibernatableWebSocket, ShardDOState, SubscriptionOutcome } from ".
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "./shard-do.js";
 export type { TransactionSqlLike } from "./transaction.js";
 export { ConflictError } from "./transaction.js";
+export type {
+    RunTriggersOptions,
+    SchedulerLike,
+    TriggerContextLike,
+    TriggerDefinitionLike,
+    TriggerEventLike,
+    TriggerOpLike,
+    TriggerTimingLike,
+} from "./triggers.js";
+export { hasTrigger, runTriggers } from "./triggers.js";
 export type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
 export type { CompiledWhere, FieldOperators, FieldRef, SerializeValue, WhereCompilerStrategy, WhereInput } from "./where-clause-compiler.js";
 export { compileWhere } from "./where-clause-compiler.js";

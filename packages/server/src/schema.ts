@@ -9,6 +9,12 @@ import type {
     ShardMode,
     TableDefinition,
     TableVectorIndex,
+    TriggerBuilder,
+    TriggerDefinition,
+    TriggerEvent,
+    TriggerHandler,
+    TriggerOp,
+    TriggerTiming,
     VectorEmbedder,
     VectorIndexDefinition,
     VectorMetric,
@@ -56,6 +62,8 @@ export interface TableBuilder<Shape extends Record<string, Validator> = Record<s
     searchIndex: (name: string, options: { field: string; filterFields?: ReadonlyArray<string> }) => TableBuilder<Shape>;
     /** Route storage by the named field — one DO per distinct value. */
     shardBy: (field: keyof Shape & string) => TableBuilder<Shape>;
+    /** Declare named lifecycle triggers fired inline within the write path. */
+    triggers: (build: (t: TriggerBuilder<Shape>) => Record<string, TriggerDefinition>) => TableBuilder<Shape>;
     /** Declare a vector index over a single text field on this table. */
     vectorize: (field: keyof Shape & string, options: VectorizeOptions<Shape>) => TableBuilder<Shape>;
 }
@@ -65,6 +73,24 @@ const relationBuilder: RelationBuilder = {
     many: (table, options) => ({ field: options.field, kind: "many", references: options.references ?? "_id", table }),
     one: (table, options) => ({ field: options.field, kind: "one", onDelete: options.onDelete, references: options.references ?? "_id", table }),
 };
+
+/** Build a {@link TriggerDefinition}; the handler's narrow event type is erased into the stored union. */
+const makeTrigger = (timing: TriggerTiming, op: TriggerOp, handler: TriggerHandler<TriggerEvent>): TriggerDefinition => ({ handler, op, timing });
+
+/**
+ * Build a per-`Shape` trigger builder. Runtime behavior is shape-agnostic —
+ * every method just stores `{ handler, op, timing }` — so the `as` casts only
+ * widen each handler's narrow event param into the stored {@link TriggerEvent}
+ * union. The precise per-`Shape` event typing lives in {@link TriggerBuilder}.
+ */
+const createTriggerBuilder = <Shape extends Record<string, Validator>>(): TriggerBuilder<Shape> => ({
+    afterDelete: (handler) => makeTrigger("after", "delete", handler as TriggerHandler<TriggerEvent>),
+    afterInsert: (handler) => makeTrigger("after", "insert", handler as TriggerHandler<TriggerEvent>),
+    afterUpdate: (handler) => makeTrigger("after", "update", handler as TriggerHandler<TriggerEvent>),
+    beforeDelete: (handler) => makeTrigger("before", "delete", handler as TriggerHandler<TriggerEvent>),
+    beforeInsert: (handler) => makeTrigger("before", "insert", handler as TriggerHandler<TriggerEvent>),
+    beforeUpdate: (handler) => makeTrigger("before", "update", handler as TriggerHandler<TriggerEvent>),
+});
 
 /** Options for `defineVectorIndex(...)` (DSL Shape B). */
 export interface VectorIndexOptions {
@@ -85,6 +111,8 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
     const indexes: IndexDefinition[] = [];
     const relations: Record<string, RelationDefinition> = {};
     const searchIndexes: SearchIndexDefinition[] = [];
+    const triggers: Record<string, TriggerDefinition> = {};
+    const triggerBuilder = createTriggerBuilder<Shape>();
     const vectorIndexes: TableVectorIndex[] = [];
     let shardMode: ShardMode = { kind: "root" };
 
@@ -101,6 +129,9 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
         shape,
         get shardMode() {
             return shardMode;
+        },
+        get triggerMap() {
+            return triggers;
         },
         get vectorIndexes() {
             return vectorIndexes;
@@ -127,6 +158,11 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
         },
         shardBy(field) {
             shardMode = { field, kind: "shardBy" };
+
+            return builder;
+        },
+        triggers(build) {
+            Object.assign(triggers, build(triggerBuilder));
 
             return builder;
         },

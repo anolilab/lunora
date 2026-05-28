@@ -10,7 +10,19 @@
  * value serialization) so the generated `ctx.db.<table>` facade (1.2.7) is
  * backend-agnostic.
  */
-import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, TableDefinitionLike, WhereCompilerStrategy, WhereInput } from "@cirrus/do";
+import type {
+    ColumnMetaLike,
+    DatabaseWriterLike,
+    SchedulerLike,
+    SchemaLike,
+    TableDefinitionLike,
+    TriggerContextLike,
+    TriggerEventLike,
+    TriggerOpLike,
+    TriggerTimingLike,
+    WhereCompilerStrategy,
+    WhereInput,
+} from "@cirrus/do";
 import {
     applyOnDelete,
     buildSeekWhere,
@@ -19,8 +31,10 @@ import {
     ConflictError,
     decodeCursor,
     encodeCursor,
+    hasTrigger,
     normalizeOrderKeys,
     resolveWith,
+    runTriggers,
 } from "@cirrus/do";
 
 /**
@@ -37,8 +51,27 @@ export interface D1CtxDbOptions {
     clock?: () => number;
     exec: D1Exec;
     idGenerator?: () => string;
+    /**
+     * Scheduler exposed to global-table trigger handlers as `ctx.scheduler`.
+     * Absent it, `ctx.scheduler` is a stub that throws on use — pass one when
+     * triggers on `.global()` tables need to enqueue follow-up work.
+     */
+    scheduler?: SchedulerLike;
     schema: SchemaLike;
 }
+
+/** Cap on re-entrant trigger writes before we treat it as a self-triggering loop. */
+const MAX_TRIGGER_DEPTH = 50;
+
+/** Default `ctx.scheduler` when none is configured: any use throws a clear error. */
+const throwingScheduler: SchedulerLike = {
+    runAfter: () => {
+        throw new Error("ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to createD1CtxDb().");
+    },
+    runAt: () => {
+        throw new Error("ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to createD1CtxDb().");
+    },
+};
 
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
@@ -173,6 +206,26 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
     const { exec, schema } = options;
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
+    const scheduler = options.scheduler ?? throwingScheduler;
+
+    let triggerDepth = 0;
+
+    /** Fire matching triggers with a depth guard against runaway self-triggering. */
+    const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
+        triggerDepth += 1;
+
+        if (triggerDepth > MAX_TRIGGER_DEPTH) {
+            triggerDepth -= 1;
+
+            throw new ConflictError(`trigger recursion exceeded ${MAX_TRIGGER_DEPTH} levels on "${event.table}" — check for a self-triggering write`);
+        }
+
+        try {
+            await runTriggers({ ctx: triggerCtx, event, op, schema, tableName: event.table, timing });
+        } finally {
+            triggerDepth -= 1;
+        }
+    };
 
     /** Run a write, remapping a UNIQUE-index breach to a {@link ConflictError} (code `CONFLICT`, 409). */
     const runWrite = async (table: string, sql: string, parameters: readonly unknown[]): Promise<void> => {
@@ -234,6 +287,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             // physical delete, mirroring the DO path.
             const existing = await writer.get(id);
 
+            // `before` fires ahead of cascade resolution so a throwing guard
+            // aborts the delete before any holder rows are touched.
+            await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+
             await applyOnDelete({
                 deletedId: id,
                 deletedReference: (references) => existing?.[references],
@@ -248,6 +305,8 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             });
 
             await runWrite(tableName, `DELETE FROM ${quoteIdentifier(tableName)} WHERE "id" = ?`, [id]);
+
+            await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
         },
 
         async findFirst(tableName, args = {}) {
@@ -346,10 +405,20 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const id = typeof withDefaults["_id"] === "string" ? (withDefaults["_id"] as string) : generateId();
             const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"] as number) : clock();
 
+            const docWithMeta: Record<string, unknown> = { ...withDefaults, _id: id, _creationTime: creationTime };
+
+            // `before` sees a shallow copy so an abort-only handler can't reassign
+            // the row's top-level fields before they persist. Nested values are
+            // still shared by reference — before-handlers are abort/side-effect
+            // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
+            await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
+
             const { columns, values } = columnTuple(definition, id, creationTime, withDefaults);
             const placeholders = columns.map(() => "?").join(", ");
 
             await runWrite(tableName, `INSERT INTO ${quoteIdentifier(tableName)} (${columns.join(", ")}) VALUES (${placeholders})`, values);
+
+            await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
 
             return id;
         },
@@ -372,11 +441,15 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             applyOnUpdate(definition, patch, merged);
 
+            await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+
             const fields = Object.keys(definition.shape);
             const assignments = fields.map((field) => `${quoteIdentifier(field)} = ?`).join(", ");
             const values = [...fields.map((field) => serializeColumnValue(merged[field] ?? null)), id];
 
             await runWrite(tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${assignments} WHERE "id" = ?`, values);
+
+            await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
         },
 
         query() {
@@ -391,18 +464,29 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             const definition = schema.tables[tableName]!;
+            // Only pay the extra read to supply `previous` when an update trigger exists.
+            const previous = hasTrigger(schema, tableName, "update") ? await writer.get(id) ?? undefined : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
             applyOnUpdate(definition, document, replaced);
+
+            await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
 
             const fields = Object.keys(definition.shape);
             const assignments = ['"_creationTime" = ?', ...fields.map((field) => `${quoteIdentifier(field)} = ?`)].join(", ");
             const values = [creationTime, ...fields.map((field) => serializeColumnValue(replaced[field] ?? null)), id];
 
             await runWrite(tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${assignments} WHERE "id" = ?`, values);
+
+            await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
         },
     };
+
+    // Declared after `writer` but closed over by `fireTriggers` (defined above):
+    // safe because `fireTriggers` only runs while a write is in flight, long
+    // after construction has initialized this binding.
+    const triggerCtx: TriggerContextLike = { db: writer, scheduler };
 
     return writer;
 };

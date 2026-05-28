@@ -32,9 +32,13 @@ import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOr
 import type { RelationDefinitionLike } from "./relations.js";
 import { applyOnDelete, resolveWith } from "./relations.js";
 import { ConflictError } from "./transaction.js";
+import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
+import { hasTrigger, runTriggers } from "./triggers.js";
 import type { MutationDelta } from "./types.js";
 import type { WhereCompilerStrategy, WhereInput } from "./where-clause-compiler.js";
 import { compileWhere } from "./where-clause-compiler.js";
+
+export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 
 /**
  * Structural projection of `state.storage.sql` (workerd's SqlStorage). We
@@ -64,6 +68,7 @@ export interface TableDefinitionLike {
     readonly relationMap?: Record<string, RelationDefinitionLike>;
     readonly shape: Record<string, ValidatorLike>;
     readonly shardMode?: { kind: "global" | "root" | "shardBy" };
+    readonly triggerMap?: Record<string, TriggerDefinitionLike>;
 }
 
 export interface IndexDefinitionLike {
@@ -129,9 +134,24 @@ export interface CtxDbOptions {
     idGenerator?: IdGenerator;
     onRead?: ReadHook;
     onWrite?: WriteHook;
+    /** Injected into the trigger context as `ctx.scheduler`; defaults to a throwing stub. */
+    scheduler?: SchedulerLike;
     schema: SchemaLike;
     sql: SqlExec;
 }
+
+/** Upper bound on nested trigger re-entry (a handler's `ctx.db` write refires triggers). */
+const MAX_TRIGGER_DEPTH = 50;
+
+/** Scheduler stub wired when no scheduler is configured — every method throws. */
+const throwingScheduler: SchedulerLike = {
+    runAfter: () => {
+        throw new Error("ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to createShardCtxDb().");
+    },
+    runAt: () => {
+        throw new Error("ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to createShardCtxDb().");
+    },
+};
 
 export interface IndexRangeBuilderLike {
     eq: (field: string, value: unknown) => IndexRangeBuilderLike;
@@ -474,6 +494,26 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const onWrite = options.onWrite ?? (() => undefined);
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
+    const scheduler = options.scheduler ?? throwingScheduler;
+
+    let triggerDepth = 0;
+
+    /** Fire matching triggers with a depth guard against runaway self-triggering. */
+    const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
+        triggerDepth += 1;
+
+        if (triggerDepth > MAX_TRIGGER_DEPTH) {
+            triggerDepth -= 1;
+
+            throw new ConflictError(`trigger recursion exceeded ${MAX_TRIGGER_DEPTH} levels on "${event.table}" — check for a self-triggering write`);
+        }
+
+        try {
+            await runTriggers({ ctx: triggerCtx, event, op, schema, tableName: event.table, timing });
+        } finally {
+            triggerDepth -= 1;
+        }
+    };
 
     const writer: DatabaseWriterLike = {
         async get(id) {
@@ -604,6 +644,12 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const docWithMeta: Record<string, unknown> = { ...withDefaults, _id: id, _creationTime: creationTime };
 
+            // `before` sees a shallow copy so an abort-only handler can't reassign
+            // the row's top-level fields before they persist. Nested values are
+            // still shared by reference — before-handlers are abort/side-effect
+            // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
+            await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
+
             runWrite(
                 sql,
                 tableName,
@@ -614,6 +660,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             );
 
             broadcast({ table: tableName, op: "insert", key: id, row: docWithMeta });
+            await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
             await onWrite({ op: "insert", table: tableName, id, doc: docWithMeta });
 
             return id;
@@ -636,9 +683,12 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             applyOnUpdate(schema.tables[tableName]!, patch, merged);
 
+            await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+
             runWrite(sql, tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ?`, JSON.stringify(merged), id);
 
             broadcast({ table: tableName, op: "update", key: id, row: merged });
+            await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
             await onWrite({ op: "update", table: tableName, id, doc: merged });
         },
 
@@ -649,10 +699,14 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`document not found: ${id}`);
             }
 
+            // Only pay the extra read to supply `previous` when an update trigger exists.
+            const previous = hasTrigger(schema, tableName, "update") ? await writer.get(id) ?? undefined : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
             applyOnUpdate(schema.tables[tableName]!, document, replaced);
+
+            await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
 
             runWrite(
                 sql,
@@ -664,6 +718,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             );
 
             broadcast({ table: tableName, op: "update", key: id, row: replaced });
+            await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
             await onWrite({ op: "update", table: tableName, id, doc: replaced });
         },
 
@@ -674,11 +729,15 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 return;
             }
 
+            const existing = await writer.get(id);
+
+            // `before` fires ahead of cascade resolution so a throwing guard
+            // aborts the delete before any holder rows are touched.
+            await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+
             // Resolve declared `onDelete` actions on holder rows *before* the
             // physical delete, so `restrict` can abort and cascaded child
             // deletes still fire their own broadcast/onWrite per row.
-            const existing = await writer.get(id);
-
             await applyOnDelete({
                 deletedId: id,
                 deletedReference: (references) => existing?.[references],
@@ -695,9 +754,15 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             runSql(sql, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
 
             broadcast({ table: tableName, op: "delete", key: id });
+            await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
             await onWrite({ op: "delete", table: tableName, id });
         },
     };
+
+    // Declared after `writer` but closed over by `fireTriggers` (defined above):
+    // safe because `fireTriggers` only runs while a write is in flight, long
+    // after construction has initialized this binding.
+    const triggerCtx: TriggerContextLike = { db: writer, scheduler };
 
     return writer;
 };

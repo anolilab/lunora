@@ -1,6 +1,6 @@
-import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { ColumnMetaLike, DatabaseWriterLike, SchedulerLike, SchemaLike, TriggerEventLike, ValidatorLike } from "@cirrus/do";
 import { ConflictError } from "@cirrus/do";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { createD1CtxDb } from "../src/d1-ctx-db.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
@@ -548,5 +548,187 @@ describe("relations", () => {
 
         await expect(writer.delete("u1")).rejects.toBeInstanceOf(ConflictError);
         await expect(writer.get("u1")).resolves.not.toBeNull();
+    });
+});
+
+describe("triggers", () => {
+    const messagesDdl = (): void => {
+        harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "locked" INTEGER)`);
+    };
+
+    test("before/after insert fire in order with the new doc", async () => {
+        const events: Array<{ doc?: unknown; phase: string }> = [];
+        const schema: SchemaLike = {
+            tables: {
+                messages: {
+                    indexes: [],
+                    shape: { body: col("string"), locked: col("boolean") },
+                    triggerMap: {
+                        a: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "after" }), op: "insert", timing: "after" },
+                        b: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "before" }), op: "insert", timing: "before" },
+                    },
+                },
+            },
+        };
+
+        messagesDdl();
+
+        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+
+        await writer.insert("messages", { _id: "m1", body: "hi", locked: false });
+
+        expect(events.map((e) => e.phase)).toEqual(["before", "after"]);
+        expect((events[1]!.doc as Record<string, unknown>)["_id"]).toBe("m1");
+    });
+
+    test("update triggers see merged doc and previous on patch", async () => {
+        let captured: TriggerEventLike | undefined;
+        const schema: SchemaLike = {
+            tables: {
+                messages: {
+                    indexes: [],
+                    shape: { body: col("string"), locked: col("boolean") },
+                    triggerMap: {
+                        a: {
+                            handler: (_ctx, event) => {
+                                captured = event;
+                            },
+                            op: "update",
+                            timing: "after",
+                        },
+                    },
+                },
+            },
+        };
+
+        messagesDdl();
+
+        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+
+        await writer.insert("messages", { _id: "m1", body: "hi", locked: false });
+        await writer.patch("m1", { body: "bye" });
+
+        expect((captured!.doc as Record<string, unknown>)["body"]).toBe("bye");
+        expect((captured!.previous as Record<string, unknown>)["body"]).toBe("hi");
+    });
+
+    test("a throwing beforeDelete aborts the delete — the row survives", async () => {
+        const schema: SchemaLike = {
+            tables: {
+                messages: {
+                    indexes: [],
+                    shape: { body: col("string"), locked: col("boolean") },
+                    triggerMap: {
+                        guard: {
+                            handler: (_ctx, event) => {
+                                if ((event.previous as Record<string, unknown>)["locked"]) {
+                                    throw new ConflictError("row is locked");
+                                }
+                            },
+                            op: "delete",
+                            timing: "before",
+                        },
+                    },
+                },
+            },
+        };
+
+        messagesDdl();
+
+        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+
+        await writer.insert("messages", { _id: "m1", body: "hi", locked: true });
+
+        await expect(writer.delete("m1")).rejects.toBeInstanceOf(ConflictError);
+        await expect(writer.get("m1")).resolves.not.toBeNull();
+    });
+
+    test("an afterInsert handler writing another table via ctx.db persists", async () => {
+        const schema: SchemaLike = {
+            tables: {
+                audit: { indexes: [], shape: { row: col("string"), table: col("string") }, triggerMap: {} },
+                messages: {
+                    indexes: [],
+                    shape: { body: col("string"), locked: col("boolean") },
+                    triggerMap: {
+                        audit: {
+                            handler: async (ctx, event) => {
+                                await ctx.db.insert("audit", { row: event.id, table: event.table });
+                            },
+                            op: "insert",
+                            timing: "after",
+                        },
+                    },
+                },
+            },
+        };
+
+        messagesDdl();
+        harness.ddl(`CREATE TABLE "audit" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "row" TEXT, "table" TEXT)`);
+
+        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+
+        await writer.insert("messages", { _id: "m1", body: "hi", locked: false });
+
+        const { page } = await writer.findMany("audit");
+
+        expect(page).toHaveLength(1);
+        expect(page[0]!["row"]).toBe("m1");
+    });
+
+    test("ctx.scheduler reaches the scheduler passed to createD1CtxDb", async () => {
+        const runAfter = vi.fn(async () => "job-1");
+        const scheduler: SchedulerLike = { runAfter, runAt: async () => "job-2" };
+        const schema: SchemaLike = {
+            tables: {
+                messages: {
+                    indexes: [],
+                    shape: { body: col("string"), locked: col("boolean") },
+                    triggerMap: {
+                        bump: {
+                            handler: async (ctx, event) => {
+                                await ctx.scheduler.runAfter(0, "counters:recount", { id: event.id });
+                            },
+                            op: "insert",
+                            timing: "after",
+                        },
+                    },
+                },
+            },
+        };
+
+        messagesDdl();
+
+        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, scheduler, schema });
+
+        await writer.insert("messages", { _id: "m1", body: "hi", locked: false });
+
+        expect(runAfter).toHaveBeenCalledWith(0, "counters:recount", { id: "m1" });
+    });
+
+    test("the default scheduler throws when a trigger uses it unconfigured", async () => {
+        const schema: SchemaLike = {
+            tables: {
+                messages: {
+                    indexes: [],
+                    shape: { body: col("string"), locked: col("boolean") },
+                    triggerMap: {
+                        bump: {
+                            handler: async (ctx) => {
+                                await ctx.scheduler.runAfter(0, "noop");
+                            },
+                            op: "insert",
+                            timing: "after",
+                        },
+                    },
+                },
+            },
+        };
+
+        messagesDdl();
+
+        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+
+        await expect(writer.insert("messages", { _id: "m1", body: "hi", locked: false })).rejects.toThrow(/no scheduler configured/);
     });
 });

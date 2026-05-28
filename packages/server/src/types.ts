@@ -80,6 +80,13 @@ export interface TableDefinition<Shape extends Record<string, Validator> = Recor
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
     shape: Shape;
     shardMode: ShardMode;
+    /**
+     * Declared lifecycle triggers keyed by accessor name; empty unless
+     * `.triggers()` was called. Named `triggerMap` (not `triggers`) so the
+     * fluent `.triggers((t) => …)` builder method doesn't collide with this
+     * field — same reasoning as {@link TableDefinition.relationMap}.
+     */
+    triggerMap: Record<string, TriggerDefinition>;
     vectorIndexes: ReadonlyArray<TableVectorIndex>;
 }
 
@@ -160,6 +167,134 @@ export interface AuthState {
 export interface Scheduler {
     runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
     runAt: (timestampMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
+}
+
+// --- Lifecycle triggers ------------------------------------------------------
+
+/** Lifecycle phase relative to the SQL write. */
+export type TriggerTiming = "after" | "before";
+
+/** The CRUD operation a trigger reacts to. `patch` and `replace` both map to `update`. */
+export type TriggerOp = "delete" | "insert" | "update";
+
+/**
+ * A row as observed by a trigger handler: the table's `Shape` (with the same
+ * optionality rules as {@link InferArgs}) plus the system columns every stored
+ * doc carries.
+ */
+export type TriggerRow<Shape extends Record<string, Validator>> = { [K in keyof Shape as undefined extends Infer<Shape[K]> ? K : never]?: Infer<Shape[K]> } & {
+    [K in keyof Shape as undefined extends Infer<Shape[K]> ? never : K]: Infer<Shape[K]>;
+} & {
+    readonly _creationTime: number;
+    readonly _id: string;
+};
+
+/** What an `insert` trigger observes: the freshly written row. */
+export interface TriggerInsertEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
+    readonly doc: TriggerRow<Shape>;
+    readonly id: string;
+    readonly op: "insert";
+    readonly table: string;
+}
+
+/**
+ * What an `update` trigger observes: the merged row plus the pre-write row.
+ * `previous` is typed as always present (the row must exist to be updated); the
+ * runtime supplies it best-effort and only omits it in the unreachable
+ * row-vanished-mid-write case.
+ */
+export interface TriggerUpdateEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
+    readonly doc: TriggerRow<Shape>;
+    readonly id: string;
+    readonly op: "update";
+    readonly previous: TriggerRow<Shape>;
+    readonly table: string;
+}
+
+/**
+ * What a `delete` trigger observes: the row about to be (or just) removed.
+ * `previous` is typed as always present; the runtime supplies it best-effort
+ * and only omits it in the unreachable row-vanished-mid-write case.
+ */
+export interface TriggerDeleteEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
+    readonly id: string;
+    readonly op: "delete";
+    readonly previous: TriggerRow<Shape>;
+    readonly table: string;
+}
+
+/** Union of every trigger event, with the table `Shape` erased (as stored in `triggerMap`). */
+export type TriggerEvent = TriggerDeleteEvent | TriggerInsertEvent | TriggerUpdateEvent;
+
+/** Page returned by {@link TriggerDatabase.findMany}; mirrors `@cirrus/do`'s `QueryPage`. */
+export interface TriggerQueryPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: Array<Record<string, unknown>>;
+}
+
+/** Args accepted by {@link TriggerDatabase} reads; mirrors `@cirrus/do`'s `QueryArgs`. */
+export interface TriggerQueryArgs {
+    cursor?: null | string;
+    limit?: number;
+    orderBy?: ReadonlyArray<unknown>;
+    where?: Record<string, unknown>;
+    with?: Record<string, unknown>;
+}
+
+/**
+ * Portable, table/id-addressed ORM writer handed to trigger handlers via
+ * `ctx.db`. Mirrors `@cirrus/do`'s runtime `DatabaseWriterLike` surface — it is
+ * **not** the generated per-table `ctx.db.<table>` facade (which can't be typed
+ * from inside `defineTable`, where the full schema isn't known).
+ */
+export interface TriggerDatabase {
+    count: (tableName: string, where?: Record<string, unknown>) => Promise<number>;
+    delete: (id: string) => Promise<void>;
+    findFirst: (tableName: string, args?: TriggerQueryArgs) => Promise<Record<string, unknown> | null>;
+    findMany: (tableName: string, args?: TriggerQueryArgs) => Promise<TriggerQueryPage>;
+    get: (id: string) => Promise<Record<string, unknown> | null>;
+    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+}
+
+/**
+ * Handle injected into every trigger handler. `db` is the portable ORM writer;
+ * `scheduler` enqueues async / cross-shard follow-up work (cross-shard work is
+ * **not** transactional with the firing write).
+ */
+export interface TriggerCtx {
+    readonly db: TriggerDatabase;
+    readonly scheduler: Scheduler;
+}
+
+/** A user-declared trigger handler. Throwing from a `before*` handler aborts the write. */
+export type TriggerHandler<Event> = (ctx: TriggerCtx, event: Event) => Promise<void> | void;
+
+/**
+ * A single declared trigger, as stored in {@link TableDefinition.triggerMap}.
+ * The handler's event type is erased to the {@link TriggerEvent} union here; the
+ * per-op {@link TriggerBuilder} methods recover the precise event type for
+ * authors.
+ */
+export interface TriggerDefinition {
+    readonly handler: TriggerHandler<TriggerEvent>;
+    readonly op: TriggerOp;
+    readonly timing: TriggerTiming;
+}
+
+/**
+ * The `t` argument passed to `.triggers((t) => …)`. Each method binds a handler
+ * to one `timing`+`op` pair, typing the event against the table's `Shape`.
+ */
+export interface TriggerBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> {
+    afterDelete: (handler: TriggerHandler<TriggerDeleteEvent<Shape>>) => TriggerDefinition;
+    afterInsert: (handler: TriggerHandler<TriggerInsertEvent<Shape>>) => TriggerDefinition;
+    afterUpdate: (handler: TriggerHandler<TriggerUpdateEvent<Shape>>) => TriggerDefinition;
+    beforeDelete: (handler: TriggerHandler<TriggerDeleteEvent<Shape>>) => TriggerDefinition;
+    beforeInsert: (handler: TriggerHandler<TriggerInsertEvent<Shape>>) => TriggerDefinition;
+    beforeUpdate: (handler: TriggerHandler<TriggerUpdateEvent<Shape>>) => TriggerDefinition;
 }
 
 /**
