@@ -18,6 +18,20 @@ export type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer 
 export type Unsubscribe = () => void;
 
 /**
+ * Serializable result of `preloadQuery`. Produced on the server during SSR,
+ * embedded in the rendered HTML, then handed to `usePreloadedQuery` on the
+ * client so the first render shows the server value with no loading flash
+ * before a live subscription attaches. Every field survives `JSON.stringify`.
+ */
+export interface Preloaded<T = unknown> {
+    readonly __cirrusPreloaded: true;
+    readonly args: Record<string, unknown>;
+    readonly functionPath: string;
+    readonly shardKey?: string;
+    readonly value: T;
+}
+
+/**
  * Pluggable storage for the `x-d1-bookmark` value used to provide
  * read-your-writes between a mutation and subsequent queries.
  */

@@ -43,23 +43,27 @@ export class QueryCache {
         args: Record<string, unknown>,
         shardKey: string | undefined,
         listener: () => void,
-        options: { pollIntervalMs?: number } = {},
+        options: { initialData?: { value: unknown }; pollIntervalMs?: number } = {},
     ): { entry: CacheEntry; key: string; release: () => void } {
         const key = this.keyOf(fn, args, shardKey);
         let entry = this.entries.get(key);
 
         if (!entry) {
+            const seeded = options.initialData !== undefined;
+
             entry = {
                 refCount: 0,
-                status: "loading",
-                data: undefined,
+                status: seeded ? "ready" : "loading",
+                data: seeded ? options.initialData?.value : undefined,
                 error: undefined,
                 listeners: new Set(),
                 unsubscribe: undefined,
                 pollTimer: undefined,
             };
             this.entries.set(key, entry);
-            this.beginFetch(entry, fn, args, shardKey, options.pollIntervalMs ?? 5000);
+            // A preloaded entry already carries the server value, so skip the
+            // initial HTTP fetch and only attach the live subscription.
+            this.beginFetch(entry, fn, args, shardKey, options.pollIntervalMs ?? 5000, seeded);
         }
 
         entry.refCount += 1;
@@ -100,21 +104,31 @@ export class QueryCache {
         }
     }
 
-    private beginFetch(entry: CacheEntry, fn: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined, pollIntervalMs: number): void {
+    private beginFetch(
+        entry: CacheEntry,
+        fn: FunctionReference,
+        args: Record<string, unknown>,
+        shardKey: string | undefined,
+        pollIntervalMs: number,
+        skipInitialFetch = false,
+    ): void {
         // Initial fetch (HTTP) so that even WS-less environments see a value.
-        this.client
-            .query(fn as FunctionReference, args, { shardKey })
-            .then((value) => {
-                entry.status = "ready";
-                entry.data = value;
-                entry.error = undefined;
-                this.emit(entry);
-            })
-            .catch((error: unknown) => {
-                entry.status = "error";
-                entry.error = error instanceof Error ? error : new Error(String(error));
-                this.emit(entry);
-            });
+        // Skipped when the entry was seeded from a preloaded server value.
+        if (!skipInitialFetch) {
+            this.client
+                .query(fn as FunctionReference, args, { shardKey })
+                .then((value) => {
+                    entry.status = "ready";
+                    entry.data = value;
+                    entry.error = undefined;
+                    this.emit(entry);
+                })
+                .catch((error: unknown) => {
+                    entry.status = "error";
+                    entry.error = error instanceof Error ? error : new Error(String(error));
+                    this.emit(entry);
+                });
+        }
 
         // Live updates via WS subscription. The client subscribes regardless;
         // if the WS implementation is missing, the subscribe call still wires

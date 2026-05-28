@@ -14,10 +14,43 @@ export interface UseSubscriptionResult<T> {
     error: Error | undefined;
 }
 
+/** One page returned by a paginated query — the shape `.paginate()` yields. */
+export interface PaginationResult<T = unknown> {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: T[];
+}
+
+/**
+ * Lifecycle of a {@link usePaginatedQuery} feed.
+ *
+ * - `LoadingFirstPage` — the first page is in flight; `results` is empty.
+ * - `CanLoadMore` — the loaded tail has a cursor; calling `loadMore` fetches the next page.
+ * - `LoadingMore` — a `loadMore` page is in flight; earlier results stay visible.
+ * - `Exhausted` — every page has loaded and the server reported `isDone`.
+ */
+export type PaginationStatus = "CanLoadMore" | "Exhausted" | "LoadingFirstPage" | "LoadingMore";
+
+export interface UsePaginatedQueryOptions {
+    /** Page size for the first page (and the default for `loadMore`). */
+    initialNumItems: number;
+    shardKey?: string;
+}
+
+export interface UsePaginatedQueryResult<T> {
+    /** `true` while the first page or a `loadMore` page is in flight. */
+    isLoading: boolean;
+    /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
+    loadMore: (numItems: number) => void;
+    /** Flattened items across every loaded page, in order. */
+    results: T[];
+    status: PaginationStatus;
+}
+
 export interface UseAuthResult {
     setToken: (token: string | null) => void;
     token: string | null;
     user: User | null;
 }
 
-export { type ArgsOf, type CirrusClient, type FunctionReference, type ReturnOf, type User } from "@cirrus/client";
+export { type ArgsOf, type CirrusClient, type FunctionReference, type Preloaded, type ReturnOf, type User } from "@cirrus/client";

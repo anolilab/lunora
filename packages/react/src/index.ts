@@ -4,9 +4,14 @@ export type {
     ArgsOf,
     CirrusClient,
     FunctionReference,
+    PaginationResult,
+    PaginationStatus,
+    Preloaded,
     ReturnOf,
     UseAuthResult,
     UseMutationCallOptions,
+    UsePaginatedQueryOptions,
+    UsePaginatedQueryResult,
     UseQueryOptions,
     User,
     UseSubscriptionResult,
@@ -14,5 +19,8 @@ export type {
 export { useAuth } from "./use-auth.js";
 export type { MutationHook } from "./use-mutation.js";
 export { useMutation } from "./use-mutation.js";
+export type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
+export { usePaginatedQuery } from "./use-paginated-query.js";
+export { usePreloadedQuery } from "./use-preloaded-query.js";
 export { useQuery } from "./use-query.js";
 export { useSubscription } from "./use-subscription.js";
