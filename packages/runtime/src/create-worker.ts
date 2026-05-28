@@ -29,6 +29,39 @@ export interface ExecutionContextLike {
 export type Route = (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> | Response;
 
 /**
+ * Context handed to HTTP-action handlers. Built per request by the worker; its
+ * `run*` methods forward an RPC envelope to the shard, so handlers reach
+ * queries/mutations/actions without a direct DB binding.
+ *
+ * `reference` is typed `unknown` so this structural contract stays free of a
+ * `@cirrus/server` dependency while remaining assignable from the fully-typed
+ * `HttpActionCtx` on the server side (`{ __cirrusRef }` is read at runtime).
+ */
+export interface HttpActionContext {
+    auth: { getIdentity: () => Promise<Record<string, unknown> | null>; userId: null | string };
+    fetch: typeof globalThis.fetch;
+    runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
+    runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
+    runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
+}
+
+export interface HttpActionLike {
+    handler: (ctx: HttpActionContext, request: Request) => Promise<Response> | Response;
+}
+
+/** Result of {@link HttpRouterLike.lookup}: a handler, a 405, or a 404. */
+export type HttpRouteLookup = { action: HttpActionLike; kind: "match" } | { allow: string[]; kind: "method_not_allowed" } | { kind: "not_found" };
+
+/**
+ * Structural view of `@cirrus/server`'s `httpRouter()`. The worker only ever
+ * calls `lookup`, so that single method is the contract — keeping the runtime
+ * free of a hard dependency on the server package.
+ */
+export interface HttpRouterLike {
+    lookup: (pathname: string, method: string) => HttpRouteLookup;
+}
+
+/**
  * Identity resolved from the inbound request by {@link WorkerOptions.resolveIdentity}.
  *
  * The `userId` field is special — it becomes `ctx.auth.userId` inside the
@@ -54,6 +87,13 @@ export interface WorkerOptions {
     d1?: unknown;
     /** Default shard key used when an envelope omits one. */
     defaultShardKey?: string;
+    /**
+     * Router for HTTP actions (`httpRouter()` from `@cirrus/server`). Consulted
+     * for requests that miss the explicit {@link WorkerOptions.routes} map and
+     * the internal `/_cirrus/*` endpoints. A matched handler runs in the worker
+     * and reaches the data layer via `ctx.run*`, which forward to the shard.
+     */
+    httpRouter?: HttpRouterLike;
     /**
      * When true, the runtime calls `ctx.passThroughOnException()` at the top
      * of the fetch handler. Forwards uncaught exceptions to the origin
@@ -150,40 +190,7 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
             // Forward selected headers from the inbound request so the DO can
             // honour auth, sessions, and D1 read-your-writes consistency.
-            const forwardedHeaders: Record<string, string> = { "content-type": "application/json" };
-            const authorization = request.headers.get("authorization");
-            const cookie = request.headers.get("cookie");
-            const bookmark = request.headers.get("x-d1-bookmark");
-
-            if (authorization) {
-                forwardedHeaders["authorization"] = authorization;
-            }
-
-            if (cookie) {
-                forwardedHeaders["cookie"] = cookie;
-            }
-
-            if (bookmark) {
-                forwardedHeaders["x-d1-bookmark"] = bookmark;
-            }
-
-            if (options.resolveIdentity) {
-                const identity = await options.resolveIdentity(request, env);
-
-                if (identity && typeof identity.userId === "string" && identity.userId.length > 0) {
-                    forwardedHeaders["x-cirrus-userid"] = identity.userId;
-
-                    // Strip `userId` from the envelope so the DO doesn't see it
-                    // twice. The rest of the identity (claims like email/name
-                    // /roles) is JSON-encoded so handlers can read it via
-                    // `ctx.auth.getIdentity()`.
-                    const { userId: _userId, ...extra } = identity;
-
-                    if (Object.keys(extra).length > 0) {
-                        forwardedHeaders["x-cirrus-identity"] = JSON.stringify(extra);
-                    }
-                }
-            }
+            const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
 
             if (envelope.fanOut) {
                 // Coordinator presence was checked above.
@@ -227,7 +234,76 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             return response;
         }
 
+        // HTTP actions are the lowest-priority matcher: explicit routes and the
+        // internal `/_cirrus/*` endpoints above always win.
+        const httpRouteResponse = await dispatchHttpRoute(request, env, url);
+
+        if (httpRouteResponse) {
+            return httpRouteResponse;
+        }
+
         return new Response("Not found", { status: 404 });
+    };
+
+    const dispatchHttpRoute = async (request: Request, env: unknown, url: URL): Promise<null | Response> => {
+        if (!options.httpRouter) {
+            return null;
+        }
+
+        const lookup = options.httpRouter.lookup(url.pathname, request.method);
+
+        if (lookup.kind === "match") {
+            const httpCtx = await buildHttpActionCtx(request, env);
+
+            return lookup.action.handler(httpCtx, request);
+        }
+
+        if (lookup.kind === "method_not_allowed") {
+            return new Response("Method Not Allowed", { headers: { allow: lookup.allow.join(", ") }, status: 405 });
+        }
+
+        return null;
+    };
+
+    const buildHttpActionCtx = async (request: Request, env: unknown): Promise<HttpActionContext> => {
+        const { claims, headers, userId } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
+            const functionPath = (reference as { __cirrusRef?: unknown }).__cirrusRef;
+
+            if (typeof functionPath !== "string") {
+                throw new CirrusError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
+            }
+
+            const forwarded = new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args, functionPath }),
+                headers,
+                method: "POST",
+            });
+
+            const response = await forwardToShard(options.shardDO, defaultShard, forwarded);
+            const payload = (await response.json()) as { error?: { code?: string; message?: string }; result?: unknown };
+
+            if (payload.error) {
+                throw new CirrusError(payload.error.message ?? "shard RPC failed", {
+                    code: payload.error.code ?? "INTERNAL",
+                    status: response.status,
+                });
+            }
+
+            return payload.result as R;
+        };
+
+        return {
+            auth: {
+                getIdentity: async () => claims,
+                userId,
+            },
+            fetch: globalThis.fetch.bind(globalThis),
+            runAction: run,
+            runMutation: run,
+            runQuery: run,
+        };
     };
 
     return {
@@ -243,6 +319,63 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             }
         },
     };
+};
+
+interface ForwardContext {
+    /** Identity claims minus `userId`, or `null` when anonymous / no extra claims. */
+    claims: Record<string, unknown> | null;
+    /** Headers to forward to the shard (`content-type` + auth/cookie/bookmark/identity). */
+    headers: Record<string, string>;
+    /** Resolved stable user id, or `null` when anonymous. */
+    userId: null | string;
+}
+
+/**
+ * Build the headers forwarded to the shard and the resolved identity, shared by
+ * the RPC path and HTTP-action context. `userId` and `claims` mirror what the
+ * DO reconstructs from the `x-cirrus-userid` / `x-cirrus-identity` headers.
+ */
+const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    const authorization = request.headers.get("authorization");
+    const cookie = request.headers.get("cookie");
+    const bookmark = request.headers.get("x-d1-bookmark");
+
+    if (authorization) {
+        headers["authorization"] = authorization;
+    }
+
+    if (cookie) {
+        headers["cookie"] = cookie;
+    }
+
+    if (bookmark) {
+        headers["x-d1-bookmark"] = bookmark;
+    }
+
+    if (!resolveIdentity) {
+        return { claims: null, headers, userId: null };
+    }
+
+    const identity = await resolveIdentity(request, env);
+
+    if (!identity || typeof identity.userId !== "string" || identity.userId.length === 0) {
+        return { claims: null, headers, userId: null };
+    }
+
+    headers["x-cirrus-userid"] = identity.userId;
+
+    // Strip `userId` so the DO doesn't see it twice. The rest of the identity
+    // (claims like email/name/roles) is JSON-encoded so handlers can read it
+    // via `ctx.auth.getIdentity()`.
+    const { userId, ...extra } = identity;
+    const claims = Object.keys(extra).length > 0 ? extra : null;
+
+    if (claims) {
+        headers["x-cirrus-identity"] = JSON.stringify(claims);
+    }
+
+    return { claims, headers, userId };
 };
 
 const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { ExecutionContextLike } from "../src/create-worker.js";
+import type { ExecutionContextLike, HttpActionContext, HttpActionLike, HttpRouteLookup, HttpRouterLike } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
@@ -183,7 +183,7 @@ describe("createWorker", () => {
 
         expect(namespace.getByName).toHaveBeenCalledWith("a");
         expect(namespace.idFromName).not.toHaveBeenCalled();
-        expect(stub.fetch).toHaveBeenCalled();
+        expect(stub.fetch).toHaveBeenCalledWith();
     });
 
     test("forwards resolveIdentity userId on the x-cirrus-userid header", async () => {
@@ -293,5 +293,154 @@ describe("createWorker", () => {
 
         expect(headers["x-cirrus-userid"]).toBe("user_42");
         expect(JSON.parse(headers["x-cirrus-identity"]!)).toEqual({ email: "u@example.com" });
+    });
+});
+
+/** Minimal {@link HttpRouterLike} whose `lookup` always returns `result`. */
+const fixedRouter = (result: HttpRouteLookup): HttpRouterLike => ({ lookup: () => result });
+
+/** Router that matches `path` for `method`, else 404 — mirrors the real `httpRouter` shape. */
+const oneRoute = (path: string, method: string, handler: HttpActionLike["handler"]): HttpRouterLike => ({
+    lookup: (pathname, requestMethod) => pathname === path && requestMethod === method ? { action: { handler }, kind: "match" } : { kind: "not_found" },
+});
+
+describe("createWorker — HTTP actions", () => {
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    test("dispatches a matched request to the action handler and returns its Response", async () => {
+        const worker = createWorker({
+            httpRouter: oneRoute("/ping", "GET", () => new Response("pong", { status: 201 })),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/ping"), {}, fakeCtx);
+
+        expect(res.status).toBe(201);
+        await expect(res.text()).resolves.toBe("pong");
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    test("ctx.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
+        shard.response = Response.json({ result: { id: "m1" } });
+
+        const handler = async (ctx: HttpActionContext, request: Request): Promise<Response> => {
+            const body = (await request.json()) as Record<string, unknown>;
+            const created = await ctx.runMutation({ __cirrusRef: "messages:send" }, { body });
+
+            return Response.json({ created });
+        };
+
+        const worker = createWorker({
+            httpRouter: oneRoute("/webhook", "POST", handler),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/webhook", { body: JSON.stringify({ text: "hi" }), method: "POST" }), {}, fakeCtx);
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toEqual({ created: { id: "m1" } });
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]!.shardKey).toBe("__root__");
+
+        const forwarded = (await shard.calls[0]!.request.json()) as { args: unknown; functionPath: string };
+
+        expect(forwarded.functionPath).toBe("messages:send");
+        expect(forwarded.args).toEqual({ body: { text: "hi" } });
+    });
+
+    test("ctx.run* rejects (→ mapped error response) when the shard returns an error envelope", async () => {
+        shard.response = Response.json({ error: { code: "BAD_REQUEST", message: "nope" } }, { status: 400 });
+
+        const handler = async (ctx: HttpActionContext): Promise<Response> => {
+            await ctx.runQuery({ __cirrusRef: "messages:list" });
+
+            return new Response("unreachable");
+        };
+
+        const worker = createWorker({
+            httpRouter: oneRoute("/run", "GET", handler),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/run"), {}, fakeCtx);
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toEqual({ error: { code: "BAD_REQUEST", message: "nope" } });
+    });
+
+    test("exposes resolveIdentity on ctx.auth", async () => {
+        const handler = async (ctx: HttpActionContext): Promise<Response> => Response.json({ claims: await ctx.auth.getIdentity(), userId: ctx.auth.userId });
+
+        const worker = createWorker({
+            httpRouter: oneRoute("/me", "GET", handler),
+            resolveIdentity: () => ({ email: "u@example.com", userId: "user_7" }),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/me"), {}, fakeCtx);
+
+        await expect(res.json()).resolves.toEqual({ claims: { email: "u@example.com" }, userId: "user_7" });
+    });
+
+    test("returns 405 with an Allow header on method_not_allowed", async () => {
+        const worker = createWorker({
+            httpRouter: fixedRouter({ allow: ["GET", "PUT"], kind: "method_not_allowed" }),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/thing", { method: "POST" }), {}, fakeCtx);
+
+        expect(res.status).toBe(405);
+        expect(res.headers.get("allow")).toBe("GET, PUT");
+    });
+
+    test("falls through to 404 when the router reports not_found", async () => {
+        const worker = createWorker({
+            httpRouter: fixedRouter({ kind: "not_found" }),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/missing"), {}, fakeCtx);
+
+        expect(res.status).toBe(404);
+    });
+
+    test("explicit routes win over the HTTP router", async () => {
+        const route = vi.fn(async () => new Response("explicit", { status: 200 }));
+        const action = vi.fn(() => new Response("action"));
+
+        const worker = createWorker({
+            httpRouter: oneRoute("/x", "GET", action),
+            routes: { "/x": route },
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/x"), {}, fakeCtx);
+
+        await expect(res.text()).resolves.toBe("explicit");
+        expect(action).not.toHaveBeenCalled();
+    });
+
+    test("the internal RPC path is never shadowed by a catch-all router", async () => {
+        const action = vi.fn(() => new Response("action"));
+
+        const worker = createWorker({
+            httpRouter: fixedRouter({ action: { handler: action }, kind: "match" }),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            {},
+            fakeCtx,
+        );
+
+        expect(res.status).toBe(200);
+        expect(action).not.toHaveBeenCalled();
+        expect(shard.calls).toHaveLength(1);
     });
 });

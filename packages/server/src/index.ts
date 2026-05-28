@@ -18,6 +18,19 @@ export type { CirrusErrorCode } from "./error.js";
 export { CirrusError } from "./error.js";
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions.js";
 export { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions.js";
+export type {
+    ExactRouteSpec,
+    HttpActionCtx,
+    HttpActionHandler,
+    HttpMethod,
+    HttpRouter,
+    PrefixRouteSpec,
+    RegisteredHttpAction,
+    RouteEntry,
+    RouteLookup,
+    RouteSpec,
+} from "./http.js";
+export { httpAction, httpRouter } from "./http.js";
 export type { ManyRelation, OneRelation, RelationBuilder, TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";
 export { defineSchema, defineTable, defineVectorIndex } from "./schema.js";
 export type {
