@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
 
-import type { CallExpression, Identifier, Project, SourceFile, Type } from "ts-morph";
+import type { CallExpression, Identifier, Project, PropertyAccessExpression, SourceFile, Type } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { FunctionIR, ValidatorIR } from "./ir.js";
@@ -106,33 +106,16 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
 };
 
 /**
- * Pull the handler's return type out of a `query/mutation/action` call using
- * ts-morph's type checker. Unwraps the outer `Promise<…>` so the emitted
- * `FunctionReference<Kind, Args, Return>` matches what callers see post-await.
+ * Render a handler's resolved return type via ts-morph's type checker. Unwraps
+ * the outer `Promise<…>` so the emitted `FunctionReference<Kind, Args, Return>`
+ * matches what callers see post-await. Shared by the object-literal `query(...)`
+ * path and the builder terminal (`c.query(...)`) path.
  *
  * Returns `"unknown"` when the type checker can't resolve enough context —
  * typical when running against a stand-alone fixture without a tsconfig.
  */
-const returnTypeFromCall = (call: CallExpression): string => {
-    const first = call.getArguments()[0];
-
-    if (!first || !Node.isObjectLiteralExpression(first)) {
-        return "unknown";
-    }
-
-    const handlerProperty = first.getProperty("handler");
-
-    if (!handlerProperty || !Node.isPropertyAssignment(handlerProperty)) {
-        return "unknown";
-    }
-
-    const initializer = handlerProperty.getInitializer();
-
-    if (!initializer || !(Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer))) {
-        return "unknown";
-    }
-
-    const signature = initializer.getType().getCallSignatures()[0];
+const unwrapHandlerReturn = (handler: Node): string => {
+    const signature = handler.getType().getCallSignatures()[0];
 
     if (!signature) {
         return "unknown";
@@ -152,7 +135,7 @@ const returnTypeFromCall = (call: CallExpression): string => {
         }
     }
 
-    const rendered = returnType.getText(initializer);
+    const rendered = returnType.getText(handler);
 
     // `any`/empty fall back to `unknown` so downstream typings stay strict.
     if (!rendered || rendered === "any" || rendered === "never") {
@@ -174,11 +157,114 @@ const returnTypeFromCall = (call: CallExpression): string => {
     // unreachable from `_generated/api.ts` and produces TS2304 on compile.
     // Detect that case via the type symbol's declaration and fall back to
     // `unknown` rather than emitting unresolvable identifiers.
-    if (referencesUnreachableLocalType(returnType, initializer.getSourceFile().getFilePath())) {
+    if (referencesUnreachableLocalType(returnType, handler.getSourceFile().getFilePath())) {
         return "unknown";
     }
 
     return rendered;
+};
+
+/**
+ * Pull the handler's return type out of an object-literal `query/mutation/action`
+ * call (the `{ args, handler }` form).
+ */
+const returnTypeFromCall = (call: CallExpression): string => {
+    const first = call.getArguments()[0];
+
+    if (!first || !Node.isObjectLiteralExpression(first)) {
+        return "unknown";
+    }
+
+    const handlerProperty = first.getProperty("handler");
+
+    if (!handlerProperty || !Node.isPropertyAssignment(handlerProperty)) {
+        return "unknown";
+    }
+
+    const initializer = handlerProperty.getInitializer();
+
+    if (!initializer || !(Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer))) {
+        return "unknown";
+    }
+
+    return unwrapHandlerReturn(initializer);
+};
+
+/**
+ * Pull the handler's return type out of a builder terminal call. Here the
+ * handler is the first (and only) argument — `c.query(({ ctx, args }) => …)` —
+ * not a `handler:` property.
+ */
+const returnTypeFromBuilderCall = (call: CallExpression): string => {
+    const handler = call.getArguments()[0];
+
+    if (!handler || !(Node.isArrowFunction(handler) || Node.isFunctionExpression(handler))) {
+        return "unknown";
+    }
+
+    return unwrapHandlerReturn(handler);
+};
+
+/**
+ * Walk a builder chain leftward from the terminal receiver, merging every
+ * `.input({...})` argument into one args record. Chains read terminal → root,
+ * so a key set by a later `.input()` (encountered first) must win over an
+ * earlier one — hence `{ ...earlier, ...merged }`, mirroring the runtime's
+ * `{ ...state.args, ...validators }` spread order.
+ */
+const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
+    let merged: Record<string, ValidatorIR> = {};
+    let node: Node = receiver;
+
+    while (Node.isCallExpression(node)) {
+        const chainCallee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(chainCallee)) {
+            break;
+        }
+
+        if (chainCallee.getName() === "input") {
+            const argument = node.getArguments()[0];
+
+            if (argument && Node.isObjectLiteralExpression(argument)) {
+                merged = { ...parseObjectShape(argument), ...merged };
+            }
+        }
+
+        node = chainCallee.getExpression();
+    }
+
+    return merged;
+};
+
+/**
+ * Recognise a builder terminal registration (`c.query(...)` / `.mutation(...)`
+ * / `.action(...)`). The terminal property name is the kind. The receiver must
+ * carry the `__cirrusProcedure` brand so we don't pick up an unrelated method
+ * named `query` on some other object. Returns `null` when this isn't a Cirrus
+ * builder terminal.
+ */
+const discoverBuilderProcedure = (
+    call: CallExpression,
+    callee: PropertyAccessExpression,
+): null | { args: Record<string, ValidatorIR>; kind: string; returnType: string } => {
+    const method = callee.getName();
+
+    if (!FUNCTION_KINDS.has(method)) {
+        return null;
+    }
+
+    const receiver = callee.getExpression();
+
+    if (!receiver.getType().getProperty("__cirrusProcedure")) {
+        return null;
+    }
+
+    return {
+        args: argsFromBuilderChain(receiver),
+        kind: method,
+        returnType: returnTypeFromBuilderCall(call),
+    };
 };
 
 /**
@@ -267,22 +353,28 @@ export const discoverFunctions = (project: Project, cirrusDirectory: string): Fu
                 const call = initializer as CallExpression;
                 const callee = call.getExpression();
 
-                if (!Node.isIdentifier(callee)) {
-                    continue;
+                let discovered: null | { args: Record<string, ValidatorIR>; kind: string; returnType: string } = null;
+
+                if (Node.isIdentifier(callee)) {
+                    const kind = resolveCalleeKind(callee);
+
+                    if (kind && FUNCTION_KINDS.has(kind)) {
+                        discovered = { args: argsFromCall(call), kind, returnType: returnTypeFromCall(call) };
+                    }
+                } else if (Node.isPropertyAccessExpression(callee)) {
+                    discovered = discoverBuilderProcedure(call, callee);
                 }
 
-                const kind = resolveCalleeKind(callee);
-
-                if (!kind || !FUNCTION_KINDS.has(kind)) {
+                if (!discovered) {
                     continue;
                 }
 
                 functions.push({
-                    args: argsFromCall(call),
+                    args: discovered.args,
                     exportName: declaration.getName(),
                     filePath: relativePath,
-                    kind: kind as FunctionIR["kind"],
-                    returnType: returnTypeFromCall(call),
+                    kind: discovered.kind as FunctionIR["kind"],
+                    returnType: discovered.returnType,
                 });
             }
         }

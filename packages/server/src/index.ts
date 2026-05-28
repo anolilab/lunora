@@ -1,3 +1,18 @@
+export type {
+    ActionBuilder,
+    CirrusBuilders,
+    CreateOptions,
+    DataModelInit,
+    EmptyArgs,
+    Middleware,
+    MiddlewareNext,
+    MutationBuilder,
+    QueryBuilder,
+    TerminalKind,
+} from "./builder/index.js";
+export { initCirrus } from "./builder/index.js";
+export type { CirrusErrorCode } from "./error.js";
+export { CirrusError } from "./error.js";
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions.js";
 export { action, mutation, query } from "./functions.js";
 export type { TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";

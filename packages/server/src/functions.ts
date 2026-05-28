@@ -5,8 +5,11 @@ import type { ActionCtx, ArgsValidator, InferArgs, MutationCtx, QueryCtx, Regist
 /**
  * Validate an args record against the validator map. Throws a
  * {@link ValidationError} with the offending field's path on mismatch.
+ *
+ * Exported so the procedure builder (`./builder`) reuses one validator
+ * implementation rather than forking the arg-parsing logic.
  */
-const validateArgs = <A extends ArgsValidator>(validators: A, args: Record<string, unknown>): InferArgs<A> => {
+export const validateArgs = <A extends ArgsValidator>(validators: A, args: Record<string, unknown>): InferArgs<A> => {
     const out: Record<string, unknown> = {};
 
     for (const key of Object.keys(validators)) {

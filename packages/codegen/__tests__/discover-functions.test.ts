@@ -221,3 +221,130 @@ describe("discoverFunctions namespace collision", () => {
         expect(result.map((f) => f.exportName).sort()).toEqual(["list", "send"]);
     });
 });
+
+// A self-contained branded builder. The discovery brand-guard resolves the
+// `__cirrusProcedure` property off the receiver's *type*, so the builder is
+// declared inline here rather than imported from `@cirrus/server` (the isolated
+// test project has no module resolution for workspace packages).
+const BUILDER_PREAMBLE = `
+    declare const v: {
+        id: (table: string) => { __k: "id" };
+        number: () => { __k: "number" };
+        string: () => { __k: "string" };
+    };
+
+    interface QueryBuilder<Args> {
+        readonly __cirrusProcedure: "query";
+        input: <X extends Record<string, unknown>>(validators: X) => QueryBuilder<Args & X>;
+        use: <C>(middleware: (options: { ctx: unknown }) => C) => QueryBuilder<Args>;
+        query: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "query" };
+    }
+
+    interface MutationBuilder<Args> {
+        readonly __cirrusProcedure: "mutation";
+        input: <X extends Record<string, unknown>>(validators: X) => MutationBuilder<Args & X>;
+        mutation: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "mutation" };
+    }
+
+    declare const c: { mutation: MutationBuilder<Record<never, never>>; query: QueryBuilder<Record<never, never>> };
+`;
+
+describe("discoverFunctions builder procedures", () => {
+    test("discovers a builder terminal, reading the kind from the terminal method name", () => {
+        writeFunction(
+            "messages.ts",
+            `${BUILDER_PREAMBLE}
+            export const list = c.query
+                .input({ channelId: v.id("channels"), limit: v.number() })
+                .query((): { hello: "world" } => ({ hello: "world" }));
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result).toHaveLength(1);
+        expect(result[0]?.kind).toBe("query");
+        expect(result[0]?.returnType).toBe('{ hello: "world"; }');
+        expect(result[0]?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
+        expect(result[0]?.args.limit).toEqual({ kind: "number" });
+    });
+
+    test("merges .input() args across the chain — a later .input() wins on collision", () => {
+        writeFunction(
+            "messages.ts",
+            `${BUILDER_PREAMBLE}
+            export const list = c.query
+                .input({ value: v.number() })
+                .input({ value: v.string() })
+                .query(() => null);
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result[0]?.args.value).toEqual({ kind: "string" });
+    });
+
+    test("intervening .use() links don't disturb detection or arg collection", () => {
+        writeFunction(
+            "messages.ts",
+            `${BUILDER_PREAMBLE}
+            export const list = c.query
+                .input({ a: v.number() })
+                .use(({ ctx }) => ctx)
+                .query(() => null);
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result).toHaveLength(1);
+        expect(Object.keys(result[0]?.args ?? {})).toEqual(["a"]);
+    });
+
+    test("detects a mutation builder terminal with its own kind", () => {
+        writeFunction(
+            "messages.ts",
+            `${BUILDER_PREAMBLE}
+            export const send = c.mutation.input({ text: v.string() }).mutation(() => null);
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result[0]?.kind).toBe("mutation");
+    });
+
+    test("ignores a `.query()` method on an object lacking the __cirrusProcedure brand", () => {
+        writeFunction(
+            "messages.ts",
+            `
+            declare const notBuilder: { query: (handler: () => unknown) => { args: Record<never, never>; handler: () => unknown; kind: "query" } };
+            export const list = notBuilder.query(() => null);
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result).toHaveLength(0);
+    });
+
+    test("does not register an intermediate .input() assignment that lacks a terminal", () => {
+        writeFunction(
+            "messages.ts",
+            `${BUILDER_PREAMBLE}
+            export const partial = c.query.input({ a: v.number() });
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result).toHaveLength(0);
+    });
+});
