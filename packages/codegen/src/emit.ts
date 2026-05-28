@@ -227,7 +227,7 @@ export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
     // Import only the dataModel helpers the rendered arg/return types actually
     // reference: `Doc` appears when a function returns documents, `Id` when it
     // takes or returns an id. Importing an unused one trips noUnusedLocals.
-    const dataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(`\\b${name}<`, "u").test(body));
+    const dataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(body));
     const dataModelImportLine = dataModelImports.length > 0 ? `\nimport type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
 
     return `${GENERATED_HEADER}import { anyApi } from "@cirrus/server/types";
@@ -344,7 +344,7 @@ export const dispatchCirrusFunction = async (functionPath: string, context: unkn
 export const emitShard = (schema: SchemaIR): string => {
     const hasVectors = schema.vectorIndexes.length > 0;
 
-    const doTypeImports = ["DatabaseWriterLike", "SchemaLike", "ShardDOState", "SqlExec", ...(hasVectors ? ["WriteHook"] : [])];
+    const doTypeImports = ["DatabaseWriterLike", "SchemaLike", "ShardDOState", "SqlExec", ...hasVectors ? ["WriteHook"] : []];
 
     const importLines = [`import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`, `import { createShardCtxDb, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`];
 
