@@ -54,7 +54,7 @@
         "cz-conventional-changelog": "catalog:prod",
         "eslint": "catalog:lint",
         "prettier": "catalog:lint",
-        "react-doctor": "0.2.9",
+        "react-doctor": "0.2.10",
         "rimraf": "catalog:node",
         "ts-morph": "catalog:tooling",
         "tsx": "catalog:dev",

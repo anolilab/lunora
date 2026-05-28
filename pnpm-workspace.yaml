@@ -48,7 +48,7 @@ catalogs:
     "@types/node": 25.9.1
   cloudflare:
     "@cloudflare/vitest-pool-workers": ^0.16.10
-    "@cloudflare/workers-types": ^4.20260527.1
+    "@cloudflare/workers-types": ^4.20260528.1
     miniflare: ^4.20260526.0
     wrangler: ^4.95.0
   e2e:
@@ -73,8 +73,8 @@ catalogs:
     "@visulima/email": 1.0.0-alpha.32
     "@react-email/render": 2.0.8
   docs:
-    "fumadocs-core": ^16.9.1
-    "fumadocs-ui": ^16.9.1
+    "fumadocs-core": ^16.9.2
+    "fumadocs-ui": ^16.9.2
     "fumadocs-mdx": ^15.0.9
     "next": ^16.2.6
     "tailwindcss": ^4.3.0
