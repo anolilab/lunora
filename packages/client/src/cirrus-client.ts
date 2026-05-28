@@ -8,6 +8,7 @@ import type {
     CirrusClientOptions,
     ClientMessage,
     FunctionReference,
+    ReconnectOptions,
     ReturnOf,
     RpcResponseBody,
     ServerMessage,
@@ -22,6 +23,24 @@ type WSState = "idle" | "connecting" | "open" | "closed";
 interface MutationCallOptions<TCurrent, TValue> {
     optimistic?: (current: TCurrent | undefined) => TValue;
     shardKey?: string;
+}
+
+/**
+ * One WebSocket per shard key. Subscriptions and the writes they observe must
+ * land on the same Durable Object, so each distinct `shardKey` gets its own
+ * socket connected to `?shard=<key>` (the default shard uses no query param).
+ * Reconnect backoff, offline-flush state, and the pending-unsubscribe buffer
+ * are all per-connection so one shard dropping doesn't disturb the others.
+ */
+interface ShardConnection {
+    pendingUnsubscribes: string[];
+    reconnect: ReconnectCalculator;
+    reconnectTimer: ReturnType<typeof setTimeout> | null;
+    /** `undefined` for the default shard (connects without a `shard` param). */
+    readonly shardKey: string | undefined;
+    socket: WebSocket | null;
+    wasEverConnected: boolean;
+    wsState: WSState;
 }
 
 const deriveWsUrl = (url: string): string => {
@@ -60,38 +79,20 @@ export class CirrusClient {
 
     private readonly bookmark: BookmarkStorage;
 
-    private readonly reconnect: ReconnectCalculator;
+    private readonly reconnectOptions: ReconnectOptions | undefined;
 
     private readonly offlineQueue: OfflineQueue;
 
     private readonly subscriptions = new SubscriptionRegistry();
 
-    private socket: WebSocket | null = null;
-
-    private wsState: WSState = "idle";
+    /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
+    private readonly connections = new Map<string, ShardConnection>();
 
     private authToken: string | null = null;
-
-    private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     private closed = false;
 
     private nextSubId = 0;
-
-    /**
-     * Unsubscribe ids that couldn't be sent over the current (closed/closing)
-     * socket. Flushed once the socket re-opens, so the server doesn't keep
-     * shipping deltas for callbacks the consumer has already discarded.
-     */
-    private pendingUnsubscribes: string[] = [];
-
-    /**
-     * Set the first time a WS connection has opened. Mutations are only
-     * queued (rather than sent over HTTP) once we have evidence the client
-     * is expected to be online via WS — otherwise mutations would hang the
-     * first time they were called in an environment without subscriptions.
-     */
-    private wasEverConnected = false;
 
     public constructor(opts: CirrusClientOptions) {
         this.url = opts.url;
@@ -99,7 +100,7 @@ export class CirrusClient {
         this.fetchImpl = opts.fetch ?? (typeof fetch === "function" ? fetch.bind(globalThis) : (undefined as unknown as typeof fetch));
         this.WebSocketImpl = opts.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
         this.bookmark = opts.bookmarkStorage ?? createInMemoryBookmarkStorage();
-        this.reconnect = createReconnect(opts.reconnect);
+        this.reconnectOptions = opts.reconnect;
         this.offlineQueue = new OfflineQueue(opts.offlineQueue);
     }
 
@@ -168,10 +169,16 @@ export class CirrusClient {
         // Queue while offline (only mutations — queries fail fast). We also
         // queue when we're mid-reconnect (wsState === "connecting") provided
         // we've been connected before — otherwise the mutation would race
-        // the resubscribe.
-        const midReconnect = this.wsState === "connecting" && this.wasEverConnected;
+        // the resubscribe. State is scoped to the mutation's own shard so a
+        // dropped shard only queues writes destined for it.
+        const conn = this.getConnection(opts.shardKey);
+        const wsState: WSState = conn?.wsState ?? "idle";
+        const hasSocket = conn?.socket != null;
+        const wasEverConnected = conn?.wasEverConnected ?? false;
+        const shouldQueueOffline = this.WebSocketImpl !== undefined && wasEverConnected;
+        const midReconnect = wsState === "connecting" && wasEverConnected;
 
-        if ((this.wsState !== "open" && this.socket === null && this.shouldQueueOffline()) || midReconnect) {
+        if ((wsState !== "open" && !hasSocket && shouldQueueOffline) || midReconnect) {
             return new Promise<ReturnOf<F>>((resolve, reject) => {
                 this.offlineQueue.enqueue<ReturnOf<F>>({
                     functionPath: fn.__cirrusRef,
@@ -246,7 +253,7 @@ export class CirrusClient {
             }
         }
 
-        this.ensureSocket();
+        this.ensureSocket(opts.shardKey);
         this.sendSubscribeIfOpen(state);
 
         return () => {
@@ -257,10 +264,11 @@ export class CirrusClient {
             state.callbacks.delete(cb);
 
             if (state.callbacks.size === 0) {
-                const ok = this.send({ type: "unsubscribe", id: state.id });
+                const conn = this.getConnection(state.shardKey);
+                const ok = conn ? this.sendOn(conn, { type: "unsubscribe", id: state.id }) : false;
 
-                if (!ok) {
-                    this.pendingUnsubscribes.push(state.id);
+                if (!ok && conn) {
+                    conn.pendingUnsubscribes.push(state.id);
                 }
 
                 this.subscriptions.remove(state);
@@ -271,32 +279,66 @@ export class CirrusClient {
     public close(): void {
         this.closed = true;
 
-        if (this.reconnectTimer !== null) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
-
-        if (this.socket) {
-            try {
-                this.socket.close();
-            } catch {
-                /* ignore */
+        for (const conn of this.connections.values()) {
+            if (conn.reconnectTimer !== null) {
+                clearTimeout(conn.reconnectTimer);
+                conn.reconnectTimer = null;
             }
 
-            this.socket = null;
+            if (conn.socket) {
+                try {
+                    conn.socket.close();
+                } catch {
+                    /* ignore */
+                }
+
+                conn.socket = null;
+            }
+
+            conn.wsState = "closed";
         }
 
-        this.wsState = "closed";
         this.offlineQueue.clear();
     }
 
     // --- Internals ----------------------------------------------------------
 
-    private shouldQueueOffline(): boolean {
-        // Only queue when we've previously been connected — i.e. the WS dropped.
-        // Before the first connection, mutations should travel over HTTP so they
-        // don't deadlock when no consumer has triggered a subscription yet.
-        return this.WebSocketImpl !== undefined && this.wasEverConnected;
+    private connectionKey(shardKey: string | undefined): string {
+        return shardKey ?? "";
+    }
+
+    private getConnection(shardKey: string | undefined): ShardConnection | undefined {
+        return this.connections.get(this.connectionKey(shardKey));
+    }
+
+    private getOrCreateConnection(shardKey: string | undefined): ShardConnection {
+        const key = this.connectionKey(shardKey);
+        let conn = this.connections.get(key);
+
+        if (!conn) {
+            conn = {
+                pendingUnsubscribes: [],
+                reconnect: createReconnect(this.reconnectOptions),
+                reconnectTimer: null,
+                shardKey,
+                socket: null,
+                wasEverConnected: false,
+                wsState: "idle",
+            };
+            this.connections.set(key, conn);
+        }
+
+        return conn;
+    }
+
+    private wsUrlFor(shardKey: string | undefined): string {
+        if (shardKey === undefined) {
+            return this.wsUrl;
+        }
+
+        const separator = this.wsUrl.includes("?") ? "&" : "?";
+
+        return `${this.wsUrl}${separator}shard=${encodeURIComponent(shardKey)}`;
     }
 
     private async rpc(
@@ -355,90 +397,112 @@ export class CirrusClient {
         return body.result;
     }
 
-    private ensureSocket(): void {
-        if (this.closed || this.wsState === "open" || this.wsState === "connecting" || this.WebSocketImpl === undefined) {
+    private ensureSocket(shardKey: string | undefined): void {
+        if (this.closed || this.WebSocketImpl === undefined) {
             return;
         }
 
-        this.wsState = "connecting";
+        const conn = this.getOrCreateConnection(shardKey);
 
-        const socket = new this.WebSocketImpl(this.wsUrl);
+        if (conn.wsState === "open" || conn.wsState === "connecting") {
+            return;
+        }
 
-        this.socket = socket;
+        conn.wsState = "connecting";
 
-        socket.onopen = (): void => {
-            this.wsState = "open";
-            this.wasEverConnected = true;
-            this.reconnect.reset();
+        const socket = new this.WebSocketImpl(this.wsUrlFor(shardKey));
 
-            // Resubscribe everyone.
-            this.subscriptions.markAllPendingAck();
+        conn.socket = socket;
+
+        socket.addEventListener('open', (): void => {
+            conn.wsState = "open";
+            conn.wasEverConnected = true;
+            conn.reconnect.reset();
+
+            // Resubscribe everyone bound to this shard.
+            this.markShardPendingAck(shardKey);
 
             for (const state of this.subscriptions.all()) {
-                this.sendSubscribeIfOpen(state);
-            }
-
-            // Flush any unsubscribes that piled up while the socket was down.
-            if (this.pendingUnsubscribes.length > 0) {
-                const pending = this.pendingUnsubscribes;
-
-                this.pendingUnsubscribes = [];
-
-                for (const id of pending) {
-                    this.send({ type: "unsubscribe", id });
+                if (this.connectionKey(state.shardKey) === this.connectionKey(shardKey)) {
+                    this.sendSubscribeIfOpen(state);
                 }
             }
 
-            this.flushOfflineQueue();
-        };
+            // Flush any unsubscribes that piled up while the socket was down.
+            if (conn.pendingUnsubscribes.length > 0) {
+                const pending = conn.pendingUnsubscribes;
+
+                conn.pendingUnsubscribes = [];
+
+                for (const id of pending) {
+                    this.sendOn(conn, { type: "unsubscribe", id });
+                }
+            }
+
+            this.flushOfflineQueue(shardKey);
+        });
 
         socket.onmessage = (event: MessageEvent): void => {
             this.handleServerMessage(event.data);
         };
 
-        socket.onclose = (): void => {
-            this.handleDisconnect();
-        };
+        socket.addEventListener('close', (): void => {
+            this.handleDisconnect(conn);
+        });
 
         socket.onerror = (): void => {
             // The runtime will follow up with onclose; just leave a breadcrumb.
         };
     }
 
-    private handleDisconnect(): void {
+    private handleDisconnect(conn: ShardConnection): void {
         if (this.closed) {
             return;
         }
 
-        this.socket = null;
-        this.wsState = "idle";
-        this.subscriptions.markAllPendingAck();
+        conn.socket = null;
+        conn.wsState = "idle";
+        this.markShardPendingAck(conn.shardKey);
 
         if (this.WebSocketImpl === undefined) {
             return;
         }
 
-        const delay = this.reconnect.next();
+        const delay = conn.reconnect.next();
 
-        this.reconnectTimer = setTimeout(() => {
-            this.reconnectTimer = null;
-            this.ensureSocket();
+        conn.reconnectTimer = setTimeout(() => {
+            conn.reconnectTimer = null;
+            this.ensureSocket(conn.shardKey);
         }, delay);
     }
 
+    /** Mark every subscription bound to `shardKey` as needing a fresh ack. */
+    private markShardPendingAck(shardKey: string | undefined): void {
+        const key = this.connectionKey(shardKey);
+
+        for (const state of this.subscriptions.all()) {
+            if (this.connectionKey(state.shardKey) === key) {
+                state.acked = false;
+            }
+        }
+    }
+
     private sendSubscribeIfOpen(state: SubscriptionState): void {
-        if (this.wsState !== "open" || state.acked) {
+        const conn = this.getConnection(state.shardKey);
+
+        if (conn?.wsState !== "open" || state.acked) {
             return;
         }
 
-        // Extract `table` if codegen surfaced it on the ref. Until codegen
-        // attaches table metadata we fall back to the function path itself.
+        // `table` keeps the legacy raw-delta fan-out working; `functionPath`
+        // drives server-side re-execution. They're the same ref unless codegen
+        // surfaced a distinct `__cirrusTable`.
         const table = (state.fn as FunctionReference & { __cirrusTable?: string }).__cirrusTable ?? state.fn.__cirrusRef;
 
-        this.send({
+        this.sendOn(conn, {
             type: "subscribe",
             id: state.id,
-            query: { table, args: state.args },
+            query: { table, functionPath: state.fn.__cirrusRef, args: state.args },
         });
     }
 
@@ -501,17 +565,17 @@ export class CirrusClient {
     }
 
     /**
-     * Best-effort send over the WS. Returns `true` when the message was
+     * Best-effort send over a shard's WS. Returns `true` when the message was
      * handed to the socket, `false` when the caller should queue it for the
      * next reconnect.
      */
-    private send(message: ClientMessage): boolean {
-        if (!this.socket || this.wsState !== "open") {
+    private sendOn(conn: ShardConnection, message: ClientMessage): boolean {
+        if (!conn.socket || conn.wsState !== "open") {
             return false;
         }
 
         try {
-            this.socket.send(JSON.stringify(message));
+            conn.socket.send(JSON.stringify(message));
 
             return true;
         } catch {
@@ -520,8 +584,9 @@ export class CirrusClient {
         }
     }
 
-    private flushOfflineQueue(): void {
-        const drained = this.offlineQueue.drain();
+    private flushOfflineQueue(shardKey: string | undefined): void {
+        const key = this.connectionKey(shardKey);
+        const drained = this.offlineQueue.drain((item) => this.connectionKey(item.shardKey) === key);
 
         for (const item of drained) {
             this.rpc(item.functionPath, item.args, item.shardKey, { captureBookmark: true }).then(

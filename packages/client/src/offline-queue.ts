@@ -44,10 +44,30 @@ export class OfflineQueue {
         }
     }
 
-    public drain(): QueuedMutation[] {
-        const drained = [...this.items];
+    /**
+     * Remove and return queued mutations. With no `predicate`, drains the whole
+     * queue. With one, drains only matching entries (preserving FIFO order) and
+     * leaves the rest queued — used to flush a single shard's writes when its
+     * socket reconnects while other shards are still down.
+     */
+    public drain(predicate?: (item: QueuedMutation) => boolean): QueuedMutation[] {
+        if (!predicate) {
+            const drained = [...this.items];
+
+            this.items.length = 0;
+
+            return drained;
+        }
+
+        const drained: QueuedMutation[] = [];
+        const kept: QueuedMutation[] = [];
+
+        for (const item of this.items) {
+            (predicate(item) ? drained : kept).push(item);
+        }
 
         this.items.length = 0;
+        this.items.push(...kept);
 
         return drained;
     }

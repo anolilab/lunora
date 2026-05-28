@@ -59,7 +59,7 @@ export type RpcResponseBody = { result: unknown } | { error: { code: string; mes
 /** Subscription protocol — client → server. */
 export interface ClientSubscribeMessage {
     id: string;
-    query: { args?: Record<string, unknown>; table: string };
+    query: { args?: Record<string, unknown>; functionPath?: string; table?: string };
     type: "subscribe";
 }
 
