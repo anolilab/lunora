@@ -414,3 +414,139 @@ describe(".unique() constraint", () => {
         await expect(writer.count("items")).resolves.toBe(2);
     });
 });
+
+describe("relations", () => {
+    const buildRelSchema = (action?: "cascade" | "restrict" | "set null"): SchemaLike => ({
+        tables: {
+            messages: {
+                indexes: [],
+                relationMap: {
+                    author: { field: "authorId", kind: "one", onDelete: action, references: "_id", table: "users" },
+                    reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" },
+                },
+                shape: { authorId: col("string"), body: col("string") },
+            },
+            reactions: {
+                indexes: [],
+                relationMap: { message: { field: "messageId", kind: "one", onDelete: "cascade", references: "_id", table: "messages" } },
+                shape: { emoji: col("string"), messageId: col("string") },
+            },
+            users: {
+                indexes: [],
+                relationMap: { messages: { field: "authorId", kind: "many", references: "_id", table: "messages" } },
+                shape: { name: col("string") },
+            },
+        },
+    });
+
+    const setupRelations = (action?: "cascade" | "restrict" | "set null"): DatabaseWriterLike => {
+        // FK columns stay nullable so `set null` can clear them.
+        harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
+        harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "authorId" TEXT, "body" TEXT)`);
+        harness.ddl(`CREATE TABLE "reactions" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "messageId" TEXT, "emoji" TEXT)`);
+
+        return createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: buildRelSchema(action) });
+    };
+
+    const seedRelations = async (writer: DatabaseWriterLike): Promise<void> => {
+        await writer.insert("users", { _id: "u1", name: "Ada" });
+        await writer.insert("users", { _id: "u2", name: "Linus" });
+        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" });
+        await writer.insert("messages", { _id: "m2", authorId: "u1", body: "yo" });
+        await writer.insert("messages", { _id: "m3", authorId: "u2", body: "hey" });
+        await writer.insert("reactions", { _id: "r1", emoji: "thumbsup", messageId: "m1" });
+        await writer.insert("reactions", { _id: "r2", emoji: "party", messageId: "m1" });
+        await writer.insert("reactions", { _id: "r3", emoji: "fire", messageId: "m2" });
+    };
+
+    test("loads a one relation as Doc | null", async () => {
+        const writer = setupRelations();
+
+        await seedRelations(writer);
+
+        const { page } = await writer.findMany("messages", { where: { authorId: "u1" }, with: { author: true } });
+
+        expect((page[0]!["author"] as Record<string, unknown>)["name"]).toBe("Ada");
+    });
+
+    test("loads a many relation grouped per parent", async () => {
+        const writer = setupRelations();
+
+        await seedRelations(writer);
+
+        const { page } = await writer.findMany("users", { with: { messages: true } });
+        const ada = page.find((row) => row["_id"] === "u1")!;
+
+        expect(ids(ada["messages"] as Array<Record<string, unknown>>)).toEqual(["m1", "m2"]);
+    });
+
+    test("nested with recurses (users → messages → reactions)", async () => {
+        const writer = setupRelations();
+
+        await seedRelations(writer);
+
+        const { page } = await writer.findMany("users", { where: { _id: "u1" }, with: { messages: { with: { reactions: true } } } });
+        const messages = page[0]!["messages"] as Array<Record<string, unknown>>;
+        const m1 = messages.find((row) => row["_id"] === "m1")!;
+
+        expect(ids(m1["reactions"] as Array<Record<string, unknown>>)).toEqual(["r1", "r2"]);
+    });
+
+    test("per-group limit caps a many relation in memory", async () => {
+        const writer = setupRelations();
+
+        await seedRelations(writer);
+
+        const { page } = await writer.findMany("users", { where: { _id: "u1" }, with: { messages: { limit: 1 } } });
+
+        expect(page[0]!["messages"]).toHaveLength(1);
+    });
+
+    test("_count attaches per-parent aggregate", async () => {
+        const writer = setupRelations();
+
+        await seedRelations(writer);
+
+        const { page } = await writer.findMany("messages", { orderBy: [{ _id: "asc" }], with: { _count: { reactions: true } } });
+
+        expect((page[0]!["_count"] as Record<string, number>)["reactions"]).toBe(2);
+        expect((page[2]!["_count"] as Record<string, number>)["reactions"]).toBe(0);
+    });
+
+    test("onDelete cascade removes holder rows and chains", async () => {
+        const writer = setupRelations("cascade");
+
+        await writer.insert("users", { _id: "u1", name: "Ada" });
+        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" });
+        await writer.insert("reactions", { _id: "r1", emoji: "thumbsup", messageId: "m1" });
+
+        await writer.delete("u1");
+
+        await expect(writer.get("m1")).resolves.toBeNull();
+        await expect(writer.get("r1")).resolves.toBeNull();
+    });
+
+    test("onDelete set null clears the FK", async () => {
+        const writer = setupRelations("set null");
+
+        await writer.insert("users", { _id: "u1", name: "Ada" });
+        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" });
+
+        await writer.delete("u1");
+
+        const message = await writer.get("m1");
+
+        expect(message).not.toBeNull();
+        expect(message!["authorId"]).toBeNull();
+    });
+
+    test("onDelete restrict aborts when a holder remains", async () => {
+        const writer = setupRelations("restrict");
+
+        await writer.insert("users", { _id: "u1", name: "Ada" });
+        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" });
+
+        await expect(writer.delete("u1")).rejects.toBeInstanceOf(ConflictError);
+        await expect(writer.get("u1")).resolves.not.toBeNull();
+    });
+});

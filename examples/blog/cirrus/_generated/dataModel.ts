@@ -39,3 +39,190 @@ export interface DataModel {
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
+
+/**
+ * Per-table index name union. `never` for tables without secondary indexes.
+ * Used by `TableReader.withIndex()` to constrain callers to declared names.
+ */
+export interface IndexNamesByTable {
+    users: "by_email";
+    posts: "by_published";
+    drafts: "by_updated";
+}
+
+export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
+
+/** Per-table search-index name union. `never` for tables without searchIndex. */
+export interface SearchIndexNamesByTable {
+    users: never;
+    posts: never;
+    drafts: never;
+}
+
+export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
+
+/** Union of declared vector index names. `never` when none are declared. */
+export type VectorIndexName = never;
+
+export interface Insert_users {
+    _id?: Id<"users">;
+    _creationTime?: number;
+    email: string;
+    name: string;
+    passwordHash: string;
+}
+
+export interface Insert_posts {
+    _id?: Id<"posts">;
+    _creationTime?: number;
+    authorId: Id<"users">;
+    title: string;
+    body: string;
+    imageKey?: string;
+    publishedAt: number;
+}
+
+export interface Insert_drafts {
+    _id?: Id<"drafts">;
+    _creationTime?: number;
+    authorId: Id<"users">;
+    title: string;
+    body: string;
+    updatedAt: number;
+}
+
+/** Per-table insert shape, accepted by `ctx.db.<table>.insert(...)`. */
+export interface InsertModel {
+    users: Insert_users;
+    posts: Insert_posts;
+    drafts: Insert_drafts;
+}
+
+export type Insert<T extends keyof DataModel> = InsertModel[T];
+
+/** Field-level operators for the typed `where` DSL (see `@cirrus/do`'s compiler). */
+export interface WhereOperators<T> {
+    contains?: string;
+    eq?: T;
+    gt?: T;
+    gte?: T;
+    in?: T[];
+    isNull?: boolean;
+    lt?: T;
+    lte?: T;
+    ne?: T;
+    notIn?: T[];
+}
+
+/** A typed `where` tree over a document's columns. */
+export type Where<TDoc> = {
+    [K in keyof TDoc]?: TDoc[K] | WhereOperators<TDoc[K]>;
+} & {
+    AND?: Array<Where<TDoc>>;
+    NOT?: Where<TDoc>;
+    OR?: Array<Where<TDoc>>;
+};
+
+/** One `{ field: "asc" | "desc" }` ordering entry; `orderBy` is an ordered list. */
+export type OrderBy<TDoc> = Partial<Record<keyof TDoc, "asc" | "desc">>;
+
+export interface QueryArgs<TDoc> {
+    cursor?: null | string;
+    limit?: number;
+    orderBy?: Array<OrderBy<TDoc>>;
+    where?: Where<TDoc>;
+}
+
+export interface QueryPage<TDoc> {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: TDoc[];
+}
+
+/**
+ * Phantom relation descriptors. They carry the relation kind and target table
+ * as type parameters only — there is no runtime value — so the `with` argument
+ * and its return type can be inferred from {@link Relations}.
+ */
+export interface OneRelation<Target extends keyof DataModel> {
+    readonly __relationKind: "one";
+    readonly __target: Target;
+}
+
+export interface ManyRelation<Target extends keyof DataModel> {
+    readonly __relationKind: "many";
+    readonly __target: Target;
+}
+
+/** Per-table relation map keyed by accessor name. `{}` for tables with none. */
+export interface Relations {
+    users: {};
+    posts: {};
+    drafts: {};
+}
+
+/**
+ * The `with` argument for table `T`: each relation can be `true` (load with no
+ * refinements) or an object. `many` relations accept `where`/`orderBy`/`limit`
+ * plus a nested `with`; `one` relations accept only a nested `with`. The
+ * reserved `_count` key requests per-relation aggregate counts.
+ */
+export type WithArg<T extends keyof DataModel> = {
+    [K in keyof Relations[T]]?: Relations[T][K] extends ManyRelation<infer Target>
+        ? boolean | (QueryArgs<Doc<Target>> & { with?: WithArg<Target> })
+        : Relations[T][K] extends OneRelation<infer Target>
+          ? boolean | { with?: WithArg<Target> }
+          : never;
+} & {
+    _count?: { [K in keyof Relations[T]]?: true };
+};
+
+/** The nested `with` sub-argument inside a relation's with-value, or `{}`. */
+type NestedWithArg<WK> = WK extends { with: infer NW } ? NW : {};
+
+/** Resolve a single relation descriptor + its with-value to the loaded type. */
+type LoadRelation<R, WK> =
+    R extends OneRelation<infer Target>
+        ? LoadWith<Target, NestedWithArg<WK>> | null
+        : R extends ManyRelation<infer Target>
+          ? Array<LoadWith<Target, NestedWithArg<WK>>>
+          : never;
+
+/** The relation keys of `W` that were actually requested (not `false`/`undefined`). */
+type LoadedRelations<T extends keyof DataModel, W> = {
+    [K in keyof W as K extends keyof Relations[T] ? (W[K] extends false | undefined ? never : K) : never]: K extends keyof Relations[T]
+        ? LoadRelation<Relations[T][K], W[K]>
+        : never;
+};
+
+/** The `_count` projection of `W`, if any. */
+type LoadedCount<W> = W extends { _count: infer C } ? { _count: { [K in keyof C]: number } } : {};
+
+/** `Doc<T>` narrowed to exactly the relations requested in the with-arg `W`. */
+export type LoadWith<T extends keyof DataModel, W> = Doc<T> & LoadedRelations<T, W> & LoadedCount<W>;
+
+/** Read-only typed table accessor exposed on `QueryCtx.db.<table>`. */
+export interface TableReaderFacade<T extends keyof DataModel> {
+    count: (where?: Where<Doc<T>>) => Promise<number>;
+    findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;
+    findMany: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<QueryPage<LoadWith<T, W>>>;
+    get: (id: Id<T>) => Promise<Doc<T> | null>;
+}
+
+/** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
+export interface TableWriterFacade<T extends keyof DataModel> extends TableReaderFacade<T> {
+    delete: (id: Id<T>) => Promise<void>;
+    insert: (values: Insert<T>) => Promise<Id<T>>;
+    patch: (id: Id<T>, values: Partial<Insert<T>>) => Promise<void>;
+    replace: (id: Id<T>, values: Insert<T>) => Promise<void>;
+}
+
+/** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
+export type DatabaseReaderFacade = {
+    readonly [T in keyof DataModel]: TableReaderFacade<T>;
+};
+
+/** Per-table read-write facade — `ctx.db.<table>` on a `MutationCtx` / `ActionCtx`. */
+export type DatabaseWriterFacade = {
+    readonly [T in keyof DataModel]: TableWriterFacade<T>;
+};

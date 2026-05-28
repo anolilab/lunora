@@ -16,7 +16,10 @@ export const schema = defineSchema({
         prefs: v.record(v.string(), v.string()),
     })
         .global()
-        .index("by_email", ["email"], { unique: true }),
+        .index("by_email", ["email"], { unique: true })
+        .relations((r) => ({
+            attachments: r.many("attachments", { field: "ownerId" }),
+        })),
 
     // Coverage table — exercises the drizzle emitter's optional/array/bigint/bytes
     // branches. Not used by any function; the codegen tests just assert that the
@@ -27,5 +30,9 @@ export const schema = defineSchema({
         size: v.bigint(),
         tags: v.array(v.string()),
         title: v.optional(v.string()),
-    }).global(),
+    })
+        .global()
+        .relations((r) => ({
+            owner: r.one("users", { field: "ownerId", onDelete: "cascade" }),
+        })),
 });

@@ -29,6 +29,8 @@
 
 import type { QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
+import type { RelationDefinitionLike } from "./relations.js";
+import { applyOnDelete, resolveWith } from "./relations.js";
 import { ConflictError } from "./transaction.js";
 import type { MutationDelta } from "./types.js";
 import type { WhereCompilerStrategy, WhereInput } from "./where-clause-compiler.js";
@@ -59,6 +61,7 @@ export interface SchemaLike {
 
 export interface TableDefinitionLike {
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
+    readonly relationMap?: Record<string, RelationDefinitionLike>;
     readonly shape: Record<string, ValidatorLike>;
     readonly shardMode?: { kind: "global" | "root" | "shardBy" };
 }
@@ -540,12 +543,20 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             if (limit === undefined) {
+                if (args.with) {
+                    await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: docs, schema, tableName, with: args.with });
+                }
+
                 return { continueCursor: null, isDone: true, page: docs };
             }
 
             const hasMore = docs.length > limit;
             const page = hasMore ? docs.slice(0, limit) : docs;
             const last = page.at(-1);
+
+            if (args.with) {
+                await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: page, schema, tableName, with: args.with });
+            }
 
             return {
                 continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
@@ -662,6 +673,24 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (!tableName) {
                 return;
             }
+
+            // Resolve declared `onDelete` actions on holder rows *before* the
+            // physical delete, so `restrict` can abort and cascaded child
+            // deletes still fire their own broadcast/onWrite per row.
+            const existing = await writer.get(id);
+
+            await applyOnDelete({
+                deletedId: id,
+                deletedReference: (references) => existing?.[references],
+                findHolders: async (holderTable, field, value) => (await writer.findMany(holderTable, { where: { [field]: value } })).page,
+                onCascade: (holderId) => writer.delete(holderId),
+                onRestrict: (message) => {
+                    throw new ConflictError(message);
+                },
+                onSetNull: (holderId, field) => writer.patch(holderId, { [field]: null }),
+                schema,
+                tableName,
+            });
 
             runSql(sql, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
 

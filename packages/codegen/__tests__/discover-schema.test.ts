@@ -186,6 +186,105 @@ describe("discoverSchema", () => {
         expect(todos?.shape.plain).toEqual({ kind: "string" });
     });
 
+    test("parses .relations() into one/many descriptors with references defaulting to _id", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                users: defineTable({ email: v.string() }).relations((r) => ({
+                    posts: r.many("posts", { field: "authorId" }),
+                })),
+                posts: defineTable({
+                    authorId: v.id("users"),
+                    body: v.string(),
+                }).relations((r) => ({
+                    author: r.one("users", { field: "authorId", onDelete: "cascade" }),
+                })),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const users = schema.tables.find((table) => table.name === "users");
+        const posts = schema.tables.find((table) => table.name === "posts");
+
+        expect(users?.relations).toEqual([{ field: "authorId", kind: "many", name: "posts", onDelete: undefined, references: "_id", table: "posts" }]);
+        expect(posts?.relations).toEqual([{ field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "_id", table: "users" }]);
+    });
+
+    test("honors an explicit references and ignores onDelete on a many relation", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                orgs: defineTable({ slug: v.string() }).relations((r) => ({
+                    members: r.many("members", { field: "orgSlug", references: "slug", onDelete: "cascade" }),
+                })),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const orgs = schema.tables.find((table) => table.name === "orgs");
+
+        expect(orgs?.relations[0]).toEqual({ field: "orgSlug", kind: "many", name: "members", onDelete: undefined, references: "slug", table: "members" });
+    });
+
+    test("tables without .relations() expose an empty relations array", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                users: defineTable({ email: v.string() }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables[0]?.relations).toEqual([]);
+    });
+
+    test("emits the relation type machinery and per-table Relations map", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                users: defineTable({ email: v.string() }).relations((r) => ({
+                    posts: r.many("posts", { field: "authorId" }),
+                })),
+                posts: defineTable({ authorId: v.id("users") }).relations((r) => ({
+                    author: r.one("users", { field: "authorId" }),
+                })),
+            });
+        `);
+
+        const dataModel = emitDataModel(discoverSchema(project, schemaPath));
+
+        // Phantom descriptors + the per-table Relations map.
+        expect(dataModel).toContain("export interface OneRelation<Target extends keyof DataModel>");
+        expect(dataModel).toContain("export interface ManyRelation<Target extends keyof DataModel>");
+        expect(dataModel).toContain('posts: ManyRelation<"posts">;');
+        expect(dataModel).toContain('author: OneRelation<"users">;');
+
+        // The with-inference machinery + generic facades.
+        expect(dataModel).toContain("export type WithArg<T extends keyof DataModel>");
+        expect(dataModel).toContain("export type LoadWith<T extends keyof DataModel, W> = Doc<T> & LoadedRelations<T, W> & LoadedCount<W>;");
+        expect(dataModel).toContain("findMany: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<QueryPage<LoadWith<T, W>>>;");
+        expect(dataModel).toContain("findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;");
+    });
+
+    test("emits an empty Relations entry for tables that declare none", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                users: defineTable({ email: v.string() }),
+            });
+        `);
+
+        const dataModel = emitDataModel(discoverSchema(project, schemaPath));
+
+        expect(dataModel).toContain("users: {};");
+    });
+
     test("emits a VectorIndexName union covering both shapes", () => {
         const { project, schemaPath } = projectWith(`
             import { defineSchema, defineTable, defineVectorIndex, v } from "@cirrus/server";

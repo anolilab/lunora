@@ -23,6 +23,29 @@ export interface SearchIndexDefinition {
     name: string;
 }
 
+/** FK behavior when a referenced parent row is deleted (mirrors SQL `ON DELETE`). */
+export type OnDeleteAction = "cascade" | "restrict" | "set null";
+
+/**
+ * A declared relation between two tables, recorded by `.relations((r) => …)`.
+ *
+ * - `one` (many-to-one): the FK column `field` lives on **this** table and
+ *   points at `table`.`references` (default `_id`). Loads a single doc.
+ * - `many` (one-to-many): the FK column `field` lives on the **target** table
+ *   and points back at this table's `references` (default `_id`). Loads an
+ *   array.
+ *
+ * `onDelete` is meaningful only on `one`: it is the action applied to the
+ * holder rows when the referenced parent row is deleted.
+ */
+export interface RelationDefinition {
+    field: string;
+    kind: "many" | "one";
+    onDelete?: OnDeleteAction;
+    references: string;
+    table: string;
+}
+
 /** Distance metric used by a Vectorize index. */
 export type VectorMetric = "cosine" | "dot-product" | "euclidean";
 
@@ -48,6 +71,12 @@ export interface TableVectorIndex {
 
 export interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     indexes: ReadonlyArray<IndexDefinition>;
+    /**
+     * Declared relations keyed by accessor name; empty unless `.relations()`
+     * was called. Named `relationMap` (not `relations`) so the fluent
+     * `.relations((r) => …)` builder method doesn't collide with this field.
+     */
+    relationMap: Record<string, RelationDefinition>;
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
     shape: Shape;
     shardMode: ShardMode;

@@ -2,6 +2,8 @@ import type { Validator } from "@cirrus/values";
 
 import type {
     IndexDefinition,
+    OnDeleteAction,
+    RelationDefinition,
     Schema,
     SearchIndexDefinition,
     ShardMode,
@@ -23,11 +25,33 @@ export interface VectorizeOptions<Shape extends Record<string, Validator> = Reco
     metric: VectorMetric;
 }
 
+/** A `one` (many-to-one) relation descriptor; phantom `Target` carries the target table name. */
+export interface OneRelation<Target extends string = string> extends RelationDefinition {
+    readonly __target?: Target;
+    readonly kind: "one";
+}
+
+/** A `many` (one-to-many) relation descriptor; phantom `Target` carries the target table name. */
+export interface ManyRelation<Target extends string = string> extends RelationDefinition {
+    readonly __target?: Target;
+    readonly kind: "many";
+}
+
+/** The `r` argument passed to `.relations((r) => …)`. */
+export interface RelationBuilder {
+    /** One-to-many: the FK `field` lives on the target table, matching this table's `references` (default `_id`). */
+    many: <Target extends string>(table: Target, options: { field: string; references?: string }) => ManyRelation<Target>;
+    /** Many-to-one: the FK `field` lives on this table, pointing at `table`.`references` (default `_id`). */
+    one: <Target extends string>(table: Target, options: { field: string; onDelete?: OnDeleteAction; references?: string }) => OneRelation<Target>;
+}
+
 export interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     /** Mark this table as global (D1-backed, cross-shard). */
     global: () => TableBuilder<Shape>;
     /** Add a secondary index. */
     index: (name: string, fields: ReadonlyArray<string>, options?: { unique?: boolean }) => TableBuilder<Shape>;
+    /** Declare relations to other tables, loaded via `findMany({ with })`. */
+    relations: (build: (r: RelationBuilder) => Record<string, RelationDefinition>) => TableBuilder<Shape>;
     /** Add a search index over a field with optional filter fields. */
     searchIndex: (name: string, options: { field: string; filterFields?: ReadonlyArray<string> }) => TableBuilder<Shape>;
     /** Route storage by the named field — one DO per distinct value. */
@@ -35,6 +59,12 @@ export interface TableBuilder<Shape extends Record<string, Validator> = Record<s
     /** Declare a vector index over a single text field on this table. */
     vectorize: (field: keyof Shape & string, options: VectorizeOptions<Shape>) => TableBuilder<Shape>;
 }
+
+/** Shared relation builder — `one`/`many` produce {@link RelationDefinition}s, defaulting `references` to `_id`. */
+const relationBuilder: RelationBuilder = {
+    many: (table, options) => ({ field: options.field, kind: "many", references: options.references ?? "_id", table }),
+    one: (table, options) => ({ field: options.field, kind: "one", onDelete: options.onDelete, references: options.references ?? "_id", table }),
+};
 
 /** Options for `defineVectorIndex(...)` (DSL Shape B). */
 export interface VectorIndexOptions {
@@ -53,6 +83,7 @@ export interface VectorIndexOptions {
  */
 export const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): TableBuilder<Shape> => {
     const indexes: IndexDefinition[] = [];
+    const relations: Record<string, RelationDefinition> = {};
     const searchIndexes: SearchIndexDefinition[] = [];
     const vectorIndexes: TableVectorIndex[] = [];
     let shardMode: ShardMode = { kind: "root" };
@@ -60,6 +91,9 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
     const builder: TableBuilder<Shape> = {
         get indexes() {
             return indexes;
+        },
+        get relationMap() {
+            return relations;
         },
         get searchIndexes() {
             return searchIndexes;
@@ -78,6 +112,11 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
         },
         index(name, fields, options) {
             indexes.push({ fields, name, unique: options?.unique ?? false });
+
+            return builder;
+        },
+        relations(build) {
+            Object.assign(relations, build(relationBuilder));
 
             return builder;
         },

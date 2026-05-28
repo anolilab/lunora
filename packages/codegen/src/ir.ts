@@ -63,9 +63,25 @@ export interface VectorIndexIR {
     table: string;
 }
 
+export interface RelationIR {
+    /** FK column: on this table for `one`, on the target table for `many`. */
+    field: string;
+    kind: "many" | "one";
+    /** Accessor name the relation is loaded under (the `with` key). */
+    name: string;
+    /** FK behaviour applied to holder rows when the referenced parent is deleted. */
+    onDelete?: "cascade" | "restrict" | "set null";
+    /** Referenced column (defaults to `_id`). */
+    references: string;
+    /** Target table name. */
+    table: string;
+}
+
 export interface TableIR {
     indexes: ReadonlyArray<IndexIR>;
     name: string;
+    /** Declared relations (via `.relations((r) => …)`), keyed in source order. */
+    relations: ReadonlyArray<RelationIR>;
     searchIndexes: ReadonlyArray<SearchIndexIR>;
     shape: Record<string, ValidatorIR>;
     shardMode: "global" | "root" | { field: string; kind: "shardBy" };

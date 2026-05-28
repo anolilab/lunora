@@ -15,7 +15,7 @@ export type { CirrusErrorCode } from "./error.js";
 export { CirrusError } from "./error.js";
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions.js";
 export { action, mutation, query } from "./functions.js";
-export type { TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";
+export type { ManyRelation, OneRelation, RelationBuilder, TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";
 export { defineSchema, defineTable, defineVectorIndex } from "./schema.js";
 export type {
     ActionCtx,
@@ -29,12 +29,14 @@ export type {
     IndexRangeBuilder,
     InferArgs,
     MutationCtx,
+    OnDeleteAction,
     QueryCtx,
     ReadOnlyStorage,
     RegisteredAction,
     RegisteredFunction,
     RegisteredMutation,
     RegisteredQuery,
+    RelationDefinition,
     Scheduler,
     Schema,
     SearchIndexDefinition,

@@ -279,6 +279,7 @@ describe("emitShard", () => {
                 {
                     indexes: [],
                     name: "docs",
+                    relations: [],
                     searchIndexes: [],
                     shape: { body: { kind: "string" } },
                     shardMode: "root",
@@ -308,6 +309,7 @@ describe("emitShard", () => {
                 {
                     indexes: [],
                     name: "docs",
+                    relations: [],
                     searchIndexes: [],
                     shape: { body: { kind: "string" } },
                     shardMode: "root",
@@ -331,6 +333,7 @@ describe("emitShard", () => {
                 {
                     indexes: [],
                     name: "messages",
+                    relations: [],
                     searchIndexes: [],
                     shape: { text: { kind: "string" } },
                     shardMode: { field: "channelId", kind: "shardBy" },
@@ -339,6 +342,7 @@ describe("emitShard", () => {
                 {
                     indexes: [],
                     name: "users",
+                    relations: [],
                     searchIndexes: [],
                     shape: { email: { kind: "string" } },
                     shardMode: "global",
@@ -366,6 +370,7 @@ describe("emitShard", () => {
                 {
                     indexes: [],
                     name: "messages",
+                    relations: [],
                     searchIndexes: [],
                     shape: { text: { kind: "string" } },
                     shardMode: "root",

@@ -1,10 +1,11 @@
 import type { Expression, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import type { IndexIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir.js";
+import type { IndexIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir.js";
 import { parseObjectShape } from "./parse-validator.js";
 
 const VECTOR_METRICS = new Set(["cosine", "dot-product", "euclidean"]);
+const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 
 /** Read a string-literal property from an object literal, or `undefined`. */
 const getStringProperty = (object: ObjectLiteralExpression, key: string): string | undefined => {
@@ -56,8 +57,83 @@ const getStringArrayProperty = (object: ObjectLiteralExpression, key: string): s
 
 const asMetric = (value: string | undefined): VectorIndexIR["metric"] => value && VECTOR_METRICS.has(value) ? (value as VectorIndexIR["metric"]) : undefined;
 
+const asOnDelete = (value: string | undefined): RelationIR["onDelete"] =>
+    value && ON_DELETE_ACTIONS.has(value) ? (value as RelationIR["onDelete"]) : undefined;
+
+/**
+ * Parse the `.relations((r) => ({ ... }))` argument. The arrow's body is an
+ * object literal (usually parenthesized) whose every property is a
+ * `r.one(table, opts)` / `r.many(table, opts)` call. `references` defaults to
+ * `_id`; `onDelete` is captured only on `one`.
+ */
+const parseRelations = (argument: Node): RelationIR[] => {
+    if (!Node.isArrowFunction(argument)) {
+        return [];
+    }
+
+    let body: Node = argument.getBody();
+
+    if (Node.isParenthesizedExpression(body)) {
+        body = body.getExpression();
+    } else if (Node.isBlock(body)) {
+        const returnStatement = body.getStatements().find((statement) => Node.isReturnStatement(statement));
+
+        body = returnStatement && Node.isReturnStatement(returnStatement) ? returnStatement.getExpression() ?? body : body;
+    }
+
+    if (!Node.isObjectLiteralExpression(body)) {
+        return [];
+    }
+
+    const relations: RelationIR[] = [];
+
+    for (const property of body.getProperties()) {
+        if (!Node.isPropertyAssignment(property)) {
+            continue;
+        }
+
+        const initializer = property.getInitializer();
+
+        if (!initializer || !Node.isCallExpression(initializer)) {
+            continue;
+        }
+
+        const callee = initializer.getExpression();
+
+        if (!Node.isPropertyAccessExpression(callee)) {
+            continue;
+        }
+
+        const method = callee.getName();
+
+        if (method !== "one" && method !== "many") {
+            continue;
+        }
+
+        const callArgs = initializer.getArguments();
+        const tableArgument = callArgs[0];
+        const optionsExpression = callArgs[1];
+        const table = tableArgument && Node.isStringLiteral(tableArgument) ? tableArgument.getLiteralText() : "_unknown_";
+
+        let field = "_unknown_";
+        let references = "_id";
+        let onDelete: RelationIR["onDelete"];
+
+        if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
+            field = getStringProperty(optionsExpression, "field") ?? field;
+            references = getStringProperty(optionsExpression, "references") ?? references;
+            onDelete = method === "one" ? asOnDelete(getStringProperty(optionsExpression, "onDelete")) : undefined;
+        }
+
+        relations.push({ field, kind: method, name: property.getName(), onDelete, references, table });
+    }
+
+    return relations;
+};
+
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const indexes: IndexIR[] = [];
+    const relations: RelationIR[] = [];
     const searchIndexes: SearchIndexIR[] = [];
     const vectorIndexes: VectorIndexIR[] = [];
     let shardMode: TableIR["shardMode"] = "root";
@@ -108,6 +184,16 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
                         name: indexName && Node.isStringLiteral(indexName) ? indexName.getLiteralText() : "_unnamed_",
                         unique,
                     });
+
+                    break;
+                }
+
+                case "relations": {
+                    const builder = args[0];
+
+                    if (builder) {
+                        relations.push(...parseRelations(builder));
+                    }
 
                     break;
                 }
@@ -199,7 +285,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         }
     }
 
-    return { indexes, name, searchIndexes, shape, shardMode, vectorIndexes };
+    return { indexes, name, relations, searchIndexes, shape, shardMode, vectorIndexes };
 };
 
 /**

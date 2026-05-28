@@ -20,6 +20,8 @@ export type {
 export { createShardCtxDb, runShardMigrations } from "./ctx-db.js";
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args.js";
 export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
+export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations.js";
+export { applyOnDelete, resolveWith } from "./relations.js";
 export type { SessionRecord } from "./session-do.js";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
 export type { HibernatableWebSocket, ShardDOState, SubscriptionOutcome } from "./shard-do.js";

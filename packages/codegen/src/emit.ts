@@ -163,6 +163,18 @@ export const emitDataModel = (schema: SchemaIR): string => {
     const insertInterfaces = schema.tables.map((table) => renderInsertInterface(table)).join("\n\n");
     const insertMap = schema.tables.map((table) => `    ${table.name}: Insert_${table.name};`).join("\n");
 
+    // Per-table relation descriptor map. Every table gets an entry (`{}` when it
+    // declares none) so `Relations[T]` is always defined for the `with` machinery.
+    const relationsMap = schema.tables
+        .map((table) => {
+            const entries = table.relations
+                .map((relation) => `        ${relation.name}: ${relation.kind === "one" ? "OneRelation" : "ManyRelation"}<"${relation.table}">;`)
+                .join("\n");
+
+            return entries ? `    ${table.name}: {\n${entries}\n    };` : `    ${table.name}: {};`;
+        })
+        .join("\n");
+
     return `${GENERATED_HEADER}export type TableName = ${tableNames};
 
 export type Id<TName extends string> = string & { readonly __table: TName };
@@ -243,11 +255,70 @@ export interface QueryPage<TDoc> {
     page: TDoc[];
 }
 
+/**
+ * Phantom relation descriptors. They carry the relation kind and target table
+ * as type parameters only — there is no runtime value — so the \`with\` argument
+ * and its return type can be inferred from {@link Relations}.
+ */
+export interface OneRelation<Target extends keyof DataModel> {
+    readonly __relationKind: "one";
+    readonly __target: Target;
+}
+
+export interface ManyRelation<Target extends keyof DataModel> {
+    readonly __relationKind: "many";
+    readonly __target: Target;
+}
+
+/** Per-table relation map keyed by accessor name. \`{}\` for tables with none. */
+export interface Relations {
+${relationsMap}
+}
+
+/**
+ * The \`with\` argument for table \`T\`: each relation can be \`true\` (load with no
+ * refinements) or an object. \`many\` relations accept \`where\`/\`orderBy\`/\`limit\`
+ * plus a nested \`with\`; \`one\` relations accept only a nested \`with\`. The
+ * reserved \`_count\` key requests per-relation aggregate counts.
+ */
+export type WithArg<T extends keyof DataModel> = {
+    [K in keyof Relations[T]]?: Relations[T][K] extends ManyRelation<infer Target>
+        ? boolean | (QueryArgs<Doc<Target>> & { with?: WithArg<Target> })
+        : Relations[T][K] extends OneRelation<infer Target>
+            ? boolean | { with?: WithArg<Target> }
+            : never;
+} & {
+    _count?: { [K in keyof Relations[T]]?: true };
+};
+
+/** The nested \`with\` sub-argument inside a relation's with-value, or \`{}\`. */
+type NestedWithArg<WK> = WK extends { with: infer NW } ? NW : {};
+
+/** Resolve a single relation descriptor + its with-value to the loaded type. */
+type LoadRelation<R, WK> = R extends OneRelation<infer Target>
+    ? LoadWith<Target, NestedWithArg<WK>> | null
+    : R extends ManyRelation<infer Target>
+        ? Array<LoadWith<Target, NestedWithArg<WK>>>
+        : never;
+
+/** The relation keys of \`W\` that were actually requested (not \`false\`/\`undefined\`). */
+type LoadedRelations<T extends keyof DataModel, W> = {
+    [K in keyof W as K extends keyof Relations[T] ? (W[K] extends false | undefined ? never : K) : never]: K extends keyof Relations[T]
+        ? LoadRelation<Relations[T][K], W[K]>
+        : never;
+};
+
+/** The \`_count\` projection of \`W\`, if any. */
+type LoadedCount<W> = W extends { _count: infer C } ? { _count: { [K in keyof C]: number } } : {};
+
+/** \`Doc<T>\` narrowed to exactly the relations requested in the with-arg \`W\`. */
+export type LoadWith<T extends keyof DataModel, W> = Doc<T> & LoadedRelations<T, W> & LoadedCount<W>;
+
 /** Read-only typed table accessor exposed on \`QueryCtx.db.<table>\`. */
 export interface TableReaderFacade<T extends keyof DataModel> {
     count: (where?: Where<Doc<T>>) => Promise<number>;
-    findFirst: (args?: QueryArgs<Doc<T>>) => Promise<Doc<T> | null>;
-    findMany: (args?: QueryArgs<Doc<T>>) => Promise<QueryPage<Doc<T>>>;
+    findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;
+    findMany: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<QueryPage<LoadWith<T, W>>>;
     get: (id: Id<T>) => Promise<Doc<T> | null>;
 }
 
