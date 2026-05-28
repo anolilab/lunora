@@ -1,7 +1,9 @@
 import type { ExecutionContextLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 
-export { ShardDO } from "./shard-do.js";
+import { createShardDO } from "../../cirrus/_generated/shard.js";
+
+export const ShardDO = createShardDO();
 
 interface Env {
     SHARD: ShardNamespaceLike;

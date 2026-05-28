@@ -2,9 +2,13 @@ import type { CirrusAuth } from "@cirrus/auth";
 import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
+import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
+import type { R2BucketLike } from "@cirrus/storage";
+import { createStorage } from "@cirrus/storage";
+
+import { createShardDO } from "../../cirrus/_generated/shard.js";
 
 export { SchedulerDO } from "./scheduler-do.js";
-export { ShardDO } from "./shard-do.js";
 
 interface Env {
     AUTH_SECRET?: string;
@@ -15,6 +19,29 @@ interface Env {
     SHARD: ShardNamespaceLike;
     STORAGE_SECRET?: string;
 }
+
+interface ShardEnv {
+    CIRRUS_WORKER_ORIGIN?: string;
+    FILES?: R2BucketLike;
+    PUBLIC_STORAGE_BASE_URL?: string;
+    SCHEDULER?: DurableObjectNamespaceLike;
+    STORAGE_SECRET?: string;
+}
+
+export const ShardDO = createShardDO({
+    scheduler: (env) => {
+        const shardEnv = env as ShardEnv;
+
+        return shardEnv.SCHEDULER && shardEnv.CIRRUS_WORKER_ORIGIN
+            ? createScheduler({ namespace: shardEnv.SCHEDULER, originUrl: shardEnv.CIRRUS_WORKER_ORIGIN })
+            : undefined;
+    },
+    storage: (env) => {
+        const shardEnv = env as ShardEnv;
+
+        return shardEnv.FILES ? createStorage({ bucket: shardEnv.FILES, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET }) : undefined;
+    },
+});
 
 let worker: ReturnType<typeof createWorker> | null = null;
 let auth: CirrusAuth | null = null;

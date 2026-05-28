@@ -4,10 +4,34 @@ import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@cirrus/ru
 import { createWorker } from "@cirrus/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
-import { buildSignedUrl } from "@cirrus/storage";
+import { buildSignedUrl, createStorage } from "@cirrus/storage";
+
+import { createShardDO } from "../../cirrus/_generated/shard.js";
 
 export { SchedulerDO } from "./scheduler-do.js";
-export { ShardDO } from "./shard-do.js";
+
+interface ShardEnv {
+    CIRRUS_WORKER_ORIGIN?: string;
+    FILES?: R2BucketLike;
+    PUBLIC_STORAGE_BASE_URL?: string;
+    SCHEDULER?: DurableObjectNamespaceLike;
+    STORAGE_SECRET?: string;
+}
+
+export const ShardDO = createShardDO({
+    scheduler: (env) => {
+        const shardEnv = env as ShardEnv;
+
+        return shardEnv.SCHEDULER && shardEnv.CIRRUS_WORKER_ORIGIN
+            ? createScheduler({ namespace: shardEnv.SCHEDULER, originUrl: shardEnv.CIRRUS_WORKER_ORIGIN })
+            : undefined;
+    },
+    storage: (env) => {
+        const shardEnv = env as ShardEnv;
+
+        return shardEnv.FILES ? createStorage({ bucket: shardEnv.FILES, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET }) : undefined;
+    },
+});
 
 interface Env {
     AUTH_SECRET?: string;
