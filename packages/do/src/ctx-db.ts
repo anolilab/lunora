@@ -325,7 +325,15 @@ const tableNameFromId = (sql: SqlExec, schema: SchemaLike, id: string): string |
     // table name onto the id, so we have to probe each known table. In
     // practice schemas hold a small number of tables; SQLite returns the
     // first hit fast since `id` is the primary key.
-    for (const tableName of Object.keys(schema.tables)) {
+    //
+    // `.global()` tables live in D1, not the DO — no SQLite table exists for
+    // them here, so probing one would raise `no such table`. Skip them the
+    // same way `runShardMigrations` does.
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        if (definition.shardMode?.kind === "global") {
+            continue;
+        }
+
         const row = runSql(sql, `SELECT 1 FROM ${quoteIdentifier(tableName)} WHERE id = ? LIMIT 1`, id).toArray();
 
         if (row.length > 0) {
