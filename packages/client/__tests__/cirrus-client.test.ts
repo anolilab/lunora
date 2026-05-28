@@ -6,6 +6,7 @@ import type { FunctionReference } from "../src/types.js";
 // --- Test doubles -----------------------------------------------------------
 
 interface MockSocket {
+    addEventListener: (type: string, listener: (event?: unknown) => void) => void;
     close: () => void;
     onclose?: ((event?: unknown) => void) | null;
     onerror?: ((event?: unknown) => void) | null;
@@ -38,25 +39,43 @@ const createMockWebSocket = (): typeof WebSocket => {
 
         public onerror: ((event?: unknown) => void) | null = null;
 
+        private readonly listeners = new Map<string, Array<(event?: unknown) => void>>();
+
         public constructor(url: string) {
             this.url = url;
             sockets.push(this as unknown as MockSocket);
         }
 
+        public addEventListener(type: string, listener: (event?: unknown) => void): void {
+            const existing = this.listeners.get(type) ?? [];
+
+            existing.push(listener);
+            this.listeners.set(type, existing);
+        }
+
+        private dispatch(type: string, event?: unknown): void {
+            for (const listener of this.listeners.get(type) ?? []) {
+                listener(event);
+            }
+        }
+
         public open(): void {
             this.readyState = 1;
             this.onopen?.();
+            this.dispatch("open");
         }
 
         public receive(payload: unknown): void {
             const data = typeof payload === "string" ? payload : JSON.stringify(payload);
 
             this.onmessage?.({ data });
+            this.dispatch("message", { data });
         }
 
         public triggerClose(): void {
             this.readyState = 3;
             this.onclose?.();
+            this.dispatch("close");
         }
 
         public send(data: string): void {
