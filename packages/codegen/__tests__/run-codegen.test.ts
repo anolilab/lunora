@@ -387,4 +387,32 @@ describe("emitShard", () => {
         expect(output).not.toContain("d1?:");
         expect(output).toContain('facade["messages"] = bindTable(db, "messages");');
     });
+
+    test("hoists the scheduler and threads it into createShardCtxDb for triggers", () => {
+        const schema: SchemaIR = {
+            tables: [
+                {
+                    indexes: [],
+                    name: "messages",
+                    relations: [],
+                    searchIndexes: [],
+                    shape: { text: { kind: "string" } },
+                    shardMode: "root",
+                    vectorIndexes: [],
+                },
+            ],
+            vectorIndexes: [],
+        };
+
+        const output = emitShard(schema);
+
+        // The scheduler is resolved once, typed for the ctx-db options surface.
+        expect(output).toContain("SchedulerLike");
+        expect(output).toContain("const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;");
+
+        // It is passed into the ORM writer (so DO triggers get ctx.scheduler) and reused on ctx via shorthand.
+        const dbOptions = output.slice(output.indexOf("createShardCtxDb({"), output.indexOf("createShardCtxDb({") + 400);
+
+        expect(dbOptions).toContain("scheduler,");
+    });
 });

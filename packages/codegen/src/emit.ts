@@ -568,7 +568,16 @@ export const emitShard = (schema: SchemaIR): string => {
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
 
-    const doTypeImports = ["DatabaseWriterLike", "QueryArgs", "SchemaLike", "ShardDOState", "SqlExec", "WhereInput", ...hasVectors ? ["WriteHook"] : []];
+    const doTypeImports = [
+        "DatabaseWriterLike",
+        "QueryArgs",
+        "SchedulerLike",
+        "SchemaLike",
+        "ShardDOState",
+        "SqlExec",
+        "WhereInput",
+        ...hasVectors ? ["WriteHook"] : [],
+    ];
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`,
@@ -672,6 +681,7 @@ const vectorsStub: VectorSearchLike = {
                 },
                 onRead: options.onRead,
                 onWrite,
+                scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
             }`
@@ -680,6 +690,7 @@ const vectorsStub: VectorSearchLike = {
                     this.recordChangedTable(delta.table);
                 },
                 onRead: options.onRead,
+                scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
             }`;
@@ -836,6 +847,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const userId = this.getCurrentUserId();
             const identity = this.getCurrentIdentity();
 ${vectorsBuild}
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             const db: DatabaseWriterLike = createShardCtxDb(${dbOptions});${globalDbLine}
 ${facadeBlock}
             const ctx: Record<string, unknown> = {
@@ -845,7 +857,7 @@ ${facadeBlock}
                 },
                 db,
                 fetch: globalThis.fetch.bind(globalThis),
-                scheduler: config.scheduler?.(env) ?? schedulerStub,
+                scheduler,
                 storage: config.storage?.(env) ?? storageStub,${vectorsCtxField}
             };
 

@@ -242,6 +242,30 @@ describe("discoverSchema", () => {
         expect(schema.tables[0]?.relations).toEqual([]);
     });
 
+    test("a .triggers() call is skipped without disrupting indexes/relations on the same table", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                messages: defineTable({ authorId: v.id("users"), body: v.string() })
+                    .index("by_author", ["authorId"])
+                    .relations((r) => ({ author: r.one("users", { field: "authorId" }) }))
+                    .triggers((t) => ({
+                        audit: t.afterInsert(async (ctx, e) => { await ctx.db.insert("audit", { row: e.id }); }),
+                        guard: t.beforeDelete(async () => {}),
+                    })),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const messages = schema.tables.find((table) => table.name === "messages");
+
+        expect(messages).toBeDefined();
+        // Triggers are code (closures), not IR — discovery steps over the call and the rest of the chain still parses.
+        expect(messages?.indexes).toEqual([{ fields: ["authorId"], name: "by_author", unique: false }]);
+        expect(messages?.relations).toEqual([{ field: "authorId", kind: "one", name: "author", onDelete: undefined, references: "_id", table: "users" }]);
+    });
+
     test("emits the relation type machinery and per-table Relations map", () => {
         const { project, schemaPath } = projectWith(`
             import { defineSchema, defineTable, v } from "@cirrus/server";
