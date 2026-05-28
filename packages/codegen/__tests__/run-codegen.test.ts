@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { emitShard, runCodegen } from "../src/index.js";
-import type { SchemaIR } from "../src/ir.js";
+import { emitApi, emitShard, runCodegen } from "../src/index.js";
+import type { FunctionIR, SchemaIR } from "../src/ir.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "simple");
@@ -204,6 +204,44 @@ describe("runCodegen", () => {
         } finally {
             rmSync(empty, { force: true, recursive: true });
         }
+    });
+});
+
+describe("emitApi", () => {
+    const fn = (overrides: Partial<FunctionIR>): FunctionIR => ({
+        args: {},
+        exportName: "list",
+        filePath: "posts",
+        kind: "query",
+        returnType: "unknown",
+        ...overrides,
+    });
+
+    test("imports Doc when a return type references it", () => {
+        const output = emitApi([fn({ returnType: 'Doc<"posts">[]' })]);
+
+        expect(output).toContain('import type { Doc } from "./dataModel.js";');
+        expect(output).not.toContain("import type { Id }");
+        expect(output).not.toContain("import type { Doc, Id }");
+    });
+
+    test("imports both Doc and Id when both are referenced", () => {
+        const output = emitApi([fn({ args: { id: { kind: "id", tableName: "posts" } }, returnType: 'Doc<"posts">' })]);
+
+        expect(output).toContain('import type { Doc, Id } from "./dataModel.js";');
+    });
+
+    test("imports only Id when no Doc is referenced", () => {
+        const output = emitApi([fn({ args: { id: { kind: "id", tableName: "posts" } }, returnType: "{ ok: boolean }" })]);
+
+        expect(output).toContain('import type { Id } from "./dataModel.js";');
+        expect(output).not.toContain("Doc");
+    });
+
+    test("omits the dataModel import when neither is referenced", () => {
+        const output = emitApi([fn({ returnType: "{ ok: boolean }" })]);
+
+        expect(output).not.toContain("./dataModel.js");
     });
 });
 

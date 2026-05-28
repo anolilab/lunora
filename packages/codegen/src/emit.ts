@@ -222,14 +222,19 @@ export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
     };
 
     const sortedNamespaces = [...namespaces.entries()].sort(([a], [b]) => a.localeCompare(b));
+    const body = sortedNamespaces.map((entry) => renderNamespace(entry)).join("\n");
+
+    // Import only the dataModel helpers the rendered arg/return types actually
+    // reference: `Doc` appears when a function returns documents, `Id` when it
+    // takes or returns an id. Importing an unused one trips noUnusedLocals.
+    const dataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(`\\b${name}<`, "u").test(body));
+    const dataModelImportLine = dataModelImports.length > 0 ? `\nimport type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
 
     return `${GENERATED_HEADER}import { anyApi } from "@cirrus/server/types";
 import type { FunctionReference } from "@cirrus/client";
-
-import type { Id } from "./dataModel.js";
-
+${dataModelImportLine}
 export interface ApiTypes {
-${sortedNamespaces.map((entry) => renderNamespace(entry)).join("\n")}
+${body}
 }
 
 export const api = anyApi as unknown as ApiTypes;
