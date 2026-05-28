@@ -277,12 +277,39 @@ export interface ActionCtx {
  */
 export type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValidator, unknown, FunctionKind>>>;
 
+// Cache the namespace proxies and the per-function reference objects so that
+// `api.foo.bar` returns the *same* object on every access. React hooks
+// (`useMutation`, `useQuery`) put the reference in dependency arrays; a fresh
+// identity per render would re-run effects every render and loop forever.
+const namespaceCache = new Map<PropertyKey, Record<string, unknown>>();
+
 export const anyApi: AnyApi = new Proxy({} as AnyApi, {
-    get(_target, namespace: string) {
-        return new Proxy({} as Record<string, unknown>, {
-            get(_inner, functionName: string) {
-                return { __cirrusRef: `${namespace}:${functionName}` };
+    get(_target, namespace: PropertyKey) {
+        const cached = namespaceCache.get(namespace);
+
+        if (cached) {
+            return cached;
+        }
+
+        const refCache = new Map<PropertyKey, { __cirrusRef: string }>();
+        const nsProxy = new Proxy({} as Record<string, unknown>, {
+            get(_inner, functionName: PropertyKey) {
+                const cachedRef = refCache.get(functionName);
+
+                if (cachedRef) {
+                    return cachedRef;
+                }
+
+                const ref = { __cirrusRef: `${String(namespace)}:${String(functionName)}` };
+
+                refCache.set(functionName, ref);
+
+                return ref;
             },
         });
+
+        namespaceCache.set(namespace, nsProxy);
+
+        return nsProxy;
     },
 });
