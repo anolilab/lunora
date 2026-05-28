@@ -1,7 +1,48 @@
 import type { CallExpression, Expression, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
-import type { ValidatorIR } from "./ir.js";
+import type { ColumnMetaIR, ValidatorIR } from "./ir.js";
+
+/**
+ * Column-modifier methods that hang off a base `v.*` validator inside
+ * `defineTable`. They unwrap to the base validator's IR with the constraint
+ * recorded under `column`, rather than counting as their own validator kind.
+ */
+const COLUMN_MODIFIERS = new Set(["$defaultFn", "$onUpdateFn", "default", "nullable", "unique"]);
+
+const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR => {
+    const column: ColumnMetaIR = { notNull: true, ...base.column };
+
+    switch (modifier) {
+        case "$defaultFn":
+        case "default": {
+            column.hasDefault = true;
+
+            break;
+        }
+        case "$onUpdateFn": {
+            column.hasOnUpdate = true;
+
+            break;
+        }
+        case "nullable": {
+            column.notNull = false;
+
+            break;
+        }
+        case "unique": {
+            column.unique = true;
+
+            break;
+        }
+        default: {
+            // The caller only routes known modifiers here; ignore anything else.
+            break;
+        }
+    }
+
+    return { ...base, column };
+};
 
 /**
  * Convert a v.* call expression (or any other expression) into a {@link ValidatorIR}.
@@ -45,6 +86,13 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
 
     const member = callee.getName();
     const args = call.getArguments();
+
+    if (COLUMN_MODIFIERS.has(member)) {
+        const receiver = callee.getExpression();
+        const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
+
+        return applyColumnModifier(base, member);
+    }
 
     switch (member) {
         case "any":

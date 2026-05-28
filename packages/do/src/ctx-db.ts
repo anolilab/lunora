@@ -27,7 +27,12 @@
  * stop typing the string at all.
  */
 
+import type { QueryArgs, QueryPage } from "./query-args.js";
+import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
+import { ConflictError } from "./transaction.js";
 import type { MutationDelta } from "./types.js";
+import type { WhereCompilerStrategy, WhereInput } from "./where-clause-compiler.js";
+import { compileWhere } from "./where-clause-compiler.js";
 
 /**
  * Structural projection of `state.storage.sql` (workerd's SqlStorage). We
@@ -64,7 +69,23 @@ export interface IndexDefinitionLike {
     readonly unique?: boolean;
 }
 
+/**
+ * Column constraints/defaults the write layer honors, mirrored structurally
+ * from `@cirrus/values`' `ColumnMeta` (kept local so this package doesn't take
+ * a runtime dependency on the validator package — same reasoning as
+ * {@link SchemaLike}). Populated on the live validator's `_meta.column` and
+ * read through here when the generated `shard.ts` hands us the real schema.
+ */
+export interface ColumnMetaLike {
+    readonly defaultFn?: () => unknown;
+    readonly defaultValue?: unknown;
+    readonly notNull?: boolean;
+    readonly onUpdateFn?: () => unknown;
+    readonly unique?: boolean;
+}
+
 export interface ValidatorLike {
+    readonly _meta?: { readonly column?: ColumnMetaLike };
     readonly kind?: string;
 }
 
@@ -92,10 +113,18 @@ export interface WriteEvent {
  */
 export type WriteHook = (event: WriteEvent) => Promise<void> | void;
 
+/**
+ * Notified with each table a handler reads (via `db.query(table)` or
+ * `db.get(id)`). The shard uses this to discover, at runtime, which tables a
+ * subscription's query depends on so it can re-run only the affected ones.
+ */
+export type ReadHook = (table: string) => void;
+
 export interface CtxDbOptions {
     broadcast?: BroadcastDelta;
     clock?: Clock;
     idGenerator?: IdGenerator;
+    onRead?: ReadHook;
     onWrite?: WriteHook;
     schema: SchemaLike;
     sql: SqlExec;
@@ -118,7 +147,10 @@ export interface TableReaderLike {
 }
 
 export interface DatabaseWriterLike {
+    count: (tableName: string, where?: WhereInput) => Promise<number>;
     delete: (id: string) => Promise<void>;
+    findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
+    findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
@@ -336,6 +368,77 @@ const serializeSqlValue = (value: unknown): unknown => {
     return JSON.stringify(value);
 };
 
+/** DO dialect: fields resolve through `json_extract`; values via {@link serializeSqlValue}. */
+const doWhereStrategy: WhereCompilerStrategy = { fieldRef: jsonPath, serialize: serializeSqlValue };
+
+/** A table's fields paired with their column meta, skipping fields that declare none. */
+const tableColumns = (definition: TableDefinitionLike): Array<[string, ColumnMetaLike]> => {
+    const columns: Array<[string, ColumnMetaLike]> = [];
+
+    for (const [field, validator] of Object.entries(definition.shape)) {
+        const column = validator._meta?.column;
+
+        if (column) {
+            columns.push([field, column]);
+        }
+    }
+
+    return columns;
+};
+
+/**
+ * Fill any field absent from `document` that declares a `.default()` literal or
+ * `.$defaultFn()` factory. The factory wins when both are present; a literal is
+ * applied on presence (`"defaultValue" in column`), so `null`/`false`/`0`
+ * defaults survive.
+ */
+const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<string, unknown>): Record<string, unknown> => {
+    const result = { ...document };
+
+    for (const [field, column] of tableColumns(definition)) {
+        if (result[field] !== undefined) {
+            continue;
+        }
+
+        if (column.defaultFn) {
+            result[field] = column.defaultFn();
+        } else if ("defaultValue" in column) {
+            result[field] = column.defaultValue;
+        }
+    }
+
+    return result;
+};
+
+/**
+ * Recompute every `.$onUpdateFn()` field the caller did not set explicitly,
+ * mutating `target` in place — so timestamps refresh on `patch`/`replace`
+ * unless the caller overrode them.
+ */
+const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string, unknown>, target: Record<string, unknown>): void => {
+    for (const [field, column] of tableColumns(definition)) {
+        if (column.onUpdateFn && !(field in provided)) {
+            target[field] = column.onUpdateFn();
+        }
+    }
+};
+
+/** workerd and node:sqlite both phrase a UNIQUE-index breach as "UNIQUE constraint failed". */
+const isUniqueViolation = (error: unknown): boolean => error instanceof Error && /unique constraint failed/i.test(error.message);
+
+/** Run a write, remapping a UNIQUE-index breach to a {@link ConflictError} (code `CONFLICT`, 409). */
+const runWrite = (sql: SqlExec, table: string, query: string, ...params: unknown[]): void => {
+    try {
+        runSql(sql, query, ...params);
+    } catch (error) {
+        if (isUniqueViolation(error)) {
+            throw new ConflictError(`unique constraint violation on "${table}"`);
+        }
+
+        throw error;
+    }
+};
+
 const tableNameFromId = (sql: SqlExec, schema: SchemaLike, id: string): string | undefined => {
     // The adapter stores `id` as TEXT in every table; we don't tag the
     // table name onto the id, so we have to probe each known table. In
@@ -364,6 +467,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
+    const onRead = options.onRead ?? (() => undefined);
     const onWrite = options.onWrite ?? (() => undefined);
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
@@ -376,6 +480,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 return null;
             }
 
+            onRead(tableName);
+
             const cursor = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
             const rows = cursor.toArray();
 
@@ -383,21 +489,113 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         query(tableName) {
+            onRead(tableName);
+
             return buildReader(sql, schema, tableName);
         },
 
-        async insert(tableName, document) {
+        async findMany(tableName, args = {}) {
             if (!schema.tables[tableName]) {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const id = typeof document["_id"] === "string" ? (document["_id"] as string) : generateId();
-            const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
+            onRead(tableName);
 
-            const docWithMeta: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
+            const orderKeys = normalizeOrderKeys(args.orderBy);
+            const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
-            runSql(
+            let predicate: WhereInput | undefined = args.where;
+
+            if (seek) {
+                predicate = predicate ? { AND: [predicate, seek] } : seek;
+            }
+
+            const { params, sql: whereSql } = compileWhere(predicate, doWhereStrategy);
+
+            let querySql = `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`;
+
+            if (whereSql) {
+                querySql += ` WHERE ${whereSql}`;
+            }
+
+            querySql += ` ORDER BY ${compileOrderBy(orderKeys, jsonPath)}`;
+
+            const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
+
+            if (limit !== undefined) {
+                // Over-fetch by one row to learn whether another page exists
+                // without issuing a second query.
+                querySql += ` LIMIT ${limit + 1}`;
+            }
+
+            const rows = runSql(sql, querySql, ...params).toArray();
+            const docs: Array<Record<string, unknown>> = [];
+
+            for (const row of rows) {
+                const doc = rowToDoc(row);
+
+                if (doc) {
+                    docs.push(doc);
+                }
+            }
+
+            if (limit === undefined) {
+                return { continueCursor: null, isDone: true, page: docs };
+            }
+
+            const hasMore = docs.length > limit;
+            const page = hasMore ? docs.slice(0, limit) : docs;
+            const last = page.at(-1);
+
+            return {
+                continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
+                isDone: !hasMore,
+                page,
+            };
+        },
+
+        async findFirst(tableName, args = {}) {
+            const result = await writer.findMany(tableName, { ...args, limit: 1 });
+
+            return result.page[0] ?? null;
+        },
+
+        async count(tableName, where) {
+            if (!schema.tables[tableName]) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            onRead(tableName);
+
+            const { params, sql: whereSql } = compileWhere(where, doWhereStrategy);
+
+            let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
+
+            if (whereSql) {
+                querySql += ` WHERE ${whereSql}`;
+            }
+
+            const row = runSql<{ count: number }>(sql, querySql, ...params).one();
+
+            return Number(row.count);
+        },
+
+        async insert(tableName, document) {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            const withDefaults = applyInsertDefaults(definition, document);
+            const id = typeof withDefaults["_id"] === "string" ? (withDefaults["_id"] as string) : generateId();
+            const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"] as number) : clock();
+
+            const docWithMeta: Record<string, unknown> = { ...withDefaults, _id: id, _creationTime: creationTime };
+
+            runWrite(
                 sql,
+                tableName,
                 `INSERT INTO ${quoteIdentifier(tableName)} (id, _creationTime, ${DOC_COLUMN}) VALUES (?, ?, ?)`,
                 id,
                 creationTime,
@@ -425,7 +623,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const merged = { ...existing, ...patch, _id: id };
 
-            runSql(sql, `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ?`, JSON.stringify(merged), id);
+            applyOnUpdate(schema.tables[tableName]!, patch, merged);
+
+            runWrite(sql, tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ?`, JSON.stringify(merged), id);
 
             broadcast({ table: tableName, op: "update", key: id, row: merged });
             await onWrite({ op: "update", table: tableName, id, doc: merged });
@@ -441,8 +641,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
-            runSql(
+            applyOnUpdate(schema.tables[tableName]!, document, replaced);
+
+            runWrite(
                 sql,
+                tableName,
                 `UPDATE ${quoteIdentifier(tableName)} SET _creationTime = ?, ${DOC_COLUMN} = ? WHERE id = ?`,
                 creationTime,
                 JSON.stringify(replaced),
@@ -497,6 +700,19 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
             const expressions = index.fields.map(jsonPath).join(", ");
             const uniqueClause = index.unique ? "UNIQUE" : "";
             const indexSql = `CREATE ${uniqueClause} INDEX IF NOT EXISTS ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableName)} (${expressions})`;
+
+            runSql(sql, indexSql);
+        }
+
+        // `.unique()` columns synthesize a UNIQUE expression index so SQLite
+        // enforces the constraint; the write layer maps breaches to ConflictError.
+        for (const [field, column] of tableColumns(definition)) {
+            if (!column.unique) {
+                continue;
+            }
+
+            const indexName = `${tableName}_unique_${field}`;
+            const indexSql = `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableName)} (${jsonPath(field)})`;
 
             runSql(sql, indexSql);
         }

@@ -1,6 +1,18 @@
 export interface SubscriptionQuery {
     args?: Record<string, unknown>;
-    table: string;
+    /**
+     * `<file>:<function>` identifier of the query to re-run server-side when
+     * a write touches a table it reads. Present on subscriptions that opt into
+     * server re-execution; absent on legacy delta-only subscriptions, which
+     * are matched by {@link table} alone.
+     */
+    functionPath?: string;
+    /**
+     * Table name the legacy raw-delta fan-out path matches against. Kept for
+     * `broadcastDelta`; the server re-execution path keys off
+     * {@link functionPath} instead.
+     */
+    table?: string;
 }
 
 export interface SubscriptionEnvelope {

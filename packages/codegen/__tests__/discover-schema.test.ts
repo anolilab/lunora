@@ -158,6 +158,34 @@ describe("discoverSchema", () => {
         ]);
     });
 
+    test("captures column modifiers into the field IR (and a chain no longer throws)", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({
+                    title: v.string().unique(),
+                    priority: v.string().unique().default("medium"),
+                    createdAt: v.number().$defaultFn(() => Date.now()),
+                    updatedAt: v.number().$onUpdateFn(() => Date.now()),
+                    note: v.string().nullable(),
+                    plain: v.string(),
+                }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const todos = schema.tables.find((table) => table.name === "todos");
+
+        expect(todos?.shape.title).toEqual({ column: { notNull: true, unique: true }, kind: "string" });
+        expect(todos?.shape.priority).toEqual({ column: { hasDefault: true, notNull: true, unique: true }, kind: "string" });
+        expect(todos?.shape.createdAt).toEqual({ column: { hasDefault: true, notNull: true }, kind: "number" });
+        expect(todos?.shape.updatedAt).toEqual({ column: { hasOnUpdate: true, notNull: true }, kind: "number" });
+        expect(todos?.shape.note).toEqual({ column: { notNull: false }, kind: "string" });
+        // A bare validator carries no column metadata.
+        expect(todos?.shape.plain).toEqual({ kind: "string" });
+    });
+
     test("emits a VectorIndexName union covering both shapes", () => {
         const { project, schemaPath } = projectWith(`
             import { defineSchema, defineTable, defineVectorIndex, v } from "@cirrus/server";

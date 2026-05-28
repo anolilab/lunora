@@ -56,6 +56,22 @@ export interface HibernatableWebSocket {
 }
 
 /**
+ * Result of re-running a subscription's query. `tables` is the set of tables
+ * the query touched (discovered at runtime via the db adapter's `onRead`
+ * hook) — the shard uses it to decide which writes should trigger a re-run.
+ */
+export interface SubscriptionOutcome {
+    result: unknown;
+    tables: Set<string>;
+}
+
+/** Per-subscription memo used to suppress no-op pushes. */
+interface SubscriptionMemo {
+    lastJson: string;
+    tables: Set<string>;
+}
+
+/**
  * Threshold at which a `__root__` DO triggers the size warning. 1 GiB —
  * exactly 10% of the 10 GiB per-DO SQLite ceiling, leaving plenty of runway
  * to plan a `.shardBy()` migration before the wall hits.
@@ -139,6 +155,23 @@ export abstract class ShardDO {
      * worker. Surfaced to handlers via {@link getCurrentIdentity}.
      */
     private currentRequestIdentity: Record<string, unknown> | undefined;
+
+    /**
+     * Tables written during the in-flight RPC, accumulated by
+     * {@link recordChangedTable}. Drained after `handleRpc` returns to drive
+     * {@link refreshSubscriptions}. `null` when no write has happened yet so
+     * the common read-only path allocates nothing.
+     */
+    private pendingChangedTables: Set<string> | null = null;
+
+    /**
+     * Last pushed result per `(socket, subId)`, keyed by socket. Lets
+     * {@link refreshSubscriptions} skip re-running queries whose tables were
+     * untouched and suppress pushes when the re-run result is unchanged. Held
+     * in memory only — it does not survive hibernation, which is safe: a cold
+     * memo simply forces one re-run and (at most) one redundant push.
+     */
+    private readonly subMemos = new WeakMap<WebSocket, Map<string, SubscriptionMemo>>();
 
     constructor(state: ShardDOState, env: unknown) {
         this.state = state;
@@ -284,7 +317,13 @@ export abstract class ShardDO {
                 // cheap stat call, not a full table scan.
                 this.maybeWarnRootSize();
 
-                return jsonResponse({ result }, 200, this.currentResponseBookmark);
+                // Snapshot the response before re-running subscriptions so the
+                // bookmark captured by the handler is preserved verbatim.
+                const response = jsonResponse({ result }, 200, this.currentResponseBookmark);
+
+                await this.flushChangedTables();
+
+                return response;
             } catch (error: unknown) {
                 return this.errorToResponse(error);
             } finally {
@@ -419,6 +458,20 @@ export abstract class ShardDO {
             this.subscribe(ws, envelope.id, envelope.query);
             ws.send(JSON.stringify({ type: "ack", id: envelope.id }));
 
+            // Seed the subscriber with the query's current result so the first
+            // value arrives over the same channel as later updates. When the
+            // subclass doesn't support re-execution (base default), this is a
+            // no-op and the subscriber relies on its initial HTTP query.
+            const { functionPath } = envelope.query;
+
+            if (functionPath) {
+                const outcome = await this.executeSubscription(functionPath, envelope.query.args ?? {});
+
+                if (outcome) {
+                    this.pushSubscriptionData(ws, envelope.id, outcome);
+                }
+            }
+
             return;
         }
 
@@ -468,6 +521,7 @@ export abstract class ShardDO {
 
         delete attachment.subs[subId];
         (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+        this.subMemos.get(ws)?.delete(subId);
     }
 
     /**
@@ -536,6 +590,123 @@ export abstract class ShardDO {
                     /* socket may have been closed mid-broadcast */
                 }
             }
+        }
+    }
+
+    /**
+     * Re-run a subscription's query and return its current result alongside
+     * the set of tables it read. The base class can't dispatch user functions,
+     * so it returns `null` — the codegen-generated subclass overrides this to
+     * run the handler from the project's function registry. Returning `null`
+     * disables server re-execution and leaves the legacy {@link broadcastDelta}
+     * path as the only live-update mechanism.
+     */
+    protected executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        void functionPath;
+        void args;
+
+        return Promise.resolve(null);
+    }
+
+    /**
+     * Record that `table` was written during the current RPC. Wired into the
+     * db adapter's `broadcast` callback by the generated subclass so that
+     * {@link flushChangedTables} can re-run only the affected subscriptions.
+     */
+    protected recordChangedTable(table: string): void {
+        this.pendingChangedTables ??= new Set<string>();
+        this.pendingChangedTables.add(table);
+    }
+
+    /**
+     * Drain the tables written during the in-flight RPC and re-run every
+     * subscription that depends on one of them. Called after `handleRpc`
+     * resolves. No-op when nothing was written.
+     */
+    private async flushChangedTables(): Promise<void> {
+        const changed = this.pendingChangedTables;
+
+        this.pendingChangedTables = null;
+
+        if (!changed || changed.size === 0) {
+            return;
+        }
+
+        // Subscriptions are established over the WS handshake, which doesn't
+        // resolve identity — they're anonymous. Re-running their queries with
+        // the *mutating* request's identity would leak that user's view to
+        // every subscriber, so we drop the request identity before re-running.
+        this.currentRequestUserId = undefined;
+        this.currentRequestIdentity = undefined;
+
+        await this.refreshSubscriptions(changed);
+    }
+
+    /**
+     * For every live subscription whose query reads one of `changed`, re-run
+     * the query and push a fresh `{ type: "data" }` frame when the result
+     * differs from the last one sent. Subscriptions with no `functionPath`
+     * (legacy delta-only) are left to {@link broadcastDelta}.
+     */
+    private async refreshSubscriptions(changed: Set<string>): Promise<void> {
+        for (const ws of this.state.getWebSockets()) {
+            const attachment = this.readAttachment(ws);
+
+            for (const [subId, query] of Object.entries(attachment.subs)) {
+                const { functionPath } = query;
+
+                if (!functionPath) {
+                    continue;
+                }
+
+                const memo = this.subMemos.get(ws)?.get(subId);
+
+                // Skip when we already know this subscription's tables and none
+                // of them changed. A missing memo means "unknown deps" — re-run
+                // to be safe.
+                if (memo && !setsIntersect(memo.tables, changed)) {
+                    continue;
+                }
+
+                const outcome = await this.executeSubscription(functionPath, query.args ?? {});
+
+                if (!outcome) {
+                    continue;
+                }
+
+                this.pushSubscriptionData(ws, subId, outcome);
+            }
+        }
+    }
+
+    /**
+     * Memoise `outcome` for `(ws, subId)` and push it to the socket, unless an
+     * identical result was already sent. Always refreshes the memo's table set
+     * so dependency tracking stays current even when the value is unchanged.
+     */
+    private pushSubscriptionData(ws: WebSocket, subId: string, outcome: SubscriptionOutcome): void {
+        let memos = this.subMemos.get(ws);
+
+        if (!memos) {
+            memos = new Map<string, SubscriptionMemo>();
+            this.subMemos.set(ws, memos);
+        }
+
+        const json = JSON.stringify(outcome.result ?? null);
+        const existing = memos.get(subId);
+
+        if (existing?.lastJson === json) {
+            existing.tables = outcome.tables;
+
+            return;
+        }
+
+        memos.set(subId, { lastJson: json, tables: outcome.tables });
+
+        try {
+            ws.send(`{"type":"data","id":${JSON.stringify(subId)},"data":${json}}`);
+        } catch {
+            /* socket may have been closed between checks */
         }
     }
 
@@ -619,6 +790,20 @@ export abstract class ShardDO {
         return { subs: {} };
     }
 }
+
+/** True when `a` and `b` share at least one element. */
+const setsIntersect = (a: Set<string>, b: Set<string>): boolean => {
+    // Iterate the smaller set for fewer lookups.
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+
+    for (const value of small) {
+        if (large.has(value)) {
+            return true;
+        }
+    }
+
+    return false;
+};
 
 const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
     const headers: Record<string, string> = { "content-type": "application/json" };

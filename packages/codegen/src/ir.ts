@@ -1,5 +1,23 @@
+/**
+ * AST-observable subset of a column's modifier chain (`.unique()`, `.default()`,
+ * …). Function-valued modifiers (`.$defaultFn`/`.$onUpdateFn`) can't be
+ * serialized, so only their *presence* is recorded.
+ */
+export interface ColumnMetaIR {
+    /** `.default(...)` or `.$defaultFn(...)` present — field is optional on insert. */
+    hasDefault?: boolean;
+    /** `.$onUpdateFn(...)` present. */
+    hasOnUpdate?: boolean;
+    /** Default `true`; `.nullable()` flips it to `false`. */
+    notNull: boolean;
+    /** `.unique()` present. */
+    unique?: boolean;
+}
+
 /** Reflective representation of a single validator call from the schema. */
 export interface ValidatorIR {
+    /** Column modifiers (`.unique()`, `.default()`, `.nullable()`, …) when present. */
+    column?: ColumnMetaIR;
     /** For `v.optional(inner)` / `v.array(inner)`. */
     inner?: ValidatorIR;
     /** For `v.record(key, value)`. */
