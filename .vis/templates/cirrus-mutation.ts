@@ -12,10 +12,10 @@ export default createTemplate({
     },
     options: {
         fileNameCase: {
-            choices: FILE_NAME_CASE_VALUES,
             default: "camel",
             prompt: "Filename case (camel, kebab, pascal, snake) — the export stays camelCase",
-            type: "string",
+            type: "enum",
+            values: [...FILE_NAME_CASE_VALUES],
         },
         name: {
             prompt: "Mutation name (camelCased for the export; filename uses --fileNameCase)",
