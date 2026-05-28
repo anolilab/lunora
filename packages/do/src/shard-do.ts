@@ -1,6 +1,8 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { drizzle as drizzleDO, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
+import type { SqlExec } from "./ctx-db.js";
+import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 import { ConflictError, type TransactionSqlLike } from "./transaction.js";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
 
@@ -301,6 +303,13 @@ export abstract class ShardDO {
                 return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
             }
 
+            // Reserved admin-introspection RPCs are intercepted before user
+            // dispatch — they read raw SQLite directly rather than running a
+            // registered function, and carry their own bearer-token gate.
+            if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+                return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
+            }
+
             // Stash the inbound D1 bookmark and identity headers for the
             // duration of the handler call so getters return the right
             // values. Cleared on exit so the next request starts fresh.
@@ -435,6 +444,60 @@ export abstract class ShardDO {
         const message = error instanceof Error ? error.message : "unknown error";
 
         return jsonResponse({ error: { code: "RPC_FAILED", message } }, 500);
+    }
+
+    /**
+     * Serve a reserved admin-introspection RPC (`__cirrus_admin__:*`) for the
+     * data browser. Gated by `env.CIRRUS_ADMIN_TOKEN`: introspection is
+     * **disabled unless the token is configured**, and when it is, the request
+     * must present a matching `Authorization: Bearer` header. The blast radius
+     * is raw table contents, so the default is closed — unlike the WebSocket
+     * upgrade gate, which defaults open for local dev.
+     */
+    private handleAdminRpc(request: Request, functionPath: string, args: Record<string, unknown>): Response {
+        if (!this.isAdminAuthorized(request)) {
+            return jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "admin introspection is disabled or the bearer token is invalid" } }, 403);
+        }
+
+        const sql = this.state.storage.sql as unknown as SqlExec;
+
+        try {
+            if (functionPath === ADMIN_FUNCTIONS.listTables) {
+                return jsonResponse({ result: listTables(sql) }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
+                const page = readTablePage(sql, {
+                    limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+                    offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
+                    table: typeof args["table"] === "string" ? args["table"] : "",
+                });
+
+                return jsonResponse({ result: page }, 200);
+            }
+
+            return jsonResponse({ error: { code: "UNKNOWN_ADMIN_OP", message: `unknown admin op: ${functionPath}` } }, 404);
+        } catch (error: unknown) {
+            return this.errorToResponse(error);
+        }
+    }
+
+    /**
+     * Constant-time bearer check against `env.CIRRUS_ADMIN_TOKEN`. Returns
+     * `false` (closed) when the token is unset so admin introspection is
+     * opt-in rather than exposed by default.
+     */
+    private isAdminAuthorized(request: Request): boolean {
+        const env = (this.env ?? {}) as { CIRRUS_ADMIN_TOKEN?: string };
+        const token = env.CIRRUS_ADMIN_TOKEN;
+
+        if (!token || token.length === 0) {
+            return false;
+        }
+
+        const supplied = extractBearerToken(request.headers.get("authorization"));
+
+        return supplied !== undefined && constantTimeEqual(supplied, token);
     }
 
     /**

@@ -19,6 +19,8 @@ export type {
     WriteHook,
 } from "./ctx-db.js";
 export { createShardCtxDb, runShardMigrations } from "./ctx-db.js";
+export type { ReadTablePageOptions, TableInfo, TablePage } from "./introspect.js";
+export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args.js";
 export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations.js";
