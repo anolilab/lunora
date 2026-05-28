@@ -27,6 +27,14 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         return { objects: result.objects, cursor: result.cursor };
     };
 
+    const getUrl = (key: string): string => {
+        if (!options.publicBaseUrl) {
+            throw new Error("@cirrus/storage: `publicBaseUrl` is required for getUrl()");
+        }
+
+        return `${options.publicBaseUrl.replace(/\/+$/, "")}/${key}`;
+    };
+
     const getSignedUrl = async (key: string, signedOpts: SignedUrlOptions = {}): Promise<string> => {
         if (!options.publicBaseUrl) {
             throw new Error("@cirrus/storage: `publicBaseUrl` is required for getSignedUrl()");
@@ -45,5 +53,5 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         });
     };
 
-    return { upload, download, delete: deleteObject, list, getSignedUrl };
+    return { upload, download, delete: deleteObject, list, getUrl, getSignedUrl };
 };

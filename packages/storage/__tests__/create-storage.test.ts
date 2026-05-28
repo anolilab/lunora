@@ -99,6 +99,20 @@ describe("createStorage", () => {
         expect(result.cursor).toBe("next-cursor");
     });
 
+    test("getUrl() requires publicBaseUrl", () => {
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        expect(() => storage.getUrl("x")).toThrow(/publicBaseUrl/);
+    });
+
+    test("getUrl() joins the base URL and key, trimming trailing slashes", () => {
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, publicBaseUrl: "https://cdn.test/" });
+
+        expect(storage.getUrl("uploads/x.png")).toBe("https://cdn.test/uploads/x.png");
+    });
+
     test("getSignedUrl() requires publicBaseUrl + signingSecret", async () => {
         const bucket = fakeBucket();
         const storage = createStorage({ bucket });
