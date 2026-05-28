@@ -145,12 +145,38 @@ export interface DatabaseReader {
     query: <T extends string>(tableName: T) => TableReader;
 }
 
+/** Options for {@link TableReader.paginate} — Convex-compatible page request. */
+export interface PaginationOptions {
+    /** Opaque cursor from the prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+    /** Maximum rows to return for this page. */
+    numItems: number;
+}
+
+/** One page of a keyset-paginated query. */
+export interface PaginationResult<T = Record<string, unknown>> {
+    /** Cursor to pass back for the next page, or `null` once `isDone`. */
+    continueCursor: null | string;
+    /** `true` when this page is the last one. */
+    isDone: boolean;
+    page: T[];
+}
+
 export interface TableReader {
     collect: () => Promise<Array<Record<string, unknown>>>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReader;
     first: () => Promise<Record<string, unknown> | null>;
+    paginate: (options: PaginationOptions) => Promise<PaginationResult>;
     take: (limit: number) => Promise<Array<Record<string, unknown>>>;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader;
+    /**
+     * Restrict the query to a declared `.searchIndex()`. The builder's
+     * `.search(field, query)` runs a full-text match against the index's
+     * searchable field; `.eq(field, value)` narrows by a declared filter
+     * field. Results come back ordered by relevance — pair with `.take(n)`
+     * (`.paginate()` is not supported on a search query).
+     */
+    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader;
 }
 
 export interface IndexRangeBuilder {
@@ -159,6 +185,14 @@ export interface IndexRangeBuilder {
     gte: (field: string, value: unknown) => IndexRangeBuilder;
     lt: (field: string, value: unknown) => IndexRangeBuilder;
     lte: (field: string, value: unknown) => IndexRangeBuilder;
+}
+
+/** Builder passed to {@link TableReader.withSearchIndex}; mirrors Convex's search query. */
+export interface SearchFilterBuilder {
+    /** Narrow by a declared filter field (exact match). */
+    eq: (field: string, value: unknown) => SearchFilterBuilder;
+    /** Full-text match `query` against the index's searchable `field`. Call exactly once. */
+    search: (field: string, query: string) => SearchFilterBuilder;
 }
 
 export interface DatabaseWriter extends DatabaseReader {

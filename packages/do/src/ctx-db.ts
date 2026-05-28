@@ -27,7 +27,7 @@
  * stop typing the string at all.
  */
 
-import type { QueryArgs, QueryPage } from "./query-args.js";
+import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
 import type { RelationDefinitionLike } from "./relations.js";
 import { applyOnDelete, resolveWith } from "./relations.js";
@@ -66,6 +66,7 @@ export interface SchemaLike {
 export interface TableDefinitionLike {
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly relationMap?: Record<string, RelationDefinitionLike>;
+    readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
     readonly shape: Record<string, ValidatorLike>;
     readonly shardMode?: { kind: "global" | "root" | "shardBy" };
     readonly triggerMap?: Record<string, TriggerDefinitionLike>;
@@ -75,6 +76,12 @@ export interface IndexDefinitionLike {
     readonly fields: ReadonlyArray<string>;
     readonly name: string;
     readonly unique?: boolean;
+}
+
+export interface SearchIndexDefinitionLike {
+    readonly field: string;
+    readonly filterFields?: ReadonlyArray<string>;
+    readonly name: string;
 }
 
 /**
@@ -161,12 +168,27 @@ export interface IndexRangeBuilderLike {
     lte: (field: string, value: unknown) => IndexRangeBuilderLike;
 }
 
+export interface SearchFilterBuilderLike {
+    eq: (field: string, value: unknown) => SearchFilterBuilderLike;
+    search: (field: string, query: string) => SearchFilterBuilderLike;
+}
+
+/** Options accepted by {@link TableReaderLike.paginate} — Convex-compatible. */
+export interface PaginationOptions {
+    /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+    /** Maximum rows to return for this page. */
+    numItems: number;
+}
+
 export interface TableReaderLike {
     collect: () => Promise<Array<Record<string, unknown>>>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;
+    paginate: (options: PaginationOptions) => Promise<QueryPage>;
     take: (limit: number) => Promise<Array<Record<string, unknown>>>;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilderLike) => IndexRangeBuilderLike) => TableReaderLike;
+    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
 }
 
 export interface DatabaseWriterLike {
@@ -207,6 +229,109 @@ const jsonPath = (field: string): string => {
     return `json_extract(${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
 };
 
+/**
+ * Name of the FTS5 shadow table backing a search index. Kept distinct from any
+ * user table (the `__fts_` infix is reserved) so `runShardMigrations` can create
+ * it alongside the document table without collision.
+ */
+const ftsTableName = (table: string, indexName: string): string => `${table}__fts_${indexName}`;
+
+/**
+ * Split a search string into lowercased alphanumeric tokens. The Unicode
+ * `\p{L}\p{N}` class guarantees tokens carry no SQL/FTS metacharacters, so they
+ * need no escaping beyond the literal-phrase quoting {@link buildFtsMatch} adds.
+ */
+const tokenizeSearch = (query: string): string[] => query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+
+/**
+ * Render tokens as an FTS5 MATCH expression: each token is a quoted literal
+ * phrase (neutralizes reserved words), the final token gains a trailing `*` for
+ * prefix matching (asterisk outside the quotes), and they AND together so every
+ * token must be present — mirroring the fallback scorer's conjunction semantics.
+ */
+const buildFtsMatch = (tokens: ReadonlyArray<string>): string =>
+    tokens.map((token, index) => index === tokens.length - 1 ? `"${token}"*` : `"${token}"`).join(" AND ");
+
+/** Coerce a search/filter field value to the text FTS indexes and the scorer scans. */
+const stringifySearchText = (value: unknown): string => {
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (value === null || value === undefined) {
+        return "";
+    }
+
+    return String(value);
+};
+
+/**
+ * Score a document's indexed text against the query tokens with AND semantics:
+ * every non-final token must appear exactly, the final token matches as a
+ * prefix. Returns 0 (no match) unless all tokens are present; otherwise the sum
+ * of occurrences, giving a coarse term-frequency relevance order for the
+ * LIKE-scan fallback used when FTS5 is unavailable.
+ */
+const scoreDoc = (text: string, tokens: ReadonlyArray<string>): number => {
+    const docTokens = tokenizeSearch(text);
+
+    if (docTokens.length === 0) {
+        return 0;
+    }
+
+    let score = 0;
+
+    for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index]!;
+        const isLast = index === tokens.length - 1;
+        let occurrences = 0;
+
+        for (const docToken of docTokens) {
+            if (isLast ? docToken.startsWith(token) : docToken === token) {
+                occurrences += 1;
+            }
+        }
+
+        if (occurrences === 0) {
+            return 0;
+        }
+
+        score += occurrences;
+    }
+
+    return score;
+};
+
+/**
+ * Memoized per-`SqlExec` FTS5 capability probe. Cloudflare Durable Objects ship
+ * SQLite with FTS5; `node:sqlite` (used in tests) does not. We create and drop a
+ * throwaway virtual table once per handle and cache the result — the DO's `sql`
+ * object is stable for the object's lifetime, so this runs at most once per DO.
+ */
+const ftsAvailabilityCache = new WeakMap<SqlExec, boolean>();
+
+const isFtsAvailable = (sql: SqlExec): boolean => {
+    const cached = ftsAvailabilityCache.get(sql);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    let available: boolean;
+
+    try {
+        runSql(sql, `CREATE VIRTUAL TABLE IF NOT EXISTS "__cirrus_fts_probe" USING fts5(x)`);
+        runSql(sql, `DROP TABLE IF EXISTS "__cirrus_fts_probe"`);
+        available = true;
+    } catch {
+        available = false;
+    }
+
+    ftsAvailabilityCache.set(sql, available);
+
+    return available;
+};
+
 const rowToDoc = (row: Record<string, unknown> | undefined): Record<string, unknown> | null => {
     if (!row) {
         return null;
@@ -238,10 +363,20 @@ const rowToDoc = (row: Record<string, unknown> | undefined): Record<string, unkn
     return parsed;
 };
 
+interface SearchStage {
+    definition: SearchIndexDefinitionLike;
+    field: string;
+    filters: Array<{ field: string; value: unknown }>;
+    hasQuery: boolean;
+    indexName: string;
+    query: string;
+}
+
 interface QueryStage {
     indexFields: ReadonlyArray<string>;
     indexName: string | undefined;
     inMemoryFilters: Array<(doc: Record<string, unknown>) => boolean>;
+    search?: SearchStage;
     sqlConditions: Array<{ comparator: string; field: string; value: unknown }>;
 }
 
@@ -277,6 +412,33 @@ const createRangeBuilder = (stage: QueryStage): IndexRangeBuilderLike => {
     return builder;
 };
 
+const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilterBuilderLike => {
+    const builder: SearchFilterBuilderLike = {
+        eq: (field, value) => {
+            if (!search.definition.filterFields?.includes(field)) {
+                throw new Error(`field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
+            }
+
+            search.filters.push({ field, value });
+
+            return builder;
+        },
+        search: (field, query) => {
+            if (field !== search.definition.field) {
+                throw new Error(`search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`);
+            }
+
+            search.field = field;
+            search.query = query;
+            search.hasQuery = true;
+
+            return builder;
+        },
+    };
+
+    return builder;
+};
+
 const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): TableReaderLike => {
     const tableDefinition = schema.tables[tableName];
 
@@ -291,7 +453,36 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         sqlConditions: [],
     };
 
+    const runSearchFetch = (limit: number | undefined): Array<Record<string, unknown>> => {
+        const search = stage.search!;
+        const filtered = stage.inMemoryFilters.length > 0;
+        const engineLimit = filtered ? undefined : limit;
+        const docs = isFtsAvailable(sql) ? searchViaFts(sql, tableName, search, engineLimit) : searchViaScan(sql, tableName, search, engineLimit);
+
+        if (!filtered) {
+            return docs;
+        }
+
+        const result: Array<Record<string, unknown>> = [];
+
+        for (const doc of docs) {
+            if (stage.inMemoryFilters.every((predicate) => predicate(doc))) {
+                result.push(doc);
+
+                if (typeof limit === "number" && result.length >= limit) {
+                    break;
+                }
+            }
+        }
+
+        return result;
+    };
+
     const runFetch = (limit: number | undefined): Array<Record<string, unknown>> => {
+        if (stage.search) {
+            return runSearchFetch(limit);
+        }
+
         const where: string[] = [];
         const params: unknown[] = [];
 
@@ -346,6 +537,13 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
 
             return rows[0] ?? null;
         },
+        async paginate(options) {
+            if (stage.search) {
+                throw new Error("pagination is not supported on search queries; use .take(n) or .collect()");
+            }
+
+            return paginateStage(sql, tableName, stage, options);
+        },
         async take(limit) {
             return runFetch(limit);
         },
@@ -366,6 +564,31 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
 
             if (range) {
                 range(createRangeBuilder(stage));
+            }
+
+            return reader;
+        },
+        withSearchIndex(indexName, search) {
+            const definition = (tableDefinition.searchIndexes ?? []).find((index) => index.name === indexName);
+
+            if (!definition) {
+                throw new Error(`unknown search index "${indexName}" on table "${tableName}"`);
+            }
+
+            const searchStage: SearchStage = {
+                definition,
+                field: definition.field,
+                filters: [],
+                hasQuery: false,
+                indexName,
+                query: "",
+            };
+
+            stage.search = searchStage;
+            search(createSearchBuilder(searchStage, tableName));
+
+            if (!searchStage.hasQuery) {
+                throw new Error(`search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
             }
 
             return reader;
@@ -391,8 +614,189 @@ const serializeSqlValue = (value: unknown): unknown => {
     return JSON.stringify(value);
 };
 
+/**
+ * Run a search via the FTS5 shadow table: MATCH the query against the indexed
+ * text column, JOIN back to the document table on the stored id, narrow by any
+ * `.eq()` filter fields, and order by FTS5's `rank` (bm25 — best first).
+ */
+const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined): Array<Record<string, unknown>> => {
+    const tokens = tokenizeSearch(search.query);
+
+    if (tokens.length === 0) {
+        return [];
+    }
+
+    const ftName = ftsTableName(tableName, search.indexName);
+    const where: string[] = ["f MATCH ?"];
+    const params: unknown[] = [buildFtsMatch(tokens)];
+
+    for (const filter of search.filters) {
+        where.push(`${jsonPath(filter.field)} = ?`);
+        params.push(serializeSqlValue(filter.value));
+    }
+
+    let querySql = `SELECT m.id, m._creationTime, m.${DOC_COLUMN} FROM ${quoteIdentifier(ftName)} f JOIN ${quoteIdentifier(tableName)} m ON m.id = f."__id__" WHERE ${where.join(" AND ")} ORDER BY f.rank`;
+
+    if (typeof limit === "number") {
+        querySql += ` LIMIT ${Math.max(0, Math.floor(limit))}`;
+    }
+
+    const rows = runSql(sql, querySql, ...params).toArray();
+    const docs: Array<Record<string, unknown>> = [];
+
+    for (const row of rows) {
+        const doc = rowToDoc(row);
+
+        if (doc) {
+            docs.push(doc);
+        }
+    }
+
+    return docs;
+};
+
+/**
+ * Portable fallback for engines without FTS5 (the `node:sqlite` test runner):
+ * pull candidate rows (narrowed by `.eq()` filters in SQL), tokenize the indexed
+ * field in JS, and rank with {@link scoreDoc}. Matches the FTS path's AND +
+ * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
+ * by creation time (newest first).
+ */
+const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined): Array<Record<string, unknown>> => {
+    const tokens = tokenizeSearch(search.query);
+
+    if (tokens.length === 0) {
+        return [];
+    }
+
+    const where: string[] = [];
+    const params: unknown[] = [];
+
+    for (const filter of search.filters) {
+        where.push(`${jsonPath(filter.field)} = ?`);
+        params.push(serializeSqlValue(filter.value));
+    }
+
+    let querySql = `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`;
+
+    if (where.length > 0) {
+        querySql += ` WHERE ${where.join(" AND ")}`;
+    }
+
+    const rows = runSql(sql, querySql, ...params).toArray();
+    const scored: Array<{ creationTime: number; doc: Record<string, unknown>; score: number }> = [];
+
+    for (const row of rows) {
+        const doc = rowToDoc(row);
+
+        if (!doc) {
+            continue;
+        }
+
+        const score = scoreDoc(stringifySearchText(doc[search.field]), tokens);
+
+        if (score > 0) {
+            scored.push({ creationTime: typeof doc["_creationTime"] === "number" ? (doc["_creationTime"] as number) : 0, doc, score });
+        }
+    }
+
+    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime);
+
+    const docs = scored.map((entry) => entry.doc);
+
+    return typeof limit === "number" ? docs.slice(0, Math.max(0, Math.floor(limit))) : docs;
+};
+
 /** DO dialect: fields resolve through `json_extract`; values via {@link serializeSqlValue}. */
 const doWhereStrategy: WhereCompilerStrategy = { fieldRef: jsonPath, serialize: serializeSqlValue };
+
+/** Invert the reader's staged SQL comparators back into `where`-tree operators. */
+const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
+
+/** Order keys for a paginated stage: the staged index, else creation order. */
+const paginateOrderKeys = (stage: QueryStage): OrderKey[] =>
+    stage.indexFields.length > 0
+        ? stage.indexFields.map((field) => ({ direction: "asc" as const, field }))
+        : [{ direction: "asc" as const, field: "_creationTime" }];
+
+/**
+ * Re-express the staged `.withIndex()` range as a `where` tree and AND the
+ * keyset seek onto it, so a single shared compiler renders the page predicate.
+ */
+const paginateWhere = (stage: QueryStage, orderKeys: OrderKey[], cursor: null | string | undefined): undefined | WhereInput => {
+    const clauses: WhereInput[] = stage.sqlConditions.map((condition) => ({
+        [condition.field]: { [COMPARATOR_TO_OPERATOR[condition.comparator] ?? "eq"]: condition.value },
+    }));
+
+    if (cursor) {
+        clauses.push(buildSeekWhere(orderKeys, decodeCursor(cursor)));
+    }
+
+    if (clauses.length === 0) {
+        return undefined;
+    }
+
+    return clauses.length === 1 ? clauses[0] : { AND: clauses };
+};
+
+/** Decode rows to docs, applying the in-memory filters; stop at `cap` rows when bounding here. */
+const scanDocs = (rows: Array<Record<string, unknown>>, filters: QueryStage["inMemoryFilters"], cap: number | undefined): Array<Record<string, unknown>> => {
+    const docs: Array<Record<string, unknown>> = [];
+
+    for (const row of rows) {
+        const doc = rowToDoc(row);
+
+        if (doc && filters.every((predicate) => predicate(doc))) {
+            docs.push(doc);
+
+            if (cap !== undefined && docs.length > cap) {
+                break;
+            }
+        }
+    }
+
+    return docs;
+};
+
+/**
+ * Keyset-paginate a built reader stage: order by the staged index (creation
+ * order by default), seek past `cursor`, and over-fetch one row to learn
+ * `isDone`. With in-memory `.filter()`s the SQL row count no longer tracks the
+ * post-filter page size, so we scan unbounded and bound after filtering rather
+ * than let a `LIMIT` drop rows that pass the predicate.
+ */
+const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, options: PaginationOptions): QueryPage => {
+    const numItems = Math.max(0, Math.floor(options.numItems));
+    const orderKeys = paginateOrderKeys(stage);
+    const { params, sql: whereSql } = compileWhere(paginateWhere(stage, orderKeys, options.cursor), doWhereStrategy);
+
+    let querySql = `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`;
+
+    if (whereSql) {
+        querySql += ` WHERE ${whereSql}`;
+    }
+
+    querySql += ` ORDER BY ${compileOrderBy(orderKeys, jsonPath)}`;
+
+    const filtered = stage.inMemoryFilters.length > 0;
+
+    if (!filtered) {
+        querySql += ` LIMIT ${numItems + 1}`;
+    }
+
+    const rows = runSql(sql, querySql, ...params).toArray();
+    const docs = scanDocs(rows, stage.inMemoryFilters, filtered ? numItems : undefined);
+
+    const hasMore = docs.length > numItems;
+    const page = hasMore ? docs.slice(0, numItems) : docs;
+    const last = page.at(-1);
+
+    return {
+        continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
+        isDone: !hasMore,
+        page,
+    };
+};
 
 /** A table's fields paired with their column meta, skipping fields that declare none. */
 const tableColumns = (definition: TableDefinitionLike): Array<[string, ColumnMetaLike]> => {
@@ -512,6 +916,31 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             await runTriggers({ ctx: triggerCtx, event, op, schema, tableName: event.table, timing });
         } finally {
             triggerDepth -= 1;
+        }
+    };
+
+    /**
+     * Keep the FTS5 shadow tables in step with a row write. A no-op when the
+     * table declares no search indexes or when FTS5 is unavailable (the scan
+     * fallback reads the live document table, so nothing to mirror). Delete then
+     * insert makes it idempotent across insert/update; `doc === undefined`
+     * deletes only (row removal).
+     */
+    const syncSearch = (tableName: string, id: string, document: Record<string, unknown> | undefined): void => {
+        const indexes = schema.tables[tableName]?.searchIndexes;
+
+        if (!indexes || indexes.length === 0 || !isFtsAvailable(sql)) {
+            return;
+        }
+
+        for (const index of indexes) {
+            const ftName = ftsTableName(tableName, index.name);
+
+            runSql(sql, `DELETE FROM ${quoteIdentifier(ftName)} WHERE "__id__" = ?`, id);
+
+            if (document) {
+                runSql(sql, `INSERT INTO ${quoteIdentifier(ftName)} ("__text__", "__id__") VALUES (?, ?)`, stringifySearchText(document[index.field]), id);
+            }
         }
     };
 
@@ -659,6 +1088,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 JSON.stringify(docWithMeta),
             );
 
+            syncSearch(tableName, id, docWithMeta);
+
             broadcast({ table: tableName, op: "insert", key: id, row: docWithMeta });
             await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
             await onWrite({ op: "insert", table: tableName, id, doc: docWithMeta });
@@ -686,6 +1117,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
 
             runWrite(sql, tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ?`, JSON.stringify(merged), id);
+
+            syncSearch(tableName, id, merged);
 
             broadcast({ table: tableName, op: "update", key: id, row: merged });
             await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
@@ -716,6 +1149,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 JSON.stringify(replaced),
                 id,
             );
+
+            syncSearch(tableName, id, replaced);
 
             broadcast({ table: tableName, op: "update", key: id, row: replaced });
             await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
@@ -752,6 +1187,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             });
 
             runSql(sql, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
+
+            syncSearch(tableName, id, undefined);
 
             broadcast({ table: tableName, op: "delete", key: id });
             await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
@@ -809,6 +1246,19 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
             const indexSql = `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableName)} (${jsonPath(field)})`;
 
             runSql(sql, indexSql);
+        }
+
+        // FTS5 shadow tables back `.searchIndex()` declarations. Created only on
+        // engines that ship FTS5 (Cloudflare DOs do; the `node:sqlite` test
+        // runner doesn't, where `.search()` transparently falls back to a scan).
+        // `__text__` holds the indexed field; `__id__` (UNINDEXED) joins back to
+        // the document row.
+        if (definition.searchIndexes && definition.searchIndexes.length > 0 && isFtsAvailable(sql)) {
+            for (const index of definition.searchIndexes) {
+                const ftName = ftsTableName(tableName, index.name);
+
+                runSql(sql, `CREATE VIRTUAL TABLE IF NOT EXISTS ${quoteIdentifier(ftName)} USING fts5("__text__", "__id__" UNINDEXED)`);
+            }
         }
     }
 };

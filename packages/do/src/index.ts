@@ -7,6 +7,7 @@ export type {
     IdGenerator,
     IndexDefinitionLike,
     IndexRangeBuilderLike,
+    PaginationOptions,
     ReadHook,
     SchemaLike,
     SqlCursor,
