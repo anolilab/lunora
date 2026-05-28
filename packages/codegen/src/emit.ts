@@ -325,6 +325,214 @@ export const dispatchCirrusFunction = async (functionPath: string, context: unkn
 `;
 };
 
+/**
+ * Emit `_generated/shard.ts` — a `createShardDO(config)` factory returning a
+ * concrete `ShardDO` subclass. Dispatch runs through `CIRRUS_FUNCTIONS` from
+ * `./server.js`; the live schema is imported from `../schema.js`.
+ *
+ * The file stays dependency-light: it always imports `@cirrus/do`, and only
+ * imports `@cirrus/vectors` when the schema declares at least one vector index.
+ * `scheduler`/`storage` arrive via optional config thunks (so the generated
+ * file never hard-imports `@cirrus/scheduler` / `@cirrus/storage`); when a
+ * thunk is omitted an error stub is wired in its place.
+ */
+export const emitShard = (schema: SchemaIR): string => {
+    const hasVectors = schema.vectorIndexes.length > 0;
+
+    const doTypeImports = ["DatabaseWriterLike", "SchemaLike", "ShardDOState", "SqlExec", ...(hasVectors ? ["WriteHook"] : [])];
+
+    const importLines = [`import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`, `import { createShardCtxDb, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`];
+
+    if (hasVectors) {
+        importLines.push(
+            `import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@cirrus/vectors";`,
+            `import { createCtxVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors";`,
+        );
+    }
+
+    importLines.push(``, `import schema from "../schema.js";`, `import { CIRRUS_FUNCTIONS } from "./server.js";`);
+
+    const vectorsConfigField = hasVectors ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
+
+    const vectorsStub = hasVectors
+        ? `
+const vectorsStub: VectorSearchLike = {
+    deleteByIds: async () => {
+        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
+    },
+    getByIds: async () => {
+        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
+    },
+    query: async () => {
+        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
+    },
+    upsert: async () => {
+        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
+    },
+    upsertNow: async () => {
+        throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");
+    },
+};
+`
+        : "";
+
+    const vectorsBuild = hasVectors
+        ? `
+            let vectors: VectorSearchLike;
+            let onWrite: WriteHook | undefined;
+
+            if (config.vectors) {
+                const cirrus = createVectors({ indexes: config.vectors(env) });
+
+                vectors = createCtxVectors(cirrus);
+                onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });
+            } else {
+                vectors = vectorsStub;
+                onWrite = undefined;
+            }
+`
+        : "";
+
+    const dbOptions = hasVectors
+        ? `{
+                broadcast: (delta) => {
+                    this.broadcastDelta(delta);
+                },
+                onWrite,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            }`
+        : `{
+                broadcast: (delta) => {
+                    this.broadcastDelta(delta);
+                },
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            }`;
+
+    const vectorsCtxField = hasVectors ? `\n                vectors,` : "";
+
+    return `${GENERATED_HEADER}${importLines.join("\n")}
+
+type FunctionKind = "action" | "mutation" | "query";
+
+interface FunctionReference {
+    __cirrusRef: string;
+}
+
+export interface ShardDOConfig {
+    scheduler?: (env: Record<string, unknown>) => unknown;
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}
+}
+
+const schedulerStub = {
+    cancel: async () => {
+        throw new Error("ctx.scheduler: no scheduler configured. Pass \`scheduler\` to createShardDO().");
+    },
+    runAfter: async () => {
+        throw new Error("ctx.scheduler: no scheduler configured. Pass \`scheduler\` to createShardDO().");
+    },
+    runAt: async () => {
+        throw new Error("ctx.scheduler: no scheduler configured. Pass \`scheduler\` to createShardDO().");
+    },
+};
+
+const storageStub = {
+    delete: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
+    },
+    download: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
+    },
+    getSignedUrl: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
+    },
+    getUrl: () => {
+        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
+    },
+    list: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
+    },
+    upload: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
+    },
+};
+${vectorsStub}
+const dispatchRun = (expected: FunctionKind, functionPath: string, args: Record<string, unknown>, ctx: unknown): Promise<unknown> | unknown => {
+    const registered = CIRRUS_FUNCTIONS[functionPath];
+
+    if (!registered) {
+        throw new Error(\`unknown function: \${functionPath}\`);
+    }
+
+    if (registered.kind !== expected) {
+        throw new Error(\`ctx.run\${expected[0]!.toUpperCase()}\${expected.slice(1)}: "\${functionPath}" is registered as a \${registered.kind}, not a \${expected}\`);
+    }
+
+    return registered.handler(ctx, args);
+};
+
+/**
+ * Build the project's shard Durable Object. Export the result as \`ShardDO\`
+ * from the worker entry so wrangler binds it by name.
+ */
+export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
+    class extends ShardDOBase {
+        private migrated = false;
+
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+            const registered = CIRRUS_FUNCTIONS[functionPath];
+
+            if (!registered) {
+                throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
+                    name: "CirrusError",
+                    code: "FUNCTION_NOT_FOUND",
+                    status: 404,
+                });
+            }
+
+            this.ensureMigrated();
+
+            return registered.handler(this.buildCtx(), args);
+        }
+
+        private ensureMigrated(): void {
+            if (this.migrated) {
+                return;
+            }
+
+            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike);
+            this.migrated = true;
+        }
+
+        private buildCtx(): unknown {
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const userId = this.getCurrentUserId();
+            const identity = this.getCurrentIdentity();
+${vectorsBuild}
+            const db: DatabaseWriterLike = createShardCtxDb(${dbOptions});
+
+            const ctx: Record<string, unknown> = {
+                auth: {
+                    getIdentity: async () => identity ?? null,
+                    userId: userId ?? null,
+                },
+                db,
+                fetch: globalThis.fetch.bind(globalThis),
+                scheduler: config.scheduler ? config.scheduler(env) : schedulerStub,
+                storage: config.storage ? config.storage(env) : storageStub,${vectorsCtxField}
+            };
+
+            ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__cirrusRef, fnArgs, ctx);
+            ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("mutation", reference.__cirrusRef, fnArgs, ctx);
+            ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("query", reference.__cirrusRef, fnArgs, ctx);
+
+            return ctx;
+        }
+    };
+`;
+};
+
 // ─── Drizzle schema emission ─────────────────────────────────────────────────
 
 interface DrizzleColumn {

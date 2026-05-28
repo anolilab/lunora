@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { runCodegen } from "../src/index.js";
+import { emitShard, runCodegen } from "../src/index.js";
+import type { SchemaIR } from "../src/ir.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "simple");
@@ -110,6 +111,7 @@ describe("runCodegen", () => {
         expect(existsSync(join(generatedDirectory, "dataModel.ts"))).toBe(true);
         expect(existsSync(join(generatedDirectory, "drizzle.global.ts"))).toBe(true);
         expect(existsSync(join(generatedDirectory, "drizzle.shard.ts"))).toBe(true);
+        expect(existsSync(join(generatedDirectory, "shard.ts"))).toBe(true);
     });
 
     test("emits drizzle.global.ts containing only `.global()` tables", () => {
@@ -168,12 +170,30 @@ describe("runCodegen", () => {
         const expectedDataModel = readFileSync(join(expectedDirectory, "dataModel.ts"), "utf8");
         const expectedDrizzleGlobal = readFileSync(join(expectedDirectory, "drizzle.global.ts"), "utf8");
         const expectedDrizzleShard = readFileSync(join(expectedDirectory, "drizzle.shard.ts"), "utf8");
+        const expectedShard = readFileSync(join(expectedDirectory, "shard.ts"), "utf8");
 
         expect(result.generated.api).toBe(expectedApi);
         expect(result.generated.server).toBe(expectedServer);
         expect(result.generated.dataModel).toBe(expectedDataModel);
         expect(result.generated.drizzleGlobal).toBe(expectedDrizzleGlobal);
         expect(result.generated.drizzleShard).toBe(expectedDrizzleShard);
+        expect(result.generated.shard).toBe(expectedShard);
+    });
+
+    test("emits shard.ts with a createShardDO factory wired to generated modules", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        expect(result.generated.shard).toContain("export const createShardDO");
+        expect(result.generated.shard).toContain('import { CIRRUS_FUNCTIONS } from "./server.js"');
+        expect(result.generated.shard).toContain('import schema from "../schema.js"');
+        expect(result.generated.shard).toContain("class extends ShardDOBase");
+        expect(result.generated.shard).toContain("runShardMigrations");
+        expect(result.generated.shard).toContain("createShardCtxDb");
+
+        // The fixture schema declares no vector indexes, so the shard must stay
+        // dependency-light and never reach for @cirrus/vectors.
+        expect(result.generated.shard).not.toContain("@cirrus/vectors");
+        expect(result.generated.shard).not.toContain("createVectorSyncHook");
     });
 
     test("throws when schema.ts is missing", () => {
@@ -184,5 +204,59 @@ describe("runCodegen", () => {
         } finally {
             rmSync(empty, { force: true, recursive: true });
         }
+    });
+});
+
+describe("emitShard", () => {
+    test("wires @cirrus/vectors auto-sync when the schema declares vector indexes", () => {
+        const schema: SchemaIR = {
+            tables: [
+                {
+                    indexes: [],
+                    name: "docs",
+                    searchIndexes: [],
+                    shape: { body: { kind: "string" } },
+                    shardMode: "root",
+                    vectorIndexes: [{ field: "body", name: "by_body", table: "docs" }],
+                },
+            ],
+            vectorIndexes: [{ field: "body", name: "by_body", table: "docs" }],
+        };
+
+        const output = emitShard(schema);
+
+        // Vectors variant: pull the adapters + the Vectorize binding type.
+        expect(output).toContain('import { createCtxVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors"');
+        expect(output).toContain("VectorizeIndexLike");
+        expect(output).toContain("WriteHook");
+
+        // ctx.vectors + the auto-propagation write hook are assembled in buildCtx.
+        expect(output).toContain("vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;");
+        expect(output).toContain("onWrite = createVectorSyncHook(");
+        expect(output).toContain("onWrite,");
+        expect(output).toContain("vectors,");
+    });
+
+    test("omits @cirrus/vectors entirely when the schema declares no vectors", () => {
+        const schema: SchemaIR = {
+            tables: [
+                {
+                    indexes: [],
+                    name: "docs",
+                    searchIndexes: [],
+                    shape: { body: { kind: "string" } },
+                    shardMode: "root",
+                    vectorIndexes: [],
+                },
+            ],
+            vectorIndexes: [],
+        };
+
+        const output = emitShard(schema);
+
+        expect(output).not.toContain("@cirrus/vectors");
+        expect(output).not.toContain("createVectorSyncHook");
+        expect(output).not.toContain("onWrite");
+        expect(output).toContain("export const createShardDO");
     });
 });
