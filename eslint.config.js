@@ -25,6 +25,8 @@ export default createConfig(
             "**/.husky/**",
             "**/.worktrees/**",
             "apps/playground/cirrus/_generated/**",
+            ".agents/**",
+            ".claude/skills/**",
             "**/CHANGELOG.md",
             "pnpm-lock.yaml",
             "pnpm-workspace.yaml",

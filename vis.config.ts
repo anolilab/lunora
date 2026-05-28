@@ -84,7 +84,7 @@ export default defineConfig({
     },
     secrets: {
         walk: {
-            excludePatterns: [".pnpm-store/**", "**/.vis/**", "**/__fixtures__/**", "**/CHANGELOG.md"],
+            excludePatterns: [".pnpm-store/**", "**/.vis/**", "**/__fixtures__/**", "**/CHANGELOG.md", ".agents/**", ".claude/skills/**"],
         },
     },
 });

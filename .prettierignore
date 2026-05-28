@@ -18,6 +18,10 @@ pnpm-workspace.yaml
 
 /.nx/cache
 
+# Vendored agent skills (managed by skills-lock.json) — keep upstream content byte-for-byte
+.agents/
+.claude/skills/
+
 # Plop templates contain Handlebars syntax that Prettier cannot parse
 plop/**/*.hbs
 
