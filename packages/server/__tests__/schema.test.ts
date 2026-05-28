@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { defineSchema, defineTable, v } from "../src/index.js";
+import { defineSchema, defineTable, defineVectorIndex, v } from "../src/index.js";
 
 describe("defineTable", () => {
     test("returns a table definition with shape and default __root__ shard mode", () => {
@@ -47,6 +47,29 @@ describe("defineTable", () => {
         expect(users.shardMode).toEqual({ kind: "global" });
     });
 
+    test("table without .vectorize exposes an empty vectorIndexes array", () => {
+        const docs = defineTable({ body: v.string() });
+
+        expect(docs.vectorIndexes).toEqual([]);
+    });
+
+    test(".vectorize appends an inline vector index (Shape A)", () => {
+        const embed = (text: string): ReadonlyArray<number> => [text.length];
+        const docs = defineTable({ body: v.string(), title: v.string(), workspaceId: v.id("workspaces") })
+            .shardBy("workspaceId")
+            .vectorize("body", { dimensions: 1024, embed, index: "docs-body", metadata: ["title", "workspaceId"], metric: "cosine" });
+
+        expect(docs.vectorIndexes).toHaveLength(1);
+        expect(docs.vectorIndexes[0]).toMatchObject({
+            dimensions: 1024,
+            field: "body",
+            metadata: ["title", "workspaceId"],
+            metric: "cosine",
+            name: "docs-body",
+        });
+        expect(docs.vectorIndexes[0]?.embed).toBe(embed);
+    });
+
     test("builder chains return the same instance", () => {
         const builder = defineTable({ a: v.string() });
         const chained = builder.index("by_a", ["a"]).shardBy("a");
@@ -65,5 +88,31 @@ describe("defineSchema", () => {
         expect(Object.keys(schema.tables)).toEqual(["messages", "users"]);
         expect(schema.tables.users.shardMode).toEqual({ kind: "global" });
         expect(schema.tables.messages.shardMode).toEqual({ field: "channelId", kind: "shardBy" });
+    });
+
+    test("defaults vectorIndexes to an empty object when the second arg is omitted", () => {
+        const schema = defineSchema({ users: defineTable({ email: v.string() }) });
+
+        expect(schema.vectorIndexes).toEqual({});
+    });
+
+    test("registers standalone defineVectorIndex entries from the second arg (Shape B)", () => {
+        const embed = async (text: string): Promise<ReadonlyArray<number>> => [text.length];
+        const schema = defineSchema(
+            { docs: defineTable({ body: v.string(), title: v.string() }) },
+            {
+                "docs-title-and-body": defineVectorIndex({
+                    dimensions: 1024,
+                    embed,
+                    metric: "cosine",
+                    source: { select: (row) => `${row.title}\n\n${row.body}`, table: "docs" },
+                }),
+            },
+        );
+
+        const index = schema.vectorIndexes["docs-title-and-body"];
+
+        expect(index).toMatchObject({ dimensions: 1024, kind: "vectorIndex", metric: "cosine", table: "docs" });
+        expect(index?.select({ body: "B", title: "T" })).toBe("T\n\nB");
     });
 });

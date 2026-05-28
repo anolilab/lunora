@@ -59,3 +59,6 @@ export interface SearchIndexNamesByTable {
 }
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
+
+/** Union of declared vector index names. `never` when none are declared. */
+export type VectorIndexName = never;

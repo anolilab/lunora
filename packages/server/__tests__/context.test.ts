@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
 import type { MutationCtx, QueryCtx, ReadOnlyStorage, Storage } from "../src/index.js";
 import { query, v } from "../src/index.js";
@@ -24,10 +24,10 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
         const queryCtx: QueryCtx["storage"] = storage;
         const mutationCtx: MutationCtx["storage"] = storage;
 
-        expect(typeof queryCtx.getSignedUrl).toBe("function");
-        expect(typeof queryCtx.getUrl).toBe("function");
-        expect(typeof queryCtx.download).toBe("function");
-        expect(typeof mutationCtx.getSignedUrl).toBe("function");
+        expectTypeOf(queryCtx.getSignedUrl).toBeFunction();
+        expectTypeOf(queryCtx.getUrl).toBeFunction();
+        expectTypeOf(queryCtx.download).toBeFunction();
+        expectTypeOf(mutationCtx.getSignedUrl).toBeFunction();
     });
 
     test("does NOT expose write operations on QueryCtx.storage at the type level", () => {
@@ -79,6 +79,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             auth: { getIdentity: async () => null, userId: null },
             db: {} as QueryCtx["db"],
             storage,
+            vectors: {} as QueryCtx["vectors"],
         } satisfies QueryCtx;
 
         const result = await getAvatar.handler(ctx, { userId: "u_1" as unknown as Parameters<typeof getAvatar.handler>[1]["userId"] });

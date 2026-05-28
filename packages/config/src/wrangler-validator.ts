@@ -35,11 +35,14 @@ export interface WranglerConfig {
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
+    vectorize?: ReadonlyArray<{ binding?: string; index_name?: string }>;
 }
 
 export interface SchemaInfo {
     /** Whether the cirrus schema declares any `.global()` table. */
     hasGlobalTable: boolean;
+    /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
+    vectorIndexNames?: ReadonlyArray<string>;
 }
 
 export interface WranglerValidationReport {
@@ -91,6 +94,19 @@ export const validateWranglerConfig = (wrangler: WranglerConfig | undefined, sch
 
         if (!dbBinding) {
             errors.push('schema declares .global() tables; d1_databases must include a binding named "DB"');
+        }
+    }
+
+    const vectorIndexNames = schema?.vectorIndexNames ?? [];
+
+    if (vectorIndexNames.length > 0) {
+        const vectorizeBindings = wrangler.vectorize ?? [];
+        const declaredIndexNames = new Set(vectorizeBindings.map((binding) => binding.index_name));
+
+        for (const indexName of vectorIndexNames) {
+            if (!declaredIndexNames.has(indexName)) {
+                errors.push(`schema declares vector index "${indexName}"; wrangler "vectorize" must include a binding with index_name "${indexName}"`);
+            }
         }
     }
 
@@ -172,7 +188,10 @@ export const validateWranglerProject = (options: WranglerProjectValidationOption
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
             const schema = discoverSchema(project, schemaPath);
 
-            schemaInfo = { hasGlobalTable: schema.tables.some((table) => table.shardMode === "global") };
+            schemaInfo = {
+                hasGlobalTable: schema.tables.some((table) => table.shardMode === "global"),
+                vectorIndexNames: schema.vectorIndexes.map((index) => index.name),
+            };
         } catch (schemaError: unknown) {
             // Surface a warning rather than swallowing silently — codegen
             // will report the actionable error elsewhere, but a complete

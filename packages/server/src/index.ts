@@ -1,7 +1,7 @@
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions.js";
 export { action, mutation, query } from "./functions.js";
-export type { TableBuilder } from "./schema.js";
-export { defineSchema, defineTable } from "./schema.js";
+export type { TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";
+export { defineSchema, defineTable, defineVectorIndex } from "./schema.js";
 export type {
     ActionCtx,
     AnyApi,
@@ -27,6 +27,17 @@ export type {
     Storage,
     TableDefinition,
     TableReader,
+    TableVectorIndex,
+    VectorEmbedder,
+    VectorIndexDefinition,
+    VectorMatch,
+    VectorMatches,
+    VectorMetric,
+    VectorQueryInput,
+    VectorRecord,
+    VectorSearch,
+    VectorSearchReader,
+    VectorUpsertInput,
 } from "./types.js";
 export { anyApi } from "./types.js";
 export type { Id, Infer, Validator, ValidatorKind } from "@cirrus/values";

@@ -140,34 +140,41 @@ export const searchDocs = query({
 
 ---
 
-## Recommendation
+## Decision — both shapes shipped
 
-**Shape A as the primary surface, Shape B as an opt-in escape hatch.**
+**Shape A is the primary surface; Shape B is the opt-in escape hatch.** Both
+are implemented and share the `createVectors` runtime adapter.
 
 Most apps want one vector per natural-language field on one table — exactly
 Shape A's sweet spot. The handful of cases that need derived sources or
-multi-table indexes can drop down to `defineVectorIndex(...)` and pair it with
-an explicit `ctx.vectors.upsertNow(...)` from a mutation/action.
+multi-table indexes drop down to `defineVectorIndex(...)` and pair it with an
+explicit `ctx.vectors.upsertNow(...)` from a mutation/action.
 
-Implementation cost is asymmetric: A is a single new method on `TableBuilder`
-plus a small codegen pass; B requires a parallel slot in the schema shape and
-back-reference tracking. Shipping A first lets us see real usage before paying
-B's complexity.
-
-If we ship both, the `cirrus/schema.ts` example becomes:
+Shape B lives in an **optional second argument** to `defineSchema` rather than a
+reserved `vectorIndexes` key inside the table map. This keeps the first
+argument's per-table type inference intact (`schema.tables.docs.shape.body` stays
+typed) and sidesteps the reserved-name collision flagged in Shape B's cons:
 
 ```ts
-defineSchema({
-    docs: defineTable({ ... }).shardBy("workspaceId").vectorize("body", { ... }),
-    // ...
-    vectorIndexes: {
+defineSchema(
+    {
+        docs: defineTable({ ... }).shardBy("workspaceId").vectorize("body", { index: "docs-body", ... }),
+        // ...
+    },
+    {
         "docs-title-and-body": defineVectorIndex({
             source: { table: "docs", select: (r) => `${r.title}\n\n${r.body}` },
             // ...
         }),
     },
-});
+);
 ```
+
+Codegen discovers Shape A by the `.vectorize()` chain method and Shape B from
+the second `defineSchema` argument, hoisting both into a flat
+`SchemaIR.vectorIndexes` list. From there it emits a `VectorIndexName` union into
+`_generated/dataModel.ts` and the wrangler validator requires a matching
+`[[vectorize]]` binding (by `index_name`) for every declared index.
 
 ---
 

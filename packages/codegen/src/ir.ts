@@ -33,16 +33,32 @@ export interface SearchIndexIR {
     name: string;
 }
 
+export interface VectorIndexIR {
+    dimensions?: number;
+    /** Shape A: the single source column. Shape B: undefined (derived via a `select` fn). */
+    field?: string;
+    /** Shape A: metadata field names mirrored into Vectorize. */
+    metadata?: ReadonlyArray<string>;
+    metric?: "cosine" | "dot-product" | "euclidean";
+    name: string;
+    /** Owning table the vectors are sourced from. */
+    table: string;
+}
+
 export interface TableIR {
     indexes: ReadonlyArray<IndexIR>;
     name: string;
     searchIndexes: ReadonlyArray<SearchIndexIR>;
     shape: Record<string, ValidatorIR>;
     shardMode: "global" | "root" | { field: string; kind: "shardBy" };
+    /** Vector indexes declared inline via `.vectorize()` (DSL Shape A). */
+    vectorIndexes: ReadonlyArray<VectorIndexIR>;
 }
 
 export interface SchemaIR {
     tables: ReadonlyArray<TableIR>;
+    /** All vector indexes (inline Shape A hoisted + standalone Shape B), flattened. */
+    vectorIndexes: ReadonlyArray<VectorIndexIR>;
 }
 
 export interface FunctionIR {

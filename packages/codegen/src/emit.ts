@@ -132,6 +132,8 @@ export const emitDataModel = (schema: SchemaIR): string => {
         })
         .join("\n");
 
+    const vectorIndexNames = schema.vectorIndexes.map((index) => `"${index.name}"`).join(" | ") || "never";
+
     return `${GENERATED_HEADER}export type TableName = ${tableNames};
 
 export type Id<TName extends string> = string & { readonly __table: TName };
@@ -160,6 +162,9 @@ ${searchIndexNamesByTable}
 }
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
+
+/** Union of declared vector index names. \`never\` when none are declared. */
+export type VectorIndexName = ${vectorIndexNames};
 `;
 };
 

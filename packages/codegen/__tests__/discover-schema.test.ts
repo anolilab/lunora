@@ -2,6 +2,7 @@ import { Project } from "ts-morph";
 import { describe, expect, test } from "vitest";
 
 import { discoverSchema } from "../src/discover-schema.js";
+import { emitDataModel } from "../src/emit.js";
 
 /**
  * Build a fresh in-memory project hosting a `schema.ts` with the given source.
@@ -93,5 +94,94 @@ describe("discoverSchema", () => {
         expect(messages?.shardMode).toEqual({ field: "channelId", kind: "shardBy" });
         expect(messages?.indexes).toEqual([{ fields: ["channelId"], name: "by_channel", unique: false }]);
         expect(messages?.searchIndexes[0]).toMatchObject({ field: "text", name: "by_text" });
+    });
+
+    test("captures an inline .vectorize() index hoisted into schema.vectorIndexes (Shape A)", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { embed } from "../app/embed";
+
+            export const schema = defineSchema({
+                docs: defineTable({
+                    body: v.string(),
+                    title: v.string(),
+                    workspaceId: v.id("workspaces"),
+                })
+                    .shardBy("workspaceId")
+                    .vectorize("body", { index: "docs-body", dimensions: 1024, metric: "cosine", metadata: ["title", "workspaceId"], embed }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const docs = schema.tables.find((table) => table.name === "docs");
+
+        expect(docs?.vectorIndexes[0]).toEqual({
+            dimensions: 1024,
+            field: "body",
+            metadata: ["title", "workspaceId"],
+            metric: "cosine",
+            name: "docs-body",
+            table: "docs",
+        });
+        expect(schema.vectorIndexes).toEqual(docs?.vectorIndexes);
+    });
+
+    test("captures a standalone defineVectorIndex entry from the second arg (Shape B)", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, defineVectorIndex, v } from "@cirrus/server";
+            import { embed } from "../app/embed";
+
+            export const schema = defineSchema(
+                {
+                    docs: defineTable({ body: v.string(), title: v.string() }).shardBy("body"),
+                },
+                {
+                    "docs-title-and-body": defineVectorIndex({
+                        source: { table: "docs", select: (row) => row.title + row.body },
+                        dimensions: 768,
+                        metric: "euclidean",
+                        embed,
+                    }),
+                },
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.vectorIndexes).toEqual([
+            {
+                dimensions: 768,
+                metric: "euclidean",
+                name: "docs-title-and-body",
+                table: "docs",
+            },
+        ]);
+    });
+
+    test("emits a VectorIndexName union covering both shapes", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, defineVectorIndex, v } from "@cirrus/server";
+            import { embed } from "../app/embed";
+
+            export const schema = defineSchema(
+                {
+                    docs: defineTable({ body: v.string(), title: v.string() })
+                        .vectorize("body", { index: "docs-body", dimensions: 1024, metric: "cosine", embed }),
+                },
+                {
+                    "docs-title": defineVectorIndex({
+                        source: { table: "docs", select: (row) => row.title },
+                        dimensions: 1024,
+                        metric: "cosine",
+                        embed,
+                    }),
+                },
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const dataModel = emitDataModel(schema);
+
+        expect(dataModel).toContain('export type VectorIndexName = "docs-body" | "docs-title";');
     });
 });

@@ -7,6 +7,7 @@ const makeQueryCtx = (): QueryCtx => ({
     auth: { getIdentity: async () => null, userId: null },
     db: {} as QueryCtx["db"],
     storage: {} as QueryCtx["storage"],
+    vectors: {} as QueryCtx["vectors"],
 });
 
 const makeMutationCtx = (): MutationCtx => ({
@@ -14,6 +15,7 @@ const makeMutationCtx = (): MutationCtx => ({
     db: {} as MutationCtx["db"],
     scheduler: {} as MutationCtx["scheduler"],
     storage: {} as MutationCtx["storage"],
+    vectors: {} as MutationCtx["vectors"],
 });
 
 const makeActionCtx = (): ActionCtx => ({
@@ -25,6 +27,7 @@ const makeActionCtx = (): ActionCtx => ({
     runQuery: vi.fn(),
     scheduler: {} as ActionCtx["scheduler"],
     storage: {} as ActionCtx["storage"],
+    vectors: {} as ActionCtx["vectors"],
 });
 
 describe("query", () => {

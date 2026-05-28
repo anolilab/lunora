@@ -23,15 +23,55 @@ export interface SearchIndexDefinition {
     name: string;
 }
 
+/** Distance metric used by a Vectorize index. */
+export type VectorMetric = "cosine" | "dot-product" | "euclidean";
+
+/**
+ * Bring-your-own-embedder: a user-supplied fn turning a source string into a
+ * numeric vector. The runtime calls it at upsert/query time so the framework
+ * never couples to a single embedding provider.
+ */
+export type VectorEmbedder = (input: string) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
+
+/**
+ * Vector index declared inline on a table via `.vectorize(field, opts)`
+ * (DSL Shape A). The source is always a single column on the owning table.
+ */
+export interface TableVectorIndex {
+    dimensions: number;
+    embed: VectorEmbedder;
+    field: string;
+    metadata?: ReadonlyArray<string>;
+    metric: VectorMetric;
+    name: string;
+}
+
 export interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     indexes: ReadonlyArray<IndexDefinition>;
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
     shape: Shape;
     shardMode: ShardMode;
+    vectorIndexes: ReadonlyArray<TableVectorIndex>;
+}
+
+/**
+ * Standalone vector index declared via `defineVectorIndex(...)` (DSL Shape B).
+ * Unlike {@link TableVectorIndex}, the source is a `select` function so it can
+ * derive the embedded text from any computation (e.g. `title + body`).
+ */
+export interface VectorIndexDefinition {
+    readonly dimensions: number;
+    readonly embed: VectorEmbedder;
+    readonly kind: "vectorIndex";
+    readonly metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
+    readonly metric: VectorMetric;
+    readonly select: (row: Record<string, unknown>) => string;
+    readonly table: string;
 }
 
 export interface Schema<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
     readonly tables: T;
+    readonly vectorIndexes: Record<string, VectorIndexDefinition>;
 }
 
 // --- Function registration ---------------------------------------------------
@@ -116,10 +156,68 @@ export interface Storage extends ReadOnlyStorage {
     delete: (key: string) => Promise<void>;
 }
 
+export interface VectorMatch {
+    id: string;
+    metadata?: Record<string, unknown>;
+    score: number;
+}
+
+export interface VectorMatches {
+    count: number;
+    matches: ReadonlyArray<VectorMatch>;
+}
+
+export interface VectorQueryInput {
+    /** Embedder used when `input` is supplied instead of a precomputed `vector`. */
+    embed?: VectorEmbedder;
+    filter?: Record<string, unknown>;
+    /** Natural-language input embedded via `embed`. Ignored when `vector` is set. */
+    input?: string;
+    namespace?: string;
+    topK?: number;
+    /** Precomputed query vector; skips `embed`. */
+    vector?: ReadonlyArray<number>;
+}
+
+export interface VectorUpsertInput {
+    embed: VectorEmbedder;
+    id: string;
+    input: string;
+    metadata?: Record<string, unknown>;
+    namespace?: string;
+}
+
+export interface VectorRecord {
+    id: string;
+    metadata?: Record<string, unknown>;
+    values: ReadonlyArray<number>;
+}
+
+/**
+ * Read-only vector surface exposed on {@link QueryCtx}. Mirrors the read half
+ * of `@cirrus/vectors`' `CirrusVectors` so the live adapter is assignable.
+ */
+export interface VectorSearchReader {
+    getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
+    query: (indexName: string, input: VectorQueryInput) => Promise<VectorMatches>;
+}
+
+/**
+ * Mutating vector surface on {@link MutationCtx} / {@link ActionCtx}. `upsert`
+ * is queued post-commit by default; `upsertNow` forces a synchronous write.
+ * `db.delete` on a vectorized table auto-propagates the matching `deleteByIds`.
+ */
+export interface VectorSearch extends VectorSearchReader {
+    deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<void>;
+    upsert: (indexName: string, input: VectorUpsertInput) => Promise<void>;
+    upsertNow: (indexName: string, input: VectorUpsertInput) => Promise<void>;
+}
+
 export interface QueryCtx {
     readonly auth: AuthState;
     readonly db: DatabaseReader;
     readonly storage: ReadOnlyStorage;
+    readonly vectors: VectorSearchReader;
 }
 
 export interface MutationCtx {
@@ -127,6 +225,7 @@ export interface MutationCtx {
     readonly db: DatabaseWriter;
     readonly scheduler: Scheduler;
     readonly storage: ReadOnlyStorage;
+    readonly vectors: VectorSearch;
 }
 
 export interface ActionCtx {
@@ -138,6 +237,7 @@ export interface ActionCtx {
     readonly runQuery: <R>(reference: RegisteredQuery<ArgsValidator, R>, args: Record<string, unknown>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly storage: Storage;
+    readonly vectors: VectorSearch;
 }
 
 // --- Generated API surface ---------------------------------------------------

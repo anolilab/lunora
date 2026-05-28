@@ -5,13 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import type { WranglerConfig } from "../src/wrangler-validator.js";
-import {
-    REQUIRED_COMPATIBILITY_DATE,
-    REQUIRED_FLAG,
-    validateWrangler,
-    validateWranglerConfig,
-    validateWranglerProject,
-} from "../src/wrangler-validator.js";
+import { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject } from "../src/wrangler-validator.js";
 
 const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@cirrus/server";
 
@@ -35,6 +29,19 @@ export const schema = defineSchema({
         channelId: v.id("channels"),
         text: v.string(),
     }).shardBy("channelId"),
+});
+`;
+
+const SCHEMA_WITH_VECTOR = `import { defineSchema, defineTable, v } from "@cirrus/server";
+import { embed } from "../app/embed";
+
+export const schema = defineSchema({
+    docs: defineTable({
+        body: v.string(),
+        workspaceId: v.id("workspaces"),
+    })
+        .shardBy("workspaceId")
+        .vectorize("body", { index: "docs-body", dimensions: 1024, metric: "cosine", embed }),
 });
 `;
 
@@ -122,6 +129,33 @@ describe("validateWranglerConfig (pure)", () => {
         const report = validateWranglerConfig(wrangler, { hasGlobalTable: true });
 
         expect(report.errors.some((line) => line.includes("d1_databases"))).toBe(true);
+    });
+
+    test("requires a matching vectorize binding for each declared vector index", () => {
+        const wrangler: WranglerConfig = {
+            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+            compatibility_flags: [REQUIRED_FLAG],
+            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+        };
+
+        const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+
+        expect(report.valid).toBe(false);
+        expect(report.errors.some((line) => line.includes("docs-body"))).toBe(true);
+    });
+
+    test("passes when a vectorize binding declares the index_name", () => {
+        const wrangler: WranglerConfig = {
+            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+            compatibility_flags: [REQUIRED_FLAG],
+            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            vectorize: [{ binding: "DOCS_BODY", index_name: "docs-body" }],
+        };
+
+        const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+
+        expect(report.valid).toBe(true);
+        expect(report.errors).toEqual([]);
     });
 
     test("validateWrangler is an alias for validateWranglerConfig", () => {
@@ -216,6 +250,49 @@ describe("validateWranglerProject (file-system aware)", () => {
         const result = validateWranglerProject({ projectRoot: workdir });
 
         expect(result.problems.some((line) => /SHARD.+ShardDO/u.test(line))).toBe(true);
+    });
+
+    test("flags a declared .vectorize() index with no matching vectorize binding", () => {
+        writeSchema(SCHEMA_WITH_VECTOR);
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            `{
+    "name": "x",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "compatibility_flags": ["${REQUIRED_FLAG}"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    }
+}
+`,
+            "utf8",
+        );
+
+        const result = validateWranglerProject({ projectRoot: workdir });
+
+        expect(result.problems.some((line) => line.includes("docs-body"))).toBe(true);
+    });
+
+    test("passes when wrangler declares the vectorize binding for the schema's index", () => {
+        writeSchema(SCHEMA_WITH_VECTOR);
+        writeFileSync(
+            join(workdir, "wrangler.jsonc"),
+            `{
+    "name": "x",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "compatibility_flags": ["${REQUIRED_FLAG}"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "vectorize": [{ "binding": "DOCS_BODY", "index_name": "docs-body" }]
+}
+`,
+            "utf8",
+        );
+
+        const result = validateWranglerProject({ projectRoot: workdir });
+
+        expect(result.problems).toEqual([]);
     });
 
     test("returns a problem when schema has .global() tables but D1 binding is missing", () => {
