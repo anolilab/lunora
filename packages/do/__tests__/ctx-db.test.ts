@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { BroadcastDelta, DatabaseWriterLike } from "../src/ctx-db.js";
+import type { BroadcastDelta, DatabaseWriterLike, WriteHook } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
 import { createFakeSql, messagesSchema } from "./_helpers/fake-sql.js";
 
@@ -11,6 +11,7 @@ const setupWriter = (
         broadcast?: BroadcastDelta;
         clock?: () => number;
         idGenerator?: () => string;
+        onWrite?: WriteHook;
     } = {},
 ): {
     deltas: Parameters<BroadcastDelta>[0][];
@@ -29,6 +30,7 @@ const setupWriter = (
         broadcast: overrides.broadcast ?? ((delta) => deltas.push(delta)),
         clock: overrides.clock ?? (() => fixedTime),
         idGenerator: overrides.idGenerator,
+        onWrite: overrides.onWrite,
     });
 
     return { writer, sql, state, deltas };
@@ -322,6 +324,60 @@ describe("createShardCtxDb — query()", () => {
             .take(2);
 
         expect(rows.map((row) => row["_id"])).toEqual(["a", "c"]);
+    });
+});
+
+describe("createShardCtxDb — onWrite", () => {
+    test("fires after each write with op/table/id/doc", async () => {
+        const events: Array<Parameters<WriteHook>[0]> = [];
+        const { writer } = setupWriter({ idGenerator: () => "m_1", onWrite: (event) => void events.push(event) });
+
+        await writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
+        await writer.patch("m_1", { text: "edit" });
+        await writer.replace("m_1", { channelId: "c2", text: "fresh", authorId: "u2" });
+        await writer.delete("m_1");
+
+        expect(events.map((event) => event.op)).toEqual(["insert", "update", "update", "delete"]);
+        expect(events[0]).toMatchObject({ op: "insert", table: "messages", id: "m_1", doc: { text: "hi" } });
+        expect(events[1]).toMatchObject({ op: "update", doc: { text: "edit" } });
+        expect(events[3]).toMatchObject({ op: "delete", table: "messages", id: "m_1" });
+        expect(events[3]?.doc).toBeUndefined();
+    });
+
+    test("is awaited so async hooks settle before the write resolves", async () => {
+        const order: string[] = [];
+        const { writer } = setupWriter({
+            idGenerator: () => "m_1",
+            onWrite: async () => {
+                await Promise.resolve();
+                order.push("hook");
+            },
+        });
+
+        await writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
+        order.push("after");
+
+        expect(order).toEqual(["hook", "after"]);
+    });
+
+    test("does not fire when delete targets an unknown id", async () => {
+        const onWrite = vi.fn();
+        const { writer } = setupWriter({ onWrite });
+
+        await writer.delete("missing");
+
+        expect(onWrite).not.toHaveBeenCalled();
+    });
+
+    test("a thrown hook propagates to the caller", async () => {
+        const { writer } = setupWriter({
+            idGenerator: () => "m_1",
+            onWrite: () => {
+                throw new Error("sync failed");
+            },
+        });
+
+        await expect(writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" })).rejects.toThrow(/sync failed/u);
     });
 });
 

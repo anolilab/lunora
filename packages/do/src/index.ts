@@ -12,6 +12,8 @@ export type {
     TableDefinitionLike,
     TableReaderLike,
     ValidatorLike,
+    WriteEvent,
+    WriteHook,
 } from "./ctx-db.js";
 export { createShardCtxDb, runShardMigrations } from "./ctx-db.js";
 export type { SessionRecord } from "./session-do.js";

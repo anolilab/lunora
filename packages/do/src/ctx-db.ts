@@ -77,10 +77,26 @@ export type Clock = () => number;
 /** Pluggable ID minter — defaults to `crypto.randomUUID()`. */
 export type IdGenerator = () => string;
 
+/** A single committed row mutation, surfaced to {@link CtxDbOptions.onWrite}. */
+export interface WriteEvent {
+    doc?: Record<string, unknown>;
+    id: string;
+    op: "delete" | "insert" | "update";
+    table: string;
+}
+
+/**
+ * Side-effect run inline after a row write commits and the delta broadcasts.
+ * Awaited within the write path so failures surface to the caller — used to
+ * keep external stores (e.g. Vectorize) in sync atomically with the write.
+ */
+export type WriteHook = (event: WriteEvent) => Promise<void> | void;
+
 export interface CtxDbOptions {
     broadcast?: BroadcastDelta;
     clock?: Clock;
     idGenerator?: IdGenerator;
+    onWrite?: WriteHook;
     schema: SchemaLike;
     sql: SqlExec;
 }
@@ -348,6 +364,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
+    const onWrite = options.onWrite ?? (() => undefined);
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
 
@@ -388,6 +405,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             );
 
             broadcast({ table: tableName, op: "insert", key: id, row: docWithMeta });
+            await onWrite({ op: "insert", table: tableName, id, doc: docWithMeta });
 
             return id;
         },
@@ -410,6 +428,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             runSql(sql, `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ?`, JSON.stringify(merged), id);
 
             broadcast({ table: tableName, op: "update", key: id, row: merged });
+            await onWrite({ op: "update", table: tableName, id, doc: merged });
         },
 
         async replace(id, document) {
@@ -431,6 +450,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             );
 
             broadcast({ table: tableName, op: "update", key: id, row: replaced });
+            await onWrite({ op: "update", table: tableName, id, doc: replaced });
         },
 
         async delete(id) {
@@ -443,6 +463,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             runSql(sql, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
 
             broadcast({ table: tableName, op: "delete", key: id });
+            await onWrite({ op: "delete", table: tableName, id });
         },
     };
 
