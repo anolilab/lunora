@@ -1,5 +1,5 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useCirrus } from "./cirrus-provider.js";
 import type { UseQueryOptions, UseSubscriptionResult } from "./types.js";
@@ -39,17 +39,26 @@ export function useSubscription<F extends FunctionReference>(
     const skipped = args === "skip";
     const serialized = skipped ? "skip" : stableStringify(args);
 
+    // Latest subscribe inputs. The dependency array keys off `fn.__cirrusRef`
+    // and the serialized args, which already capture every meaningful change;
+    // reading `fn`/`args` from a ref keeps the dependency array honest without
+    // re-subscribing whenever the consumer recreates them with the same value.
+    const subscribeRef = useRef({ args, fn });
+
+    subscribeRef.current = { args, fn };
+
     useEffect(() => {
         if (skipped) {
             return;
         }
 
         let cancelled = false;
+        const { args: currentArgs, fn: currentFn } = subscribeRef.current;
 
         try {
             const unsubscribe = client.subscribe(
-                fn,
-                args as ArgsOf<F>,
+                currentFn,
+                currentArgs as ArgsOf<F>,
                 (value) => {
                     if (cancelled) {
                         return;
@@ -65,9 +74,19 @@ export function useSubscription<F extends FunctionReference>(
                 unsubscribe();
             };
         } catch (error: unknown) {
-            setState({ data: undefined, error: error instanceof Error ? error : new Error(String(error)) });
+            const normalized = error instanceof Error ? error : new Error(String(error));
 
-            return undefined;
+            // Defer out of the synchronous effect body so the error isn't a
+            // state adjustment made directly in response to a prop change.
+            queueMicrotask(() => {
+                if (!cancelled) {
+                    setState({ data: undefined, error: normalized });
+                }
+            });
+
+            return () => {
+                cancelled = true;
+            };
         }
     }, [client, fn.__cirrusRef, serialized, options.shardKey, skipped]);
 

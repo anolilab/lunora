@@ -37,18 +37,26 @@ export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "
         };
     }).current;
 
-    const notify = (): void => {
-        for (const listener of listenersRef.current) {
-            listener();
-        }
-    };
+    // Latest acquire inputs. `key` already encodes (fn, argsRecord, shardKey),
+    // so the effect re-runs whenever any of them changes; reading them from a
+    // ref keeps the dependency array honest without re-acquiring every render.
+    const acquireRef = useRef({ argsRecord, fn, shardKey });
+
+    acquireRef.current = { argsRecord, fn, shardKey };
 
     useEffect(() => {
         if (skipped) {
             return;
         }
 
-        const handle = cache.acquire(fn, argsRecord, shardKey, notify);
+        const notify = (): void => {
+            for (const listener of listenersRef.current) {
+                listener();
+            }
+        };
+
+        const { argsRecord: currentArgs, fn: currentFn, shardKey: currentShardKey } = acquireRef.current;
+        const handle = cache.acquire(currentFn, currentArgs, currentShardKey, notify);
 
         releaseRef.current = handle.release;
         lastKeyRef.current = key;
@@ -61,7 +69,7 @@ export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "
             releaseRef.current = null;
             lastKeyRef.current = null;
         };
-    }, [key, skipped]);
+    }, [cache, key, skipped]);
 
     const getSnapshot = (): ReturnOf<F> | undefined => {
         if (skipped) {
