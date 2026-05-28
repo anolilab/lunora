@@ -95,6 +95,13 @@ export interface ValidatorLike {
 /** Notifies hibernated subscribers that a row in `table` changed. */
 export type BroadcastDelta = (delta: MutationDelta) => void;
 
+/**
+ * Records that a query touched `table`. Wired only during subscription
+ * re-execution so the DO learns which tables a query depends on; the normal
+ * mutation path leaves it unset (default no-op) to avoid spurious reads.
+ */
+export type ReadHook = (table: string) => void;
+
 /** Pluggable wall clock — defaults to `Date.now`. */
 export type Clock = () => number;
 
@@ -115,13 +122,6 @@ export interface WriteEvent {
  * keep external stores (e.g. Vectorize) in sync atomically with the write.
  */
 export type WriteHook = (event: WriteEvent) => Promise<void> | void;
-
-/**
- * Notified with each table a handler reads (via `db.query(table)` or
- * `db.get(id)`). The shard uses this to discover, at runtime, which tables a
- * subscription's query depends on so it can re-run only the affected ones.
- */
-export type ReadHook = (table: string) => void;
 
 export interface CtxDbOptions {
     broadcast?: BroadcastDelta;
