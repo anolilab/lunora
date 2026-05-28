@@ -519,8 +519,8 @@ ${vectorsBuild}
                 },
                 db,
                 fetch: globalThis.fetch.bind(globalThis),
-                scheduler: config.scheduler ? config.scheduler(env) : schedulerStub,
-                storage: config.storage ? config.storage(env) : storageStub,${vectorsCtxField}
+                scheduler: config.scheduler?.(env) ?? schedulerStub,
+                storage: config.storage?.(env) ?? storageStub,${vectorsCtxField}
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__cirrusRef, fnArgs, ctx);

@@ -118,8 +118,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 },
                 db,
                 fetch: globalThis.fetch.bind(globalThis),
-                scheduler: config.scheduler ? config.scheduler(env) : schedulerStub,
-                storage: config.storage ? config.storage(env) : storageStub,
+                scheduler: config.scheduler?.(env) ?? schedulerStub,
+                storage: config.storage?.(env) ?? storageStub,
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__cirrusRef, fnArgs, ctx);
