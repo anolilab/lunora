@@ -473,7 +473,7 @@ const renderDrizzleFile = (tables: ReadonlyArray<TableIR>): string => {
 
     const tableBlocks = tables.map((table) => renderDrizzleTable(table, knownTables)).join("\n\n");
 
-    return `${GENERATED_HEADER}import { ${importParts.join(", ")} } from "drizzle-orm/sqlite-core";
+    return `${GENERATED_HEADER}import { ${importParts.join(", ")} } from "@cirrus/server/drizzle";
 
 ${tableBlocks}
 `;

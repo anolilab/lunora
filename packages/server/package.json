@@ -22,6 +22,11 @@
             "import": "./dist/types.mjs",
             "require": "./dist/types.cjs"
         },
+        "./drizzle": {
+            "types": "./dist/drizzle.d.ts",
+            "import": "./dist/drizzle.mjs",
+            "require": "./dist/drizzle.cjs"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {
@@ -32,7 +37,8 @@
         "bench": "vitest bench --run"
     },
     "dependencies": {
-        "@cirrus/values": "workspace:*"
+        "@cirrus/values": "workspace:*",
+        "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
         "@types/node": "catalog:types",

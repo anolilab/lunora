@@ -883,6 +883,9 @@ importers:
       '@cirrus/values':
         specifier: workspace:*
         version: link:../values
+      drizzle-orm:
+        specifier: catalog:drizzle
+        version: 0.45.2(@cloudflare/workers-types@4.20260527.1)(kysely@0.28.17)
     devDependencies:
       '@types/node':
         specifier: catalog:types
