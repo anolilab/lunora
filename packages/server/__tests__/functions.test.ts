@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import type { ActionCtx, MutationCtx, QueryCtx } from "../src/index.js";
-import { action, mutation, query, v, ValidationError } from "../src/index.js";
+import { action, internalAction, internalMutation, internalQuery, mutation, query, v, ValidationError } from "../src/index.js";
 
 const makeQueryCtx = (): QueryCtx => ({
     auth: { getIdentity: async () => null, userId: null },
@@ -99,5 +99,31 @@ describe("action", () => {
 
         await expect(async () => ping.handler(makeActionCtx(), { url: 42 } as unknown as { url: string })).rejects.toBeInstanceOf(ValidationError);
         expect(handler).not.toHaveBeenCalled();
+    });
+});
+
+describe("visibility", () => {
+    test("public factories omit the visibility key (absence === public)", () => {
+        expect(query({ args: {}, handler: () => null })).not.toHaveProperty("visibility");
+        expect(mutation({ args: {}, handler: () => null })).not.toHaveProperty("visibility");
+        expect(action({ args: {}, handler: () => null })).not.toHaveProperty("visibility");
+    });
+
+    test("internal factories stamp visibility: internal while keeping the right kind", () => {
+        const stats = internalQuery({ args: {}, handler: () => null });
+        const purge = internalMutation({ args: {}, handler: () => null });
+        const sync = internalAction({ args: {}, handler: () => null });
+
+        expect(stats).toMatchObject({ kind: "query", visibility: "internal" });
+        expect(purge).toMatchObject({ kind: "mutation", visibility: "internal" });
+        expect(sync).toMatchObject({ kind: "action", visibility: "internal" });
+    });
+
+    test("internal factories still validate and run their handler", async () => {
+        const handler = vi.fn(async (_context: MutationCtx, args: { text: string }) => args.text);
+        const purge = internalMutation({ args: { text: v.string() }, handler });
+
+        await expect(purge.handler(makeMutationCtx(), { text: "hi" })).resolves.toBe("hi");
+        await expect(async () => purge.handler(makeMutationCtx(), { text: 1 } as unknown as { text: string })).rejects.toBeInstanceOf(ValidationError);
     });
 });

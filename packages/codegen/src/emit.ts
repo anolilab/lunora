@@ -364,9 +364,12 @@ const relocateGeneratedImports = (returnType: string): string =>
         return `import("${stripped}")`;
     });
 
-/** Emit `_generated/api.ts` — the typed `api.*` registry. */
-export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
-    // Group functions by file path (namespace).
+/**
+ * Render the grouped-by-namespace body of an api interface for a subset of
+ * functions. Returns `""` when the subset is empty so the caller can emit an
+ * empty `{}` interface.
+ */
+const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
     const namespaces = new Map<string, FunctionIR[]>();
 
     for (const fn of functions) {
@@ -395,23 +398,47 @@ export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
         return `    ${sanitizeNamespace(file)}: {\n${members}\n    };`;
     };
 
-    const sortedNamespaces = [...namespaces.entries()].sort(([a], [b]) => a.localeCompare(b));
-    const body = sortedNamespaces.map((entry) => renderNamespace(entry)).join("\n");
+    return [...namespaces.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map((entry) => renderNamespace(entry))
+        .join("\n");
+};
+
+/**
+ * Emit `_generated/api.ts` — the typed `api.*` registry (public functions) plus
+ * the `internal.*` registry. Both are the same `anyApi` proxy at runtime (the
+ * `__cirrusRef` is identical); visibility is enforced server-side at dispatch,
+ * not in the reference. Splitting the *types* keeps internal functions off the
+ * client-facing `api` surface.
+ */
+export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
+    const publicFunctions = functions.filter((fn) => fn.visibility !== "internal");
+    const internalFunctions = functions.filter((fn) => fn.visibility === "internal");
+
+    const publicBody = renderApiBody(publicFunctions);
+    const internalBody = renderApiBody(internalFunctions);
 
     // Import only the dataModel helpers the rendered arg/return types actually
     // reference: `Doc` appears when a function returns documents, `Id` when it
     // takes or returns an id. Importing an unused one trips noUnusedLocals.
-    const dataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(body));
+    const combinedBody = `${publicBody}\n${internalBody}`;
+    const dataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(combinedBody));
     const dataModelImportLine = dataModelImports.length > 0 ? `\nimport type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
+
+    const apiBlock = publicBody ? `\n${publicBody}\n` : "";
+    const internalBlock = internalBody ? `\n${internalBody}\n` : "";
 
     return `${GENERATED_HEADER}import { anyApi } from "@cirrus/server/types";
 import type { FunctionReference } from "@cirrus/client";
 ${dataModelImportLine}
-export interface ApiTypes {
-${body}
-}
+export interface ApiTypes {${apiBlock}}
 
 export const api = anyApi as unknown as ApiTypes;
+
+/** Internal functions — callable only server-side via \`ctx.run*\`, never from a client. */
+export interface InternalApiTypes {${internalBlock}}
+
+export const internal = anyApi as unknown as InternalApiTypes;
 `;
 };
 
@@ -460,7 +487,14 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>): string => {
     const dispatchBody = dispatchEntries.length > 0 ? `\n${dispatchEntries}\n` : "";
     const importBlock = importLines.length > 0 ? `${importLines}\n\n` : "";
 
-    return `${GENERATED_HEADER}${importBlock}import { action as actionBase, mutation as mutationBase, query as queryBase } from "@cirrus/server";
+    return `${GENERATED_HEADER}${importBlock}import {
+    action as actionBase,
+    internalAction as internalActionBase,
+    internalMutation as internalMutationBase,
+    internalQuery as internalQueryBase,
+    mutation as mutationBase,
+    query as queryBase,
+} from "@cirrus/server";
 import type {
     ActionCtx as ActionCtxBase,
     ArgsValidator,
@@ -514,6 +548,24 @@ export const action = actionBase as unknown as <A extends ArgsValidator, R>(defi
     handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
 }) => RegisteredAction<A, R>;
 
+/** \`internalQuery()\` bound to this project's typed {@link QueryCtx} — never exposed on \`api\`. */
+export const internalQuery = internalQueryBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: QueryCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredQuery<A, R>;
+
+/** \`internalMutation()\` bound to this project's typed {@link MutationCtx} — never exposed on \`api\`. */
+export const internalMutation = internalMutationBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: MutationCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredMutation<A, R>;
+
+/** \`internalAction()\` bound to this project's typed {@link ActionCtx} — never exposed on \`api\`. */
+export const internalAction = internalActionBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredAction<A, R>;
+
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
  * The real argument validators / return types are checked elsewhere — at
@@ -524,6 +576,8 @@ export interface RegisteredCirrusFunction {
     kind: "action" | "mutation" | "query";
     args: Record<string, unknown>;
     handler: (context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown;
+    /** \`"internal"\` functions are rejected on the external RPC path; absence === public. */
+    visibility?: "internal" | "public";
 }
 
 /**
@@ -533,14 +587,15 @@ export interface RegisteredCirrusFunction {
 export const CIRRUS_FUNCTIONS: Record<string, RegisteredCirrusFunction> = {${dispatchBody}};
 
 /**
- * Resolve and invoke a registered function. Throws a CirrusError-shaped
- * object (404) when the path is unknown — the runtime's structural error
- * mapper turns that into the right HTTP status.
+ * Resolve and invoke a registered function from an external caller. Throws a
+ * CirrusError-shaped object (404) when the path is unknown — the runtime's
+ * structural error mapper turns that into the right HTTP status. Internal
+ * functions are treated as not-found so their existence never leaks to clients.
  */
 export const dispatchCirrusFunction = async (functionPath: string, context: unknown, args: Record<string, unknown>): Promise<unknown> => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
-    if (!registered) {
+    if (!registered || registered.visibility === "internal") {
         throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
             name: "CirrusError",
             code: "FUNCTION_NOT_FOUND",
@@ -804,7 +859,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
             const registered = CIRRUS_FUNCTIONS[functionPath];
 
-            if (!registered) {
+            // Internal functions are reachable only server-side (\`ctx.run*\`),
+            // never from a client. Report them as not-found so their existence
+            // never leaks across the external RPC boundary.
+            if (!registered || registered.visibility === "internal") {
                 throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
                     name: "CirrusError",
                     code: "FUNCTION_NOT_FOUND",
@@ -820,7 +878,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {
             const registered = CIRRUS_FUNCTIONS[functionPath];
 
-            if (!registered || registered.kind !== "query") {
+            if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
                 return null;
             }
 

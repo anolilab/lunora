@@ -14,3 +14,12 @@ export interface ApiTypes {
 }
 
 export const api = anyApi as unknown as ApiTypes;
+
+/** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
+export interface InternalApiTypes {
+    messages: {
+        purge: FunctionReference<"mutation", { channelId: Id<"channels"> }, unknown>;
+    };
+}
+
+export const internal = anyApi as unknown as InternalApiTypes;

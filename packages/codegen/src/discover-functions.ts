@@ -11,6 +11,24 @@ import { sanitizeNamespace } from "./paths.js";
 const FUNCTION_KINDS = new Set(["action", "mutation", "query"]);
 
 /**
+ * Internal factory names exported from `@cirrus/server`, mapped to the kind
+ * they register. A call to one of these marks the function `internal`: callable
+ * server-side via `ctx.run*` but absent from the client-facing `api`.
+ */
+const INTERNAL_FACTORIES: Record<string, "action" | "mutation" | "query"> = {
+    internalAction: "action",
+    internalMutation: "mutation",
+    internalQuery: "query",
+};
+
+interface DiscoveredFunction {
+    args: Record<string, ValidatorIR>;
+    kind: string;
+    returnType: string;
+    visibility: "internal" | "public";
+}
+
+/**
  * Resolve a callee identifier through its import declaration, returning the
  * **imported** name (i.e. the name as exported from `@cirrus/server`). This
  * handles aliasing like `import { query as q }` where the call site uses `q`
@@ -244,10 +262,7 @@ const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
  * named `query` on some other object. Returns `null` when this isn't a Cirrus
  * builder terminal.
  */
-const discoverBuilderProcedure = (
-    call: CallExpression,
-    callee: PropertyAccessExpression,
-): null | { args: Record<string, ValidatorIR>; kind: string; returnType: string } => {
+const discoverBuilderProcedure = (call: CallExpression, callee: PropertyAccessExpression): DiscoveredFunction | null => {
     const method = callee.getName();
 
     if (!FUNCTION_KINDS.has(method)) {
@@ -255,8 +270,9 @@ const discoverBuilderProcedure = (
     }
 
     const receiver = callee.getExpression();
+    const receiverType = receiver.getType();
 
-    if (!receiver.getType().getProperty("__cirrusProcedure")) {
+    if (!receiverType.getProperty("__cirrusProcedure")) {
         return null;
     }
 
@@ -264,6 +280,10 @@ const discoverBuilderProcedure = (
         args: argsFromBuilderChain(receiver),
         kind: method,
         returnType: returnTypeFromBuilderCall(call),
+        // Internal builders carry an extra `__cirrusVisibility: "internal"`
+        // brand the public builders don't declare, so its mere presence marks
+        // the procedure internal.
+        visibility: receiverType.getProperty("__cirrusVisibility") ? "internal" : "public",
     };
 };
 
@@ -353,13 +373,20 @@ export const discoverFunctions = (project: Project, cirrusDirectory: string): Fu
                 const call = initializer as CallExpression;
                 const callee = call.getExpression();
 
-                let discovered: null | { args: Record<string, ValidatorIR>; kind: string; returnType: string } = null;
+                let discovered: DiscoveredFunction | null = null;
 
                 if (Node.isIdentifier(callee)) {
-                    const kind = resolveCalleeKind(callee);
+                    const calleeName = resolveCalleeKind(callee);
 
-                    if (kind && FUNCTION_KINDS.has(kind)) {
-                        discovered = { args: argsFromCall(call), kind, returnType: returnTypeFromCall(call) };
+                    if (calleeName && FUNCTION_KINDS.has(calleeName)) {
+                        discovered = { args: argsFromCall(call), kind: calleeName, returnType: returnTypeFromCall(call), visibility: "public" };
+                    } else if (calleeName && INTERNAL_FACTORIES[calleeName]) {
+                        discovered = {
+                            args: argsFromCall(call),
+                            kind: INTERNAL_FACTORIES[calleeName],
+                            returnType: returnTypeFromCall(call),
+                            visibility: "internal",
+                        };
                     }
                 } else if (Node.isPropertyAccessExpression(callee)) {
                     discovered = discoverBuilderProcedure(call, callee);
@@ -375,6 +402,7 @@ export const discoverFunctions = (project: Project, cirrusDirectory: string): Fu
                     filePath: relativePath,
                     kind: discovered.kind as FunctionIR["kind"],
                     returnType: discovered.returnType,
+                    visibility: discovered.visibility,
                 });
             }
         }

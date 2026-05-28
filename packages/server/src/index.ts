@@ -4,6 +4,9 @@ export type {
     CreateOptions,
     DataModelInit,
     EmptyArgs,
+    InternalActionBuilder,
+    InternalMutationBuilder,
+    InternalQueryBuilder,
     Middleware,
     MiddlewareNext,
     MutationBuilder,
@@ -14,7 +17,7 @@ export { initCirrus } from "./builder/index.js";
 export type { CirrusErrorCode } from "./error.js";
 export { CirrusError } from "./error.js";
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions.js";
-export { action, mutation, query } from "./functions.js";
+export { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions.js";
 export type { ManyRelation, OneRelation, RelationBuilder, TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";
 export { defineSchema, defineTable, defineVectorIndex } from "./schema.js";
 export type {
@@ -25,6 +28,7 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     FunctionKind,
+    FunctionVisibility,
     IndexDefinition,
     IndexRangeBuilder,
     InferArgs,

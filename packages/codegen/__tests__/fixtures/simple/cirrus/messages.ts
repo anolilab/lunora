@@ -1,4 +1,4 @@
-import { mutation, query, v } from "@cirrus/server";
+import { internalMutation, mutation, query, v } from "@cirrus/server";
 
 export const list = query({
     args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
@@ -16,5 +16,12 @@ export const send = mutation({
     },
     handler: async (_context, args) => {
         return { channelId: args.channelId, text: args.text, kind: args.kind, tags: args.tags };
+    },
+});
+
+export const purge = internalMutation({
+    args: { channelId: v.id("channels") },
+    handler: async (_context, args) => {
+        return { channelId: args.channelId, purged: 0 };
     },
 });

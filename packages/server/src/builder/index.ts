@@ -6,6 +6,9 @@ import type {
     CreateOptions,
     DataModelInit,
     EmptyArgs,
+    InternalActionBuilder,
+    InternalMutationBuilder,
+    InternalQueryBuilder,
     Middleware,
     MiddlewareNext,
     MutationBuilder,
@@ -18,6 +21,9 @@ export type {
     CreateOptions,
     DataModelInit,
     EmptyArgs,
+    InternalActionBuilder,
+    InternalMutationBuilder,
+    InternalQueryBuilder,
     Middleware,
     MiddlewareNext,
     MutationBuilder,
@@ -84,26 +90,36 @@ const makeHandler
  * Construct a kind-specific builder. The terminal method is keyed by the kind
  * (`query` / `mutation` / `action`) so codegen reads the kind from the call
  * expression's property name without tracing the builder across files.
+ *
+ * Internal builders carry an extra `__cirrusVisibility: "internal"` brand and
+ * stamp `visibility: "internal"` onto the registered function. Public builders
+ * declare neither, so codegen distinguishes them by the brand's mere presence.
  */
-const makeBuilder = (kind: FunctionKind, state: BuilderState): Record<string, unknown> => ({
+const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "internal"): Record<string, unknown> => ({
     __cirrusProcedure: kind,
+    ...visibility ? { __cirrusVisibility: visibility } : {},
     [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => ({
         args: state.args,
         handler: makeHandler(state.args, state.middlewares, userHandler),
         kind,
+        ...visibility ? { visibility } : {},
     }),
-    input: (validators: ArgsValidator) => makeBuilder(kind, { args: { ...state.args, ...validators }, middlewares: state.middlewares }),
-    use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { args: state.args, middlewares: [...state.middlewares, middleware] }),
+    input: (validators: ArgsValidator) => makeBuilder(kind, { args: { ...state.args, ...validators }, middlewares: state.middlewares }, visibility),
+    use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { args: state.args, middlewares: [...state.middlewares, middleware] }, visibility),
 });
 
 /**
  * Entry point for the procedure builder. `dataModel<DM>()` binds the generated
- * `DataModel` (phantom for now), and `.create()` yields the three root builders.
+ * `DataModel` (phantom for now), and `.create()` yields the public root builders
+ * plus their `internal*` counterparts.
  */
 export const initCirrus = {
     dataModel: <DataModel>(): DataModelInit<DataModel> => ({
         create: (_options?: CreateOptions): CirrusBuilders => ({
             action: makeBuilder("action", { args: {}, middlewares: [] }) as unknown as ActionBuilder<ActionCtx, EmptyArgs>,
+            internalAction: makeBuilder("action", { args: {}, middlewares: [] }, "internal") as unknown as InternalActionBuilder<ActionCtx, EmptyArgs>,
+            internalMutation: makeBuilder("mutation", { args: {}, middlewares: [] }, "internal") as unknown as InternalMutationBuilder<MutationCtx, EmptyArgs>,
+            internalQuery: makeBuilder("query", { args: {}, middlewares: [] }, "internal") as unknown as InternalQueryBuilder<QueryCtx, EmptyArgs>,
             mutation: makeBuilder("mutation", { args: {}, middlewares: [] }) as unknown as MutationBuilder<MutationCtx, EmptyArgs>,
             query: makeBuilder("query", { args: {}, middlewares: [] }) as unknown as QueryBuilder<QueryCtx, EmptyArgs>,
         }),

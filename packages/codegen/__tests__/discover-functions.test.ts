@@ -202,6 +202,29 @@ describe("discoverFunctions namespace collision", () => {
         expect(result[0]?.returnType).toMatch(/CursorDoc\[\]/u);
     });
 
+    test("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
+        writeFunction(
+            "admin.ts",
+            `
+            import { internalQuery, internalMutation, internalAction, query } from "@cirrus/server";
+            export const stats = internalQuery({ args: {}, handler: () => null });
+            export const purge = internalMutation({ args: {}, handler: () => null });
+            export const sync = internalAction({ args: {}, handler: () => null });
+            export const list = query({ args: {}, handler: () => null });
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+        const byName = new Map(result.map((f) => [f.exportName, f]));
+
+        expect(byName.get("stats")).toMatchObject({ kind: "query", visibility: "internal" });
+        expect(byName.get("purge")).toMatchObject({ kind: "mutation", visibility: "internal" });
+        expect(byName.get("sync")).toMatchObject({ kind: "action", visibility: "internal" });
+        // A plain `query` stays public.
+        expect(byName.get("list")).toMatchObject({ kind: "query", visibility: "public" });
+    });
+
     test("same file producing two registrations does not trip the guard", () => {
         // Two functions exported from the same file share a sanitized namespace
         // but that's expected — only *distinct files* should collide.
@@ -246,7 +269,18 @@ const BUILDER_PREAMBLE = `
         mutation: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "mutation" };
     }
 
-    declare const c: { mutation: MutationBuilder<Record<never, never>>; query: QueryBuilder<Record<never, never>> };
+    interface InternalQueryBuilder<Args> {
+        readonly __cirrusProcedure: "query";
+        readonly __cirrusVisibility: "internal";
+        input: <X extends Record<string, unknown>>(validators: X) => InternalQueryBuilder<Args & X>;
+        query: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "query"; visibility: "internal" };
+    }
+
+    declare const c: {
+        mutation: MutationBuilder<Record<never, never>>;
+        query: QueryBuilder<Record<never, never>>;
+        internalQuery: InternalQueryBuilder<Record<never, never>>;
+    };
 `;
 
 describe("discoverFunctions builder procedures", () => {
@@ -332,6 +366,38 @@ describe("discoverFunctions builder procedures", () => {
         const result = discoverFunctions(project, workdir);
 
         expect(result).toHaveLength(0);
+    });
+
+    test("marks a builder carrying the __cirrusVisibility brand as internal, across a chain", () => {
+        writeFunction(
+            "messages.ts",
+            `${BUILDER_PREAMBLE}
+            export const stats = c.internalQuery
+                .input({ channelId: v.id("channels") })
+                .query((): { ok: true } => ({ ok: true }));
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result).toHaveLength(1);
+        expect(result[0]).toMatchObject({ kind: "query", visibility: "internal" });
+        expect(result[0]?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
+    });
+
+    test("a public builder terminal stays visibility: public", () => {
+        writeFunction(
+            "messages.ts",
+            `${BUILDER_PREAMBLE}
+            export const list = c.query.input({ a: v.number() }).query(() => null);
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result[0]?.visibility).toBe("public");
     });
 
     test("does not register an intermediate .input() assignment that lacks a terminal", () => {

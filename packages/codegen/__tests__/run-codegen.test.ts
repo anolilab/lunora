@@ -48,6 +48,27 @@ describe("runCodegen", () => {
         expect(result.generated.api).toContain("export const api = anyApi as unknown as ApiTypes;");
     });
 
+    test("routes internal functions to `internal`/InternalApiTypes, keeping them off the public `api`", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        // `purge` is an internalMutation — it must NOT appear in the public ApiTypes.
+        const [publicHalf, internalHalf] = result.generated.api.split("export interface InternalApiTypes");
+
+        expect(publicHalf).toContain("list:");
+        expect(publicHalf).toContain("send:");
+        expect(publicHalf).not.toContain("purge:");
+
+        // …and it must appear in the internal half, typed as a mutation.
+        expect(internalHalf).toContain('purge: FunctionReference<"mutation"');
+        expect(result.generated.api).toContain("export const internal = anyApi as unknown as InternalApiTypes;");
+
+        // The dispatch table still registers it (so `ctx.runMutation` can reach it),
+        // and the external paths gate on `visibility`.
+        expect(result.generated.server).toContain('"messages:purge": cirrus_messages_0.purge');
+        expect(result.generated.server).toContain('visibility?: "internal" | "public";');
+        expect(result.generated.shard).toContain('registered.visibility === "internal"');
+    });
+
     test("emits per-table index and searchIndex name unions in dataModel.ts", () => {
         const result = runCodegen({ projectRoot: workdir });
 
@@ -86,10 +107,19 @@ describe("runCodegen", () => {
 
         // The base factories are imported under `*Base` aliases and re-bound to
         // the schema-typed contexts (rather than re-exported verbatim).
-        expect(result.generated.server).toContain('import { action as actionBase, mutation as mutationBase, query as queryBase } from "@cirrus/server"');
+        expect(result.generated.server).toContain("action as actionBase,");
+        expect(result.generated.server).toContain("mutation as mutationBase,");
+        expect(result.generated.server).toContain("query as queryBase,");
+        expect(result.generated.server).toContain('} from "@cirrus/server";');
         expect(result.generated.server).toContain("export const query = queryBase as unknown as");
         expect(result.generated.server).toContain("export const mutation = mutationBase as unknown as");
         expect(result.generated.server).toContain("export const action = actionBase as unknown as");
+
+        // Internal factories are re-bound to typed contexts alongside the public ones.
+        expect(result.generated.server).toContain("internalQuery as internalQueryBase,");
+        expect(result.generated.server).toContain("export const internalQuery = internalQueryBase as unknown as");
+        expect(result.generated.server).toContain("export const internalMutation = internalMutationBase as unknown as");
+        expect(result.generated.server).toContain("export const internalAction = internalActionBase as unknown as");
 
         // The typed contexts widen `db` to the generated per-table facade while
         // intersecting the legacy structural reader/writer for back-compat.

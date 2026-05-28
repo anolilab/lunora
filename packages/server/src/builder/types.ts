@@ -57,9 +57,42 @@ export interface ActionBuilder<Ctx, Args extends ArgsValidator> {
     use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => ActionBuilder<CtxOut, Args>;
 }
 
-/** The three root builders returned by `.create()`. */
+/**
+ * Internal builder variants. Identical to their public counterparts but carry
+ * the `__cirrusVisibility: "internal"` brand codegen keys off to route the
+ * registration into the `internal` object (and keep it off `api`). `input`/`use`
+ * return the internal builder type so the brand survives the whole chain.
+ */
+export interface InternalQueryBuilder<Ctx, Args extends ArgsValidator> {
+    readonly __cirrusProcedure: "query";
+    readonly __cirrusVisibility: "internal";
+    input: <A extends ArgsValidator>(validators: A) => InternalQueryBuilder<Ctx, A & Args>;
+    query: <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>;
+    use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => InternalQueryBuilder<CtxOut, Args>;
+}
+
+export interface InternalMutationBuilder<Ctx, Args extends ArgsValidator> {
+    readonly __cirrusProcedure: "mutation";
+    readonly __cirrusVisibility: "internal";
+    input: <A extends ArgsValidator>(validators: A) => InternalMutationBuilder<Ctx, A & Args>;
+    mutation: <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>;
+    use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => InternalMutationBuilder<CtxOut, Args>;
+}
+
+export interface InternalActionBuilder<Ctx, Args extends ArgsValidator> {
+    readonly __cirrusProcedure: "action";
+    readonly __cirrusVisibility: "internal";
+    action: <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>;
+    input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Ctx, A & Args>;
+    use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => InternalActionBuilder<CtxOut, Args>;
+}
+
+/** The public root builders plus their `internal*` counterparts, returned by `.create()`. */
 export interface CirrusBuilders {
     action: ActionBuilder<ActionCtx, EmptyArgs>;
+    internalAction: InternalActionBuilder<ActionCtx, EmptyArgs>;
+    internalMutation: InternalMutationBuilder<MutationCtx, EmptyArgs>;
+    internalQuery: InternalQueryBuilder<QueryCtx, EmptyArgs>;
     mutation: MutationBuilder<MutationCtx, EmptyArgs>;
     query: QueryBuilder<QueryCtx, EmptyArgs>;
 }

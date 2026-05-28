@@ -1,6 +1,16 @@
 import { ValidationError } from "@cirrus/values";
 
-import type { ActionCtx, ArgsValidator, InferArgs, MutationCtx, QueryCtx, RegisteredAction, RegisteredMutation, RegisteredQuery } from "./types.js";
+import type {
+    ActionCtx,
+    ArgsValidator,
+    FunctionVisibility,
+    InferArgs,
+    MutationCtx,
+    QueryCtx,
+    RegisteredAction,
+    RegisteredMutation,
+    RegisteredQuery,
+} from "./types.js";
 
 /**
  * Validate an args record against the validator map. Throws a
@@ -61,7 +71,8 @@ export interface ActionDefinition<A extends ArgsValidator, R> {
 const wrap = <A extends ArgsValidator, R, Kind extends "action" | "mutation" | "query">(
     kind: Kind,
     definition: { args: A; handler: (context: never, args: InferArgs<A>) => Promise<R> | R },
-): { args: A; handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R; kind: Kind } => ({
+    visibility?: FunctionVisibility,
+): { args: A; handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R; kind: Kind; visibility?: FunctionVisibility } => ({
     args: definition.args,
     handler: (context: unknown, args: InferArgs<A>) => {
         const parsed = validateArgs(definition.args, args as Record<string, unknown>);
@@ -69,13 +80,27 @@ const wrap = <A extends ArgsValidator, R, Kind extends "action" | "mutation" | "
         return definition.handler(context as never, parsed);
     },
     kind,
+    // Only attach the key when internal so public registrations keep emitting
+    // the bare `{ args, handler, kind }` shape (absence === public).
+    ...visibility ? { visibility } : {},
 });
 
-/** Register a query function. */
+/** Register a query function reachable from clients via the generated `api`. */
 export const query = <A extends ArgsValidator, R>(definition: QueryDefinition<A, R>): RegisteredQuery<A, R> => wrap("query", definition);
 
-/** Register a mutation function. */
+/** Register a mutation function reachable from clients via the generated `api`. */
 export const mutation = <A extends ArgsValidator, R>(definition: MutationDefinition<A, R>): RegisteredMutation<A, R> => wrap("mutation", definition);
 
-/** Register an action function (HTTP/external side effects allowed). */
+/** Register an action function (HTTP/external side effects allowed) reachable from clients via the generated `api`. */
 export const action = <A extends ArgsValidator, R>(definition: ActionDefinition<A, R>): RegisteredAction<A, R> => wrap("action", definition);
+
+/** Register an internal query — callable only server-side via `ctx.runQuery`, never from a client. */
+export const internalQuery = <A extends ArgsValidator, R>(definition: QueryDefinition<A, R>): RegisteredQuery<A, R> => wrap("query", definition, "internal");
+
+/** Register an internal mutation — callable only server-side via `ctx.runMutation`, never from a client. */
+export const internalMutation = <A extends ArgsValidator, R>(definition: MutationDefinition<A, R>): RegisteredMutation<A, R> =>
+    wrap("mutation", definition, "internal");
+
+/** Register an internal action — callable only server-side via `ctx.runAction`, never from a client. */
+export const internalAction = <A extends ArgsValidator, R>(definition: ActionDefinition<A, R>): RegisteredAction<A, R> =>
+    wrap("action", definition, "internal");

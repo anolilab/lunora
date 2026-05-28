@@ -3,7 +3,14 @@
 
 import * as cirrus_messages_0 from "../messages.js";
 
-import { action as actionBase, mutation as mutationBase, query as queryBase } from "@cirrus/server";
+import {
+    action as actionBase,
+    internalAction as internalActionBase,
+    internalMutation as internalMutationBase,
+    internalQuery as internalQueryBase,
+    mutation as mutationBase,
+    query as queryBase,
+} from "@cirrus/server";
 import type {
     ActionCtx as ActionCtxBase,
     ArgsValidator,
@@ -57,6 +64,24 @@ export const action = actionBase as unknown as <A extends ArgsValidator, R>(defi
     handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
 }) => RegisteredAction<A, R>;
 
+/** `internalQuery()` bound to this project's typed {@link QueryCtx} — never exposed on `api`. */
+export const internalQuery = internalQueryBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: QueryCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredQuery<A, R>;
+
+/** `internalMutation()` bound to this project's typed {@link MutationCtx} — never exposed on `api`. */
+export const internalMutation = internalMutationBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: MutationCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredMutation<A, R>;
+
+/** `internalAction()` bound to this project's typed {@link ActionCtx} — never exposed on `api`. */
+export const internalAction = internalActionBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredAction<A, R>;
+
 /**
  * Single registered function, narrowed to the shape `handleRpc` needs.
  * The real argument validators / return types are checked elsewhere — at
@@ -67,6 +92,8 @@ export interface RegisteredCirrusFunction {
     kind: "action" | "mutation" | "query";
     args: Record<string, unknown>;
     handler: (context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown;
+    /** `"internal"` functions are rejected on the external RPC path; absence === public. */
+    visibility?: "internal" | "public";
 }
 
 /**
@@ -75,18 +102,20 @@ export interface RegisteredCirrusFunction {
  */
 export const CIRRUS_FUNCTIONS: Record<string, RegisteredCirrusFunction> = {
     "messages:list": cirrus_messages_0.list as unknown as RegisteredCirrusFunction,
+    "messages:purge": cirrus_messages_0.purge as unknown as RegisteredCirrusFunction,
     "messages:send": cirrus_messages_0.send as unknown as RegisteredCirrusFunction,
 };
 
 /**
- * Resolve and invoke a registered function. Throws a CirrusError-shaped
- * object (404) when the path is unknown — the runtime's structural error
- * mapper turns that into the right HTTP status.
+ * Resolve and invoke a registered function from an external caller. Throws a
+ * CirrusError-shaped object (404) when the path is unknown — the runtime's
+ * structural error mapper turns that into the right HTTP status. Internal
+ * functions are treated as not-found so their existence never leaks to clients.
  */
 export const dispatchCirrusFunction = async (functionPath: string, context: unknown, args: Record<string, unknown>): Promise<unknown> => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
-    if (!registered) {
+    if (!registered || registered.visibility === "internal") {
         throw Object.assign(new Error(`function not registered: ${functionPath}`), {
             name: "CirrusError",
             code: "FUNCTION_NOT_FOUND",

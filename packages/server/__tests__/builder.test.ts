@@ -28,6 +28,34 @@ describe("builder terminal", () => {
     });
 });
 
+describe("internal builders", () => {
+    test("carry the __cirrusVisibility brand while public builders do not", () => {
+        expect((c.internalQuery as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
+        expect((c.internalMutation as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
+        expect((c.internalAction as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
+        expect((c.query as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBeUndefined();
+    });
+
+    test("stamp visibility: internal onto the registered function, preserving kind + the brand across .input()", () => {
+        const stats = c.internalQuery.input({ limit: v.number() }).query(({ args }) => args.limit);
+
+        expect(stats).toMatchObject({ kind: "query", visibility: "internal" });
+
+        // The brand survives a chained .input() so codegen reads it off the receiver.
+        const chained = c.internalQuery.input({ a: v.number() });
+
+        expect((chained as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
+    });
+
+    test("internal builders still validate and run their handler", async () => {
+        const purge = c.internalMutation.input({ text: v.string() }).mutation(({ args }) => args.text);
+
+        expect(purge.kind).toBe("mutation");
+        await expect(purge.handler({}, { text: "hi" })).resolves.toBe("hi");
+        await expect(purge.handler({}, { text: 1 } as unknown as { text: string })).rejects.toBeInstanceOf(ValidationError);
+    });
+});
+
 describe("builder input accumulation", () => {
     test("merges args across multiple .input() calls", () => {
         const fn = c.query

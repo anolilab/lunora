@@ -118,7 +118,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
             const registered = CIRRUS_FUNCTIONS[functionPath];
 
-            if (!registered) {
+            // Internal functions are reachable only server-side (`ctx.run*`),
+            // never from a client. Report them as not-found so their existence
+            // never leaks across the external RPC boundary.
+            if (!registered || registered.visibility === "internal") {
                 throw Object.assign(new Error(`function not registered: ${functionPath}`), {
                     name: "CirrusError",
                     code: "FUNCTION_NOT_FOUND",
@@ -134,7 +137,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {
             const registered = CIRRUS_FUNCTIONS[functionPath];
 
-            if (!registered || registered.kind !== "query") {
+            if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
                 return null;
             }
 

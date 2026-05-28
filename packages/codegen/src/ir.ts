@@ -108,6 +108,12 @@ export interface FunctionIR {
      * project lacks a tsconfig that can reach `@cirrus/server`).
      */
     returnType: string;
+    /**
+     * Call surface the function is exposed on. Absent (or `"public"`) means it
+     * lands in the generated `api`; `"internal"` routes it to the separate
+     * `internal` object and is rejected by the DO's external RPC path.
+     */
+    visibility?: "internal" | "public";
 }
 
 export interface ProjectIR {

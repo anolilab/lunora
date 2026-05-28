@@ -114,10 +114,20 @@ export interface Schema<T extends Record<string, TableDefinition> = Record<strin
 
 export type FunctionKind = "action" | "mutation" | "query";
 
+/**
+ * Call surface a function is exposed on. `public` functions are reachable from
+ * clients via the generated `api`; `internal` functions are reachable only
+ * server-to-server (`ctx.runQuery`/`runMutation`/`runAction`) and are rejected
+ * by the DO's external RPC path. Absence is treated as `public` for
+ * back-compat with functions registered before visibility existed.
+ */
+export type FunctionVisibility = "internal" | "public";
+
 export interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
     readonly args: A;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
+    readonly visibility?: FunctionVisibility;
 }
 
 export type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
