@@ -36,10 +36,46 @@ export interface OfflineQueueOptions {
     maxItems?: number;
 }
 
+/**
+ * Serializable shape of an offline mutation, durably stored by a
+ * {@link PersistenceAdapter} so queued writes survive a reload/crash. The live
+ * `resolve`/`reject` callbacks of an in-flight `QueuedMutation` are *not*
+ * persisted — a restored mutation is replayed with no original awaiter.
+ */
+export interface PersistedMutation {
+    args: Record<string, unknown>;
+    functionPath: string;
+    id: string;
+    shardKey?: string;
+}
+
+/**
+ * Durable store for the offline mutation queue. The default client keeps the
+ * queue in memory; supplying an adapter (e.g. {@link createIndexedDbPersistence})
+ * makes queued writes survive a page reload. Implementations must preserve FIFO
+ * (enqueue) order in {@link PersistenceAdapter.load}.
+ *
+ * Replay semantics are at-least-once: a mutation is removed only after the
+ * server confirms (or rejects) it, so a crash between commit and `remove` can
+ * replay it again on the next load.
+ */
+export interface PersistenceAdapter {
+    /** Append a mutation to durable storage (called on enqueue). */
+    append: (mutation: PersistedMutation) => Promise<void>;
+    /** Drop every persisted mutation (e.g. on logout). */
+    clear: () => Promise<void>;
+    /** Load all persisted mutations in FIFO order — called once at startup. */
+    load: () => Promise<PersistedMutation[]>;
+    /** Remove a mutation by id once it has been replayed (resolved or rejected). */
+    remove: (id: string) => Promise<void>;
+}
+
 export interface CirrusClientOptions {
     bookmarkStorage?: BookmarkStorage;
     fetch?: typeof fetch;
     offlineQueue?: OfflineQueueOptions;
+    /** Durable store for the offline mutation queue; omit to keep it in memory. */
+    persistence?: PersistenceAdapter;
     reconnect?: ReconnectOptions;
     url: string;
     WebSocket?: typeof WebSocket;

@@ -33,6 +33,7 @@
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
+        "fake-indexeddb": "catalog:test",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"

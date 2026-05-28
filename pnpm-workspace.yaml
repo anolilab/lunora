@@ -41,6 +41,7 @@ catalogs:
   test:
     "@vitest/coverage-v8": 4.1.7
     "@vitest/ui": 4.1.7
+    fake-indexeddb: 6.2.5
     vitest: 4.1.7
   tsc:
     typescript: 6.0.3

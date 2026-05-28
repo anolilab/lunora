@@ -8,6 +8,7 @@ import type {
     CirrusClientOptions,
     ClientMessage,
     FunctionReference,
+    PersistenceAdapter,
     ReconnectOptions,
     ReturnOf,
     RpcResponseBody,
@@ -83,6 +84,8 @@ export class CirrusClient {
 
     private readonly offlineQueue: OfflineQueue;
 
+    private readonly persistence: PersistenceAdapter | undefined;
+
     private readonly subscriptions = new SubscriptionRegistry();
 
     /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
@@ -101,7 +104,34 @@ export class CirrusClient {
         this.WebSocketImpl = opts.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
         this.bookmark = opts.bookmarkStorage ?? createInMemoryBookmarkStorage();
         this.reconnectOptions = opts.reconnect;
-        this.offlineQueue = new OfflineQueue(opts.offlineQueue);
+        this.persistence = opts.persistence;
+        this.offlineQueue = new OfflineQueue(opts.offlineQueue, opts.persistence);
+
+        if (this.persistence) {
+            // Deferred to a microtask so the constructor itself stays
+            // synchronous; hydration then opens sockets for any restored writes
+            // so they flush once the WS connects.
+            queueMicrotask((): void => {
+                void this.hydratePersistedQueue();
+            });
+        }
+    }
+
+    /**
+     * Restore offline mutations persisted in a prior session and open a socket
+     * for each shard they target so they flush once the WS reconnects. Failures
+     * are swallowed — a broken durable store must not stop the client booting.
+     */
+    private async hydratePersistedQueue(): Promise<void> {
+        try {
+            const shardKeys = await this.offlineQueue.hydrate();
+
+            for (const shardKey of shardKeys) {
+                this.ensureSocket(shardKey);
+            }
+        } catch {
+            /* durable store unavailable — boot without restored writes */
+        }
     }
 
     // --- Auth helpers -------------------------------------------------------
@@ -414,7 +444,7 @@ export class CirrusClient {
 
         conn.socket = socket;
 
-        socket.addEventListener('open', (): void => {
+        socket.addEventListener("open", (): void => {
             conn.wsState = "open";
             conn.wasEverConnected = true;
             conn.reconnect.reset();
@@ -446,7 +476,7 @@ export class CirrusClient {
             this.handleServerMessage(event.data);
         };
 
-        socket.addEventListener('close', (): void => {
+        socket.addEventListener("close", (): void => {
             this.handleDisconnect(conn);
         });
 
@@ -584,6 +614,12 @@ export class CirrusClient {
         }
     }
 
+    private unpersist(id: string | undefined): void {
+        if (id) {
+            void this.persistence?.remove(id).catch(() => undefined);
+        }
+    }
+
     private flushOfflineQueue(shardKey: string | undefined): void {
         const key = this.connectionKey(shardKey);
         const drained = this.offlineQueue.drain((item) => this.connectionKey(item.shardKey) === key);
@@ -591,9 +627,14 @@ export class CirrusClient {
         for (const item of drained) {
             this.rpc(item.functionPath, item.args, item.shardKey, { captureBookmark: true }).then(
                 (value) => {
+                    this.unpersist(item.id);
                     item.resolve(value);
                 },
                 (error) => {
+                    // Remove on rejection too: the server reached a verdict, so
+                    // replaying again would only re-trigger the same failure
+                    // (a poison-message loop). At-least-once, not exactly-once.
+                    this.unpersist(item.id);
                     item.reject(error);
                 },
             );

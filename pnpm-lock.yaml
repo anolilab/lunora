@@ -138,6 +138,9 @@ catalogs:
       specifier: ^3.3.0
       version: 3.3.0
   test:
+    fake-indexeddb:
+      specifier: 6.2.5
+      version: 6.2.5
     vitest:
       specifier: 4.1.7
       version: 4.1.7
@@ -619,6 +622,9 @@ importers:
       esbuild:
         specifier: catalog:build
         version: 0.28.0
+      fake-indexeddb:
+        specifier: catalog:test
+        version: 6.2.5
       typescript:
         specifier: catalog:tsc
         version: 6.0.3
@@ -7009,6 +7015,10 @@ packages:
   external-editor@3.1.0:
     resolution: {integrity: sha512-hMQ4CX1p1izmuLYyZqLMO/qGNw10wSv9QDCPfzXfyFrOaCSSoRfqE1Kf1s5an66J5JZC62NewG+mK49jOCtQew==}
     engines: {node: '>=4'}
+
+  fake-indexeddb@6.2.5:
+    resolution: {integrity: sha512-CGnyrvbhPlWYMngksqrSSUT1BAVP49dZocrHuK0SvtR0D5TMs5wP0o3j7jexDJW01KSadjBp1M/71o/KR3nD1w==}
+    engines: {node: '>=18'}
 
   fast-check@4.8.0:
     resolution: {integrity: sha512-GOJ158CUMnN6cSahsv4+ExARvIDuzzinFjkp0E9WtiBa5zcVeLozVkWaE4IzFcc+Y48Wp1EDlUZsXRyAztQcSg==}
@@ -15736,6 +15746,8 @@ snapshots:
       chardet: 0.7.0
       iconv-lite: 0.4.24
       tmp: 0.0.33
+
+  fake-indexeddb@6.2.5: {}
 
   fast-check@4.8.0:
     dependencies:

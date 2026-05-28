@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { CirrusClient } from "../src/cirrus-client.js";
+import { createInMemoryPersistence } from "../src/persistence.js";
 import type { FunctionReference } from "../src/types.js";
+
+const flushMicrotasks = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 // --- Test doubles -----------------------------------------------------------
 
@@ -371,6 +374,101 @@ describe("cirrusClient — offline queue", () => {
 
         expect(value).toEqual({ id: "1" });
         expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+});
+
+// --- Durable offline queue --------------------------------------------------
+
+describe("cirrusClient — durable offline queue", () => {
+    test("hydrates persisted mutations on construct and flushes them once the socket opens", async () => {
+        const fetchMock = vi.fn(async () => jsonResponse({ result: { ok: true } }));
+        const persistence = createInMemoryPersistence();
+
+        // A write durably queued by a prior session (e.g. before a reload).
+        await persistence.append({ functionPath: "posts:create", args: { title: "restored" }, id: "m1" });
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            persistence,
+        });
+
+        // The constructor kicks off async hydration which opens a socket for the
+        // restored write's shard. Let that settle, then bring the socket up.
+        await flushMicrotasks();
+        latestSocket().open();
+        await flushMicrotasks();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+
+        expect(body).toMatchObject({ functionPath: "posts:create", args: { title: "restored" } });
+
+        // Removed from durable storage once the server confirmed it.
+        await expect(persistence.load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    test("un-persists a replayed mutation even when the server rejects it", async () => {
+        const fetchMock = vi.fn(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }, { status: 500 }));
+        const persistence = createInMemoryPersistence();
+
+        await persistence.append({ functionPath: "posts:create", args: {}, id: "m1" });
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            persistence,
+        });
+
+        await flushMicrotasks();
+        latestSocket().open();
+        await flushMicrotasks();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        // A server verdict (even a rejection) settles the write — replaying it
+        // again would only re-trigger the same failure, so it is dropped.
+        await expect(persistence.load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    test("a live mutation queued while offline is persisted and removed after replay", async () => {
+        vi.useFakeTimers();
+        const fetchMock = vi.fn(async () => jsonResponse({ result: { id: "1" } }));
+        const persistence = createInMemoryPersistence();
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            persistence,
+            reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
+        });
+
+        // Get online, then drop the socket so the next mutation is queued.
+        client.subscribe(fn("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = client.mutation(fn("posts:create"), { title: "queued" });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(persistence.load()).resolves.toHaveLength(1);
+
+        // Reconnect and let the flush + remove settle.
+        vi.advanceTimersByTime(20);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        await expect(pending).resolves.toEqual({ id: "1" });
+        await expect(persistence.load()).resolves.toEqual([]);
+
+        client.close();
     });
 });
 
