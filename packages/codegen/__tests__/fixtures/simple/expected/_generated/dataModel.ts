@@ -235,6 +235,30 @@ export interface GroupByEntry<TDoc> {
     value: null | number;
 }
 
+/** Args for `ctx.db.<table>.rank(name, args)`. `row` is either an id or a row doc. */
+export interface TableRankOptions<TDoc> extends RestrictableQueryOptions<TDoc> {
+    row: Id<keyof DataModel & string> | TDoc | string;
+}
+
+/** Result of `rank` — 1-based position within the partition + partition total. */
+export interface RankResult {
+    position: number;
+    total: number;
+}
+
+/** Args for `ctx.db.<table>.rankPage(name, args)`. */
+export interface TableRankPageOptions<TDoc> extends RestrictableQueryOptions<TDoc> {
+    cursor?: null | string;
+    take?: number;
+}
+
+/** One page returned by `rankPage`. */
+export interface RankPage<TDoc> {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: TDoc[];
+}
+
 /** Read-only typed table accessor exposed on `QueryCtx.db.<table>`. */
 export interface TableReaderFacade<T extends keyof DataModel> {
     /**
@@ -261,6 +285,19 @@ export interface TableReaderFacade<T extends keyof DataModel> {
      * `by` matches `options.by` exactly; otherwise scans.
      */
     groupBy: (options: TableGroupByOptions<Doc<T>>) => Promise<ReadonlyArray<GroupByEntry<Doc<T>>>>;
+    /**
+     * Return the 1-based position of `options.row` within its partition
+     * under the declared rankIndex `indexName`, plus the partition's total
+     * row count. `null` when the row isn't in the index. Honors the same
+     * `baseWhere` / `restrictsCounts` RLS seam as `count()`.
+     */
+    rank: (indexName: string, options: TableRankOptions<Doc<T>>) => Promise<null | RankResult>;
+    /**
+     * Walk the rank companion in declared sort order — sorted pagination
+     * accelerator. `options.where` may pin the partition; `cursor`/`take`
+     * follow the Convex-style keyset shape.
+     */
+    rankPage: (indexName: string, options?: TableRankPageOptions<Doc<T>>) => Promise<RankPage<Doc<T>>>;
 }
 
 /** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
