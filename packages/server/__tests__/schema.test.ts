@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { defineSchema, defineTable, defineVectorIndex, v } from "../src/index.js";
+import { defineAggregateIndex, defineSchema, defineTable, defineVectorIndex, v } from "../src/index.js";
 
 describe("defineTable", () => {
     test("returns a table definition with shape and default __root__ shard mode", () => {
@@ -70,6 +70,28 @@ describe("defineTable", () => {
         expect(docs.vectorIndexes[0]?.embed).toBe(embed);
     });
 
+    test(".aggregateIndex defaults to count and stashes the by-tuple", () => {
+        const todos = defineTable({ archived: v.boolean(), projectId: v.string() })
+            .aggregateIndex("byProject", { by: ["projectId"] })
+            .aggregateIndex("activeByProject", { by: ["projectId"], where: { archived: false } });
+
+        expect(todos.aggregateIndexes).toHaveLength(2);
+        expect(todos.aggregateIndexes[0]).toMatchObject({ by: ["projectId"], name: "byProject", op: "count" });
+        expect(todos.aggregateIndexes[1]).toMatchObject({ name: "activeByProject", where: { archived: false } });
+
+        // `on` is filled in by defineSchema once the table is keyed.
+        const schema = defineSchema({ todos });
+
+        expect(schema.tables.todos.aggregateIndexes[0]?.on).toBe("todos");
+        expect(schema.tables.todos.aggregateIndexes[1]?.on).toBe("todos");
+    });
+
+    test(".aggregateIndex(non-count) requires a field", () => {
+        const builder = defineTable({ seq: v.number() });
+
+        expect(() => builder.aggregateIndex("seqSum", { op: "sum" })).toThrow(/requires a "field"/);
+    });
+
     test("builder chains return the same instance", () => {
         const builder = defineTable({ a: v.string() });
         const chained = builder.index("by_a", ["a"]).shardBy("a");
@@ -94,6 +116,29 @@ describe("defineSchema", () => {
         const schema = defineSchema({ users: defineTable({ email: v.string() }) });
 
         expect(schema.vectorIndexes).toEqual({});
+    });
+
+    test("standalone defineAggregateIndex entries fold onto the owning table", () => {
+        const schema = defineSchema(
+            { todos: defineTable({ archived: v.boolean(), projectId: v.string() }) },
+            {},
+            {
+                byProject: defineAggregateIndex("byProject", { by: ["projectId"], on: "todos" }),
+            },
+        );
+
+        expect(schema.tables.todos.aggregateIndexes).toHaveLength(1);
+        expect(schema.tables.todos.aggregateIndexes[0]).toMatchObject({ by: ["projectId"], name: "byProject", on: "todos", op: "count" });
+    });
+
+    test("standalone defineAggregateIndex throws when `on` table is unknown", () => {
+        expect(() =>
+            defineSchema(
+                { todos: defineTable({ projectId: v.string() }) },
+                {},
+                { stray: defineAggregateIndex("stray", { by: ["projectId"], on: "missing" }) },
+            ),
+        ).toThrow(/unknown table/);
     });
 
     test("registers standalone defineVectorIndex entries from the second arg (Shape B)", () => {

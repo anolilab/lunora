@@ -11,8 +11,14 @@
  * backend-agnostic.
  */
 import type {
+    AggregateIndexDefinitionLike,
+    AggregateOptions,
+    AggregateResult,
     ColumnMetaLike,
     DatabaseWriterLike,
+    GroupByEntry,
+    GroupByOptions,
+    RestrictableQueryOptions,
     SchedulerLike,
     SchemaLike,
     TableDefinitionLike,
@@ -29,13 +35,16 @@ import {
     compileOrderBy,
     compileWhere,
     ConflictError,
+    CountRlsUnsupportedError,
     decodeCursor,
     encodeCursor,
     hasTrigger,
+    mergeWhere,
     normalizeOrderKeys,
     NotFoundError,
     resolveWith,
     runTriggers,
+    selectIndexForCount,
 } from "@cirrus/do";
 
 /**
@@ -75,6 +84,79 @@ const throwingScheduler: SchedulerLike = {
 };
 
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+
+/** Companion-table name for an aggregateIndex (`__agg_` infix matches the DO dialect). */
+const aggregateTableName = (table: string, indexName: string): string => `${table}__agg_${indexName}`;
+
+/** Canonical-JSON encoding of a `by`-tuple — kept identical to the DO encoding so a parity test can compare bytes. */
+const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, unknown>): string => {
+    if (by.length === 0) {
+        return "";
+    }
+
+    const ordered: Record<string, unknown> = {};
+
+    for (const field of [...by].sort()) {
+        ordered[field] = source[field] ?? null;
+    }
+
+    return JSON.stringify(ordered);
+};
+
+/**
+ * Cheap predicate test against a flat literal `where` baked into an
+ * `aggregateIndex.where`. Mirrors the DO helper.
+ */
+const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record<string, unknown>): boolean => {
+    for (const [field, expected] of Object.entries(predicate)) {
+        const actual = document[field];
+
+        if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
+            const operatorKeys = Object.keys(expected as Record<string, unknown>);
+
+            if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
+                if (actual !== (expected as { eq: unknown }).eq) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            return false;
+        }
+
+        if (actual !== expected) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
+/** Marker keys distinguishing `RestrictableQueryOptions` from a `WhereInput`. */
+const COUNT_OPTION_KEYS = new Set(["baseWhere", "restrictsCounts", "where"]);
+
+const normalizeCountArg = (arg: RestrictableQueryOptions | undefined | WhereInput): RestrictableQueryOptions => {
+    if (arg === undefined) {
+        return {};
+    }
+
+    if (typeof arg !== "object" || Array.isArray(arg)) {
+        return { where: arg as WhereInput };
+    }
+
+    const keys = Object.keys(arg as Record<string, unknown>);
+
+    if (keys.length === 0) {
+        return {};
+    }
+
+    if (keys.every((key) => COUNT_OPTION_KEYS.has(key))) {
+        return arg as RestrictableQueryOptions;
+    }
+
+    return { where: arg as WhereInput };
+};
 
 /**
  * D1 column dialect: a field resolves to its own SQLite column. `_id`/`id`
@@ -211,6 +293,144 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
     let triggerDepth = 0;
 
+    // Per-(table, index) backfill state. The map records the outcome of the
+    // probe: `true` once the counter companion table was found and rebuilt;
+    // `false` once we've checked and the user hasn't materialized it, so we
+    // know to skip the indexed path on every subsequent read for this ctx-db.
+    const backfilled = new Map<string, boolean>();
+
+    /**
+     * Whether `table` has a corresponding `__agg_<index>` companion table on
+     * the D1 binding. Global tables ship with their own DDL — counter tables
+     * are opt-in: if the user hasn't defined one, we silently fall back to a
+     * SCAN-based count. The same opt-in shape is what `runD1AggregateMigrations`
+     * (the helper exported for tests/dev hosts) uses to materialize it.
+     */
+    const counterTableExists = async (table: string, indexName: string): Promise<boolean> => {
+        const aggTable = aggregateTableName(table, indexName);
+        const rows = await exec.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [aggTable]);
+
+        return rows.length > 0;
+    };
+
+    /**
+     * Rebuild a counter from a full table scan. Cheap to call (cache-guarded);
+     * idempotent — TRUNCATE then re-tally so a previously-skewed counter heals.
+     */
+    const ensureBackfilled = async (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> => {
+        const cacheKey = `${tableName}::${index.name}`;
+        const cached = backfilled.get(cacheKey);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const exists = await counterTableExists(tableName, index.name);
+
+        if (!exists) {
+            backfilled.set(cacheKey, false);
+
+            return false;
+        }
+
+        const definition = schema.tables[tableName]!;
+        const rows = await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)}`, []);
+        const by = index.by ?? [];
+        const tallies = new Map<string, number>();
+
+        for (const row of rows) {
+            const doc = decodeRow(definition, row);
+
+            if (!doc) {
+                continue;
+            }
+
+            if (index.where && !matchesStaticWhere(doc, index.where)) {
+                continue;
+            }
+
+            const encoded = encodeAggregateKey(by, doc);
+
+            tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
+        }
+
+        const aggTable = aggregateTableName(tableName, index.name);
+
+        await exec.run(`DELETE FROM ${quoteIdentifier(aggTable)}`, []);
+
+        for (const [encoded, count] of tallies) {
+            await exec.run(`INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)`, [encoded, count]);
+        }
+
+        backfilled.set(cacheKey, true);
+
+        return true;
+    };
+
+    const stepAggregate = async (
+        tableName: string,
+        index: AggregateIndexDefinitionLike,
+        doc: Record<string, unknown>,
+        delta: number,
+    ): Promise<void> => {
+        if (index.where && !matchesStaticWhere(doc, index.where)) {
+            return;
+        }
+
+        const aggTable = aggregateTableName(tableName, index.name);
+        const encoded = encodeAggregateKey(index.by ?? [], doc);
+
+        await exec.run(
+            `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
+             ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__"`,
+            [encoded, delta],
+        );
+    };
+
+    /** Pre-write hook: rebuild counters once per ctx-db before the row mutation. */
+    const ensureBackfilledForTable = async (tableName: string): Promise<void> => {
+        const indexes = schema.tables[tableName]?.aggregateIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            return;
+        }
+
+        for (const index of indexes) {
+            await ensureBackfilled(tableName, index);
+        }
+    };
+
+    /** Post-write hook: apply `-prev + next` step for every declared counter. */
+    const syncAggregates = async (
+        tableName: string,
+        previous: Record<string, unknown> | undefined,
+        next: Record<string, unknown> | undefined,
+    ): Promise<void> => {
+        const indexes = schema.tables[tableName]?.aggregateIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            return;
+        }
+
+        for (const index of indexes) {
+            // Skip when the user hasn't materialized the counter companion
+            // table — the SCAN fallback still answers correctly.
+            const exists = await counterTableExists(tableName, index.name);
+
+            if (!exists) {
+                continue;
+            }
+
+            if (previous) {
+                await stepAggregate(tableName, index, previous, -1);
+            }
+
+            if (next) {
+                await stepAggregate(tableName, index, next, 1);
+            }
+        }
+    };
+
     /** Fire matching triggers with a depth guard against runaway self-triggering. */
     const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
         triggerDepth += 1;
@@ -257,14 +477,43 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
     };
 
     const writer: DatabaseWriterLike = {
-        async count(tableName, where) {
+        async count(tableName, whereOrOptions) {
             const definition = schema.tables[tableName];
 
             if (!definition) {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const { params, sql: whereSql } = compileWhere(where, d1WhereStrategy);
+            const opts = normalizeCountArg(whereOrOptions);
+
+            if (opts.restrictsCounts) {
+                throw new CountRlsUnsupportedError();
+            }
+
+            // Indexed path: same planner as the DO dialect (see ctx-db.ts).
+            // We only attempt the counter when no baseWhere is set; otherwise
+            // we route uniformly through SQL so the RLS predicate participates.
+            if (definition.aggregateIndexes && !opts.baseWhere) {
+                const planned = selectIndexForCount(definition.aggregateIndexes, opts.where as Record<string, unknown> | undefined);
+
+                if (planned) {
+                    const counterReady = await ensureBackfilled(tableName, planned.index);
+
+                    if (counterReady) {
+                        const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
+                        const aggTable = aggregateTableName(tableName, planned.index.name);
+                        const rows = await exec.all(
+                            `SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
+                            [encoded],
+                        );
+
+                        return rows.length === 0 ? 0 : Number(rows[0]!["value"] ?? 0);
+                    }
+                }
+            }
+
+            const effective = mergeWhere(opts.baseWhere, opts.where);
+            const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
 
             let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
 
@@ -275,6 +524,89 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const rows = await exec.all(querySql, params);
 
             return Number(rows[0]?.["count"] ?? 0);
+        },
+
+        async aggregate(tableName, aggOptions: AggregateOptions): Promise<AggregateResult> {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            if (aggOptions.op === "count") {
+                return writer.count(tableName, {
+                    baseWhere: aggOptions.baseWhere,
+                    restrictsCounts: aggOptions.restrictsCounts,
+                    where: aggOptions.where,
+                });
+            }
+
+            if (!aggOptions.field) {
+                throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
+            }
+
+            const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
+            const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
+
+            let querySql = `SELECT ${aggOptions.op.toUpperCase()}(${columnRef(aggOptions.field)}) AS value FROM ${quoteIdentifier(tableName)}`;
+
+            if (whereSql) {
+                querySql += ` WHERE ${whereSql}`;
+            }
+
+            const rows = await exec.all(querySql, params);
+            const value = rows[0]?.["value"];
+
+            return value === null || value === undefined ? null : Number(value);
+        },
+
+        async groupBy(tableName, groupOptions: GroupByOptions): Promise<ReadonlyArray<GroupByEntry>> {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            const agg = groupOptions.agg ?? { op: "count" };
+            const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
+            const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
+
+            const select = groupOptions.by.map((field) => `${columnRef(field)} AS ${quoteIdentifier(field)}`);
+
+            if (agg.op === "count") {
+                select.push(`COUNT(*) AS value`);
+            } else {
+                if (!agg.field) {
+                    throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+                }
+
+                select.push(`${agg.op.toUpperCase()}(${columnRef(agg.field)}) AS value`);
+            }
+
+            let querySql = `SELECT ${select.join(", ")} FROM ${quoteIdentifier(tableName)}`;
+
+            if (whereSql) {
+                querySql += ` WHERE ${whereSql}`;
+            }
+
+            querySql += ` GROUP BY ${groupOptions.by.map(columnRef).join(", ")}`;
+
+            const rows = await exec.all(querySql, params);
+            const result: GroupByEntry[] = [];
+
+            for (const row of rows) {
+                const key: Record<string, unknown> = {};
+
+                for (const field of groupOptions.by) {
+                    key[field] = row[field] ?? null;
+                }
+
+                const { value } = row as { value: unknown };
+
+                result.push({ key, value: value === null || value === undefined ? null : Number(value) });
+            }
+
+            return result;
         },
 
         async delete(id) {
@@ -305,8 +637,11 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 tableName,
             });
 
+            await ensureBackfilledForTable(tableName);
+
             await runWrite(tableName, `DELETE FROM ${quoteIdentifier(tableName)} WHERE "id" = ?`, [id]);
 
+            await syncAggregates(tableName, existing ?? undefined, undefined);
             await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
         },
 
@@ -424,11 +759,14 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
             await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
 
+            await ensureBackfilledForTable(tableName);
+
             const { columns, values } = columnTuple(definition, id, creationTime, withDefaults);
             const placeholders = columns.map(() => "?").join(", ");
 
             await runWrite(tableName, `INSERT INTO ${quoteIdentifier(tableName)} (${columns.join(", ")}) VALUES (${placeholders})`, values);
 
+            await syncAggregates(tableName, undefined, docWithMeta);
             await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
 
             return id;
@@ -454,12 +792,15 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
 
+            await ensureBackfilledForTable(tableName);
+
             const fields = Object.keys(definition.shape);
             const assignments = fields.map((field) => `${quoteIdentifier(field)} = ?`).join(", ");
             const values = [...fields.map((field) => serializeColumnValue(merged[field] ?? null)), id];
 
             await runWrite(tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${assignments} WHERE "id" = ?`, values);
 
+            await syncAggregates(tableName, existing, merged);
             await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
         },
 
@@ -475,8 +816,8 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             const definition = schema.tables[tableName]!;
-            // Only pay the extra read to supply `previous` when an update trigger exists.
-            const previous = hasTrigger(schema, tableName, "update") ? await writer.get(id) ?? undefined : undefined;
+            const needsPrevious = hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0;
+            const previous = needsPrevious ? await writer.get(id) ?? undefined : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
@@ -484,12 +825,15 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
 
+            await ensureBackfilledForTable(tableName);
+
             const fields = Object.keys(definition.shape);
             const assignments = ['"_creationTime" = ?', ...fields.map((field) => `${quoteIdentifier(field)} = ?`)].join(", ");
             const values = [creationTime, ...fields.map((field) => serializeColumnValue(replaced[field] ?? null)), id];
 
             await runWrite(tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${assignments} WHERE "id" = ?`, values);
 
+            await syncAggregates(tableName, previous, replaced);
             await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
         },
     };
@@ -500,4 +844,35 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
     const triggerCtx: TriggerContextLike = { db: writer, scheduler };
 
     return writer;
+};
+
+/**
+ * Materialize the `__agg_<index>` companion tables for every declared
+ * `aggregateIndex` on a global table. Global tables in Cirrus ship their own
+ * DDL — counter tables are opt-in so production hosts can decide where they
+ * live. Tests and dev hosts can call this once after their schema migration to
+ * unlock O(1) counts.
+ *
+ * Idempotent (`CREATE TABLE IF NOT EXISTS`).
+ */
+export const runD1AggregateMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        const indexes = definition.aggregateIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            continue;
+        }
+
+        for (const index of indexes) {
+            const aggTable = aggregateTableName(tableName, index.name);
+
+            await exec.run(
+                `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} (
+                    "__key__" TEXT PRIMARY KEY,
+                    "__value__" REAL NOT NULL
+                )`,
+                [],
+            );
+        }
+    }
 };

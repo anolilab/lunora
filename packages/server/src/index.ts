@@ -33,10 +33,21 @@ export type {
 export { httpAction, httpRoute, httpRouter } from "./http.js";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";
 export { defineMigration } from "./migration.js";
-export type { ManyRelation, OneRelation, RelationBuilder, TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";
-export { defineSchema, defineTable, defineVectorIndex } from "./schema.js";
+export type {
+    AggregateIndexOptions,
+    InlineAggregateIndexOptions,
+    ManyRelation,
+    OneRelation,
+    RelationBuilder,
+    TableBuilder,
+    VectorIndexOptions,
+    VectorizeOptions,
+} from "./schema.js";
+export { defineAggregateIndex, defineSchema, defineTable, defineVectorIndex } from "./schema.js";
 export type {
     ActionCtx,
+    AggregateIndexDefinition,
+    AggregateOp,
     AnyApi,
     ArgsValidator,
     AuthState,

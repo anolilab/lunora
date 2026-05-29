@@ -319,13 +319,65 @@ type LoadedCount<W> = W extends { _count: infer C } ? { _count: { [K in keyof C]
 /** \`Doc<T>\` narrowed to exactly the relations requested in the with-arg \`W\`. */
 export type LoadWith<T extends keyof DataModel, W> = Doc<T> & LoadedRelations<T, W> & LoadedCount<W>;
 
+/** Reducer applied by an aggregate (\`avg\`/\`count\`/\`max\`/\`min\`/\`sum\`). */
+export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
+
+/**
+ * Query-options shape shared by every aggregate reader. The RLS-aware ctx
+ * (§3.2) populates \`baseWhere\` so it composes here without a hard import.
+ * \`restrictsCounts: true\` flips \`count()\` into a thrown \`COUNT_RLS_UNSUPPORTED\`
+ * \`CirrusError\` rather than silently undercount.
+ */
+export interface RestrictableQueryOptions<TDoc> {
+    baseWhere?: Where<TDoc>;
+    restrictsCounts?: boolean;
+    where?: Where<TDoc>;
+}
+
+/** Args for \`ctx.db.<table>.aggregate({ op, field?, where? })\`. */
+export interface TableAggregateOptions<TDoc> extends RestrictableQueryOptions<TDoc> {
+    field?: keyof TDoc & string;
+    op: AggregateOp;
+}
+
+/** Args for \`ctx.db.<table>.groupBy({ by, agg?, where? })\`. */
+export interface TableGroupByOptions<TDoc> extends RestrictableQueryOptions<TDoc> {
+    agg?: { field?: keyof TDoc & string; op: AggregateOp };
+    by: ReadonlyArray<keyof TDoc & string>;
+}
+
+/** One entry returned by \`groupBy\` — the group's by-tuple plus the reducer value. */
+export interface GroupByEntry<TDoc> {
+    key: Partial<TDoc>;
+    value: null | number;
+}
+
 /** Read-only typed table accessor exposed on \`QueryCtx.db.<table>\`. */
 export interface TableReaderFacade<T extends keyof DataModel> {
-    count: (where?: Where<Doc<T>>) => Promise<number>;
+    /**
+     * Reduce rows in this table to a scalar (\`avg\`/\`max\`/\`min\`/\`sum\` — \`count\`
+     * lives on its own method). Routes through a declared \`aggregateIndex\` when
+     * the planner can prove the request is answerable; otherwise scans.
+     */
+    aggregate: (options: TableAggregateOptions<Doc<T>>) => Promise<null | number>;
+    /**
+     * Count rows. The planner routes \`where\` keys that match a declared
+     * \`aggregateIndex.by\` set to the indexed counter (no scan); otherwise
+     * falls back to a SCAN. Accepts either a bare \`where\` tree or the broader
+     * \`RestrictableQueryOptions\` shape; the latter is the seam the RLS layer
+     * uses to inject \`baseWhere\` and \`restrictsCounts\`.
+     */
+    count: (where?: RestrictableQueryOptions<Doc<T>> | Where<Doc<T>>) => Promise<number>;
     findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;
     findFirstOrThrow: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W>>;
     findMany: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<QueryPage<LoadWith<T, W>>>;
     get: (id: Id<T>) => Promise<Doc<T> | null>;
+    /**
+     * Group rows by the named keys and apply \`agg\` per group (defaults to
+     * \`count\`). Answered from the counter table when an aggregate index's
+     * \`by\` matches \`options.by\` exactly; otherwise scans.
+     */
+    groupBy: (options: TableGroupByOptions<Doc<T>>) => Promise<ReadonlyArray<GroupByEntry<Doc<T>>>>;
 }
 
 /** Read-write typed table accessor exposed on \`MutationCtx.db.<table>\` / \`ActionCtx.db.<table>\`. */
@@ -788,12 +840,15 @@ export const CIRRUS_MIGRATIONS: Record<string, RegisteredDataMigration> = {${mig
 export const emitShard = (schema: SchemaIR): string => {
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
+    const hasTables = schema.tables.length > 0;
 
     const doTypeImports = [
+        ...hasTables ? ["AggregateOptions", "GroupByOptions"] : [],
         "DatabaseWriterLike",
         "DataMigrationLike",
         "MigrationRunResult",
         "QueryArgs",
+        ...hasTables ? ["RestrictableQueryOptions"] : [],
         "RunShardMigrationArgs",
         "SchedulerLike",
         "SchemaLike",
@@ -828,6 +883,9 @@ export const emitShard = (schema: SchemaIR): string => {
     const globalDbStub = hasGlobalTables
         ? `
 const globalDbStub: DatabaseWriterLike = {
+    aggregate: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
     count: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
     },
@@ -844,6 +902,9 @@ const globalDbStub: DatabaseWriterLike = {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
     },
     get: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
+    groupBy: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
     },
     insert: async () => {
@@ -924,8 +985,6 @@ const vectorsStub: VectorSearchLike = {
 
     const vectorsCtxField = hasVectors ? `\n                vectors,` : "";
 
-    const hasTables = schema.tables.length > 0;
-
     // `ctx.orm` mirrors the per-table facade under a kitcn-style namespace; it
     // only exists when the project declares tables (otherwise `facade` is unbuilt).
     const ormCtxField = hasTables ? `\n                orm: bindOrm(facade),` : "";
@@ -937,12 +996,14 @@ const vectorsStub: VectorSearchLike = {
     const bindTableHelper = hasTables
         ? `
 const bindTable = (writer: DatabaseWriterLike, tableName: string) => ({
-    count: (where?: WhereInput) => writer.count(tableName, where),
+    aggregate: (options: AggregateOptions) => writer.aggregate(tableName, options),
+    count: (where?: RestrictableQueryOptions | WhereInput) => writer.count(tableName, where),
     delete: (id: string) => writer.delete(id),
     findFirst: (args?: QueryArgs) => writer.findFirst(tableName, args),
     findFirstOrThrow: (args?: QueryArgs) => writer.findFirstOrThrow(tableName, args),
     findMany: (args?: QueryArgs) => writer.findMany(tableName, args),
     get: (id: string) => writer.get(id),
+    groupBy: (options: GroupByOptions) => writer.groupBy(tableName, options),
     insert: (values: Record<string, unknown>) => writer.insert(tableName, values),
     patch: (id: string, values: Record<string, unknown>) => writer.patch(id, values),
     replace: (id: string, values: Record<string, unknown>) => writer.replace(id, values),

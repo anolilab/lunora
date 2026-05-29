@@ -27,6 +27,15 @@
  * stop typing the string at all.
  */
 
+import type {
+    AggregateIndexDefinitionLike,
+    AggregateOptions,
+    AggregateResult,
+    GroupByEntry,
+    GroupByOptions,
+    RestrictableQueryOptions,
+} from "./aggregates.js";
+import { CountRlsUnsupportedError, mergeWhere, selectIndexForCount } from "./aggregates.js";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
 import type { RelationDefinitionLike } from "./relations.js";
@@ -64,6 +73,7 @@ export interface SchemaLike {
 }
 
 export interface TableDefinitionLike {
+    readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly relationMap?: Record<string, RelationDefinitionLike>;
     readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
@@ -192,12 +202,33 @@ export interface TableReaderLike {
 }
 
 export interface DatabaseWriterLike {
-    count: (tableName: string, where?: WhereInput) => Promise<number>;
+    /**
+     * Reduce rows in `tableName` matching `options.where` to a scalar
+     * (`avg`/`max`/`min`/`sum` — `count` lives on its own method). Routes
+     * through a matching `aggregateIndex` when one is declared for `op`/`field`
+     * and `options.where` keys all participate in its `by` set; otherwise scans
+     * the table.
+     */
+    aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
+    /**
+     * Count rows in `tableName`. Uses a declared `aggregateIndex` when one
+     * covers the `where` keys (no scan); otherwise scans. Throws
+     * `COUNT_RLS_UNSUPPORTED` when `options.restrictsCounts` is `true` (the
+     * RLS-aware ctx seam from §3.2).
+     */
+    count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (id: string) => Promise<void>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
+    /**
+     * Group rows in `tableName` by the named keys and apply `options.agg` per
+     * group (defaults to `count`). When a declared aggregate index's `by` set
+     * matches `options.by` exactly and no extra `where` keys fall outside it,
+     * answered from the counter table.
+     */
+    groupBy: (tableName: string, options: GroupByOptions) => Promise<ReadonlyArray<GroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
@@ -205,6 +236,100 @@ export interface DatabaseWriterLike {
 }
 
 const DOC_COLUMN = "__doc__";
+
+/**
+ * Name of the counter table backing an `aggregateIndex` decl. Kept distinct
+ * from any user table (`__agg_` infix is reserved) so `runShardMigrations` can
+ * create it alongside the document table without collision. The schema is a
+ * single `__key__` column (the canonical JSON-encoded `by`-tuple) plus a
+ * floating `__value__` column. We keep counts as REAL so the same physical
+ * shape carries sum/min/max/avg later.
+ */
+const aggregateTableName = (table: string, indexName: string): string => `${table}__agg_${indexName}`;
+
+/**
+ * Cheap predicate test against a flat literal `where` (the shape baked into an
+ * `aggregateIndex.where`). Only handles literal equality and `{ eq: ... }` —
+ * the full operator vocabulary stays in the SQL compiler. Used during counter
+ * maintenance to skip rows that don't qualify for a filtered aggregate.
+ */
+const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record<string, unknown>): boolean => {
+    for (const [field, expected] of Object.entries(predicate)) {
+        const actual = document[field];
+
+        if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
+            const operatorKeys = Object.keys(expected as Record<string, unknown>);
+
+            if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
+                if (actual !== (expected as { eq: unknown }).eq) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            return false;
+        }
+
+        if (actual !== expected) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
+/** Marker keys distinguishing `RestrictableQueryOptions` from a bare `WhereInput` tree. */
+const COUNT_OPTION_KEYS = new Set(["baseWhere", "restrictsCounts", "where"]);
+
+/**
+ * Disambiguate the `count(table, ?)` arg. The legacy positional is a
+ * `WhereInput` tree; the new shape is `{ where, baseWhere, restrictsCounts }`.
+ * A value is treated as the options shape when every own key is a marker —
+ * otherwise it's a `where` literal. Boolean combinators (`AND`/`OR`/`NOT`)
+ * keep it on the `where` side.
+ */
+const normalizeCountArg = (arg: RestrictableQueryOptions | undefined | WhereInput): RestrictableQueryOptions => {
+    if (arg === undefined) {
+        return {};
+    }
+
+    if (typeof arg !== "object" || Array.isArray(arg)) {
+        return { where: arg as WhereInput };
+    }
+
+    const keys = Object.keys(arg as Record<string, unknown>);
+
+    if (keys.length === 0) {
+        return {};
+    }
+
+    if (keys.every((key) => COUNT_OPTION_KEYS.has(key))) {
+        return arg as RestrictableQueryOptions;
+    }
+
+    return { where: arg as WhereInput };
+};
+
+/**
+ * Encode a `by`-key tuple into a stable string. We use canonical-key JSON so
+ * the same `{ a: 1, b: 2 }` lookup never misses for an insert that stored it
+ * as `{ b: 2, a: 1 }`. Empty `by` (whole-table aggregate) keys on the empty
+ * string.
+ */
+const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, unknown>): string => {
+    if (by.length === 0) {
+        return "";
+    }
+
+    const ordered: Record<string, unknown> = {};
+
+    for (const field of [...by].sort()) {
+        ordered[field] = source[field] ?? null;
+    }
+
+    return JSON.stringify(ordered);
+};
 
 /** Indirection that lets us call `exec` without typing the literal. */
 const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...params: unknown[]): SqlCursor<Row> => {
@@ -920,6 +1045,127 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
     };
 
+    // Tracks per-(table, indexName) backfill state so the lazy backfill runs
+    // exactly once per index per ctx-db instance. The DO instantiates a fresh
+    // ctx-db per shard, so this aligns with the "first use" semantics.
+    const backfilled = new Set<string>();
+
+    /**
+     * Lazily backfill an aggregate counter the first time the ctx-db instance
+     * touches it. Idempotency model: each ctx-db tracks which (table, index)
+     * pairs it has already considered; the first touch (read or write) does a
+     * full rebuild from scratch — TRUNCATE then re-tally — so that an index
+     * declared after rows already existed (the "added to an existing schema"
+     * case) heals on first use. Subsequent touches in the same ctx-db skip the
+     * rebuild and trust the trigger-maintained deltas.
+     *
+     * Must run **before** the triggering row write — otherwise the rebuild
+     * would double-count the row that's about to be stepped.
+     */
+    const ensureBackfilled = (tableName: string, index: AggregateIndexDefinitionLike): void => {
+        const cacheKey = `${tableName}::${index.name}`;
+
+        if (backfilled.has(cacheKey)) {
+            return;
+        }
+
+        const aggTable = aggregateTableName(tableName, index.name);
+        const by = index.by ?? [];
+        const tallies = new Map<string, number>();
+        const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
+
+        for (const row of rows) {
+            const doc = rowToDoc(row);
+
+            if (!doc) {
+                continue;
+            }
+
+            if (index.where && !matchesStaticWhere(doc, index.where)) {
+                continue;
+            }
+
+            const encoded = encodeAggregateKey(by, doc);
+
+            tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
+        }
+
+        runSql(sql, `DELETE FROM ${quoteIdentifier(aggTable)}`);
+
+        for (const [encoded, count] of tallies) {
+            runSql(sql, `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)`, encoded, count);
+        }
+
+        backfilled.add(cacheKey);
+    };
+
+    /**
+     * Apply a `+delta` counter step for the row `doc` matches under `index`.
+     * Inserts (`+1`), deletes (`-1`), and updates (`-1` for the previous row's
+     * group, `+1` for the new) all share the same maintenance hook.
+     */
+    const stepAggregate = (tableName: string, index: AggregateIndexDefinitionLike, doc: Record<string, unknown>, delta: number): void => {
+        if (index.where && !matchesStaticWhere(doc, index.where)) {
+            return;
+        }
+
+        const aggTable = aggregateTableName(tableName, index.name);
+        const encoded = encodeAggregateKey(index.by ?? [], doc);
+
+        runSql(
+            sql,
+            `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
+             ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__"`,
+            encoded,
+            delta,
+        );
+    };
+
+    /**
+     * Pre-write hook: ensure every aggregate counter on `tableName` is rebuilt
+     * once per ctx-db instance. The rebuild scans the live source table, so
+     * callers MUST invoke this before the row write — otherwise the new row
+     * lands in both the rebuild and the `+1` step that follows.
+     */
+    const ensureBackfilledForTable = (tableName: string): void => {
+        const indexes = schema.tables[tableName]?.aggregateIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            return;
+        }
+
+        for (const index of indexes) {
+            ensureBackfilled(tableName, index);
+        }
+    };
+
+    /**
+     * Post-write hook: apply the `-prev + next` step for every declared
+     * aggregate index. Must be paired with a `ensureBackfilledForTable` call
+     * earlier in the same write so the counter is in step with the source.
+     */
+    const syncAggregates = (
+        tableName: string,
+        previous: Record<string, unknown> | undefined,
+        next: Record<string, unknown> | undefined,
+    ): void => {
+        const indexes = schema.tables[tableName]?.aggregateIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            return;
+        }
+
+        for (const index of indexes) {
+            if (previous) {
+                stepAggregate(tableName, index, previous, -1);
+            }
+
+            if (next) {
+                stepAggregate(tableName, index, next, 1);
+            }
+        }
+    };
+
     /**
      * Keep the FTS5 shadow tables in step with a row write. A no-op when the
      * table declares no search indexes or when FTS5 is unavailable (the scan
@@ -1051,14 +1297,52 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return document;
         },
 
-        async count(tableName, where) {
-            if (!schema.tables[tableName]) {
+        async count(tableName, whereOrOptions) {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
                 throw new Error(`unknown table: ${tableName}`);
+            }
+
+            const opts = normalizeCountArg(whereOrOptions);
+
+            // RLS-restricted contexts can't be trusted to return a correct
+            // count — surface a structural CirrusError so the request fails
+            // loudly rather than silently undercounting. See PLAN2 §3.1
+            // "Coupling seam" and `aggregates.ts` for the seam contract.
+            if (opts.restrictsCounts) {
+                throw new CountRlsUnsupportedError();
             }
 
             onRead(tableName);
 
-            const { params, sql: whereSql } = compileWhere(where, doWhereStrategy);
+            const effective = mergeWhere(opts.baseWhere, opts.where);
+
+            // Indexed path: if the user passed a plain conjunction of equality
+            // filters and a declared aggregateIndex covers them, route to the
+            // counter table. The base predicate (when present) is intentionally
+            // left out of the indexed path because we can't trust it to be a
+            // pure equality conjunction; if `baseWhere` is set we fall through
+            // to the scan so SQL handles it uniformly.
+            if (definition.aggregateIndexes && !opts.baseWhere) {
+                const planned = selectIndexForCount(definition.aggregateIndexes, opts.where as Record<string, unknown> | undefined);
+
+                if (planned) {
+                    ensureBackfilled(tableName, planned.index);
+
+                    const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
+                    const aggTable = aggregateTableName(tableName, planned.index.name);
+                    const row = runSql<{ value: number | null }>(
+                        sql,
+                        `SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
+                        encoded,
+                    ).toArray();
+
+                    return row.length === 0 ? 0 : Number(row[0]!.value ?? 0);
+                }
+            }
+
+            const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
 
             let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
 
@@ -1069,6 +1353,101 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const row = runSql<{ count: number }>(sql, querySql, ...params).one();
 
             return Number(row.count);
+        },
+
+        async aggregate(tableName, aggOptions) {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            if (aggOptions.op === "count") {
+                // `aggregate({ op: "count" })` is just `count()` — keep the
+                // surface uniform so callers don't special-case it.
+                return writer.count(tableName, {
+                    baseWhere: aggOptions.baseWhere,
+                    restrictsCounts: aggOptions.restrictsCounts,
+                    where: aggOptions.where,
+                });
+            }
+
+            if (!aggOptions.field) {
+                throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
+            }
+
+            onRead(tableName);
+
+            const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
+            const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
+            const aggregateSql = aggOptions.op.toUpperCase();
+            const ref = jsonPath(aggOptions.field);
+
+            let querySql = `SELECT ${aggregateSql}(${ref}) AS value FROM ${quoteIdentifier(tableName)}`;
+
+            if (whereSql) {
+                querySql += ` WHERE ${whereSql}`;
+            }
+
+            const row = runSql<{ value: null | number }>(sql, querySql, ...params).toArray();
+            const value = row[0]?.value;
+
+            if (value === null || value === undefined) {
+                return null;
+            }
+
+            return Number(value);
+        },
+
+        async groupBy(tableName, groupOptions) {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            onRead(tableName);
+
+            const agg = groupOptions.agg ?? { op: "count" };
+            const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
+            const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
+
+            const select = groupOptions.by.map((field) => `${jsonPath(field)} AS ${quoteIdentifier(field)}`);
+
+            if (agg.op === "count") {
+                select.push(`COUNT(*) AS value`);
+            } else {
+                if (!agg.field) {
+                    throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+                }
+
+                select.push(`${agg.op.toUpperCase()}(${jsonPath(agg.field)}) AS value`);
+            }
+
+            let querySql = `SELECT ${select.join(", ")} FROM ${quoteIdentifier(tableName)}`;
+
+            if (whereSql) {
+                querySql += ` WHERE ${whereSql}`;
+            }
+
+            querySql += ` GROUP BY ${groupOptions.by.map(jsonPath).join(", ")}`;
+
+            const rows = runSql(sql, querySql, ...params).toArray();
+            const result: GroupByEntry[] = [];
+
+            for (const row of rows) {
+                const key: Record<string, unknown> = {};
+
+                for (const field of groupOptions.by) {
+                    key[field] = row[field] ?? null;
+                }
+
+                const { value } = row as { value: unknown };
+
+                result.push({ key, value: value === null || value === undefined ? null : Number(value) });
+            }
+
+            return result;
         },
 
         async insert(tableName, document) {
@@ -1090,6 +1469,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
             await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
 
+            // Backfill counters BEFORE the physical write so the rebuild
+            // scans a pre-insert snapshot — otherwise the row we're about to
+            // INSERT lands in both the rebuild and the +1 step.
+            ensureBackfilledForTable(tableName);
+
             runWrite(
                 sql,
                 tableName,
@@ -1100,6 +1484,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             );
 
             syncSearch(tableName, id, docWithMeta);
+            syncAggregates(tableName, undefined, docWithMeta);
 
             broadcast({ table: tableName, op: "insert", key: id, row: docWithMeta });
             await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
@@ -1127,9 +1512,12 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
 
+            ensureBackfilledForTable(tableName);
+
             runWrite(sql, tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ?`, JSON.stringify(merged), id);
 
             syncSearch(tableName, id, merged);
+            syncAggregates(tableName, existing, merged);
 
             broadcast({ table: tableName, op: "update", key: id, row: merged });
             await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
@@ -1143,14 +1531,19 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`document not found: ${id}`);
             }
 
-            // Only pay the extra read to supply `previous` when an update trigger exists.
-            const previous = hasTrigger(schema, tableName, "update") ? await writer.get(id) ?? undefined : undefined;
+            // Read the previous row when either an update trigger needs it OR
+            // the table declares aggregate indexes that need a -1/+1 step on
+            // the prior `by`-tuple.
+            const needsPrevious = hasTrigger(schema, tableName, "update") || (schema.tables[tableName]?.aggregateIndexes ?? []).length > 0;
+            const previous = needsPrevious ? await writer.get(id) ?? undefined : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
             applyOnUpdate(schema.tables[tableName]!, document, replaced);
 
             await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
+
+            ensureBackfilledForTable(tableName);
 
             runWrite(
                 sql,
@@ -1162,6 +1555,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             );
 
             syncSearch(tableName, id, replaced);
+            syncAggregates(tableName, previous, replaced);
 
             broadcast({ table: tableName, op: "update", key: id, row: replaced });
             await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
@@ -1197,9 +1591,12 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 tableName,
             });
 
+            ensureBackfilledForTable(tableName);
+
             runSql(sql, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
 
             syncSearch(tableName, id, undefined);
+            syncAggregates(tableName, existing ?? undefined, undefined);
 
             broadcast({ table: tableName, op: "delete", key: id });
             await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
@@ -1269,6 +1666,89 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
                 const ftName = ftsTableName(tableName, index.name);
 
                 runSql(sql, `CREATE VIRTUAL TABLE IF NOT EXISTS ${quoteIdentifier(ftName)} USING fts5("__text__", "__id__" UNINDEXED)`);
+            }
+        }
+
+        // Counter tables back `aggregateIndex` declarations. One row per
+        // distinct `by`-tuple; `__key__` is a canonical-JSON encoding so
+        // lookups are stable. We don't populate them here — the write path
+        // steps every counter on insert/update/delete (`syncAggregates`), and
+        // the reader lazily backfills counters that are empty on first use
+        // (added to an existing schema). Sufficient for dev; production hosts
+        // can opt into a one-shot backfill via `backfillAggregateIndexes`.
+        if (definition.aggregateIndexes) {
+            for (const index of definition.aggregateIndexes) {
+                const aggTable = aggregateTableName(tableName, index.name);
+
+                runSql(
+                    sql,
+                    `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} (
+                        "__key__" TEXT PRIMARY KEY,
+                        "__value__" REAL NOT NULL
+                    )`,
+                );
+            }
+        }
+    }
+};
+
+/**
+ * One-shot backfill of every declared aggregate index. Used by tests and
+ * production hosts that want to populate counters up-front instead of on first
+ * read. Idempotent: counter rows that already exist are left alone, so it's
+ * safe to call twice.
+ *
+ * The reader uses {@link ensureBackfilled} internally for the lazy path; this
+ * helper is the explicit twin so callers can opt out of the lazy cost.
+ */
+export const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void => {
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        if (definition.shardMode?.kind === "global") {
+            continue;
+        }
+
+        const indexes = definition.aggregateIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            continue;
+        }
+
+        for (const index of indexes) {
+            const aggTable = aggregateTableName(tableName, index.name);
+            const existing = runSql<{ count: number }>(sql, `SELECT COUNT(*) AS count FROM ${quoteIdentifier(aggTable)}`).one();
+
+            if (Number(existing.count) > 0) {
+                continue;
+            }
+
+            const by = index.by ?? [];
+            const tallies = new Map<string, number>();
+            const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
+
+            for (const row of rows) {
+                const doc = rowToDoc(row);
+
+                if (!doc) {
+                    continue;
+                }
+
+                if (index.where && !matchesStaticWhere(doc, index.where)) {
+                    continue;
+                }
+
+                const encoded = encodeAggregateKey(by, doc);
+
+                tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
+            }
+
+            for (const [encoded, count] of tallies) {
+                runSql(
+                    sql,
+                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
+                     ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__"`,
+                    encoded,
+                    count,
+                );
             }
         }
     }
