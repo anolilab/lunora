@@ -187,6 +187,9 @@ describe("runCodegen", () => {
         expect(result.generated.shard).toContain("findFirstOrThrow: (args?: QueryArgs) => writer.findFirstOrThrow(tableName, args)");
         expect(result.generated.shard).toContain("const bindOrm = (facade:");
         expect(result.generated.shard).toContain("orm: bindOrm(facade),");
+        // The orm lookup guards unknown tables so untyped callers get a clear
+        // error and the binding type-checks under `noUncheckedIndexedAccess`.
+        expect(result.generated.shard).toContain("throw new Error(`unknown table: ");
     });
 
     test("emits server.ts dispatch table keyed by `<namespace>:<fnName>`", () => {

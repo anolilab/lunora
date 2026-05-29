@@ -238,7 +238,7 @@ const number = (): ColumnValidator<number, number> =>
 
 /** Shared parser for the time validators: a finite epoch-millisecond number. */
 const parseEpochMillis = (value: unknown, context: ParseContext): number => {
-    if (typeof value !== "number" || Number.isNaN(value)) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
         fail(context, "number", value);
     }
 

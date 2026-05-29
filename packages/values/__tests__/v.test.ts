@@ -135,6 +135,7 @@ describe("time validators", () => {
         expect(v.date().parse(0)).toBe(0);
         expect(() => v.timestamp().parse("2026-01-01")).toThrow(ValidationError);
         expect(() => v.date().parse(Number.NaN)).toThrow(ValidationError);
+        expect(() => v.timestamp().parse(Number.POSITIVE_INFINITY)).toThrow(ValidationError);
     });
 
     test("defaultNow records a Date.now() default factory", () => {

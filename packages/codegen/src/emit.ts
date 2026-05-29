@@ -837,6 +837,9 @@ const globalDbStub: DatabaseWriterLike = {
     findFirst: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
     },
+    findFirstOrThrow: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
+    },
     findMany: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass \`d1\` to createShardDO().");
     },
@@ -945,13 +948,25 @@ const bindTable = (writer: DatabaseWriterLike, tableName: string) => ({
     replace: (id: string, values: Record<string, unknown>) => writer.replace(id, values),
 });
 
-const bindOrm = (facade: Record<string, ReturnType<typeof bindTable>>) => ({
-    delete: (table: string, id: string) => facade[table].delete(id),
-    insert: (table: string) => ({ values: (values: Record<string, unknown>) => facade[table].insert(values) }),
-    query: facade,
-    replace: (table: string, id: string) => ({ with: (values: Record<string, unknown>) => facade[table].replace(id, values) }),
-    update: (table: string, id: string) => ({ set: (values: Record<string, unknown>) => facade[table].patch(id, values) }),
-});
+const bindOrm = (facade: Record<string, ReturnType<typeof bindTable>>) => {
+    const resolve = (table: string): ReturnType<typeof bindTable> => {
+        const bound = facade[table];
+
+        if (!bound) {
+            throw new Error(\`unknown table: \${table}\`);
+        }
+
+        return bound;
+    };
+
+    return {
+        delete: (table: string, id: string) => resolve(table).delete(id),
+        insert: (table: string) => ({ values: (values: Record<string, unknown>) => resolve(table).insert(values) }),
+        query: facade,
+        replace: (table: string, id: string) => ({ with: (values: Record<string, unknown>) => resolve(table).replace(id, values) }),
+        update: (table: string, id: string) => ({ set: (values: Record<string, unknown>) => resolve(table).patch(id, values) }),
+    };
+};
 `
         : "";
 
