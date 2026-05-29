@@ -91,6 +91,10 @@ catalogs:
     react-dom:
       specifier: ^19.2.6
       version: 19.2.6
+  http:
+    hono:
+      specifier: ^4.12.19
+      version: 4.12.19
   lint:
     '@anolilab/eslint-config':
       specifier: 27.0.2
@@ -850,6 +854,9 @@ importers:
       '@cirrus/server':
         specifier: workspace:*
         version: link:../server
+      '@cirrus/values':
+        specifier: workspace:*
+        version: link:../values
       '@types/node':
         specifier: catalog:types
         version: 25.9.1
@@ -932,6 +939,9 @@ importers:
       esbuild:
         specifier: catalog:build
         version: 0.28.0
+      hono:
+        specifier: catalog:http
+        version: 4.12.19
       typescript:
         specifier: catalog:tsc
         version: 6.0.3
@@ -977,6 +987,9 @@ importers:
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260528.1)(kysely@0.28.17)
+      hono:
+        specifier: catalog:http
+        version: 4.12.19
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -16249,8 +16262,7 @@ snapshots:
     dependencies:
       parse-passwd: 1.0.0
 
-  hono@4.12.19:
-    optional: true
+  hono@4.12.19: {}
 
   hook-std@4.0.0: {}
 

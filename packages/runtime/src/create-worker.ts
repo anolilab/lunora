@@ -49,16 +49,20 @@ export interface HttpActionLike {
     handler: (ctx: HttpActionContext, request: Request) => Promise<Response> | Response;
 }
 
-/** Result of {@link HttpRouterLike.lookup}: a handler, a 405, or a 404. */
-export type HttpRouteLookup = { action: HttpActionLike; kind: "match" } | { allow: string[]; kind: "method_not_allowed" } | { kind: "not_found" };
-
 /**
- * Structural view of `@cirrus/server`'s `httpRouter()`. The worker only ever
- * calls `lookup`, so that single method is the contract — keeping the runtime
- * free of a hard dependency on the server package.
+ * Structural view of `@cirrus/server`'s `httpRouter()`. The worker dispatches by
+ * calling `fetch` — the same shape as a hono app's `app.fetch` — so the runtime
+ * stays free of a hard dependency on the server package (and on hono). The
+ * per-request {@link HttpActionContext} is injected on the `__cirrusCtx` env
+ * binding; the router lifts it into the handler's context.
  */
 export interface HttpRouterLike {
-    lookup: (pathname: string, method: string) => HttpRouteLookup;
+    // A method signature (not an arrow property) so parameters are compared
+    // bivariantly — this lets a real hono app, whose `fetch` is typed against its
+    // own `Bindings`/`ExecutionContext` (which carries a required `props`), assign
+    // structurally here; an arrow property would reject it under strict variance.
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- bivariant params are load-bearing for hono compatibility
+    fetch(request: Request, env?: unknown, ctx?: ExecutionContextLike): Promise<Response> | Response;
 }
 
 /**
@@ -88,10 +92,13 @@ export interface WorkerOptions {
     /** Default shard key used when an envelope omits one. */
     defaultShardKey?: string;
     /**
-     * Router for HTTP actions (`httpRouter()` from `@cirrus/server`). Consulted
-     * for requests that miss the explicit {@link WorkerOptions.routes} map and
-     * the internal `/_cirrus/*` endpoints. A matched handler runs in the worker
-     * and reaches the data layer via `ctx.run*`, which forward to the shard.
+     * Router for HTTP actions (`httpRouter()` from `@cirrus/server`, a hono app).
+     * Consulted for requests that miss the explicit {@link WorkerOptions.routes}
+     * map and the internal `/_cirrus/*` endpoints. The runtime builds the action
+     * context, injects it on the `__cirrusCtx` env binding, and dispatches via
+     * `httpRouter.fetch`; matched handlers reach the data layer through
+     * `ctx.run*`, which forward to the shard. An unmatched request returns hono's
+     * own 404 (a path-match with the wrong verb is a 404, not a 405).
      */
     httpRouter?: HttpRouterLike;
     /**
@@ -247,8 +254,9 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the
-        // internal `/_cirrus/*` endpoints above always win.
-        const httpRouteResponse = await dispatchHttpRoute(request, env, url);
+        // internal `/_cirrus/*` endpoints above always win. Once the request
+        // reaches the router, hono owns routing — its 404 is the terminal 404.
+        const httpRouteResponse = await dispatchHttpRoute(request, env, ctx);
 
         if (httpRouteResponse) {
             return httpRouteResponse;
@@ -285,24 +293,17 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
         });
     };
 
-    const dispatchHttpRoute = async (request: Request, env: unknown, url: URL): Promise<null | Response> => {
+    const dispatchHttpRoute = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<null | Response> => {
         if (!options.httpRouter) {
             return null;
         }
 
-        const lookup = options.httpRouter.lookup(url.pathname, request.method);
+        // Build the action context up front and inject it on a private env
+        // binding; the router's middleware lifts it into the handler's context.
+        // hono then matches/dispatches and returns its own response (incl. 404).
+        const httpCtx = await buildHttpActionCtx(request, env);
 
-        if (lookup.kind === "match") {
-            const httpCtx = await buildHttpActionCtx(request, env);
-
-            return lookup.action.handler(httpCtx, request);
-        }
-
-        if (lookup.kind === "method_not_allowed") {
-            return new Response("Method Not Allowed", { headers: { allow: lookup.allow.join(", ") }, status: 405 });
-        }
-
-        return null;
+        return options.httpRouter.fetch(request, { ...(env as object), __cirrusCtx: httpCtx }, ctx);
     };
 
     const buildHttpActionCtx = async (request: Request, env: unknown): Promise<HttpActionContext> => {

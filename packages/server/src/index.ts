@@ -19,7 +19,9 @@ export { CirrusError } from "./error.js";
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions.js";
 export { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions.js";
 export type {
-    ExactRouteSpec,
+    CirrusHttpApp,
+    CirrusHttpEnv,
+    CirrusRouteHandler,
     HttpActionCtx,
     HttpActionHandler,
     HttpMethod,
@@ -27,12 +29,6 @@ export type {
     HttpRouteBuilder,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
-    HttpRouter,
-    PrefixRouteSpec,
-    RegisteredHttpAction,
-    RouteEntry,
-    RouteLookup,
-    RouteSpec,
 } from "./http.js";
 export { httpAction, httpRoute, httpRouter } from "./http.js";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";

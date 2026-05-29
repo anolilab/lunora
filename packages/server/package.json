@@ -38,7 +38,8 @@
     },
     "dependencies": {
         "@cirrus/values": "workspace:*",
-        "drizzle-orm": "catalog:drizzle"
+        "drizzle-orm": "catalog:drizzle",
+        "hono": "catalog:http"
     },
     "devDependencies": {
         "@types/node": "catalog:types",

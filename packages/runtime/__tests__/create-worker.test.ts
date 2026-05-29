@@ -1,6 +1,7 @@
+import { Hono } from "hono";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { ExecutionContextLike, HttpActionContext, HttpActionLike, HttpRouteLookup, HttpRouterLike } from "../src/create-worker.js";
+import type { ExecutionContextLike, HttpActionContext, HttpRouterLike } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
@@ -384,13 +385,38 @@ describe("createWorker — migration endpoint", () => {
     });
 });
 
-/** Minimal {@link HttpRouterLike} whose `lookup` always returns `result`. */
-const fixedRouter = (result: HttpRouteLookup): HttpRouterLike => ({ lookup: () => result });
+/**
+ * Bindings the runtime injects on the env when dispatching to the HTTP router.
+ * Mirrors `@cirrus/server`'s `CirrusHttpEnv` without importing the server
+ * package — the runtime stays structurally hono-free.
+ */
+interface CtxEnv {
+    Bindings: { __cirrusCtx?: HttpActionContext };
+    Variables: { cirrus: HttpActionContext };
+}
 
-/** Router that matches `path` for `method`, else 404 — mirrors the real `httpRouter` shape. */
-const oneRoute = (path: string, method: string, handler: HttpActionLike["handler"]): HttpRouterLike => ({
-    lookup: (pathname, requestMethod) => pathname === path && requestMethod === method ? { action: { handler }, kind: "match" } : { kind: "not_found" },
-});
+/**
+ * Build a real hono app pre-wired with the same `__cirrusCtx` → `c.var.cirrus`
+ * lift that `@cirrus/server`'s `httpRouter()` installs, then let the test
+ * register routes on it. Returned as an {@link HttpRouterLike} (`{ fetch }`).
+ */
+const honoApp = (register: (app: Hono<CtxEnv>) => void): HttpRouterLike => {
+    const app = new Hono<CtxEnv>();
+
+    app.use("*", async (c, next) => {
+        const injected = c.env.__cirrusCtx;
+
+        if (injected) {
+            c.set("cirrus", injected);
+        }
+
+        await next();
+    });
+
+    register(app);
+
+    return app;
+};
 
 describe("createWorker — HTTP actions", () => {
     let shard: ShardSpy;
@@ -401,7 +427,7 @@ describe("createWorker — HTTP actions", () => {
 
     test("dispatches a matched request to the action handler and returns its Response", async () => {
         const worker = createWorker({
-            httpRouter: oneRoute("/ping", "GET", () => new Response("pong", { status: 201 })),
+            httpRouter: honoApp((app) => app.get("/ping", () => new Response("pong", { status: 201 }))),
             shardDO: shard.namespace,
         });
 
@@ -412,18 +438,18 @@ describe("createWorker — HTTP actions", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
-    test("ctx.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
+    test("c.var.cirrus.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
         shard.response = Response.json({ result: { id: "m1" } });
 
-        const handler = async (ctx: HttpActionContext, request: Request): Promise<Response> => {
-            const body = (await request.json()) as Record<string, unknown>;
-            const created = await ctx.runMutation({ __cirrusRef: "messages:send" }, { body });
-
-            return Response.json({ created });
-        };
-
         const worker = createWorker({
-            httpRouter: oneRoute("/webhook", "POST", handler),
+            httpRouter: honoApp((app) =>
+                app.post("/webhook", async (c) => {
+                    const body = (await c.req.json()) as Record<string, unknown>;
+                    const created = await c.var.cirrus.runMutation({ __cirrusRef: "messages:send" }, { body });
+
+                    return Response.json({ created });
+                }),
+            ),
             shardDO: shard.namespace,
         });
 
@@ -440,31 +466,11 @@ describe("createWorker — HTTP actions", () => {
         expect(forwarded.args).toEqual({ body: { text: "hi" } });
     });
 
-    test("ctx.run* rejects (→ mapped error response) when the shard returns an error envelope", async () => {
-        shard.response = Response.json({ error: { code: "BAD_REQUEST", message: "nope" } }, { status: 400 });
-
-        const handler = async (ctx: HttpActionContext): Promise<Response> => {
-            await ctx.runQuery({ __cirrusRef: "messages:list" });
-
-            return new Response("unreachable");
-        };
-
+    test("exposes resolveIdentity on c.var.cirrus.auth", async () => {
         const worker = createWorker({
-            httpRouter: oneRoute("/run", "GET", handler),
-            shardDO: shard.namespace,
-        });
-
-        const res = await worker.fetch(new Request("https://app.example/run"), {}, fakeCtx);
-
-        expect(res.status).toBe(400);
-        await expect(res.json()).resolves.toEqual({ error: { code: "BAD_REQUEST", message: "nope" } });
-    });
-
-    test("exposes resolveIdentity on ctx.auth", async () => {
-        const handler = async (ctx: HttpActionContext): Promise<Response> => Response.json({ claims: await ctx.auth.getIdentity(), userId: ctx.auth.userId });
-
-        const worker = createWorker({
-            httpRouter: oneRoute("/me", "GET", handler),
+            httpRouter: honoApp((app) =>
+                app.get("/me", async (c) => Response.json({ claims: await c.var.cirrus.auth.getIdentity(), userId: c.var.cirrus.auth.userId })),
+            ),
             resolveIdentity: () => ({ email: "u@example.com", userId: "user_7" }),
             shardDO: shard.namespace,
         });
@@ -474,21 +480,20 @@ describe("createWorker — HTTP actions", () => {
         await expect(res.json()).resolves.toEqual({ claims: { email: "u@example.com" }, userId: "user_7" });
     });
 
-    test("returns 405 with an Allow header on method_not_allowed", async () => {
+    test("a path-match with the wrong verb yields hono's 404", async () => {
         const worker = createWorker({
-            httpRouter: fixedRouter({ allow: ["GET", "PUT"], kind: "method_not_allowed" }),
+            httpRouter: honoApp((app) => app.get("/thing", () => new Response("ok"))),
             shardDO: shard.namespace,
         });
 
         const res = await worker.fetch(new Request("https://app.example/thing", { method: "POST" }), {}, fakeCtx);
 
-        expect(res.status).toBe(405);
-        expect(res.headers.get("allow")).toBe("GET, PUT");
+        expect(res.status).toBe(404);
     });
 
-    test("falls through to 404 when the router reports not_found", async () => {
+    test("falls through to hono's 404 when no route matches", async () => {
         const worker = createWorker({
-            httpRouter: fixedRouter({ kind: "not_found" }),
+            httpRouter: honoApp((app) => app.get("/known", () => new Response("ok"))),
             shardDO: shard.namespace,
         });
 
@@ -502,7 +507,7 @@ describe("createWorker — HTTP actions", () => {
         const action = vi.fn(() => new Response("action"));
 
         const worker = createWorker({
-            httpRouter: oneRoute("/x", "GET", action),
+            httpRouter: honoApp((app) => app.get("/x", action)),
             routes: { "/x": route },
             shardDO: shard.namespace,
         });
@@ -517,7 +522,7 @@ describe("createWorker — HTTP actions", () => {
         const action = vi.fn(() => new Response("action"));
 
         const worker = createWorker({
-            httpRouter: fixedRouter({ action: { handler: action }, kind: "match" }),
+            httpRouter: honoApp((app) => app.all("*", action)),
             shardDO: shard.namespace,
         });
 

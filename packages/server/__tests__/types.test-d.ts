@@ -2,7 +2,7 @@
  * Compile-time only: this file is included by `tsc --noEmit` to exercise the
  * type surface. It is also imported by a no-op test so vitest counts it.
  */
-import type { EmptyArgs, ExactRouteSpec, Id, Infer, RegisteredQuery } from "../src/index.js";
+import type { CirrusRouteHandler, EmptyArgs, Id, Infer, RegisteredQuery } from "../src/index.js";
 import { defineSchema, defineTable, httpRoute, initCirrus, mutation, query, v } from "../src/index.js";
 
 type Assert<T extends true> = T;
@@ -71,19 +71,20 @@ const builderOutputMismatch = c.query.output(v.object({ count: v.number() })).qu
 
 export type _Check9 = Assert<Equal<typeof builderOutputMismatch.kind, "query">>;
 
-// `httpRoute`: `.searchParams()` / `.body()` flow the validator maps into the
-// handler's typed `{ searchParams, body }`.
-const itemsRoute = httpRoute.get("/api/items").searchParams({ limit: v.number() }).body({ text: v.string() });
+// `httpRoute`: `.searchParams()` / `.body()` / `.params()` flow the validator
+// maps into the handler's typed `{ searchParams, body, params }`.
+const itemsRoute = httpRoute.get("/api/items/:id").searchParams({ limit: v.number() }).body({ text: v.string() }).params({ id: v.string() });
 
 type ItemsOptions = Parameters<Parameters<typeof itemsRoute.handler>[0]>[0];
 
 export type _Check10 = Assert<Equal<ItemsOptions["searchParams"]["limit"], number>>;
 export type _Check11 = Assert<Equal<ItemsOptions["body"]["text"], string>>;
+export type _Check11b = Assert<Equal<ItemsOptions["params"]["id"], string>>;
 
-// The terminal `.handler()` yields an `ExactRouteSpec`, mountable on `httpRouter`.
+// The terminal `.handler()` yields a `CirrusRouteHandler`, mountable on `httpRouter`.
 const pingRoute = httpRoute.get("/api/ping").handler(() => ({ ok: true }));
 
-export type _Check12 = Assert<Equal<typeof pingRoute, ExactRouteSpec>>;
+export type _Check12 = Assert<Equal<typeof pingRoute, CirrusRouteHandler>>;
 
 // `.output()` constrains the handler's return — a mismatch is a compile error.
 // @ts-expect-error - handler returns number, but .output declares string
@@ -92,4 +93,4 @@ const routeOutputMismatch = httpRoute
     .output(v.string())
     .handler(() => 42);
 
-export type _Check13 = Assert<Equal<typeof routeOutputMismatch, ExactRouteSpec>>;
+export type _Check13 = Assert<Equal<typeof routeOutputMismatch, CirrusRouteHandler>>;

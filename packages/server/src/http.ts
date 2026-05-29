@@ -1,11 +1,13 @@
 import type { Infer, Validator, ValidatorKind } from "@cirrus/values";
 import { ValidationError } from "@cirrus/values";
+import type { Context } from "hono";
+import { Hono } from "hono";
 
 import type { EmptyArgs } from "./builder/index.js";
 import { CirrusError } from "./error.js";
 import type { ActionCtx, ArgsValidator, InferArgs } from "./types.js";
 
-/** HTTP verbs an {@link HttpRouter} route can bind to. */
+/** HTTP verbs the typed {@link httpRoute} builder can bind to. */
 export type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT";
 
 /**
@@ -17,171 +19,111 @@ export type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST
  */
 export type HttpActionCtx = Pick<ActionCtx, "auth" | "fetch" | "runAction" | "runMutation" | "runQuery">;
 
-/** A handler bound to a route via {@link httpRouter}. Receives the raw request, returns the raw response. */
+/** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 export type HttpActionHandler = (ctx: HttpActionCtx, request: Request) => Promise<Response> | Response;
 
 /**
- * The value {@link httpAction} produces. Marked with `isHttpAction` so the
- * router (and tooling) can tell it apart from a plain function.
+ * The hono {@link https://hono.dev | Hono} environment used by {@link httpRouter}.
+ * The runtime injects the per-request {@link HttpActionCtx} on the private
+ * `__cirrusCtx` binding; the router's lifting middleware promotes it to
+ * `c.var.cirrus` so handlers can read it as a typed variable.
  */
-export interface RegisteredHttpAction {
-    readonly handler: HttpActionHandler;
-    readonly isHttpAction: true;
+export interface CirrusHttpEnv {
+    Bindings: Record<string, unknown> & { __cirrusCtx?: HttpActionCtx };
+    Variables: { cirrus: HttpActionCtx };
 }
 
-/** Wrap a `(ctx, request) => Response` handler so it can be mounted on an {@link httpRouter}. */
-export const httpAction = (handler: HttpActionHandler): RegisteredHttpAction => ({ handler, isHttpAction: true });
+/** The hono app type {@link httpRouter} returns. */
+export type CirrusHttpApp = Hono<CirrusHttpEnv>;
 
-/** Bind a handler to an exact pathname. */
-export interface ExactRouteSpec {
-    handler: RegisteredHttpAction;
-    method: HttpMethod;
-    path: string;
-}
-
-/** Bind a handler to every pathname under `pathPrefix` (which must end in `/`). */
-export interface PrefixRouteSpec {
-    handler: RegisteredHttpAction;
-    method: HttpMethod;
-    pathPrefix: string;
-}
-
-export type RouteSpec = ExactRouteSpec | PrefixRouteSpec;
-
-/** A normalised route entry, as returned by {@link HttpRouter.getRoutes}. */
-export interface RouteEntry {
-    handler: RegisteredHttpAction;
-    method: HttpMethod;
-    /** The exact pathname, or — for prefix routes — the prefix ending in `/`. */
-    path: string;
-    prefix: boolean;
-}
+/** A compiled route handler: a hono handler that resolves to a raw {@link Response}. */
+export type CirrusRouteHandler = (c: Context<CirrusHttpEnv>) => Promise<Response>;
 
 /**
- * Result of {@link HttpRouter.lookup}. Distinguishes "no path matched" (→ 404)
- * from "path matched but not this method" (→ 405 with an `Allow` list) so the
- * worker can respond with the correct status.
+ * Wrap a `(ctx, request) => Response` handler as a hono handler. The raw escape
+ * hatch — mount it with `app.all(path, httpAction(fn))`. `ctx` is the
+ * runtime-injected {@link HttpActionCtx} lifted into `c.var.cirrus` by
+ * {@link httpRouter}; `request` is the underlying `c.req.raw`.
  */
-export type RouteLookup = { action: RegisteredHttpAction; kind: "match" } | { allow: HttpMethod[]; kind: "method_not_allowed" } | { kind: "not_found" };
-
-export interface HttpRouter {
-    /** All registered routes, in declaration order. */
-    getRoutes: () => readonly RouteEntry[];
-    /** Marker so the worker and tooling can recognise a router instance. */
-    readonly isRouter: true;
-    /** Resolve a request to a handler, a 405, or a 404. Exact paths beat prefixes; longest prefix wins. */
-    lookup: (pathname: string, method: string) => RouteLookup;
-    /** Register a route. Throws on a malformed path or a duplicate (method, path). */
-    route: (spec: RouteSpec) => void;
-}
-
-const isPrefixSpec = (spec: RouteSpec): spec is PrefixRouteSpec => "pathPrefix" in spec;
+export const httpAction
+    = (handler: HttpActionHandler): CirrusRouteHandler =>
+        async (c) =>
+            handler(c.get("cirrus"), c.req.raw);
 
 /**
- * Create a router for HTTP actions. Mirrors Convex's `httpRouter()`:
+ * Create the hono app for HTTP actions. Pre-wired with a middleware that lifts
+ * the runtime-injected `c.env.__cirrusCtx` into `c.var.cirrus`, so both
+ * {@link httpAction} and the typed {@link httpRoute} builder can read the action
+ * context. The full hono surface is available — plugins, path params, `.route`:
  *
  * ```ts
- * const http = httpRouter();
- * http.route({ path: "/webhook", method: "POST", handler: onWebhook });
- * http.route({ pathPrefix: "/img/", method: "GET", handler: serveImage });
- * export default http;
+ * const app = httpRouter();
+ * app.use("*", cors());
+ * app.post("/webhook", httpAction(onWebhook));
+ * app.get("/users/:id", getUser);
+ * export default createWorker({ httpRouter: app, ... });
  * ```
  *
- * Pass the router to `createWorker({ httpRouter })` so inbound requests that
- * don't hit the RPC/WebSocket endpoints are dispatched to these handlers.
+ * The lifting middleware throws if the context is absent. `createWorker` injects
+ * it on every request the router sees, so this only trips when the app is run
+ * outside the runtime — a misconfiguration we surface loudly rather than let
+ * `c.var.cirrus` be silently `undefined` despite its non-optional type.
  */
-export const httpRouter = (): HttpRouter => {
-    const routes: RouteEntry[] = [];
+export const httpRouter = (): CirrusHttpApp => {
+    const app = new Hono<CirrusHttpEnv>();
 
-    const route = (spec: RouteSpec): void => {
-        const prefix = isPrefixSpec(spec);
-        const path = prefix ? spec.pathPrefix : spec.path;
+    app.use("*", async (c, next) => {
+        const injected = c.env.__cirrusCtx;
 
-        if (!path.startsWith("/")) {
-            throw new Error(`httpRouter: ${prefix ? "pathPrefix" : "path"} must start with "/" (got ${JSON.stringify(path)})`);
+        if (!injected) {
+            throw new CirrusError(
+                "INTERNAL_SERVER_ERROR",
+                "HttpActionCtx was not injected — mount httpRouter() on createWorker(), which supplies it per request.",
+            );
         }
 
-        if (prefix && !path.endsWith("/")) {
-            throw new Error(`httpRouter: pathPrefix must end with "/" (got ${JSON.stringify(path)})`);
-        }
+        c.set("cirrus", injected);
 
-        const duplicate = routes.some((entry) => entry.prefix === prefix && entry.path === path && entry.method === spec.method);
+        await next();
+    });
 
-        if (duplicate) {
-            throw new Error(`httpRouter: duplicate route for ${spec.method} ${path}`);
-        }
-
-        routes.push({ handler: spec.handler, method: spec.method, path, prefix });
-    };
-
-    const lookup = (pathname: string, method: string): RouteLookup => {
-        // Gather every entry whose path/prefix matches, ignoring the method, so
-        // we can tell a true 404 (no path) from a 405 (path, wrong method).
-        const pathMatches = routes.filter((entry) => entry.prefix ? pathname.startsWith(entry.path) : entry.path === pathname);
-
-        if (pathMatches.length === 0) {
-            return { kind: "not_found" };
-        }
-
-        // Exact routes win over prefixes; among prefixes the longest one wins.
-        const ranked = [...pathMatches].sort((a, b) => {
-            if (a.prefix !== b.prefix) {
-                return a.prefix ? 1 : -1;
-            }
-
-            return b.path.length - a.path.length;
-        });
-
-        const hit = ranked.find((entry) => entry.method === method);
-
-        if (hit) {
-            return { action: hit.handler, kind: "match" };
-        }
-
-        const allow = [...new Set(ranked.map((entry) => entry.method))];
-
-        return { allow, kind: "method_not_allowed" };
-    };
-
-    return {
-        getRoutes: () => routes,
-        isRouter: true,
-        lookup,
-        route,
-    };
+    return app;
 };
 
-/** The `{ ctx, searchParams, body }` a typed route handler receives. */
-export interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body extends ArgsValidator> {
+/** The `{ ctx, searchParams, body, params }` a typed route handler receives. */
+export interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator> {
     body: InferArgs<Body>;
     ctx: HttpActionCtx;
+    params: InferArgs<Params>;
     searchParams: InferArgs<SearchParams>;
 }
 
 /**
- * A typed REST route under construction. `.searchParams()` / `.body()` accumulate
- * validator maps (later calls merge, a colliding key wins) that decode the URL
- * query and JSON body into the handler's typed `searchParams` / `body`. Like the
- * procedure builder, `.output(validator)` defaults to the `undefined` sentinel —
- * while unset the handler is generic over its own return; once set the handler
- * must return that type and the result is parsed through the validator before
+ * A typed REST route under construction. `.searchParams()` / `.body()` /
+ * `.params()` accumulate validator maps (later calls merge, a colliding key
+ * wins) that decode the URL query, JSON body, and hono path params into the
+ * handler's typed `searchParams` / `body` / `params`. Like the procedure
+ * builder, `.output(validator)` defaults to the `undefined` sentinel — while
+ * unset the handler is generic over its own return; once set the handler must
+ * return that type and the result is parsed through the validator before
  * serialization. `[Output] extends [undefined]` is tuple-wrapped so a union
  * `Output` doesn't distribute and the test is for the exact sentinel.
  *
- * The terminal `.handler()` yields an {@link ExactRouteSpec} — mount it directly
- * via `httpRouter().route(spec)`.
+ * The terminal `.handler()` yields a {@link CirrusRouteHandler} — mount it
+ * directly with `app.get(path, route)`.
  */
-export interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends ArgsValidator, Output = undefined> {
-    body: <B extends ArgsValidator>(validators: B) => HttpRouteBuilder<SearchParams, B & Body, Output>;
+export interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator, Output = undefined> {
+    body: <B extends ArgsValidator>(validators: B) => HttpRouteBuilder<SearchParams, B & Body, Params, Output>;
     handler: [Output] extends [undefined]
-        ? <R>(handler: (options: HttpRouteHandlerOptions<SearchParams, Body>) => Promise<R> | R) => ExactRouteSpec
-        : (handler: (options: HttpRouteHandlerOptions<SearchParams, Body>) => Output | Promise<Output>) => ExactRouteSpec;
-    output: <V extends Validator>(validator: V) => HttpRouteBuilder<SearchParams, Body, Infer<V>>;
-    searchParams: <S extends ArgsValidator>(validators: S) => HttpRouteBuilder<S & SearchParams, Body, Output>;
+        ? <R>(handler: (options: HttpRouteHandlerOptions<SearchParams, Body, Params>) => Promise<R> | R) => CirrusRouteHandler
+        : (handler: (options: HttpRouteHandlerOptions<SearchParams, Body, Params>) => Output | Promise<Output>) => CirrusRouteHandler;
+    output: <V extends Validator>(validator: V) => HttpRouteBuilder<SearchParams, Body, Params, Infer<V>>;
+    params: <P extends ArgsValidator>(validators: P) => HttpRouteBuilder<SearchParams, Body, P & Params, Output>;
+    searchParams: <S extends ArgsValidator>(validators: S) => HttpRouteBuilder<S & SearchParams, Body, Params, Output>;
 }
 
-/** Binds a method to a pathname, opening a fresh {@link HttpRouteBuilder}. */
-export type HttpRouteFactory = (path: string) => HttpRouteBuilder<EmptyArgs, EmptyArgs>;
+/** Opens a fresh {@link HttpRouteBuilder}. The `path` documents intent; hono owns the actual routing at mount. */
+export type HttpRouteFactory = (path: string) => HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
 
 /** The verb-keyed entry point: `httpRoute.get("/api/todos")…`. */
 export interface HttpRoute {
@@ -199,6 +141,7 @@ interface RouteState {
     body: ArgsValidator;
     method: HttpMethod;
     output?: Validator;
+    params: ArgsValidator;
     path: string;
     searchParams: ArgsValidator;
 }
@@ -248,24 +191,29 @@ const coerceScalar = (kind: ValidatorKind, raw: string): unknown => {
 };
 
 /**
- * Decode one declared query parameter. Absent → `undefined` (so `v.optional`
- * passes and a required validator fails). An `array` validator collects every
- * repeated occurrence (`?tag=a&tag=b`), coercing each element.
+ * Decode one declared query parameter from the hono request. Absent →
+ * `undefined` (so `v.optional` passes and a required validator fails). An
+ * `array` validator collects every repeated occurrence (`?tag=a&tag=b`) via
+ * `c.req.queries`, coercing each element.
  */
-const coerceSearchParam = (validator: Validator, params: URLSearchParams, key: string): unknown => {
-    if (!params.has(key)) {
-        return undefined;
-    }
-
+const coerceSearchParam = (validator: Validator, c: Context<CirrusHttpEnv>, key: string): unknown => {
     const effective = unwrapOptional(validator);
 
     if (effective.kind === "array") {
+        const values = c.req.queries(key);
+
+        if (values === undefined) {
+            return undefined;
+        }
+
         const element = (effective as ValidatorWithMeta)._meta?.inner;
 
-        return params.getAll(key).map((raw) => coerceScalar(element?.kind ?? "string", raw));
+        return values.map((raw) => coerceScalar(element?.kind ?? "string", raw));
     }
 
-    return coerceScalar(effective.kind, params.get(key) as string);
+    const raw = c.req.query(key);
+
+    return raw === undefined ? undefined : coerceScalar(effective.kind, raw);
 };
 
 /**
@@ -307,28 +255,55 @@ const parseFields = (validators: ArgsValidator, source: Record<string, unknown>,
     return out;
 };
 
-const parseSearchParams = (validators: ArgsValidator, params: URLSearchParams): Record<string, unknown> => {
+const parseSearchParams = (validators: ArgsValidator, c: Context<CirrusHttpEnv>): Record<string, unknown> => {
     const raw: Record<string, unknown> = {};
 
     for (const key of Object.keys(validators)) {
-        if (!validators[key]) {
+        const validator = validators[key];
+
+        if (!validator) {
             continue;
         }
 
-        raw[key] = coerceSearchParam(validators[key], params, key);
+        raw[key] = coerceSearchParam(validator, c, key);
     }
 
     return parseFields(validators, raw, "searchParams");
 };
 
-type LooseHandler = (options: { body: Record<string, unknown>; ctx: HttpActionCtx; searchParams: Record<string, unknown> }) => unknown;
+/** Coerce + validate the declared hono path params (`/users/:id`). Path params arrive as strings. */
+const parseParams = (validators: ArgsValidator, c: Context<CirrusHttpEnv>): Record<string, unknown> => {
+    const provided = c.req.param() as Record<string, string | undefined>;
+    const raw: Record<string, unknown> = {};
+
+    for (const key of Object.keys(validators)) {
+        const validator = validators[key];
+
+        if (!validator) {
+            continue;
+        }
+
+        const value = provided[key];
+
+        raw[key] = value === undefined ? undefined : coerceScalar(unwrapOptional(validator).kind, value);
+    }
+
+    return parseFields(validators, raw, "params");
+};
+
+type LooseHandler = (options: {
+    body: Record<string, unknown>;
+    ctx: HttpActionCtx;
+    params: Record<string, unknown>;
+    searchParams: Record<string, unknown>;
+}) => unknown;
 
 /** Read + validate the JSON body. A non-JSON or non-object payload is a 400. */
-const parseBody = async (validators: ArgsValidator, request: Request): Promise<Record<string, unknown>> => {
+const parseBody = async (validators: ArgsValidator, c: Context<CirrusHttpEnv>): Promise<Record<string, unknown>> => {
     let json: unknown;
 
     try {
-        json = await request.json();
+        json = await c.req.json();
     } catch {
         throw new CirrusError("BAD_REQUEST", "Invalid JSON body");
     }
@@ -370,44 +345,45 @@ const errorResponse = (error: unknown): Response => {
 };
 
 /**
- * Compile the accumulated route state into a {@link RegisteredHttpAction}.
- * Input decode failures (bad query / body) surface as 400; a result that
+ * Compile the accumulated route state into a {@link CirrusRouteHandler}. Reads
+ * `ctx` from `c.var.cirrus` (set by {@link httpRouter}'s middleware). Input
+ * decode failures (bad query / body / params) surface as 400; a result that
  * violates `.output()` surfaces as 500 (see {@link applyOutput}).
  */
-const buildRouteHandler = (state: RouteState, userHandler: LooseHandler): RegisteredHttpAction =>
-    httpAction(async (ctx, request) => {
-        try {
-            const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, new URL(request.url).searchParams) : {};
-            const body = Object.keys(state.body).length > 0 ? await parseBody(state.body, request) : {};
-            const result = await userHandler({ body, ctx, searchParams });
-            const payload = state.output ? applyOutput(state.output, result) : result;
+const buildRouteHandler
+    = (state: RouteState, userHandler: LooseHandler): CirrusRouteHandler =>
+        async (c) => {
+            try {
+                const ctx = c.get("cirrus");
+                const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
+                const params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
+                const body = Object.keys(state.body).length > 0 ? await parseBody(state.body, c) : {};
+                const result = await userHandler({ body, ctx, params, searchParams });
+                const payload = state.output ? applyOutput(state.output, result) : result;
 
-            return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
-        } catch (error: unknown) {
-            return errorResponse(error);
-        }
-    });
+                return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
+            } catch (error: unknown) {
+                return errorResponse(error);
+            }
+        };
 
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => ({
     body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
-    handler: (userHandler: LooseHandler): ExactRouteSpec => ({
-        handler: buildRouteHandler(state, userHandler),
-        method: state.method,
-        path: state.path,
-    }),
+    handler: (userHandler: LooseHandler): CirrusRouteHandler => buildRouteHandler(state, userHandler),
     output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
+    params: (validators: ArgsValidator) => makeRouteBuilder({ ...state, params: { ...state.params, ...validators } }),
     searchParams: (validators: ArgsValidator) => makeRouteBuilder({ ...state, searchParams: { ...state.searchParams, ...validators } }),
 });
 
 const makeRouteFactory
     = (method: HttpMethod): HttpRouteFactory =>
         (path: string) =>
-            makeRouteBuilder({ body: {}, method, path, searchParams: {} }) as unknown as HttpRouteBuilder<EmptyArgs, EmptyArgs>;
+            makeRouteBuilder({ body: {}, method, params: {}, path, searchParams: {} }) as unknown as HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
 
 /**
- * Typed REST route builder. Compiles down to the same `ExactRouteSpec` /
- * `RegisteredHttpAction` the raw {@link httpRouter} mounts, so a typed route and
- * a hand-written `httpAction` are interchangeable on the router:
+ * Typed REST route builder. Compiles down to a {@link CirrusRouteHandler}, so a
+ * typed route and a hand-written {@link httpAction} are interchangeable when
+ * mounted on {@link httpRouter}:
  *
  * ```ts
  * export const listTodos = httpRoute
@@ -416,8 +392,14 @@ const makeRouteFactory
  *     .output(v.array(v.object({ id: v.string(), text: v.string() })))
  *     .handler(async ({ ctx, searchParams }) => ctx.runQuery(api.todos.list, searchParams));
  *
- * const http = httpRouter();
- * http.route(listTodos);
+ * export const getTodo = httpRoute
+ *     .get("/api/todos/:id")
+ *     .params({ id: v.string() })
+ *     .handler(async ({ ctx, params }) => ctx.runQuery(api.todos.get, params));
+ *
+ * const app = httpRouter();
+ * app.get("/api/todos", listTodos);
+ * app.get("/api/todos/:id", getTodo);
  * ```
  */
 export const httpRoute: HttpRoute = {

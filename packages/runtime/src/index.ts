@@ -2,7 +2,6 @@ export type {
     ExecutionContextLike,
     HttpActionContext,
     HttpActionLike,
-    HttpRouteLookup,
     HttpRouterLike,
     Route,
     RpcContext,

@@ -1,36 +1,29 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
-import type { HttpActionCtx } from "../src/index.js";
+import type { CirrusRouteHandler, HttpActionCtx } from "../src/index.js";
 import { httpRoute, httpRouter, v } from "../src/index.js";
 
 const ctx = {} as HttpActionCtx;
 
-/** Invoke a built route's handler against a Request, returning the Response. */
-const call = async (
-    spec: { handler: { handler: (ctx: HttpActionCtx, request: Request) => Promise<Response> | Response } },
-    request: Request,
-): Promise<Response> => spec.handler.handler(ctx, request);
+/** Mount a built route on a fresh hono app at `method path` and dispatch `request` with an injected ctx. */
+const dispatch = async (route: CirrusRouteHandler, method: string, path: string, request: Request): Promise<Response> => {
+    const app = httpRouter();
+
+    app.on(method, path, route);
+
+    return app.fetch(request, { __cirrusCtx: ctx });
+};
 
 describe("httpRoute terminal shape", () => {
-    test("yields an ExactRouteSpec mountable on httpRouter, carrying method + path + an http action", () => {
+    test("yields a hono handler mountable on httpRouter", async () => {
         const route = httpRoute.get("/api/ping").handler(() => ({ ok: true }));
 
-        expect(route.method).toBe("GET");
-        expect(route.path).toBe("/api/ping");
-        expect(route.handler.isHttpAction).toBe(true);
+        expectTypeOf(route).toBeFunction();
 
-        const http = httpRouter();
+        const response = await dispatch(route, "GET", "/api/ping", new Request("https://x/api/ping"));
 
-        http.route(route);
-
-        expect(http.lookup("/api/ping", "GET")).toStrictEqual({ action: route.handler, kind: "match" });
-    });
-
-    test("each verb stamps its own method", () => {
-        expect(httpRoute.post("/x").handler(() => null).method).toBe("POST");
-        expect(httpRoute.put("/x").handler(() => null).method).toBe("PUT");
-        expect(httpRoute.patch("/x").handler(() => null).method).toBe("PATCH");
-        expect(httpRoute.delete("/x").handler(() => null).method).toBe("DELETE");
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ ok: true });
     });
 });
 
@@ -41,7 +34,7 @@ describe("httpRoute searchParams", () => {
             .searchParams({ active: v.boolean(), limit: v.number() })
             .handler(({ searchParams }) => searchParams);
 
-        const response = await call(route, new Request("https://x/api/items?limit=5&active=true"));
+        const response = await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?limit=5&active=true"));
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ active: true, limit: 5 });
@@ -53,8 +46,11 @@ describe("httpRoute searchParams", () => {
             .searchParams({ q: v.optional(v.string()) })
             .handler(({ searchParams }) => ({ keys: Object.keys(searchParams), value: searchParams.q ?? null }));
 
-        await expect((await call(route, new Request("https://x/api/items"))).json()).resolves.toEqual({ keys: [], value: null });
-        await expect((await call(route, new Request("https://x/api/items?q=hi"))).json()).resolves.toEqual({ keys: ["q"], value: "hi" });
+        await expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items"))).json()).resolves.toEqual({ keys: [], value: null });
+        await expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?q=hi"))).json()).resolves.toEqual({
+            keys: ["q"],
+            value: "hi",
+        });
     });
 
     test("collects repeated params into an array validator", async () => {
@@ -63,7 +59,7 @@ describe("httpRoute searchParams", () => {
             .searchParams({ tag: v.array(v.string()) })
             .handler(({ searchParams }) => searchParams.tag);
 
-        await expect((await call(route, new Request("https://x/api/items?tag=a&tag=b"))).json()).resolves.toEqual(["a", "b"]);
+        await expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?tag=a&tag=b"))).json()).resolves.toEqual(["a", "b"]);
     });
 
     test("a malformed scalar fails with a 400 naming the field", async () => {
@@ -72,7 +68,7 @@ describe("httpRoute searchParams", () => {
             .searchParams({ limit: v.number() })
             .handler(({ searchParams }) => searchParams);
 
-        const response = await call(route, new Request("https://x/api/items?limit=abc"));
+        const response = await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?limit=abc"));
 
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toMatchObject({ code: "BAD_REQUEST", error: expect.stringContaining("searchParams.limit") });
@@ -84,7 +80,33 @@ describe("httpRoute searchParams", () => {
             .searchParams({ limit: v.number() })
             .handler(({ searchParams }) => searchParams);
 
-        expect((await call(route, new Request("https://x/api/items"))).status).toBe(400);
+        expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items"))).status).toBe(400);
+    });
+});
+
+describe("httpRoute params", () => {
+    test("coerces and validates a typed path param", async () => {
+        const route = httpRoute
+            .get("/api/users/:id")
+            .params({ id: v.number() })
+            .handler(({ params }) => ({ id: params.id }));
+
+        const response = await dispatch(route, "GET", "/api/users/:id", new Request("https://x/api/users/42"));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ id: 42 });
+    });
+
+    test("a malformed path param fails with a 400 naming the field", async () => {
+        const route = httpRoute
+            .get("/api/users/:id")
+            .params({ id: v.number() })
+            .handler(({ params }) => params);
+
+        const response = await dispatch(route, "GET", "/api/users/:id", new Request("https://x/api/users/not-a-number"));
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ code: "BAD_REQUEST", error: expect.stringContaining("params.id") });
     });
 });
 
@@ -95,7 +117,12 @@ describe("httpRoute body", () => {
             .body({ text: v.string() })
             .handler(({ body }) => ({ created: body.text }));
 
-        const response = await call(route, new Request("https://x/api/todos", { body: JSON.stringify({ text: "buy milk" }), method: "POST" }));
+        const response = await dispatch(
+            route,
+            "POST",
+            "/api/todos",
+            new Request("https://x/api/todos", { body: JSON.stringify({ text: "buy milk" }), method: "POST" }),
+        );
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ created: "buy milk" });
@@ -107,7 +134,7 @@ describe("httpRoute body", () => {
             .body({ text: v.string() })
             .handler(({ body }) => body);
 
-        const response = await call(route, new Request("https://x/api/todos", { body: "not json", method: "POST" }));
+        const response = await dispatch(route, "POST", "/api/todos", new Request("https://x/api/todos", { body: "not json", method: "POST" }));
 
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toMatchObject({ error: "Invalid JSON body" });
@@ -119,7 +146,12 @@ describe("httpRoute body", () => {
             .body({ text: v.string() })
             .handler(({ body }) => body);
 
-        const response = await call(route, new Request("https://x/api/todos", { body: JSON.stringify({ text: 42 }), method: "POST" }));
+        const response = await dispatch(
+            route,
+            "POST",
+            "/api/todos",
+            new Request("https://x/api/todos", { body: JSON.stringify({ text: 42 }), method: "POST" }),
+        );
 
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining("body.text") });
@@ -133,7 +165,7 @@ describe("httpRoute output", () => {
             .output(v.object({ id: v.string() }))
             .handler(() => ({ id: "u1", secret: "leaked" }) as { id: string });
 
-        await expect((await call(route, new Request("https://x/api/me"))).json()).resolves.toEqual({ id: "u1" });
+        await expect((await dispatch(route, "GET", "/api/me", new Request("https://x/api/me"))).json()).resolves.toEqual({ id: "u1" });
     });
 
     test("a result that violates .output() surfaces as a 500, not a 400", async () => {
@@ -142,7 +174,7 @@ describe("httpRoute output", () => {
             .output(v.object({ id: v.string() }))
             .handler(() => ({ id: 123 }) as unknown as { id: string });
 
-        const response = await call(route, new Request("https://x/api/me"));
+        const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me"));
 
         expect(response.status).toBe(500);
         await expect(response.json()).resolves.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
@@ -158,7 +190,12 @@ describe("httpRoute composition", () => {
             .body({ query: v.string() })
             .handler(({ body, searchParams }) => ({ echo: body.query, page: searchParams.page }));
 
-        const response = await call(route, new Request("https://x/api/search?page=2", { body: JSON.stringify({ query: "cats" }), method: "POST" }));
+        const response = await dispatch(
+            route,
+            "POST",
+            "/api/search",
+            new Request("https://x/api/search?page=2", { body: JSON.stringify({ query: "cats" }), method: "POST" }),
+        );
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ echo: "cats", page: 2 });
@@ -167,7 +204,7 @@ describe("httpRoute composition", () => {
     test("a handler returning undefined with no .output() yields 204 No Content", async () => {
         const route = httpRoute.post("/api/noop").handler(() => undefined);
 
-        const response = await call(route, new Request("https://x/api/noop", { method: "POST" }));
+        const response = await dispatch(route, "POST", "/api/noop", new Request("https://x/api/noop", { method: "POST" }));
 
         expect(response.status).toBe(204);
         await expect(response.text()).resolves.toBe("");
@@ -182,8 +219,10 @@ describe("httpRoute composition", () => {
         });
 
         const marker = { auth: "marker" } as unknown as HttpActionCtx;
+        const app = httpRouter();
 
-        await route.handler.handler(marker, new Request("https://x/api/ctx"));
+        app.get("/api/ctx", route);
+        await app.fetch(new Request("https://x/api/ctx"), { __cirrusCtx: marker });
 
         expect(seen[0]).toBe(marker);
     });

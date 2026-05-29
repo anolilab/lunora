@@ -83,6 +83,8 @@ catalogs:
     "better-auth": ^1.6.11
   drizzle:
     drizzle-orm: ^0.45.2
+  http:
+    hono: ^4.12.19
 
 preferWorkspacePackages: true
 

@@ -3,108 +3,93 @@ import { describe, expect, test } from "vitest";
 import type { HttpActionCtx } from "../src/index.js";
 import { httpAction, httpRouter } from "../src/index.js";
 
-const noopHandler = httpAction(() => new Response("ok"));
+const ctx = {} as HttpActionCtx;
 
 describe("httpAction", () => {
-    test("marks the registration and preserves the handler", async () => {
-        const action = httpAction((_ctx: HttpActionCtx, request: Request) => new Response(request.method));
+    test("hands the injected ctx and the raw request to the wrapped handler", async () => {
+        const seen: { ctx: HttpActionCtx; method: string }[] = [];
+        const app = httpRouter();
 
-        expect(action.isHttpAction).toBe(true);
+        app.all(
+            "/echo",
+            httpAction((actionCtx, request) => {
+                seen.push({ ctx: actionCtx, method: request.method });
 
-        const response = await action.handler({} as HttpActionCtx, new Request("https://x/y", { method: "PATCH" }));
+                return new Response(request.method);
+            }),
+        );
 
+        const marker = { auth: "marker" } as unknown as HttpActionCtx;
+        const response = await app.fetch(new Request("https://x/echo", { method: "PATCH" }), { __cirrusCtx: marker });
+
+        expect(response.status).toBe(200);
         await expect(response.text()).resolves.toBe("PATCH");
+        expect(seen[0]!.ctx).toBe(marker);
+        expect(seen[0]!.method).toBe("PATCH");
+    });
+
+    test("passes the raw Response through unchanged", async () => {
+        const app = httpRouter();
+
+        app.post(
+            "/raw",
+            httpAction(() => Response.json({ ok: true }, { status: 202 })),
+        );
+
+        const response = await app.fetch(new Request("https://x/raw", { method: "POST" }), { __cirrusCtx: ctx });
+
+        expect(response.status).toBe(202);
+        await expect(response.json()).resolves.toEqual({ ok: true });
     });
 });
 
 describe("httpRouter", () => {
-    test("matches an exact path + method", () => {
-        const http = httpRouter();
+    test("routes by method", async () => {
+        const app = httpRouter();
 
-        http.route({ handler: noopHandler, method: "POST", path: "/webhook" });
+        app.get(
+            "/r",
+            httpAction(() => new Response("GET")),
+        );
+        app.post(
+            "/r",
+            httpAction(() => new Response("POST")),
+        );
 
-        expect(http.lookup("/webhook", "POST")).toStrictEqual({ action: noopHandler, kind: "match" });
+        await expect((await app.fetch(new Request("https://x/r"), { __cirrusCtx: ctx })).text()).resolves.toBe("GET");
+        await expect((await app.fetch(new Request("https://x/r", { method: "POST" }), { __cirrusCtx: ctx })).text()).resolves.toBe("POST");
     });
 
-    test("returns not_found when no path matches", () => {
-        const http = httpRouter();
+    test("returns hono's 404 for an unmatched path", async () => {
+        const app = httpRouter();
 
-        http.route({ handler: noopHandler, method: "GET", path: "/a" });
+        app.get(
+            "/known",
+            httpAction(() => new Response("ok")),
+        );
 
-        expect(http.lookup("/b", "GET")).toStrictEqual({ kind: "not_found" });
+        expect((await app.fetch(new Request("https://x/unknown"), { __cirrusCtx: ctx })).status).toBe(404);
     });
 
-    test("returns method_not_allowed (with the Allow set) when the path matches but the verb does not", () => {
-        const http = httpRouter();
+    test("a path-match with the wrong verb is a 404", async () => {
+        const app = httpRouter();
 
-        http.route({ handler: noopHandler, method: "GET", path: "/thing" });
-        http.route({ handler: noopHandler, method: "PUT", path: "/thing" });
+        app.get(
+            "/thing",
+            httpAction(() => new Response("ok")),
+        );
 
-        const result = http.lookup("/thing", "POST");
-
-        expect(result.kind).toBe("method_not_allowed");
-        expect(result).toMatchObject({ allow: expect.arrayContaining(["GET", "PUT"]) });
+        expect((await app.fetch(new Request("https://x/thing", { method: "POST" }), { __cirrusCtx: ctx })).status).toBe(404);
     });
 
-    test("matches a pathPrefix route", () => {
-        const http = httpRouter();
+    test("errors when the action context was not injected (router used outside the runtime)", async () => {
+        const app = httpRouter();
 
-        http.route({ handler: noopHandler, method: "GET", pathPrefix: "/img/" });
+        app.get(
+            "/known",
+            httpAction(() => new Response("ok")),
+        );
 
-        expect(http.lookup("/img/cat.png", "GET")).toStrictEqual({ action: noopHandler, kind: "match" });
-        expect(http.lookup("/img/", "GET")).toStrictEqual({ action: noopHandler, kind: "match" });
-    });
-
-    test("prefers an exact route over a prefix that also matches", () => {
-        const exact = httpAction(() => new Response("exact"));
-        const prefix = httpAction(() => new Response("prefix"));
-        const http = httpRouter();
-
-        http.route({ handler: prefix, method: "GET", pathPrefix: "/files/" });
-        http.route({ handler: exact, method: "GET", path: "/files/special" });
-
-        expect(http.lookup("/files/special", "GET")).toStrictEqual({ action: exact, kind: "match" });
-        expect(http.lookup("/files/other", "GET")).toStrictEqual({ action: prefix, kind: "match" });
-    });
-
-    test("prefers the longest matching prefix", () => {
-        const broad = httpAction(() => new Response("broad"));
-        const deep = httpAction(() => new Response("deep"));
-        const http = httpRouter();
-
-        http.route({ handler: broad, method: "GET", pathPrefix: "/api/" });
-        http.route({ handler: deep, method: "GET", pathPrefix: "/api/v2/" });
-
-        expect(http.lookup("/api/v2/users", "GET")).toStrictEqual({ action: deep, kind: "match" });
-        expect(http.lookup("/api/v1/users", "GET")).toStrictEqual({ action: broad, kind: "match" });
-    });
-
-    test("rejects a path that does not start with a slash", () => {
-        const http = httpRouter();
-
-        expect(() => { http.route({ handler: noopHandler, method: "GET", path: "webhook" }); }).toThrow(/must start with/);
-    });
-
-    test("rejects a pathPrefix that does not end with a slash", () => {
-        const http = httpRouter();
-
-        expect(() => { http.route({ handler: noopHandler, method: "GET", pathPrefix: "/img" }); }).toThrow(/must end with/);
-    });
-
-    test("rejects a duplicate (method, path) registration", () => {
-        const http = httpRouter();
-
-        http.route({ handler: noopHandler, method: "POST", path: "/dup" });
-
-        expect(() => { http.route({ handler: noopHandler, method: "POST", path: "/dup" }); }).toThrow(/duplicate/);
-    });
-
-    test("allows the same path with a different method", () => {
-        const http = httpRouter();
-
-        http.route({ handler: noopHandler, method: "GET", path: "/multi" });
-
-        expect(() => { http.route({ handler: noopHandler, method: "POST", path: "/multi" }); }).not.toThrow();
-        expect(http.getRoutes()).toHaveLength(2);
+        expect((await app.fetch(new Request("https://x/known"), {})).status).toBe(500);
     });
 });
