@@ -1,6 +1,8 @@
 import type { Id } from "@cirrus/server";
 import { mutation, query, v } from "@cirrus/server";
 
+import { embedText } from "./embed.js";
+
 interface PostDoc {
     _id: Id<"posts">;
     authorId: Id<"users">;
@@ -25,6 +27,25 @@ export const list = query({
 export const get = query({
     args: { id: v.id("posts") },
     handler: async (ctx, { id }): Promise<PostDoc | null> => ((await ctx.db.get(id)) as PostDoc | null) ?? null,
+});
+
+/**
+ * Semantic search over post bodies. `.vectorize("body", …)` keeps the
+ * `posts_search` index in sync on every write, so here we just embed the query
+ * text and ask `ctx.vectors` for the nearest posts. `title` rides along as
+ * Vectorize metadata, so a result preview needs no extra DB read.
+ */
+export const search = query({
+    args: { text: v.string(), topK: v.optional(v.number()) },
+    handler: async (ctx, { text, topK }): Promise<Array<{ id: Id<"posts">; score: number; title: string }>> => {
+        const result = await ctx.vectors.query("posts_search", { embed: embedText, input: text, topK: topK ?? 5 });
+
+        return result.matches.map((match) => ({
+            id: match.id as Id<"posts">,
+            score: match.score,
+            title: String(match.metadata?.title ?? ""),
+        }));
+    },
 });
 
 /**

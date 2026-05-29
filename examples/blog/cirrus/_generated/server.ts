@@ -5,7 +5,14 @@ import * as cirrus_cleanup_0 from "../cleanup.js";
 import * as cirrus_drafts_1 from "../drafts.js";
 import * as cirrus_posts_2 from "../posts.js";
 
-import { action as actionBase, mutation as mutationBase, query as queryBase } from "@cirrus/server";
+import {
+    action as actionBase,
+    internalAction as internalActionBase,
+    internalMutation as internalMutationBase,
+    internalQuery as internalQueryBase,
+    mutation as mutationBase,
+    query as queryBase,
+} from "@cirrus/server";
 import type {
     ActionCtx as ActionCtxBase,
     ArgsValidator,
@@ -19,7 +26,7 @@ import type {
     RegisteredQuery,
 } from "@cirrus/server";
 
-import type { DatabaseReaderFacade, DatabaseWriterFacade } from "./dataModel.js";
+import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, OrmReader, OrmWriter } from "./dataModel.js";
 
 export type { DataModel, Doc, Id } from "./dataModel.js";
 
@@ -31,14 +38,17 @@ export type { DataModel, Doc, Id } from "./dataModel.js";
  */
 export interface QueryCtx extends Omit<QueryCtxBase, "db"> {
     readonly db: DatabaseReader & DatabaseReaderFacade;
+    readonly orm: OrmReader;
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
+    readonly orm: OrmWriter;
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
+    readonly orm: OrmWriter;
 }
 
 /** `query()` bound to this project's typed {@link QueryCtx}. */
@@ -59,6 +69,24 @@ export const action = actionBase as unknown as <A extends ArgsValidator, R>(defi
     handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
 }) => RegisteredAction<A, R>;
 
+/** `internalQuery()` bound to this project's typed {@link QueryCtx} — never exposed on `api`. */
+export const internalQuery = internalQueryBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: QueryCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredQuery<A, R>;
+
+/** `internalMutation()` bound to this project's typed {@link MutationCtx} — never exposed on `api`. */
+export const internalMutation = internalMutationBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: MutationCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredMutation<A, R>;
+
+/** `internalAction()` bound to this project's typed {@link ActionCtx} — never exposed on `api`. */
+export const internalAction = internalActionBase as unknown as <A extends ArgsValidator, R>(definition: {
+    args: A;
+    handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
+}) => RegisteredAction<A, R>;
+
 /**
  * Single registered function, narrowed to the shape `handleRpc` needs.
  * The real argument validators / return types are checked elsewhere — at
@@ -69,6 +97,8 @@ export interface RegisteredCirrusFunction {
     kind: "action" | "mutation" | "query";
     args: Record<string, unknown>;
     handler: (context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown;
+    /** `"internal"` functions are rejected on the external RPC path; absence === public. */
+    visibility?: "internal" | "public";
 }
 
 /**
@@ -83,14 +113,59 @@ export const CIRRUS_FUNCTIONS: Record<string, RegisteredCirrusFunction> = {
     "posts:list": cirrus_posts_2.list as unknown as RegisteredCirrusFunction,
     "posts:publish": cirrus_posts_2.publish as unknown as RegisteredCirrusFunction,
     "posts:requestImageUpload": cirrus_posts_2.requestImageUpload as unknown as RegisteredCirrusFunction,
+    "posts:search": cirrus_posts_2.search as unknown as RegisteredCirrusFunction,
 };
 
 /**
- * Resolve and invoke a registered function. Throws a CirrusError-shaped
- * object (404) when the path is unknown — the runtime's structural error
- * mapper turns that into the right HTTP status.
+ * Resolve and invoke a registered function from an external caller. Throws a
+ * CirrusError-shaped object (404) when the path is unknown — the runtime's
+ * structural error mapper turns that into the right HTTP status. Internal
+ * functions are treated as not-found so their existence never leaks to clients.
  */
 export const dispatchCirrusFunction = async (functionPath: string, context: unknown, args: Record<string, unknown>): Promise<unknown> => {
+    const registered = CIRRUS_FUNCTIONS[functionPath];
+
+    if (!registered || registered.visibility === "internal") {
+        throw Object.assign(new Error(`function not registered: ${functionPath}`), {
+            name: "CirrusError",
+            code: "FUNCTION_NOT_FOUND",
+            status: 404,
+        });
+    }
+
+    return registered.handler(context, args);
+};
+
+/**
+ * A handler context accepted by {@link createCaller}. The runtime context the
+ * shard DO builds is uniform across kinds, so any handler's `ctx` works here.
+ */
+export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
+
+/**
+ * Typed, in-process server-to-server caller. Every registered function — public
+ * *and* internal — is reachable; each call dispatches against the same shard
+ * with the supplied `context`, exactly like `ctx.runQuery`/`runMutation`/
+ * `runAction` but without re-stating the function path.
+ */
+export interface Caller {
+    cleanup: {
+        purgeStaleDrafts: (args?: {}) => Promise<{ deleted: number }>;
+    };
+    drafts: {
+        listMine: (args?: {}) => Promise<unknown>;
+        save: (args: { id?: Id<"drafts">; title: string; body: string }) => Promise<Id<"drafts">>;
+    };
+    posts: {
+        get: (args: { id: Id<"posts"> }) => Promise<unknown>;
+        list: (args?: {}) => Promise<unknown>;
+        publish: (args: { title: string; body: string; imageKey?: string }) => Promise<Id<"posts">>;
+        requestImageUpload: (args: { contentType: string }) => Promise<{ key: string; url: string }>;
+        search: (args: { text: string; topK?: number }) => Promise<{ id: Id<"posts">; score: number; title: string }[]>;
+    };
+}
+
+const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
     if (!registered) {
@@ -101,5 +176,42 @@ export const dispatchCirrusFunction = async (functionPath: string, context: unkn
         });
     }
 
-    return registered.handler(context, args);
+    return (await registered.handler(context, args ?? {})) as R;
 };
+
+/** Build a {@link Caller} bound to `context` (typically a handler's `ctx`). */
+export const createCaller = (context: CallerCtx): Caller => ({
+    cleanup: {
+        purgeStaleDrafts: (args) => callRegistered(context, "cleanup:purgeStaleDrafts", args),
+    },
+    drafts: {
+        listMine: (args) => callRegistered(context, "drafts:listMine", args),
+        save: (args) => callRegistered(context, "drafts:save", args),
+    },
+    posts: {
+        get: (args) => callRegistered(context, "posts:get", args),
+        list: (args) => callRegistered(context, "posts:list", args),
+        publish: (args) => callRegistered(context, "posts:publish", args),
+        requestImageUpload: (args) => callRegistered(context, "posts:requestImageUpload", args),
+        search: (args) => callRegistered(context, "posts:search", args),
+    },
+});
+
+/**
+ * Single registered data migration, narrowed to the shape the per-shard runner
+ * consumes. `up`/`down` are erased to a structural transform; the authoring
+ * validation lives in `defineMigration`.
+ */
+export interface RegisteredDataMigration {
+    batchSize?: number;
+    down?: (document: Record<string, unknown>) => Record<string, unknown> | undefined;
+    id: string;
+    table: string;
+    up: (document: Record<string, unknown>) => Record<string, unknown> | undefined;
+}
+
+/**
+ * Registry of online data migrations keyed by `defineMigration`'s `id`. The
+ * shard DO's admin RPC and the CLI resolve migrations to run through this map.
+ */
+export const CIRRUS_MIGRATIONS: Record<string, RegisteredDataMigration> = {};

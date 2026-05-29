@@ -24,6 +24,15 @@
             "bucket_name": "cirrus-example-blog-files",
         },
     ],
+    // `index_name` must match the schema's logical index name (`.vectorize("body",
+    // { index: "posts_search" })`); `binding` is the env var the worker reads.
+    // Create the index first: wrangler vectorize create posts_search --dimensions=256 --metric=cosine
+    "vectorize": [
+        {
+            "binding": "POSTS_SEARCH",
+            "index_name": "posts_search",
+        },
+    ],
     "triggers": {
         "crons": ["0 3 * * *"],
     },

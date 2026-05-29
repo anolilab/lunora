@@ -374,6 +374,9 @@ importers:
       '@cirrus/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@cirrus/vectors':
+        specifier: workspace:*
+        version: link:../../packages/vectors
       '@cirrus/vite':
         specifier: workspace:*
         version: link:../../packages/vite

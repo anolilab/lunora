@@ -19,7 +19,13 @@ export interface ApiTypes {
         list: FunctionReference<"query", {}, unknown>;
         publish: FunctionReference<"mutation", { title: string; body: string; imageKey?: string }, Id<"posts">>;
         requestImageUpload: FunctionReference<"mutation", { contentType: string }, { key: string; url: string }>;
+        search: FunctionReference<"query", { text: string; topK?: number }, { id: Id<"posts">; score: number; title: string }[]>;
     };
 }
 
 export const api = anyApi as unknown as ApiTypes;
+
+/** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
+export interface InternalApiTypes {}
+
+export const internal = anyApi as unknown as InternalApiTypes;

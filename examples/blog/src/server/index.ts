@@ -5,6 +5,7 @@ import { createWorker } from "@cirrus/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
 import { createStorage } from "@cirrus/storage";
+import type { VectorizeIndexLike } from "@cirrus/vectors";
 
 import { createShardDO } from "../../cirrus/_generated/shard.js";
 
@@ -23,6 +24,9 @@ interface Env {
 interface ShardEnv {
     CIRRUS_WORKER_ORIGIN?: string;
     FILES?: R2BucketLike;
+    // Bound by the `[[vectorize]]` entry in wrangler.jsonc; required because the
+    // schema declares the `posts_search` index.
+    POSTS_SEARCH: VectorizeIndexLike;
     PUBLIC_STORAGE_BASE_URL?: string;
     SCHEDULER?: DurableObjectNamespaceLike;
     STORAGE_SECRET?: string;
@@ -30,17 +34,22 @@ interface ShardEnv {
 
 export const ShardDO = createShardDO({
     scheduler: (env) => {
-        const shardEnv = env as ShardEnv;
+        const shardEnv = env as unknown as ShardEnv;
 
         return shardEnv.SCHEDULER && shardEnv.CIRRUS_WORKER_ORIGIN
             ? createScheduler({ namespace: shardEnv.SCHEDULER, originUrl: shardEnv.CIRRUS_WORKER_ORIGIN })
             : undefined;
     },
     storage: (env) => {
-        const shardEnv = env as ShardEnv;
+        const shardEnv = env as unknown as ShardEnv;
 
-        return shardEnv.FILES ? createStorage({ bucket: shardEnv.FILES, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET }) : undefined;
+        return shardEnv.FILES
+            ? createStorage({ bucket: shardEnv.FILES, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET })
+            : undefined;
     },
+    // Maps the schema's logical index name (`posts_search`) to the Vectorize
+    // binding. This is what makes `ctx.vectors` live and auto-syncs writes.
+    vectors: (env) => ({ posts_search: (env as unknown as ShardEnv).POSTS_SEARCH }),
 });
 
 let worker: ReturnType<typeof createWorker> | null = null;
