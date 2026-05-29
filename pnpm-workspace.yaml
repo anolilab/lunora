@@ -17,7 +17,7 @@ catalogs:
     "@anolilab/semantic-release-pnpm": ^8.1.15
     "@anolilab/semantic-release-preset": ^13.4.16
     "@total-typescript/ts-reset": ^0.6.1
-    "@tsconfig/node22": ^22.0.5
+    "@tsconfig/node24": ^24.0.0
     cross-env: ^10.1.0
     tsx: ^4.22.3
   lint:
