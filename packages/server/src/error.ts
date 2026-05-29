@@ -14,6 +14,14 @@ const CODE_STATUS = {
     NOT_FOUND: 404,
     CONFLICT: 409,
     UNPROCESSABLE: 422,
+    /**
+     * `count()` invoked against a table whose context carries an active RLS
+     * policy. The operation itself is unsupported in an RLS-restricted reader
+     * (kitcn's documented constraint) — the request is well-formed and the
+     * caller is authorized, so this is a 422 (semantic conflict) rather than a
+     * 403 (policy denial).
+     */
+    COUNT_RLS_UNSUPPORTED: 422,
     TOO_MANY_REQUESTS: 429,
     INTERNAL_SERVER_ERROR: 500,
     NOT_IMPLEMENTED: 501,

@@ -248,6 +248,57 @@ describe("count", () => {
         await expect(writer.count("todos", { archived: true, projectId: "p1" })).resolves.toBe(1);
         await expect(writer.count("todos")).resolves.toBe(5);
     });
+
+    test("aND-merges baseWhere into the count predicate", async () => {
+        const writer = setupTodos();
+
+        await seed(writer);
+
+        await expect(writer.count("todos", { baseWhere: { projectId: "p1" } })).resolves.toBe(4);
+        await expect(writer.count("todos", { baseWhere: { projectId: "p1" }, where: { archived: true } })).resolves.toBe(1);
+    });
+
+    test("count() throws COUNT_RLS_UNSUPPORTED when restrictsCounts is true", async () => {
+        const writer = setupTodos();
+
+        await seed(writer);
+
+        // The structural shape (`name: "CirrusError"` + `code` + `status`)
+        // lets the runtime error mapper route it without an `instanceof`
+        // check; `@cirrus/d1` stays free of a runtime dep on `@cirrus/server`.
+        await expect(writer.count("todos", { restrictsCounts: true })).rejects.toMatchObject({
+            code: "COUNT_RLS_UNSUPPORTED",
+            name: "CirrusError",
+            status: 422,
+        });
+    });
+});
+
+describe("baseWhere seam (RLS / aggregates)", () => {
+    test("findMany AND-merges baseWhere before compilation", async () => {
+        const writer = setupTodos();
+
+        await seed(writer);
+
+        const result = await writer.findMany("todos", {
+            baseWhere: { projectId: "p1" },
+            where: { archived: false },
+        });
+
+        const matchedIds = result.page.map((row) => row["_id"]).sort();
+
+        expect(matchedIds).toEqual(["t1", "t2", "t5"]);
+    });
+
+    test("baseWhere alone narrows the result", async () => {
+        const writer = setupTodos();
+
+        await seed(writer);
+
+        const result = await writer.findMany("todos", { baseWhere: { projectId: "p2" } });
+
+        expect(result.page.map((row) => row["_id"])).toEqual(["t4"]);
+    });
 });
 
 describe("get / patch / replace / delete round-trips", () => {

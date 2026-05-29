@@ -225,4 +225,69 @@ describe("count", () => {
         await expect(writer.count("todos", { archived: true, projectId: "p1" })).resolves.toBe(1);
         await expect(writer.count("todos")).resolves.toBe(5);
     });
+
+    test("aND-merges baseWhere into the count predicate", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        // baseWhere alone narrows the count
+        await expect(writer.count("todos", { baseWhere: { projectId: "p1" } })).resolves.toBe(4);
+        // baseWhere + where AND together
+        await expect(writer.count("todos", { baseWhere: { projectId: "p1" }, where: { archived: true } })).resolves.toBe(1);
+    });
+
+    test("count() throws COUNT_RLS_UNSUPPORTED when restrictsCounts is true", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        // The structural shape (`name: "CirrusError"` + `code` + `status`)
+        // lets the runtime error mapper route it without an `instanceof`
+        // check; `@cirrus/do` stays free of a runtime dep on `@cirrus/server`.
+        await expect(writer.count("todos", { restrictsCounts: true })).rejects.toMatchObject({
+            code: "COUNT_RLS_UNSUPPORTED",
+            name: "CirrusError",
+            status: 422,
+        });
+    });
+});
+
+describe("baseWhere seam (RLS / aggregates)", () => {
+    test("findMany AND-merges baseWhere before compilation", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        // Caller passes archived=false; RLS injects baseWhere=projectId=p1.
+        const result = await writer.findMany("todos", {
+            baseWhere: { projectId: "p1" },
+            where: { archived: false },
+        });
+
+        expect(ids(result.page).sort()).toEqual(["t1", "t2", "t5"]);
+    });
+
+    test("baseWhere alone narrows the result with no caller `where`", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        const result = await writer.findMany("todos", { baseWhere: { projectId: "p2" } });
+
+        expect(ids(result.page)).toEqual(["t4"]);
+    });
+
+    test("findFirst honors the merged baseWhere", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        const row = await writer.findFirst("todos", {
+            baseWhere: { projectId: "p1" },
+            orderBy: [{ seq: "desc" }],
+        });
+
+        expect(row?.["_id"]).toBe("t3");
+    });
 });

@@ -367,12 +367,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         return true;
     };
 
-    const stepAggregate = async (
-        tableName: string,
-        index: AggregateIndexDefinitionLike,
-        doc: Record<string, unknown>,
-        delta: number,
-    ): Promise<void> => {
+    const stepAggregate = async (tableName: string, index: AggregateIndexDefinitionLike, doc: Record<string, unknown>, delta: number): Promise<void> => {
         if (index.where && !matchesStaticWhere(doc, index.where)) {
             return;
         }
@@ -487,7 +482,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const opts = normalizeCountArg(whereOrOptions);
 
             if (opts.restrictsCounts) {
-                throw new CountRlsUnsupportedError();
+                throw new CountRlsUnsupportedError(tableName);
             }
 
             // Indexed path: same planner as the DO dialect (see ctx-db.ts).
@@ -502,10 +497,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                     if (counterReady) {
                         const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
                         const aggTable = aggregateTableName(tableName, planned.index.name);
-                        const rows = await exec.all(
-                            `SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
-                            [encoded],
-                        );
+                        const rows = await exec.all(`SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [encoded]);
 
                         return rows.length === 0 ? 0 : Number(rows[0]!["value"] ?? 0);
                     }
@@ -671,7 +663,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const orderKeys = normalizeOrderKeys(args.orderBy);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
-            let predicate: undefined | WhereInput = args.where;
+            // RLS (3.2) / aggregates (3.1) inject `baseWhere` we AND-merge
+            // before the keyset seek so policy + cursor compose cleanly.
+            let predicate: undefined | WhereInput = mergeWhere(args.baseWhere, args.where);
 
             if (seek) {
                 predicate = predicate ? { AND: [predicate, seek] } : seek;

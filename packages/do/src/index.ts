@@ -12,6 +12,7 @@ export type {
     BroadcastDelta,
     Clock,
     ColumnMetaLike,
+    CountArgs,
     CtxDbOptions,
     DatabaseWriterLike,
     IdGenerator,

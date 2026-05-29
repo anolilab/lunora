@@ -94,19 +94,26 @@ export interface GroupByEntry {
 }
 
 /**
- * Thrown when `count` runs in an RLS-restricted ctx. The structural `code`
- * matches kitcn's documented `COUNT_RLS_UNSUPPORTED` so error mappers can route
- * it without an `instanceof` check.
+ * Thrown when `count` runs in an RLS-restricted ctx. The structural shape
+ * (`name: "CirrusError"`, `code`, `status`) lets the runtime's error mapper
+ * route it without an `instanceof` check, so `@cirrus/do` stays free of a
+ * runtime dependency on `@cirrus/server`. Status mirrors the
+ * `COUNT_RLS_UNSUPPORTED` entry in the {@link CirrusErrorCode} taxonomy (422):
+ * the operation is invalid in this context, not malformed.
  */
 export class CountRlsUnsupportedError extends Error {
     public readonly code: string = "COUNT_RLS_UNSUPPORTED";
 
     public override readonly name = "CirrusError";
 
-    public readonly status: number = 400;
+    public readonly status: number = 422;
 
-    constructor(message: string = "count() is not supported in an RLS-restricted context") {
-        super(message);
+    constructor(table?: string) {
+        super(
+            table === undefined
+                ? "count() is not supported in an RLS-restricted context"
+                : `count() is not supported on table "${table}" inside an RLS-restricted context`,
+        );
     }
 }
 

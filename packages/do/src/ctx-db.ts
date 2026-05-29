@@ -27,14 +27,7 @@
  * stop typing the string at all.
  */
 
-import type {
-    AggregateIndexDefinitionLike,
-    AggregateOptions,
-    AggregateResult,
-    GroupByEntry,
-    GroupByOptions,
-    RestrictableQueryOptions,
-} from "./aggregates.js";
+import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates.js";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForCount } from "./aggregates.js";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
@@ -200,6 +193,15 @@ export interface TableReaderLike {
     withIndex: (indexName: string, range?: (q: IndexRangeBuilderLike) => IndexRangeBuilderLike) => TableReaderLike;
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
 }
+
+/**
+ * Options accepted by `count()`. Alias of {@link RestrictableQueryOptions} so
+ * the RLS middleware (`@cirrus/server` §3.2) and the aggregate reader (§3.1)
+ * share a single option surface. When `restrictsCounts` is `true`, the reader
+ * throws `CirrusError("COUNT_RLS_UNSUPPORTED")` (422) rather than scanning,
+ * matching kitcn's documented behavior for counts in an RLS-restricted context.
+ */
+export type CountArgs = RestrictableQueryOptions;
 
 export interface DatabaseWriterLike {
     /**
@@ -836,6 +838,12 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
 /** DO dialect: fields resolve through `json_extract`; values via {@link serializeSqlValue}. */
 const doWhereStrategy: WhereCompilerStrategy = { fieldRef: jsonPath, serialize: serializeSqlValue };
 
+/**
+ * AND-merge an injected `baseWhere` (RLS / aggregates §3.1) onto the caller's
+ * predicate. `undefined`/`{}` collapse to the other side so the seam is no-op
+ * when no policy is in scope; both present produce a `{ AND: [...] }` node so
+ * the compiler renders them with explicit precedence.
+ */
 /** Invert the reader's staged SQL comparators back into `where`-tree operators. */
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
@@ -1144,11 +1152,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * aggregate index. Must be paired with a `ensureBackfilledForTable` call
      * earlier in the same write so the counter is in step with the source.
      */
-    const syncAggregates = (
-        tableName: string,
-        previous: Record<string, unknown> | undefined,
-        next: Record<string, unknown> | undefined,
-    ): void => {
+    const syncAggregates = (tableName: string, previous: Record<string, unknown> | undefined, next: Record<string, unknown> | undefined): void => {
         const indexes = schema.tables[tableName]?.aggregateIndexes;
 
         if (!indexes || indexes.length === 0) {
@@ -1223,7 +1227,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const orderKeys = normalizeOrderKeys(args.orderBy);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
-            let predicate: WhereInput | undefined = args.where;
+            // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
+            // before the keyset seek so policy + cursor compose cleanly.
+            let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
 
             if (seek) {
                 predicate = predicate ? { AND: [predicate, seek] } : seek;
@@ -1311,7 +1317,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // loudly rather than silently undercounting. See PLAN2 §3.1
             // "Coupling seam" and `aggregates.ts` for the seam contract.
             if (opts.restrictsCounts) {
-                throw new CountRlsUnsupportedError();
+                throw new CountRlsUnsupportedError(tableName);
             }
 
             onRead(tableName);
