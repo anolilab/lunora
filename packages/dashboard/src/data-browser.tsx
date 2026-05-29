@@ -67,6 +67,7 @@ export function DataBrowser({ initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: D
     const [offset, setOffset] = useState<number>(0);
     const [page, setPage] = useState<TablePage | null>(null);
     const [pageError, setPageError] = useState<null | string>(null);
+    const [viewMode, setViewMode] = useState<"json" | "table">("table");
 
     const fetchTables = useCallback(
         async (shard: string): Promise<void> => {
@@ -188,24 +189,60 @@ export function DataBrowser({ initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: D
 
             {page !== null && (
                 <div data-testid="db-page">
-                    <table data-testid="db-rows">
-                        <thead>
-                            <tr>
-                                {page.columns.map((column) => (
-                                    <th key={column}>{column}</th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {page.rows.map((row, rowIndex) => (
-                                <tr data-testid="db-row" key={rowKey(row, rowIndex)}>
+                    <div data-testid="db-view-toggle">
+                        <button
+                            aria-pressed={viewMode === "table"}
+                            data-testid="db-view-table"
+                            onClick={() => {
+                                setViewMode("table");
+                            }}
+                            type="button"
+                        >
+                            Table
+                        </button>
+                        <button
+                            aria-pressed={viewMode === "json"}
+                            data-testid="db-view-json"
+                            onClick={() => {
+                                setViewMode("json");
+                            }}
+                            type="button"
+                        >
+                            JSON
+                        </button>
+                        <button
+                            data-testid="db-refresh"
+                            onClick={() => {
+                                goToPage(offset);
+                            }}
+                            type="button"
+                        >
+                            Refresh
+                        </button>
+                    </div>
+
+                    {viewMode === "table" && (
+                        <table data-testid="db-rows">
+                            <thead>
+                                <tr>
                                     {page.columns.map((column) => (
-                                        <td key={column}>{formatCell(row[column])}</td>
+                                        <th key={column}>{column}</th>
                                     ))}
                                 </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                {page.rows.map((row, rowIndex) => (
+                                    <tr data-testid="db-row" key={rowKey(row, rowIndex)}>
+                                        {page.columns.map((column) => (
+                                            <td key={column}>{formatCell(row[column])}</td>
+                                        ))}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
+
+                    {viewMode === "json" && <pre data-testid="db-json">{JSON.stringify(page.rows, null, 2)}</pre>}
 
                     <div>
                         <button

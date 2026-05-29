@@ -181,4 +181,30 @@ describe("dataBrowser", () => {
         expect(screen.queryByTestId("db-page")).toBeNull();
         expect(screen.getByTestId("db-table-list")).toBeDefined();
     });
+
+    test("toggles between the table and JSON views", async () => {
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 2 }));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("db-table-messages")).toBeDefined();
+        });
+
+        fireEvent.click(screen.getByTestId("db-table-messages"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("db-rows")).toBeDefined();
+        });
+
+        // Table view is the default; JSON view is opt-in.
+        expect(screen.queryByTestId("db-json")).toBeNull();
+
+        fireEvent.click(screen.getByTestId("db-view-json"));
+
+        const json = screen.getByTestId("db-json");
+
+        expect(JSON.parse(json.textContent ?? "")).toHaveLength(2);
+        expect(screen.queryByTestId("db-rows")).toBeNull();
+    });
 });
