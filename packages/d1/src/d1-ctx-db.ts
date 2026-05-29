@@ -12,6 +12,7 @@
  */
 import type {
     ColumnMetaLike,
+    CountArgs,
     DatabaseWriterLike,
     SchedulerLike,
     SchemaLike,
@@ -29,6 +30,7 @@ import {
     compileOrderBy,
     compileWhere,
     ConflictError,
+    CountRlsUnsupportedError,
     decodeCursor,
     encodeCursor,
     hasTrigger,
@@ -111,6 +113,25 @@ const serializeColumnValue = (value: unknown): unknown => {
 
 /** D1 dialect: fields resolve to real columns; values via {@link serializeColumnValue}. */
 const d1WhereStrategy: WhereCompilerStrategy = { fieldRef: columnRef, serialize: serializeColumnValue };
+
+/**
+ * AND-merge an injected `baseWhere` (RLS / aggregates §3.1) onto the caller's
+ * predicate. Mirrors `mergeBaseWhere` in `@cirrus/do`'s ctx-db; kept local
+ * (rather than re-exported) so this package stays a thin dialect twin and a
+ * later refactor can hoist it into the shared compiler module without
+ * widening the `@cirrus/do` runtime surface today.
+ */
+const mergeBaseWhere = (where: undefined | WhereInput, baseWhere: undefined | WhereInput): undefined | WhereInput => {
+    if (!baseWhere || Object.keys(baseWhere).length === 0) {
+        return where;
+    }
+
+    if (!where || Object.keys(where).length === 0) {
+        return baseWhere;
+    }
+
+    return { AND: [baseWhere, where] };
+};
 
 /** A table's fields paired with their column meta, skipping fields that declare none. */
 const tableColumns = (definition: TableDefinitionLike): Array<[string, ColumnMetaLike]> => {
@@ -257,14 +278,31 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
     };
 
     const writer: DatabaseWriterLike = {
-        async count(tableName, where) {
+        async count(tableName, whereOrArgs) {
             const definition = schema.tables[tableName];
 
             if (!definition) {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const { params, sql: whereSql } = compileWhere(where, d1WhereStrategy);
+            // Mirror the DO's tolerant count signature: accept either a raw
+            // `where` (legacy) or the `{ where, baseWhere, restrictsCounts }`
+            // options bag RLS / aggregates populate.
+            const isCountArgs = (value: unknown): value is CountArgs =>
+                value !== null
+                && typeof value === "object"
+                && !Array.isArray(value)
+                && ("baseWhere" in value || "restrictsCounts" in value);
+            const countOptions: CountArgs = isCountArgs(whereOrArgs)
+                ? whereOrArgs
+                : { where: whereOrArgs as WhereInput | undefined };
+
+            if (countOptions.restrictsCounts) {
+                throw new CountRlsUnsupportedError(tableName);
+            }
+
+            const merged = mergeBaseWhere(countOptions.where, countOptions.baseWhere);
+            const { params, sql: whereSql } = compileWhere(merged, d1WhereStrategy);
 
             let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
 
@@ -336,7 +374,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const orderKeys = normalizeOrderKeys(args.orderBy);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
-            let predicate: undefined | WhereInput = args.where;
+            // RLS (3.2) / aggregates (3.1) inject `baseWhere` we AND-merge
+            // before the keyset seek so policy + cursor compose cleanly.
+            let predicate: undefined | WhereInput = mergeBaseWhere(args.where, args.baseWhere);
 
             if (seek) {
                 predicate = predicate ? { AND: [predicate, seek] } : seek;
