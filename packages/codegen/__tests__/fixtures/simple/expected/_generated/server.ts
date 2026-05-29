@@ -25,7 +25,7 @@ import type {
     RegisteredQuery,
 } from "@cirrus/server";
 
-import type { DatabaseReaderFacade, DatabaseWriterFacade } from "./dataModel.js";
+import type { DatabaseReaderFacade, DatabaseWriterFacade, Id } from "./dataModel.js";
 
 export type { DataModel, Doc, Id } from "./dataModel.js";
 
@@ -126,6 +126,49 @@ export const dispatchCirrusFunction = async (functionPath: string, context: unkn
 
     return registered.handler(context, args);
 };
+
+/**
+ * A handler context accepted by {@link createCaller}. The runtime context the
+ * shard DO builds is uniform across kinds, so any handler's `ctx` works here.
+ */
+export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
+
+/**
+ * Typed, in-process server-to-server caller. Every registered function — public
+ * *and* internal — is reachable; each call dispatches against the same shard
+ * with the supplied `context`, exactly like `ctx.runQuery`/`runMutation`/
+ * `runAction` but without re-stating the function path.
+ */
+export interface Caller {
+    messages: {
+        list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;
+        purge: (args: { channelId: Id<"channels"> }) => Promise<unknown>;
+        send: (args: { channelId: Id<"channels">; text: string; kind: "text" | "image"; tags: Record<string, string> }) => Promise<unknown>;
+    };
+}
+
+const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
+    const registered = CIRRUS_FUNCTIONS[functionPath];
+
+    if (!registered) {
+        throw Object.assign(new Error(`function not registered: ${functionPath}`), {
+            name: "CirrusError",
+            code: "FUNCTION_NOT_FOUND",
+            status: 404,
+        });
+    }
+
+    return (await registered.handler(context, args ?? {})) as R;
+};
+
+/** Build a {@link Caller} bound to `context` (typically a handler's `ctx`). */
+export const createCaller = (context: CallerCtx): Caller => ({
+    messages: {
+        list: (args) => callRegistered(context, "messages:list", args),
+        purge: (args) => callRegistered(context, "messages:purge", args),
+        send: (args) => callRegistered(context, "messages:send", args),
+    },
+});
 
 /**
  * Single registered data migration, narrowed to the shape the per-shard runner

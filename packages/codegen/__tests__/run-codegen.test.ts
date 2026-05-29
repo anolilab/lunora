@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { emitApi, emitShard, runCodegen } from "../src/index.js";
+import { emitApi, emitServer, emitShard, runCodegen } from "../src/index.js";
 import type { FunctionIR, SchemaIR } from "../src/ir.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -126,7 +126,28 @@ describe("runCodegen", () => {
         expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db">');
         expect(result.generated.server).toContain("readonly db: DatabaseReader & DatabaseReaderFacade;");
         expect(result.generated.server).toContain("readonly db: DatabaseWriter & DatabaseWriterFacade;");
-        expect(result.generated.server).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade } from "./dataModel.js"');
+        // `Id` is pulled into the facade import because the typed `Caller` arg
+        // types reference it (the `messages:*` functions take `Id<"channels">`).
+        expect(result.generated.server).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade, Id } from "./dataModel.js"');
+    });
+
+    test("emits a typed createCaller covering public and internal functions", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        expect(result.generated.server).toContain("export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;");
+        expect(result.generated.server).toContain("export interface Caller {");
+        expect(result.generated.server).toContain("export const createCaller = (context: CallerCtx): Caller =>");
+
+        // Every leaf dispatches through the shared `callRegistered` helper.
+        expect(result.generated.server).toContain('list: (args) => callRegistered(context, "messages:list", args),');
+
+        // The caller reaches internal functions (server-to-server), unlike the
+        // public `api`: `purge` (an internalMutation) is present here.
+        expect(result.generated.server).toContain('purge: (args: { channelId: Id<"channels"> }) => Promise<unknown>;');
+        expect(result.generated.server).toContain('purge: (args) => callRegistered(context, "messages:purge", args),');
+
+        // Args are required when the function declares any, typed against dataModel.
+        expect(result.generated.server).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
     });
 
     test("emits per-table ctx.db facade types in dataModel.ts", () => {
@@ -444,5 +465,43 @@ describe("emitShard", () => {
         const dbOptions = output.slice(output.indexOf("createShardCtxDb({"), output.indexOf("createShardCtxDb({") + 400);
 
         expect(dbOptions).toContain("scheduler,");
+    });
+});
+
+describe("emitServer", () => {
+    const fn = (exportName: string, overrides: Partial<FunctionIR> = {}): FunctionIR => ({
+        args: {},
+        exportName,
+        filePath: "posts",
+        kind: "query",
+        returnType: "unknown",
+        ...overrides,
+    });
+
+    test("renders the caller arg as optional only when the function takes none", () => {
+        const output = emitServer([fn("ping"), fn("get", { args: { id: { kind: "id", tableName: "posts" } } })]);
+
+        expect(output).toContain("ping: (args?: {}) => Promise<unknown>;");
+        expect(output).toContain('get: (args: { id: Id<"posts"> }) => Promise<unknown>;');
+    });
+
+    test("threads a function's concrete return type through the caller", () => {
+        const output = emitServer([fn("count", { returnType: "number" })]);
+
+        expect(output).toContain("count: (args?: {}) => Promise<number>;");
+        expect(output).toContain('count: (args) => callRegistered(context, "posts:count", args),');
+    });
+
+    test("emits an empty caller (and no unused locals) when there are no functions", () => {
+        const output = emitServer([]);
+
+        // No functions ⇒ no `callRegistered` helper and the `context` parameter
+        // is prefixed so it never trips noUnusedParameters in a real project.
+        expect(output).toContain("export interface Caller {}");
+        expect(output).toContain("export const createCaller = (_context: CallerCtx): Caller => ({});");
+        expect(output).not.toContain("const callRegistered");
+
+        // Nothing references Doc/Id, so the facade import stays minimal.
+        expect(output).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade } from "./dataModel.js";');
     });
 });

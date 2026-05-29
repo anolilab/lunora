@@ -450,6 +450,55 @@ export const internal = anyApi as unknown as InternalApiTypes;
 const moduleAlias = (filePath: string, index: number): string => `cirrus_${sanitizeNamespace(filePath)}_${index}`;
 
 /**
+ * Render the typed `Caller` interface and the `createCaller` object body for a
+ * set of functions, both grouped by namespace. The caller surfaces **every**
+ * registered function — public *and* internal — because server-to-server calls
+ * legitimately reach internal functions (mirroring `ctx.run*`). Each leaf is
+ * `(args) => Promise<Return>`; `args` is optional only when the function takes
+ * none. The runtime leaves dispatch through `callRegistered`, which infers the
+ * return type from the interface's contextual type.
+ */
+const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: string; types: string } => {
+    const namespaces = new Map<string, FunctionIR[]>();
+
+    for (const fn of functions) {
+        const list = namespaces.get(fn.filePath) ?? [];
+
+        list.push(fn);
+        namespaces.set(fn.filePath, list);
+    }
+
+    const ordered = [...namespaces.entries()].sort(([a], [b]) => a.localeCompare(b));
+
+    const types = ordered
+        .map(([file, list]) => {
+            const members = list
+                .map((fn) => {
+                    const argsType = renderArgsType(fn.args);
+                    const optional = argsType === "{}" ? "?" : "";
+                    const returnType = relocateGeneratedImports(fn.returnType);
+
+                    return `        ${fn.exportName}: (args${optional}: ${argsType}) => Promise<${returnType}>;`;
+                })
+                .join("\n");
+
+            return `    ${sanitizeNamespace(file)}: {\n${members}\n    };`;
+        })
+        .join("\n");
+
+    const implementation = ordered
+        .map(([file, list]) => {
+            const namespace = sanitizeNamespace(file);
+            const leaves = list.map((fn) => `        ${fn.exportName}: (args) => callRegistered(context, "${namespace}:${fn.exportName}", args),`).join("\n");
+
+            return `    ${namespace}: {\n${leaves}\n    },`;
+        })
+        .join("\n");
+
+    return { implementation, types };
+};
+
+/**
  * Emit `_generated/server.ts` — re-exports of the user-facing factories
  * **plus** a static dispatch table that maps `${namespace}:${fnName}` keys
  * to the registered handler objects (and a `CIRRUS_MIGRATIONS` registry keyed
@@ -498,6 +547,39 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>, migrations: Rea
     const migrationBody = migrationEntries.length > 0 ? `\n${migrationEntries}\n` : "";
     const importBlock = importLines.length > 0 ? `${importLines}\n\n` : "";
 
+    const caller = renderCaller(functions);
+    const callerTypes = caller.types ? `\n${caller.types}\n` : "";
+    const callerImpl = caller.implementation ? `\n${caller.implementation}\n` : "";
+
+    // Pull the `Doc`/`Id` aliases the caller's arg/return types actually
+    // reference into the existing dataModel import (importing an unused one
+    // trips noUnusedLocals). The `export type` re-export below is separate — it
+    // re-exports without creating a local binding, so it can't satisfy these.
+    const callerDataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(caller.types));
+    const dataModelImportTail = callerDataModelImports.length > 0 ? `, ${callerDataModelImports.join(", ")}` : "";
+
+    // `callRegistered` (and thus `context`) is only referenced when at least one
+    // function exists; otherwise it would be an unused local / parameter.
+    const callerParameter = functions.length > 0 ? "context" : "_context";
+    const callRegisteredHelper
+        = functions.length > 0
+            ? `const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
+    const registered = CIRRUS_FUNCTIONS[functionPath];
+
+    if (!registered) {
+        throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
+            name: "CirrusError",
+            code: "FUNCTION_NOT_FOUND",
+            status: 404,
+        });
+    }
+
+    return (await registered.handler(context, args ?? {})) as R;
+};
+
+`
+            : "";
+
     return `${GENERATED_HEADER}${importBlock}import {
     action as actionBase,
     internalAction as internalActionBase,
@@ -519,7 +601,7 @@ import type {
     RegisteredQuery,
 } from "@cirrus/server";
 
-import type { DatabaseReaderFacade, DatabaseWriterFacade } from "./dataModel.js";
+import type { DatabaseReaderFacade, DatabaseWriterFacade${dataModelImportTail} } from "./dataModel.js";
 
 export type { DataModel, Doc, Id } from "./dataModel.js";
 
@@ -616,6 +698,23 @@ export const dispatchCirrusFunction = async (functionPath: string, context: unkn
 
     return registered.handler(context, args);
 };
+
+/**
+ * A handler context accepted by {@link createCaller}. The runtime context the
+ * shard DO builds is uniform across kinds, so any handler's \`ctx\` works here.
+ */
+export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
+
+/**
+ * Typed, in-process server-to-server caller. Every registered function — public
+ * *and* internal — is reachable; each call dispatches against the same shard
+ * with the supplied \`context\`, exactly like \`ctx.runQuery\`/\`runMutation\`/
+ * \`runAction\` but without re-stating the function path.
+ */
+export interface Caller {${callerTypes}}
+
+${callRegisteredHelper}/** Build a {@link Caller} bound to \`context\` (typically a handler's \`ctx\`). */
+export const createCaller = (${callerParameter}: CallerCtx): Caller => ({${callerImpl}});
 
 /**
  * Single registered data migration, narrowed to the shape the per-shard runner
