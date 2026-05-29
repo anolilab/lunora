@@ -24,7 +24,7 @@ export type {
     ShardMigrationOutcome,
     ShardRegistry,
 } from "./query-coordinator.js";
-export { createQueryCoordinator, createStaticShardRegistry } from "./query-coordinator.js";
+export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator.js";
 export type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard.js";
 export { resolveShard } from "./resolve-shard.js";
 

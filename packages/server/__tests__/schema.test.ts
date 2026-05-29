@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { defineAggregateIndex, defineSchema, defineTable, defineVectorIndex, v } from "../src/index.js";
+import { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, v } from "../src/index.js";
 
 describe("defineTable", () => {
     test("returns a table definition with shape and default __root__ shard mode", () => {
@@ -92,6 +92,40 @@ describe("defineTable", () => {
         expect(() => builder.aggregateIndex("seqSum", { op: "sum" })).toThrow(/requires a "field"/);
     });
 
+    test(".rankIndex stashes name, sortBy (asc default) + partitionBy + where", () => {
+        const messages = defineTable({ archived: v.boolean(), channelId: v.string(), createdAt: v.number(), score: v.number() })
+            .rankIndex("byChannel", { partitionBy: ["channelId"], sortBy: [{ field: "createdAt" }] })
+            .rankIndex("leaderboard", { sortBy: [{ direction: "desc", field: "score" }] })
+            .rankIndex("activeByChannel", { partitionBy: ["channelId"], sortBy: [{ field: "createdAt" }], where: { archived: false } });
+
+        expect(messages.rankIndexes).toHaveLength(3);
+        expect(messages.rankIndexes[0]).toMatchObject({
+            name: "byChannel",
+            partitionBy: ["channelId"],
+            sortBy: [{ direction: "asc", field: "createdAt" }],
+        });
+        expect(messages.rankIndexes[1]).toMatchObject({
+            name: "leaderboard",
+            sortBy: [{ direction: "desc", field: "score" }],
+        });
+        expect(messages.rankIndexes[2]).toMatchObject({
+            name: "activeByChannel",
+            where: { archived: false },
+        });
+
+        // `on` is filled in by defineSchema once the table is keyed.
+        const schema = defineSchema({ messages });
+
+        expect(schema.tables.messages.rankIndexes[0]?.on).toBe("messages");
+        expect(schema.tables.messages.rankIndexes[1]?.on).toBe("messages");
+    });
+
+    test(".rankIndex requires a non-empty sortBy", () => {
+        const builder = defineTable({ score: v.number() });
+
+        expect(() => builder.rankIndex("bad", { sortBy: [] })).toThrow(/sortBy/);
+    });
+
     test("builder chains return the same instance", () => {
         const builder = defineTable({ a: v.string() });
         const chained = builder.index("by_a", ["a"]).shardBy("a");
@@ -133,12 +167,42 @@ describe("defineSchema", () => {
 
     test("standalone defineAggregateIndex throws when `on` table is unknown", () => {
         expect(() =>
+            defineSchema({ todos: defineTable({ projectId: v.string() }) }, {}, { stray: defineAggregateIndex("stray", { by: ["projectId"], on: "missing" }) }),
+        ).toThrow(/unknown table/);
+    });
+
+    test("standalone defineRankIndex entries fold onto the owning table", () => {
+        const schema = defineSchema(
+            { messages: defineTable({ channelId: v.string(), createdAt: v.number() }) },
+            {},
+            {},
+            {
+                byChannel: defineRankIndex("byChannel", { partitionBy: ["channelId"], sortBy: [{ field: "createdAt" }], table: "messages" }),
+            },
+        );
+
+        expect(schema.tables.messages.rankIndexes).toHaveLength(1);
+        expect(schema.tables.messages.rankIndexes[0]).toMatchObject({
+            name: "byChannel",
+            on: "messages",
+            partitionBy: ["channelId"],
+            sortBy: [{ direction: "asc", field: "createdAt" }],
+        });
+    });
+
+    test("standalone defineRankIndex throws when `table` is unknown", () => {
+        expect(() =>
             defineSchema(
-                { todos: defineTable({ projectId: v.string() }) },
+                { messages: defineTable({ createdAt: v.number() }) },
                 {},
-                { stray: defineAggregateIndex("stray", { by: ["projectId"], on: "missing" }) },
+                {},
+                { stray: defineRankIndex("stray", { sortBy: [{ field: "createdAt" }], table: "missing" }) },
             ),
         ).toThrow(/unknown table/);
+    });
+
+    test("defineRankIndex requires a non-empty sortBy", () => {
+        expect(() => defineRankIndex("bad", { sortBy: [], table: "messages" })).toThrow(/sortBy/);
     });
 
     test("registers standalone defineVectorIndex entries from the second arg (Shape B)", () => {

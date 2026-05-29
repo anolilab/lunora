@@ -5,6 +5,8 @@ import type {
     AggregateOp,
     IndexDefinition,
     OnDeleteAction,
+    RankIndexDefinition,
+    RankSortKey,
     RelationDefinition,
     Schema,
     SearchIndexDefinition,
@@ -69,6 +71,21 @@ export interface InlineAggregateIndexOptions<Shape extends Record<string, Valida
     where?: Record<string, unknown>;
 }
 
+/**
+ * Options for the inline `.rankIndex(name, opts)` builder. `sortBy` is required;
+ * accepts either an array of `{ field, direction }` keys, or the shorthand
+ * `["field"]` (asc) / `{ field: "desc" }` map entries. `partitionBy` scopes the
+ * rank — omitted ⇒ one global rank over the whole table.
+ */
+export interface InlineRankIndexOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
+    /** Columns that scope each ranking; omitted ⇒ one global rank. */
+    partitionBy?: ReadonlyArray<keyof Shape & string>;
+    /** Ordered sort keys driving the rank. Required. */
+    sortBy: ReadonlyArray<{ direction?: "asc" | "desc"; field: keyof Shape & string }>;
+    /** Static predicate baked into the index; only matching rows enter. */
+    where?: Record<string, unknown>;
+}
+
 export interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     /** Declare an aggregate (counter/sum/…) maintained by triggers for O(1) reads. */
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
@@ -76,6 +93,11 @@ export interface TableBuilder<Shape extends Record<string, Validator> = Record<s
     global: () => TableBuilder<Shape>;
     /** Add a secondary index. */
     index: (name: string, fields: ReadonlyArray<string>, options?: { unique?: boolean }) => TableBuilder<Shape>;
+    /**
+     * Declare a rank index (sorted companion table, btree-backed) for
+     * `rank(row)` / `rankPage()` reads in O(log n). See {@link RankIndexDefinition}.
+     */
+    rankIndex: (name: string, options: InlineRankIndexOptions<Shape>) => TableBuilder<Shape>;
     /** Declare relations to other tables, loaded via `findMany({ with })`. */
     relations: (build: (r: RelationBuilder) => Record<string, RelationDefinition>) => TableBuilder<Shape>;
     /** Add a search index over a field with optional filter fields. */
@@ -130,6 +152,7 @@ export interface VectorIndexOptions {
 export const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): TableBuilder<Shape> => {
     const aggregateIndexes: AggregateIndexDefinition[] = [];
     const indexes: IndexDefinition[] = [];
+    const rankIndexes: RankIndexDefinition[] = [];
     const relations: Record<string, RelationDefinition> = {};
     const searchIndexes: SearchIndexDefinition[] = [];
     const triggers: Record<string, TriggerDefinition> = {};
@@ -143,6 +166,9 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
         },
         get indexes() {
             return indexes;
+        },
+        get rankIndexes() {
+            return rankIndexes;
         },
         get relationMap() {
             return relations;
@@ -188,6 +214,28 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
         },
         index(name, fields, options) {
             indexes.push({ fields, name, unique: options?.unique ?? false });
+
+            return builder;
+        },
+        rankIndex(name, options) {
+            if (!options.sortBy || options.sortBy.length === 0) {
+                throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
+            }
+
+            const sortBy: RankSortKey[] = options.sortBy.map((key) => ({
+                direction: key.direction ?? "asc",
+                field: key.field,
+            }));
+
+            rankIndexes.push({
+                name,
+                // `on` is filled in by `defineSchema` once the table is keyed —
+                // same pattern as `aggregateIndex`.
+                on: "",
+                partitionBy: options.partitionBy,
+                sortBy,
+                where: options.where,
+            });
 
             return builder;
         },
@@ -274,22 +322,61 @@ export const defineAggregateIndex = (name: string, options: AggregateIndexOption
 };
 
 /**
+ * Options for the standalone `defineRankIndex(name, opts)` helper (DSL Shape B).
+ * Mirrors the inline `.rankIndex(...)` builder but takes the owning table via
+ * `table` so it can sit next to the schema map.
+ */
+export interface RankIndexOptions {
+    partitionBy?: ReadonlyArray<string>;
+    sortBy: ReadonlyArray<{ direction?: "asc" | "desc"; field: string }>;
+    table: string;
+    where?: Record<string, unknown>;
+}
+
+/**
+ * Declare a standalone rank index. Pass the returned value to
+ * `defineSchema(tables, vectorIndexes, aggregateIndexes, rankIndexes)` keyed
+ * by index name — the schema attaches it to `tables[on].rankIndexes`.
+ */
+export const defineRankIndex = (name: string, options: RankIndexOptions): RankIndexDefinition => {
+    if (!options.sortBy || options.sortBy.length === 0) {
+        throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
+    }
+
+    const sortBy: RankSortKey[] = options.sortBy.map((key) => ({
+        direction: key.direction ?? "asc",
+        field: key.field,
+    }));
+
+    return { name, on: options.table, partitionBy: options.partitionBy, sortBy, where: options.where };
+};
+
+/**
  * Build the application schema. The first argument is the table map; the
  * optional second argument registers standalone `defineVectorIndex(...)`
  * declarations (DSL Shape B) keyed by index name. The optional third argument
  * registers standalone `defineAggregateIndex(...)` declarations (DSL Shape B);
- * they are folded into the matching `tables[on].aggregateIndexes` array so
- * runtime backends read all indexes from one place.
+ * the optional fourth argument registers standalone `defineRankIndex(...)`
+ * declarations. Both are folded into the matching `tables[on].*Indexes` array
+ * so runtime backends read every index uniformly off the table definition.
  */
 export const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
     aggregateIndexes: Record<string, AggregateIndexDefinition> = {},
+    rankIndexes: Record<string, RankIndexDefinition> = {},
 ): Schema<T> => {
-    // Fill in the `on` field for every inline `.aggregateIndex(...)` decl —
-    // the builder stashes `""` because it doesn't know its own table name.
+    // Fill in the `on` field for every inline `.aggregateIndex(...)` /
+    // `.rankIndex(...)` decl — the builder stashes `""` because it doesn't
+    // know its own table name.
     for (const [tableName, table] of Object.entries(tables)) {
         for (const index of table.aggregateIndexes) {
+            if (index.on === "") {
+                (index as { on: string }).on = tableName;
+            }
+        }
+
+        for (const index of table.rankIndexes) {
             if (index.on === "") {
                 (index as { on: string }).on = tableName;
             }
@@ -297,7 +384,7 @@ export const defineSchema = <T extends Record<string, TableDefinition>>(
     }
 
     // Fold standalone decls onto their owning table so the runtime can read
-    // every aggregate uniformly off `tables[name].aggregateIndexes`.
+    // every aggregate / rank index uniformly off `tables[name].*Indexes`.
     for (const index of Object.values(aggregateIndexes)) {
         const table = (tables as Record<string, TableDefinition>)[index.on];
 
@@ -306,6 +393,16 @@ export const defineSchema = <T extends Record<string, TableDefinition>>(
         }
 
         (table.aggregateIndexes as AggregateIndexDefinition[]).push(index);
+    }
+
+    for (const index of Object.values(rankIndexes)) {
+        const table = (tables as Record<string, TableDefinition>)[index.on];
+
+        if (!table) {
+            throw new Error(`defineRankIndex "${index.name}": unknown table "${index.on}"`);
+        }
+
+        (table.rankIndexes as RankIndexDefinition[]).push(index);
     }
 
     return { tables, vectorIndexes };

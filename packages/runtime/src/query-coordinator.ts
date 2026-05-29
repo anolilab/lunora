@@ -46,8 +46,90 @@ export const createStaticShardRegistry = (table_to_keys: Readonly<Record<string,
 /**
  * Wire-serializable merge strategy. `topK.by` is a field name on the row
  * (the runtime looks it up with a string key), not a closure.
+ *
+ * Aggregate-friendly variants for cross-shard `count` / `aggregate` /
+ * `groupBy` fan-outs:
+ *
+ *   - `sum` — `count(*)`, `aggregate({ op: "sum" })` (sums numeric per-shard payloads).
+ *   - `max` — `aggregate({ op: "max" })`.
+ *   - `min` — `aggregate({ op: "min" })`.
+ *   - `groupBy` — per-shard `GroupByEntry[]` payloads, reduced into one
+ *     entry per distinct key tuple. `op` controls how values combine across
+ *     shards: `sum` (default — works for `COUNT(*)` and `SUM`), `max`, `min`.
+ *
+ * `avg` is intentionally absent in v1 — a correct cross-shard average
+ * requires shipping `(sum, count)` per shard, not the post-shard mean.
+ * Use two separate fan-outs (`sum` + `count`) and divide in the caller.
  */
-export type MergeStrategy = { kind: "concat" } | { by: string; direction?: "asc" | "desc"; k: number; kind: "topK" } | { kind: "first" } | { kind: "sum" };
+export type MergeStrategy
+    = | { kind: "concat" }
+        | { by: string; direction?: "asc" | "desc"; k: number; kind: "topK" }
+        | { kind: "first" }
+        | { kind: "max" }
+        | { kind: "min" }
+        | { kind: "sum" }
+        | { kind: "groupBy"; op?: "max" | "min" | "sum" };
+
+/**
+ * Convenience: build the right wire-serializable {@link MergeStrategy} for a
+ * given aggregate read. The reader doesn't know which op the caller chose, so
+ * a fan-out wrapper passes the user's op + by-keys through this to derive the
+ * merge.
+ *
+ * - `count` → `sum`.
+ * - `aggregate({ op })` → `sum`/`max`/`min` (or throws for `avg`).
+ * - `groupBy({ by, agg })` → `groupBy({ op })` (defaults to `sum` since
+ *   `groupBy`'s default reducer is `count`).
+ */
+export const mergeStrategyForAggregate = (
+    input:
+        | { agg?: { op?: "avg" | "count" | "max" | "min" | "sum" }; kind: "groupBy" }
+        | { kind: "count" }
+        | { kind: "scalar"; op: "avg" | "count" | "max" | "min" | "sum" },
+): MergeStrategy => {
+    if (input.kind === "count") {
+        return { kind: "sum" };
+    }
+
+    if (input.kind === "scalar") {
+        if (input.op === "count" || input.op === "sum") {
+            return { kind: "sum" };
+        }
+
+        if (input.op === "max") {
+            return { kind: "max" };
+        }
+
+        if (input.op === "min") {
+            return { kind: "min" };
+        }
+
+        // avg requires (sum, count) — see jsdoc on MergeStrategy.
+        throw new CirrusError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
+            code: "BAD_REQUEST",
+            status: 400,
+        });
+    }
+
+    const op = input.agg?.op ?? "count";
+
+    if (op === "count" || op === "sum") {
+        return { kind: "groupBy", op: "sum" };
+    }
+
+    if (op === "max") {
+        return { kind: "groupBy", op: "max" };
+    }
+
+    if (op === "min") {
+        return { kind: "groupBy", op: "min" };
+    }
+
+    throw new CirrusError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
+        code: "BAD_REQUEST",
+        status: 400,
+    });
+};
 
 export interface FanOutSpec {
     merge: MergeStrategy;
@@ -389,6 +471,96 @@ const mergeShardResults = (values: readonly unknown[], strategy: MergeStrategy):
             return values[0];
         }
 
+        case "groupBy": {
+            // Reduce per-shard `GroupByEntry[]` payloads into one entry per
+            // distinct key tuple. Empty / non-array payloads are skipped — a
+            // failed shard already reported through `errors[]`.
+            const op = strategy.op ?? "sum";
+            const merged = new Map<string, { key: Record<string, unknown>; value: null | number }>();
+
+            for (const v of values) {
+                if (!Array.isArray(v)) {
+                    continue;
+                }
+
+                for (const entry of v) {
+                    if (entry === null || typeof entry !== "object") {
+                        continue;
+                    }
+
+                    const entryKey = (entry as { key?: Record<string, unknown> }).key ?? {};
+                    const entryValue = (entry as { value?: null | number }).value ?? null;
+                    const stableKey = canonicalJson(entryKey);
+                    const existing = merged.get(stableKey);
+
+                    if (!existing) {
+                        merged.set(stableKey, { key: entryKey, value: entryValue });
+
+                        continue;
+                    }
+
+                    if (existing.value === null) {
+                        existing.value = entryValue;
+
+                        continue;
+                    }
+
+                    if (entryValue === null) {
+                        continue;
+                    }
+
+                    switch (op) {
+                        case "max": {
+                            existing.value = Math.max(existing.value, entryValue);
+                            break;
+                        }
+
+                        case "min": {
+                            existing.value = Math.min(existing.value, entryValue);
+                            break;
+                        }
+
+                        case "sum": {
+                            existing.value += entryValue;
+                            break;
+                        }
+
+                        default: {
+                            const _exhaustive: never = op;
+
+                            void _exhaustive;
+                        }
+                    }
+                }
+            }
+
+            return [...merged.values()];
+        }
+
+        case "max": {
+            let best: null | number = null;
+
+            for (const v of values) {
+                if (typeof v === "number" && Number.isFinite(v)) {
+                    best = best === null || v > best ? v : best;
+                }
+            }
+
+            return best;
+        }
+
+        case "min": {
+            let best: null | number = null;
+
+            for (const v of values) {
+                if (typeof v === "number" && Number.isFinite(v)) {
+                    best = best === null || v < best ? v : best;
+                }
+            }
+
+            return best;
+        }
+
         case "sum": {
             let total = 0;
 
@@ -436,4 +608,19 @@ const mergeShardResults = (values: readonly unknown[], strategy: MergeStrategy):
             return values;
         }
     }
+};
+
+/**
+ * Canonical-JSON encoding of a key tuple — same shape the aggregate counter
+ * uses to stay stable across runs. Lets two shards file the same `{ a, b }`
+ * group under the same merged bucket regardless of property order.
+ */
+const canonicalJson = (record: Record<string, unknown>): string => {
+    const ordered: Record<string, unknown> = {};
+
+    for (const key of Object.keys(record).sort()) {
+        ordered[key] = record[key] ?? null;
+    }
+
+    return JSON.stringify(ordered);
 };
