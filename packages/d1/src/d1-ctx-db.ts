@@ -918,11 +918,40 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const hasMore = rankRows.length > take;
             const usable = hasMore ? rankRows.slice(0, take) : rankRows;
 
+            // Batched hydration: a single `IN (?, ?, …)` per chunk instead of
+            // one SELECT per rank row. D1's SQL-parameter ceiling is on the
+            // order of 100/query, so we chunk and fan the chunks out via
+            // Promise.all. A 100-row page used to issue 101 D1 queries;
+            // it now issues ⌈n/IN_CHUNK_SIZE⌉.
+            const IN_CHUNK_SIZE = 100;
+            const ids = usable.map((rankRow) => rankRow[RANK_TIEBREAK] as string);
+            const chunks: string[][] = [];
+
+            for (let cursor = 0; cursor < ids.length; cursor += IN_CHUNK_SIZE) {
+                chunks.push(ids.slice(cursor, cursor + IN_CHUNK_SIZE));
+            }
+
+            const byId = new Map<string, Record<string, unknown>>();
+            const fetched = await Promise.all(
+                chunks.map(async (chunk) => {
+                    const placeholders = chunk.map(() => "?").join(", ");
+
+                    return exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" IN (${placeholders})`, chunk);
+                }),
+            );
+
+            for (const rows of fetched) {
+                for (const row of rows) {
+                    byId.set(row["id"] as string, row);
+                }
+            }
+
+            // Restore the rank companion's order (the IN-fetch returns rows
+            // in arbitrary order).
             const docs: Array<Record<string, unknown>> = [];
 
             for (const rankRow of usable) {
-                const docRows = await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" = ?`, [rankRow[RANK_TIEBREAK] as string]);
-                const doc = decodeRow(definition, docRows[0]);
+                const doc = decodeRow(definition, byId.get(rankRow[RANK_TIEBREAK] as string));
 
                 if (doc) {
                     docs.push(doc);

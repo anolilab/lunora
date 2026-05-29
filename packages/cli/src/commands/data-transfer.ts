@@ -137,6 +137,18 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
     let rows = 0;
     let leftover = "";
 
+    // Honour backpressure: if the sink can't keep up (slow filesystem, piped
+    // stdout consumer), `sink.write` returns false — wait for `drain` before
+    // resuming. Otherwise Node buffers writes in the heap and a 10M-row
+    // export materialises in memory, defeating the streaming goal.
+    const writeWithBackpressure = async (line: string): Promise<void> => {
+        if (!sink.write(line)) {
+            await new Promise<void>((resolve) => {
+                sink.once("drain", resolve);
+            });
+        }
+    };
+
     while (true) {
         const { done, value } = await reader.read();
 
@@ -155,7 +167,8 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
             rows += 1;
             const line = `${leftover.slice(0, newlineIndex)}\n`;
 
-            sink.write(line);
+            // eslint-disable-next-line no-await-in-loop -- backpressure is intentionally sequential
+            await writeWithBackpressure(line);
             leftover = leftover.slice(newlineIndex + 1);
             newlineIndex = leftover.indexOf("\n");
         }
@@ -163,7 +176,7 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
 
     if (leftover.length > 0) {
         rows += 1;
-        sink.write(`${leftover}\n`);
+        await writeWithBackpressure(`${leftover}\n`);
     }
 
     if (!useStdout) {
@@ -279,6 +292,16 @@ export const runImportCommand = async (options: ImportCommandOptions): Promise<I
             method: "POST",
         });
 
+        // Surface non-2xx as a hard failure — without this the command
+        // exited 0 with `inserted` unchanged when the server rejected a
+        // batch (auth failure, 5xx, malformed bearer), silently dropping
+        // rows. response.json() could also throw on a non-JSON error body.
+        if (!response.ok) {
+            const text = await response.text().catch(() => "<no body>");
+
+            throw new Error(`import batch failed (HTTP ${String(response.status)}): ${text}`);
+        }
+
         const json = (await response.json()) as {
             conflicts?: number;
             errors?: { code: string; line: number; message: string; table: string }[];
@@ -311,52 +334,53 @@ export const runImportCommand = async (options: ImportCommandOptions): Promise<I
 
         if (options.table === undefined) {
             batch.push(trimmed);
-        } else {
-            // `--table` wraps each bare doc — the source is `{...}\n{...}\n`,
-            // not `{table,doc}` envelopes.
-            batch.push(JSON.stringify({ doc: JSON.parse(trimmed), table: options.table }));
+
+            return;
         }
+
+        // `--table` wraps each bare doc — the source is `{...}\n{...}\n`,
+        // not `{table,doc}` envelopes. Guard the parse so a malformed line
+        // surfaces a row-scoped error instead of an unhandled rejection.
+        let doc: unknown;
+
+        try {
+            doc = JSON.parse(trimmed);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+
+            throw new Error(`invalid JSON on line ${String(lineNumber)}: ${message}`);
+        }
+
+        batch.push(JSON.stringify({ doc, table: options.table }));
     };
 
-    await new Promise<void>((resolve, reject) => {
-        stream.on("data", async (chunk) => {
-            const text = typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
+    // `for await ... of` natively awaits each chunk + propagates errors
+    // through the surrounding async function, so a thrown `processLine`/
+    // `flush` rejects the outer promise instead of becoming an unhandled
+    // rejection. Backpressure falls out of `await` — the loop only requests
+    // the next chunk when the current one is drained.
+    for await (const chunk of stream) {
+        const text = typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
 
-            buffer += text;
+        buffer += text;
 
-            let newlineIndex = buffer.indexOf("\n");
+        let newlineIndex = buffer.indexOf("\n");
 
-            while (newlineIndex !== -1) {
-                processLine(buffer.slice(0, newlineIndex));
-                buffer = buffer.slice(newlineIndex + 1);
-                newlineIndex = buffer.indexOf("\n");
+        while (newlineIndex !== -1) {
+            processLine(buffer.slice(0, newlineIndex));
+            buffer = buffer.slice(newlineIndex + 1);
+            newlineIndex = buffer.indexOf("\n");
 
-                if (batch.length >= batchSize) {
-                    stream.pause();
-
-                    try {
-                        await flush();
-                        stream.resume();
-                    } catch (error: unknown) {
-                        reject(error instanceof Error ? error : new Error(String(error)));
-                    }
-                }
+            if (batch.length >= batchSize) {
+                // eslint-disable-next-line no-await-in-loop -- one POST per filled batch is the point
+                await flush();
             }
-        });
+        }
+    }
 
-        stream.on("end", () => {
-            if (buffer.length > 0) {
-                processLine(buffer);
-                buffer = "";
-            }
-
-            resolve();
-        });
-
-        stream.on("error", (error) => {
-            reject(error);
-        });
-    });
+    if (buffer.length > 0) {
+        processLine(buffer);
+    }
 
     await flush();
 

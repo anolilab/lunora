@@ -835,9 +835,10 @@ export abstract class ShardDO {
      * Wrap a query handler in the reactive cache. The subclass passes the
      * function path, parsed args, and a `run` callback that resolves to the
      * handler's return value. When the cache is configured we key by
-     * `(functionPath, stable-stringified args)`, run a dep-tracked handler
-     * via {@link withTracker}, and store the result. When the cache is
-     * absent we just call `run()` — same shape, zero overhead.
+     * `(functionPath, stable-stringified args)`, allocate a fresh dep
+     * tracker, store it on `this.currentTracker` so `getCtxDbReadHook` reads
+     * stamp into it, and restore the prior tracker in `finally`. When the
+     * cache is absent we just call `run()` — same shape, zero overhead.
      *
      * Subclasses should ALSO pass `getCtxDbReadHook()` as the `onRead`
      * option on their `createShardCtxDb(...)` call so the tracker actually
@@ -851,25 +852,20 @@ export abstract class ShardDO {
             return run();
         }
 
-        const key = reactiveCacheKey(functionPath, args);
-
-        return this.reactiveCache.run(key, this.allocateTracker(), () => this.withTracker(run));
-    }
-
-    /**
-     * Run `task()` with a fresh {@link DependencyTracker} bound to this
-     * shard, so the ctx-db hooks plumbed through {@link getCtxDbReadHook}
-     * can stamp deps without an explicit ctx arg on every handler. The
-     * tracker is cleared in `finally` so a leaked reference can never
-     * survive into a sibling call.
-     */
-    protected async withTracker<R>(task: () => Promise<R>): Promise<R> {
+        // Snapshot the in-flight tracker BEFORE allocating a fresh one, so
+        // the `finally` restores it correctly. The previous implementation
+        // allocated inside `reactiveCache.run(...)` before capturing
+        // `previous` in a separate `withTracker` helper, so `previous`
+        // captured the just-allocated tracker and the leftover never got
+        // cleared — a stray read between requests would land in the wrong
+        // dep set and corrupt the next cache miss.
         const previous = this.currentTracker;
+        const tracker = createDependencyTracker();
 
-        this.currentTracker ??= createDependencyTracker();
+        this.currentTracker = tracker;
 
         try {
-            return await task();
+            return await this.reactiveCache.run(reactiveCacheKey(functionPath, args), tracker.collect(), run);
         } finally {
             this.currentTracker = previous;
         }
@@ -878,28 +874,14 @@ export abstract class ShardDO {
     /**
      * Returns an `onRead` callback suitable to hand to `createShardCtxDb`'s
      * `onRead` option. The returned function stamps the in-flight tracker (set
-     * by {@link runCachedQuery}/{@link withTracker}) when one exists and is a
-     * no-op otherwise — so subclasses can wire this hook unconditionally
-     * without checking whether the cache is enabled.
+     * by {@link runCachedQuery}) when one exists and is a no-op otherwise — so
+     * subclasses can wire this hook unconditionally without checking whether
+     * the cache is enabled.
      */
     protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void {
         return (table, idOrScan) => {
             this.currentTracker?.recordRead(table, idOrScan ?? "*scan");
         };
-    }
-
-    /**
-     * Allocate the dep set for the next cache miss. Returns a fresh `Set`
-     * paired with the tracker that fills it: the `Set` is what the cache
-     * stores; the tracker is what the ctx-db hooks write into.
-     */
-    private allocateTracker(): Set<string> {
-        const tracker = createDependencyTracker();
-        const deps = tracker.collect();
-
-        this.currentTracker = tracker;
-
-        return deps;
     }
 
     /**

@@ -387,7 +387,10 @@ export const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryC
             const shardKeys = [...union];
 
             const exportRequest: ShardRpcRequest = {
-                args: { tables: [...request.tables] },
+                // Spread the caller's `args` (`batchSize`, future export knobs)
+                // before the `tables` field so they reach the shard RPC. The
+                // earlier `{ tables }` literal silently dropped them.
+                args: { ...request.args, tables: [...request.tables] },
                 functionPath: "__cirrus_admin__:exportShard",
                 headers: request.headers,
             };
