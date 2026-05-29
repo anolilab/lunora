@@ -1,0 +1,89 @@
+import { act, render } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+import type { UseRateLimitResult } from "../src/use-rate-limit.js";
+import { useRateLimit } from "../src/use-rate-limit.js";
+
+const clock = { now: 0 };
+let handle: UseRateLimitResult;
+
+const Probe = ({ tickMs }: { tickMs?: number }): ReactElement => {
+    handle = useRateLimit({ kind: "token bucket", period: 1000, rate: 2 }, { now: () => clock.now, tickMs });
+
+    return <span>{handle.ok ? "ok" : "blocked"}</span>;
+};
+
+afterEach(() => {
+    clock.now = 0;
+    vi.useRealTimers();
+});
+
+describe("useRateLimit", () => {
+    test("starts available and blocks once the bucket is drained", () => {
+        render(<Probe />);
+
+        expect(handle.ok).toBe(true);
+
+        act(() => {
+            handle.consume();
+            handle.consume();
+        });
+
+        expect(handle.disabled).toBe(true);
+        expect(handle.retryAfter).toBeGreaterThan(0);
+    });
+
+    test("check does not consume", () => {
+        render(<Probe />);
+
+        let allowed = false;
+
+        act(() => {
+            allowed = handle.check();
+        });
+
+        expect(allowed).toBe(true);
+        // Both units are still available because check never spent one.
+        expect(handle.consume().ok).toBe(true);
+        expect(handle.consume().ok).toBe(true);
+    });
+
+    test("reset restores availability", () => {
+        render(<Probe />);
+
+        act(() => {
+            handle.consume();
+            handle.consume();
+        });
+
+        expect(handle.disabled).toBe(true);
+
+        act(() => {
+            handle.reset();
+        });
+
+        expect(handle.ok).toBe(true);
+    });
+
+    test("re-enables on its own as tokens refill", () => {
+        vi.useFakeTimers();
+        render(<Probe tickMs={250} />);
+
+        act(() => {
+            handle.consume();
+            handle.consume();
+        });
+
+        expect(handle.disabled).toBe(true);
+
+        // 2 tokens / 1000ms means one token returns after 500ms; the tick
+        // interval re-renders and the prediction flips back to available.
+        clock.now = 500;
+        act(() => {
+            vi.advanceTimersByTime(250);
+        });
+
+        expect(handle.ok).toBe(true);
+    });
+});

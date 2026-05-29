@@ -26,4 +26,6 @@ export type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
 export { usePaginatedQuery } from "./use-paginated-query.js";
 export { usePreloadedQuery } from "./use-preloaded-query.js";
 export { useQuery } from "./use-query.js";
+export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit.js";
+export { useRateLimit } from "./use-rate-limit.js";
 export { useSubscription } from "./use-subscription.js";

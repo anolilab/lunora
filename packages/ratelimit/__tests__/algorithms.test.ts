@@ -1,0 +1,199 @@
+import { describe, expect, test } from "vitest";
+
+import { evaluate } from "../src/algorithms.js";
+import type { RateLimitConfig } from "../src/types.js";
+
+const tokenBucket: RateLimitConfig = { kind: "token bucket", period: 1000, rate: 10 };
+const fixedWindow: RateLimitConfig = { kind: "fixed window", period: 1000, rate: 5 };
+const slidingWindow: RateLimitConfig = { kind: "sliding window", period: 1000, rate: 10 };
+
+const consumeOptions = (count: number, now: number, reserve = false) => ({ consume: true, count, now, reserve });
+
+describe("token bucket", () => {
+    test("a fresh key starts full", () => {
+        const { status, value } = evaluate(tokenBucket, undefined, consumeOptions(1, 0));
+
+        expect(status.ok).toBe(true);
+        expect(value).toEqual({ ts: 0, value: 9 });
+    });
+
+    test("rejects once tokens are exhausted and reports retryAfter", () => {
+        const drained = { ts: 0, value: 0 };
+        const { status, value } = evaluate(tokenBucket, drained, consumeOptions(1, 0));
+
+        expect(status.ok).toBe(false);
+        expect(status.reason).toBe("rate");
+        // 10 tokens / 1000ms = 0.01 tokens/ms, so one token takes 100ms.
+        expect(status.retryAfter).toBe(100);
+        // A rejected, non-reserving consume must not mutate state.
+        expect(value).toBeNull();
+    });
+
+    test("refills continuously over elapsed time", () => {
+        const drained = { ts: 0, value: 0 };
+        const { status, value } = evaluate(tokenBucket, drained, consumeOptions(3, 500));
+
+        // 500ms accrues 5 tokens; consuming 3 leaves 2.
+        expect(status.ok).toBe(true);
+        expect(value).toEqual({ ts: 500, value: 2 });
+    });
+
+    test("never accrues beyond capacity", () => {
+        const capped: RateLimitConfig = { capacity: 10, kind: "token bucket", period: 1000, rate: 10 };
+        const { value } = evaluate(capped, { ts: 0, value: 8 }, consumeOptions(0, 10_000));
+
+        // 10s would accrue 100 tokens, but capacity caps the bucket at 10.
+        expect(value).toEqual({ ts: 10_000, value: 10 });
+    });
+
+    test("reserve permits a deficit and reports when it clears", () => {
+        const drained = { ts: 0, value: 0 };
+        const { status, value } = evaluate(tokenBucket, drained, consumeOptions(2, 0, true));
+
+        expect(status.ok).toBe(true);
+        expect(status.retryAfter).toBe(200);
+        expect(value).toEqual({ ts: 0, value: -2 });
+    });
+
+    test("reserve still rejects a request larger than capacity", () => {
+        const { status, value } = evaluate(tokenBucket, { ts: 0, value: 0 }, consumeOptions(11, 0, true));
+
+        expect(status.ok).toBe(false);
+        expect(value).toBeNull();
+    });
+});
+
+describe("fixed window", () => {
+    test("grants rate tokens at the window start", () => {
+        const { status, value } = evaluate(fixedWindow, undefined, consumeOptions(5, 0));
+
+        expect(status.ok).toBe(true);
+        expect(value).toEqual({ ts: 0, value: 0 });
+    });
+
+    test("rejects within the window and points retryAfter at the next window", () => {
+        const exhausted = { ts: 0, value: 0 };
+        const { status } = evaluate(fixedWindow, exhausted, consumeOptions(1, 400));
+
+        expect(status.ok).toBe(false);
+        expect(status.retryAfter).toBe(600);
+    });
+
+    test("resets at the next window boundary", () => {
+        const exhausted = { ts: 0, value: 0 };
+        const { status, value } = evaluate(fixedWindow, exhausted, consumeOptions(2, 1000));
+
+        expect(status.ok).toBe(true);
+        expect(value).toEqual({ ts: 1000, value: 3 });
+    });
+
+    test("does not roll over unused tokens without an explicit capacity", () => {
+        const leftover = { ts: 0, value: 4 };
+        const { value } = evaluate(fixedWindow, leftover, consumeOptions(0, 1000));
+
+        // capacity defaults to rate, so the new window is exactly `rate`, not 4 + 5.
+        expect(value).toEqual({ ts: 1000, value: 5 });
+    });
+
+    test("rolls leftover tokens forward up to capacity", () => {
+        const rollover: RateLimitConfig = { capacity: 8, kind: "fixed window", period: 1000, rate: 5 };
+        const leftover = { ts: 0, value: 4 };
+        const { value } = evaluate(rollover, leftover, consumeOptions(0, 1000));
+
+        // 4 carried + 5 granted = 9, clamped to capacity 8.
+        expect(value).toEqual({ ts: 1000, value: 8 });
+    });
+
+    test("aligns windows to the configured start offset", () => {
+        const aligned: RateLimitConfig = { kind: "fixed window", period: 1000, rate: 1, start: 200 };
+        const { value } = evaluate(aligned, undefined, consumeOptions(1, 1500));
+
+        // Windows align to 200 + n*1000; 1500 falls in the window starting at 1200.
+        expect(value?.ts).toBe(1200);
+    });
+
+    test("reserve borrows against the current window, and the debt is forgiven at the boundary", () => {
+        const exhausted = { ts: 0, value: 0 };
+        const reserved = evaluate(fixedWindow, exhausted, consumeOptions(2, 0, true));
+
+        // Borrowed 2 against an empty window — value goes negative, retryAfter points at the next window.
+        expect(reserved.status.ok).toBe(true);
+        expect(reserved.status.retryAfter).toBe(1000);
+        expect(reserved.value).toEqual({ ts: 0, value: -2 });
+
+        // The next window grants a fresh `rate` rather than carrying the debt forward.
+        const next = evaluate(fixedWindow, reserved.value ?? undefined, consumeOptions(0, 1000));
+
+        expect(next.value).toEqual({ ts: 1000, value: 5 });
+    });
+});
+
+describe("sliding window", () => {
+    test("a fresh key admits up to the limit and tracks the count", () => {
+        const { status, value } = evaluate(slidingWindow, undefined, consumeOptions(1, 0));
+
+        expect(status.ok).toBe(true);
+        expect(value).toEqual({ prev: 0, ts: 0, value: 1 });
+    });
+
+    test("a full previous window suppresses a fresh burst at the boundary", () => {
+        // The previous window (ts 0) saw the full 10; at the next window's start the
+        // weighted estimate is still 10, so unlike a fixed window it does not reset.
+        const previousFull = { ts: 0, value: 10 };
+        const { status } = evaluate(slidingWindow, previousFull, consumeOptions(1, 1000));
+
+        expect(status.ok).toBe(false);
+        // 9 tokens of headroom open up 100ms into the new window (weight 0.9 → est 9).
+        expect(status.retryAfter).toBe(100);
+    });
+
+    test("admits once the previous window has decayed enough", () => {
+        const previousFull = { ts: 0, value: 10 };
+        const { status, value } = evaluate(slidingWindow, previousFull, consumeOptions(1, 1100));
+
+        expect(status.ok).toBe(true);
+        expect(value).toEqual({ prev: 10, ts: 1000, value: 1 });
+    });
+
+    test("weights the previous window by how far it has scrolled out", () => {
+        // 8 in the previous window, 500ms into the next: estimate 8*0.5 = 4. A burst of
+        // 7 would reach 11 > 10, so it is rejected until ~125ms more decays the estimate.
+        const previous = { ts: 0, value: 8 };
+        const { status } = evaluate(slidingWindow, previous, consumeOptions(7, 1500));
+
+        expect(status.ok).toBe(false);
+        expect(status.retryAfter).toBe(125);
+    });
+
+    test("a gap of two or more windows resets the estimate", () => {
+        const stale = { ts: 0, value: 10 };
+        const { status, value } = evaluate(slidingWindow, stale, consumeOptions(10, 3000));
+
+        expect(status.ok).toBe(true);
+        expect(value).toEqual({ prev: 0, ts: 3000, value: 10 });
+    });
+
+    test("reserve borrows past the limit and reports when the pressure clears", () => {
+        const currentFull = { prev: 0, ts: 0, value: 10 };
+        const { status, value } = evaluate(slidingWindow, currentFull, consumeOptions(2, 0, true));
+
+        expect(status.ok).toBe(true);
+        expect(value).toEqual({ prev: 0, ts: 0, value: 12 });
+        expect(status.retryAfter).toBe(1200);
+    });
+});
+
+describe("check (non-consuming)", () => {
+    test("reports availability without mutating state", () => {
+        const { status, value } = evaluate(tokenBucket, { ts: 0, value: 3 }, { consume: false, count: 2, now: 0, reserve: false });
+
+        expect(status.ok).toBe(true);
+        expect(value).toBeNull();
+    });
+
+    test("a sliding-window check never persists", () => {
+        const { value } = evaluate(slidingWindow, { ts: 0, value: 4 }, { consume: false, count: 1, now: 0, reserve: false });
+
+        expect(value).toBeNull();
+    });
+});

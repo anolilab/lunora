@@ -25,7 +25,8 @@
         "lint:doctor": "react-doctor"
     },
     "dependencies": {
-        "@cirrus/client": "workspace:*"
+        "@cirrus/client": "workspace:*",
+        "@cirrus/ratelimit": "workspace:*"
     },
     "devDependencies": {
         "@testing-library/dom": "catalog:frontend",
