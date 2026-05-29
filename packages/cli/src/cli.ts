@@ -5,6 +5,7 @@ import { Cerebro } from "@visulima/cerebro";
 import colorize from "@visulima/colorize";
 
 import { runCodegenCommand } from "./commands/codegen.js";
+import { runExportCommand, runImportCommand } from "./commands/data-transfer.js";
 import { runDeployCommand } from "./commands/deploy.js";
 import { runDevCommand } from "./commands/dev.js";
 import type { Template } from "./commands/init.js";
@@ -14,7 +15,7 @@ import { runResetCommand } from "./commands/reset.js";
 import { runRpcCommand } from "./commands/run.js";
 import { createLogger } from "./util/logger.js";
 
-export const COMMANDS = ["init", "dev", "codegen", "deploy", "run", "reset", "migrate"] as const;
+export const COMMANDS = ["init", "dev", "codegen", "deploy", "run", "reset", "migrate", "export", "import"] as const;
 
 export type CommandName = (typeof COMMANDS)[number];
 
@@ -377,6 +378,79 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         },
     });
 
+    cli.addCommand({
+        argument: { description: "Optional path (alias for --out)", name: "path", type: String },
+        description: "Stream NDJSON of every shard-local + global table from the worker",
+        execute: async ({ argument, options: parsed }) => {
+            try {
+                const out = argument[0] ?? toStringOrUndefined(parsed.out);
+                const result = await runExportCommand({
+                    cwd,
+                    logger,
+                    out,
+                    prod: parsed.prod === true,
+                    tables: toStringOrUndefined(parsed.tables),
+                    token: toStringOrUndefined(parsed.token),
+                    url: toStringOrUndefined(parsed.url),
+                });
+
+                exitCode.value = result.code;
+            } catch (error: unknown) {
+                logger.error(error instanceof Error ? error.message : String(error));
+                exitCode.value = 1;
+            }
+        },
+        name: "export",
+        options: [
+            { description: "Output file path (`-` for stdout, default)", name: "out", type: String },
+            { description: "Comma-separated table allowlist", name: "tables", type: String },
+            { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
+            { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
+            { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
+        ],
+    });
+
+    cli.addCommand({
+        argument: { description: "Source NDJSON file", name: "file", type: String },
+        description: "Bulk-insert rows from an NDJSON file via the worker's admin endpoint",
+        execute: async ({ argument, options: parsed }) => {
+            const file = argument[0] ?? toStringOrUndefined(parsed.file);
+
+            if (!file) {
+                logger.error("import requires a file. Usage: cirrus import <path> [--table <name>]");
+                exitCode.value = 1;
+
+                return;
+            }
+
+            try {
+                const result = await runImportCommand({
+                    batchSize: toNumberOrUndefined(parsed.batchSize),
+                    cwd,
+                    file,
+                    logger,
+                    prod: parsed.prod === true,
+                    table: toStringOrUndefined(parsed.table),
+                    token: toStringOrUndefined(parsed.token),
+                    url: toStringOrUndefined(parsed.url),
+                });
+
+                exitCode.value = result.code;
+            } catch (error: unknown) {
+                logger.error(error instanceof Error ? error.message : String(error));
+                exitCode.value = 1;
+            }
+        },
+        name: "import",
+        options: [
+            { description: "Wrap each bare doc as `{table:<name>,doc:...}`", name: "table", type: String },
+            { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
+            { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
+            { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
+            { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
+        ],
+    });
+
     return { cli, exitCode };
 };
 
@@ -399,6 +473,10 @@ Commands:
           [--dry-run] [--batch-size <n>] [--steps <n>] [--prod] [--url <url>] [--token <t>]
   migrate status <id>           Report a data migration's per-shard status
           [--url <url>] [--token <t>]
+  export [--out <path>]         Stream NDJSON of every table from the worker
+          [--tables <t1,t2,...>] [--prod] [--url <url>] [--token <t>]
+  import <path> [--table <n>]   Bulk-insert NDJSON rows via the admin endpoint
+          [--batch-size <n>] [--prod] [--url <url>] [--token <t>]
   reset [--all]                 Clear local Miniflare state (and .cirrus-cache with --all)
 
 Global options:
