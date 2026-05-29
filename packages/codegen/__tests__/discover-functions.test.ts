@@ -283,6 +283,32 @@ const BUILDER_PREAMBLE = `
     };
 `;
 
+// A builder that faithfully models `.output(validator)`: the validator carries a
+// phantom `__t` for its inferred type, and once `.output()` sets `Output`, the
+// terminal types the handler's return as that declared type — exactly as the real
+// `QueryBuilder` does. This lets discovery's handler-return inference exercise the
+// `.output()` path without workspace module resolution.
+const OUTPUT_BUILDER_PREAMBLE = `
+    declare const v: {
+        number: () => { __k: "number"; __t: number };
+        string: () => { __k: "string"; __t: string };
+        object: <S extends Record<string, { __t: unknown }>>(shape: S) => { __k: "object"; __t: { [K in keyof S]: S[K]["__t"] } };
+    };
+
+    interface QueryBuilder<Args, Output = undefined> {
+        readonly __cirrusProcedure: "query";
+        input: <X extends Record<string, unknown>>(validators: X) => QueryBuilder<Args & X, Output>;
+        output: <V extends { __t: unknown }>(validator: V) => QueryBuilder<Args, V["__t"]>;
+        query: [Output] extends [undefined]
+            ? <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "query" }
+            : (handler: (options: { args: Args; ctx: unknown }) => Output) => { args: Args; handler: (ctx: unknown, args: Args) => Output; kind: "query" };
+    }
+
+    declare const c: {
+        query: QueryBuilder<Record<never, never>>;
+    };
+`;
+
 describe("discoverFunctions builder procedures", () => {
     test("discovers a builder terminal, reading the kind from the terminal method name", () => {
         writeFunction(
@@ -412,5 +438,42 @@ describe("discoverFunctions builder procedures", () => {
         const result = discoverFunctions(project, workdir);
 
         expect(result).toHaveLength(0);
+    });
+
+    test("derives the return type from .output() — the declared validator shape wins over the handler body", () => {
+        writeFunction(
+            "messages.ts",
+            `${OUTPUT_BUILDER_PREAMBLE}
+            export const stats = c.query
+                .output(v.object({ count: v.number() }))
+                .query(() => ({ count: 1 }));
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result).toHaveLength(1);
+        expect(result[0]?.kind).toBe("query");
+        expect(result[0]?.returnType).toBe("{ count: number; }");
+    });
+
+    test(".output() interleaved with .input() leaves arg collection and detection intact", () => {
+        writeFunction(
+            "messages.ts",
+            `${OUTPUT_BUILDER_PREAMBLE}
+            export const stats = c.query
+                .input({ limit: v.number() })
+                .output(v.string())
+                .query(({ args }) => String(args.limit));
+        `,
+        );
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const result = discoverFunctions(project, workdir);
+
+        expect(result).toHaveLength(1);
+        expect(Object.keys(result[0]?.args ?? {})).toEqual(["limit"]);
+        expect(result[0]?.returnType).toBe("string");
     });
 });

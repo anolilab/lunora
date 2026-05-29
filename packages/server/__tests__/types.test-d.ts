@@ -2,7 +2,7 @@
  * Compile-time only: this file is included by `tsc --noEmit` to exercise the
  * type surface. It is also imported by a no-op test so vitest counts it.
  */
-import type { Id, Infer } from "../src/index.js";
+import type { EmptyArgs, Id, Infer, RegisteredQuery } from "../src/index.js";
 import { defineSchema, defineTable, initCirrus, mutation, query, v } from "../src/index.js";
 
 type Assert<T extends true> = T;
@@ -48,3 +48,25 @@ export type _Check5 = Assert<Equal<BuilderArgs["channelId"], Id<"channels">>>;
 const builderCtx = c.query.use(async ({ next }) => next({ ctx: { userId: "u" as string } })).query(({ ctx }) => ctx.userId);
 
 export type _Check6 = Assert<Equal<Awaited<ReturnType<typeof builderCtx.handler>>, string>>;
+
+// `.output(validator)` narrows the registered return type to the validator's
+// inferred type, regardless of what the handler body would infer on its own.
+const outputValidator = v.object({ count: v.number() });
+const builderOutput = c.query.output(outputValidator).query(() => ({ count: 1 }));
+
+export type _Check7 = Assert<Equal<typeof builderOutput, RegisteredQuery<EmptyArgs, Infer<typeof outputValidator>>>>;
+
+// `.output()` composes with `.input()` in either order: args stay typed and the
+// declared output type wins for the registered return.
+const builderInputOutput = c.mutation
+    .input({ text: v.string() })
+    .output(v.string())
+    .mutation(({ args }) => args.text);
+
+export type _Check8 = Assert<Equal<Awaited<ReturnType<typeof builderInputOutput.handler>>, string>>;
+
+// A handler whose return type doesn't satisfy `.output()` is a compile error.
+// @ts-expect-error - handler returns string, but .output declares { count: number }
+const builderOutputMismatch = c.query.output(v.object({ count: v.number() })).query(() => "nope");
+
+export type _Check9 = Assert<Equal<typeof builderOutputMismatch.kind, "query">>;

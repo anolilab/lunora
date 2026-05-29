@@ -144,3 +144,27 @@ describe("builder middleware", () => {
         expect(handler).not.toHaveBeenCalled();
     });
 });
+
+describe("builder output", () => {
+    test("parses the handler result through the .output() validator, stripping undeclared keys", async () => {
+        const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: 1, extra: "stripped" }) as { count: number });
+
+        await expect(fn.handler({}, {})).resolves.toEqual({ count: 1 });
+    });
+
+    test("rejects when the handler result violates .output()", async () => {
+        const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: "nope" }) as unknown as { count: number });
+
+        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    test(".output() composes with .input() and middleware regardless of chain order", async () => {
+        const fn = c.mutation
+            .input({ text: v.string() })
+            .use(async ({ next }) => next({ ctx: { tag: "m" } }))
+            .output(v.object({ echoed: v.string() }))
+            .mutation(({ args }) => ({ echoed: args.text }));
+
+        await expect(fn.handler({}, { text: "hi" })).resolves.toEqual({ echoed: "hi" });
+    });
+});

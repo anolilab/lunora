@@ -1,3 +1,5 @@
+import type { Validator } from "@cirrus/values";
+
 import { validateArgs } from "../functions.js";
 import type { ActionCtx, ArgsValidator, FunctionKind, InferArgs, MutationCtx, QueryCtx } from "../types.js";
 import type {
@@ -31,10 +33,12 @@ export type {
     TerminalKind,
 } from "./types.js";
 
-/** Accumulated builder state threaded through `.input()` / `.use()`. */
+/** Accumulated builder state threaded through `.input()` / `.use()` / `.output()`. */
 interface BuilderState {
     args: ArgsValidator;
     middlewares: ReadonlyArray<Middleware<unknown, unknown>>;
+    /** Validator the handler's result is parsed through when `.output()` was called. */
+    output?: Validator;
 }
 
 /**
@@ -71,19 +75,24 @@ const runMiddleware = async (middlewares: ReadonlyArray<Middleware<unknown, unkn
 /**
  * Adapt a user handler (`{ args, ctx }`) to the registered dispatch contract
  * (`(context, args)`). Args are revalidated here so a builder-produced function
- * is interchangeable with one from `query()` / `mutation()` / `action()`.
+ * is interchangeable with one from `query()` / `mutation()` / `action()`. When
+ * `.output()` declared a validator, the handler's result is parsed through it
+ * so a contract violation surfaces as a `ValidationError` at the source rather
+ * than as malformed data downstream.
  */
 const makeHandler
     = <Args extends ArgsValidator, Ctx, R>(
         args: Args,
         middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
         userHandler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R,
+        output?: Validator,
     ) =>
         async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
             const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
             const ctx = await runMiddleware(middlewares, context);
+            const result = await userHandler({ args: parsed, ctx: ctx as Ctx });
 
-            return (await userHandler({ args: parsed, ctx: ctx as Ctx })) as Awaited<R>;
+            return (output ? output.parse(result) : result) as Awaited<R>;
         };
 
 /**
@@ -100,12 +109,13 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
     ...visibility ? { __cirrusVisibility: visibility } : {},
     [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => ({
         args: state.args,
-        handler: makeHandler(state.args, state.middlewares, userHandler),
+        handler: makeHandler(state.args, state.middlewares, userHandler, state.output),
         kind,
         ...visibility ? { visibility } : {},
     }),
-    input: (validators: ArgsValidator) => makeBuilder(kind, { args: { ...state.args, ...validators }, middlewares: state.middlewares }, visibility),
-    use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { args: state.args, middlewares: [...state.middlewares, middleware] }, visibility),
+    input: (validators: ArgsValidator) => makeBuilder(kind, { ...state, args: { ...state.args, ...validators } }, visibility),
+    output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),
+    use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { ...state, middlewares: [...state.middlewares, middleware] }, visibility),
 });
 
 /**
