@@ -209,6 +209,56 @@ describe("ctx-db + reactiveCache integration", () => {
 
         expect(reads).toEqual([{ table: "users", idOrScan: "*scan" }]);
     });
+
+    test("rank() and rankPage() register *scan deps so any write shifts the cached position", async () => {
+        // Rank position is `count(rows-strictly-before) + 1` — any insert /
+        // delete to the partition can shift it. Same SCAN_DEP semantics as
+        // count() so the reactive cache invalidates rank-returning queries
+        // correctly. This is a regression guard: rank() / rankPage() were
+        // added by §3.1 after the reactive-cache landed, and an earlier
+        // version called `onRead(tableName)` without the dep marker, so
+        // rank queries cached with empty deps and never invalidated.
+        const rankSchema: SchemaLike = {
+            tables: {
+                messages: {
+                    indexes: [],
+                    rankIndexes: [
+                        {
+                            name: "byChannel",
+                            on: "messages",
+                            partitionBy: ["channelId"],
+                            sortBy: [{ direction: "asc", field: "_creationTime" }],
+                        },
+                    ],
+                    shape: { channelId: { kind: "string" }, text: { kind: "string" } },
+                },
+            },
+        };
+        const sql = makeSql();
+
+        runShardMigrations(sql, rankSchema);
+
+        const reads: { idOrScan?: string; table: string }[] = [];
+        const writer = createShardCtxDb({
+            sql,
+            schema: rankSchema,
+            onRead: (table, idOrScan) => {
+                reads.push({ table, idOrScan });
+            },
+        });
+
+        await writer.insert("messages", { _id: "m1", channelId: "c1", text: "hi" });
+
+        reads.length = 0;
+        await writer.rank("messages", "byChannel", { row: "m1" });
+
+        expect(reads).toEqual([{ table: "messages", idOrScan: "*scan" }]);
+
+        reads.length = 0;
+        await writer.rankPage("messages", "byChannel", { take: 10 });
+
+        expect(reads).toEqual([{ table: "messages", idOrScan: "*scan" }]);
+    });
 });
 
 interface FakeWebSocket {

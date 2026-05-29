@@ -1672,7 +1672,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new CountRlsUnsupportedError(tableName);
             }
 
-            onRead(tableName);
+            // rank() depends on every row in the partition — a single insert
+            // or delete can shift the position. Same SCAN_DEP semantics as
+            // count/aggregate so the reactive cache invalidates correctly.
+            onRead(tableName, SCAN_DEP);
 
             ensureRankBackfilled(tableName, index);
 
@@ -1776,7 +1779,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
             }
 
-            onRead(tableName);
+            // rankPage() is a paginated read over the rank companion; the
+            // result depends on every row in the partition, so SCAN_DEP
+            // matches count/aggregate semantics for cache invalidation.
+            onRead(tableName, SCAN_DEP);
 
             ensureRankBackfilled(tableName, index);
 
