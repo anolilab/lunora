@@ -29,7 +29,7 @@ export type {
     WriteEvent,
     WriteHook,
 } from "./ctx-db.js";
-export { backfillAggregateIndexes, createShardCtxDb, runShardMigrations } from "./ctx-db.js";
+export { backfillAggregateIndexes, backfillRankIndexes, createShardCtxDb, runShardMigrations } from "./ctx-db.js";
 export type {
     DataMigrationDocument,
     DataMigrationLike,
@@ -45,6 +45,8 @@ export type { ReadTablePageOptions, TableInfo, TablePage } from "./introspect.js
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args.js";
 export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
+export type { RankDirection, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult, RankSortKeyLike } from "./rank.js";
+export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank.js";
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations.js";
 export { applyOnDelete, resolveWith } from "./relations.js";
 export type { SessionRecord } from "./session-do.js";
