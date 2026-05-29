@@ -1,4 +1,22 @@
 export type {
+    ExportRow,
+    ExportShardAdminArgs,
+    ExportShardArgs,
+    ImportError,
+    ImportShardAdminArgs,
+    ImportShardArgs,
+    ImportShardResult,
+} from "./admin-export-import.js";
+export {
+    exportShardRows,
+    exportShardTable,
+    importShardRows,
+    parseExportShardArgs,
+    parseImportShardArgs,
+    selectExportTables,
+    validateImportRow,
+} from "./admin-export-import.js";
+export type {
     AggregateIndexDefinitionLike,
     AggregateOp,
     AggregateOptions,
@@ -49,7 +67,14 @@ export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefi
 export { applyOnDelete, resolveWith } from "./relations.js";
 export type { SessionRecord } from "./session-do.js";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
-export type { HibernatableWebSocket, RunShardMigrationArgs, ShardDOState, SubscriptionOutcome } from "./shard-do.js";
+export type {
+    HibernatableWebSocket,
+    RunShardExportArgs,
+    RunShardImportArgs,
+    RunShardMigrationArgs,
+    ShardDOState,
+    SubscriptionOutcome,
+} from "./shard-do.js";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "./shard-do.js";
 export type { TransactionSqlLike } from "./transaction.js";
 export { ConflictError, NotFoundError } from "./transaction.js";

@@ -15,6 +15,8 @@ export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
  * the values stay emittable under `--isolatedDeclarations`.
  */
 export const ADMIN_FUNCTIONS = {
+    exportShard: "__cirrus_admin__:exportShard",
+    importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
     migrationStatus: "__cirrus_admin__:migrationStatus",
     readTablePage: "__cirrus_admin__:readTablePage",

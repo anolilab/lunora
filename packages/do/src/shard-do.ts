@@ -1,6 +1,8 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { drizzle as drizzleDO, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
+import type { ExportRow, ImportShardResult } from "./admin-export-import.js";
+import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import.js";
 import type { SqlExec } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
 import { readMigrationStatus } from "./data-migration.js";
@@ -76,6 +78,18 @@ export interface RunShardMigrationArgs {
     dryRun?: boolean;
     id: string;
     maxBatches?: number;
+}
+
+/** Arguments accepted by the `__cirrus_admin__:exportShard` admin RPC. */
+export interface RunShardExportArgs {
+    batchSize?: number;
+    tables?: ReadonlyArray<string>;
+}
+
+/** Arguments accepted by the `__cirrus_admin__:importShard` admin RPC. */
+export interface RunShardImportArgs {
+    rows: ReadonlyArray<ExportRow>;
+    startLine?: number;
 }
 
 /** Per-subscription memo used to suppress no-op pushes. */
@@ -504,6 +518,31 @@ export abstract class ShardDO {
                 return jsonResponse({ result }, 200);
             }
 
+            if (functionPath === ADMIN_FUNCTIONS.exportShard) {
+                const parsed = parseExportShardArgs(args);
+
+                // The export reads through the writer; producing a streaming
+                // body would require coordinating with the worker's
+                // `ReadableStream`. We instead materialize the rows here and
+                // let the worker stitch shard responses into one NDJSON stream
+                // — each shard's JSON envelope is small (bounded by
+                // `batchSize` × tables) and the worker pipes them serially.
+                const rows = await this.runShardExport({ batchSize: parsed.batchSize, tables: parsed.tables });
+
+                return jsonResponse({ result: { rows } }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.importShard) {
+                const parsed = parseImportShardArgs(args);
+                const result = await this.runShardImport({ rows: parsed.rows, startLine: parsed.startLine });
+
+                // The import inserts rows through the writer, which records
+                // touched tables; flush so live subscribers re-run.
+                await this.flushChangedTables();
+
+                return jsonResponse({ result }, 200);
+            }
+
             return jsonResponse({ error: { code: "UNKNOWN_ADMIN_OP", message: `unknown admin op: ${functionPath}` } }, 404);
         } catch (error: unknown) {
             return this.errorToResponse(error);
@@ -521,6 +560,35 @@ export abstract class ShardDO {
         return Promise.reject(
             Object.assign(new Error(`data migration "${args.id}" is not registered`), { name: "CirrusError", code: "MIGRATION_NOT_FOUND", status: 404 }),
         );
+    }
+
+    /**
+     * Export every row this shard owns across the requested tables (or every
+     * shard-local user table when none are specified) as `{table, doc}` records.
+     * Globals are not the DO's concern; the worker reads those from D1.
+     *
+     * The base class can't build a schema-aware writer without seeing the user's
+     * `schema.ts`, so it returns an empty list; the codegen-generated subclass
+     * overrides this with `exportShardRows(...)` against the live writer.
+     */
+    protected runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
+        void args;
+
+        return Promise.resolve([]);
+    }
+
+    /**
+     * Re-insert a batch of `{table, doc}` rows on this shard, returning the
+     * per-table insert counts and a per-row error array. Schema-failed rows do
+     * not abort the batch — they're surfaced in `errors` and the rest land.
+     *
+     * The base class can't build a writer; the codegen subclass overrides this
+     * to call `importShardRows(...)` inside one transaction per batch.
+     */
+    protected runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
+        void args;
+
+        return Promise.resolve({ conflicts: 0, errors: [], inserted: {} });
     }
 
     /**

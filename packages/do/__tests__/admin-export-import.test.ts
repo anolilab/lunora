@@ -1,0 +1,351 @@
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+
+import type { ExportRow } from "../src/admin-export-import.js";
+import { exportShardRows, importShardRows, selectExportTables, validateImportRow } from "../src/admin-export-import.js";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
+import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { ADMIN_FUNCTIONS } from "../src/introspect.js";
+import type { RunShardExportArgs, RunShardImportArgs, ShardDOState } from "../src/shard-do.js";
+import { ShardDO } from "../src/shard-do.js";
+import { createSqliteExec } from "./_helpers/node-sqlite.js";
+
+const ADMIN_TOKEN = "s3cret-admin";
+
+const minimalParser = (kind: string) => ({
+    kind,
+    parse(value: unknown) {
+        if (kind === "string" && typeof value !== "string") {
+            throw new Error(`expected string, received ${typeof value}`);
+        }
+
+        if (kind === "number" && typeof value !== "number") {
+            throw new Error(`expected number, received ${typeof value}`);
+        }
+
+        if (kind === "boolean" && typeof value !== "boolean") {
+            throw new Error(`expected boolean, received ${typeof value}`);
+        }
+
+        return value;
+    },
+});
+
+const usersSchema: SchemaLike = {
+    tables: {
+        messages: {
+            indexes: [],
+            shape: {
+                channelId: minimalParser("string"),
+                text: minimalParser("string"),
+            },
+            shardMode: { kind: "shardBy", field: "channelId" } as never,
+        },
+        users: {
+            indexes: [],
+            shape: {
+                email: minimalParser("string"),
+                name: minimalParser("string"),
+            },
+        },
+    },
+};
+
+const globalUsersSchema: SchemaLike = {
+    tables: {
+        global: {
+            indexes: [],
+            shape: { value: minimalParser("string") },
+            shardMode: { kind: "global" } as never,
+        },
+        local: {
+            indexes: [],
+            shape: { value: minimalParser("string") },
+        },
+    },
+};
+
+describe("selectExportTables", () => {
+    test("returns every shard-local user table when no allowlist is given", () => {
+        expect(selectExportTables(usersSchema)).toEqual(["messages", "users"]);
+    });
+
+    test("filters out global tables", () => {
+        expect(selectExportTables(globalUsersSchema)).toEqual(["local"]);
+    });
+
+    test("respects an explicit allowlist (still skipping globals)", () => {
+        expect(selectExportTables(globalUsersSchema, ["global", "local"])).toEqual(["local"]);
+    });
+});
+
+describe("validateImportRow", () => {
+    test("accepts a well-formed row", () => {
+        expect(validateImportRow(usersSchema, "users", { email: "a@b.com", name: "Alice" })).toBeNull();
+    });
+
+    test("rejects a row whose field fails the validator", () => {
+        const result = validateImportRow(usersSchema, "users", { email: 42, name: "Alice" });
+
+        expect(result).toMatch(/email/);
+    });
+
+    test("ignores `_id` / `_creationTime` (framework-managed)", () => {
+        expect(
+            validateImportRow(usersSchema, "users", {
+                _creationTime: 1_700_000_000_000,
+                _id: "u1",
+                email: "a@b.com",
+                name: "Alice",
+            }),
+        ).toBeNull();
+    });
+
+    test("rejects unknown tables", () => {
+        expect(validateImportRow(usersSchema, "nope", {})).toMatch(/unknown table/);
+    });
+});
+
+describe("exportShardRows / importShardRows roundtrip", () => {
+    let db: ReturnType<typeof createSqliteExec>;
+    let writer: DatabaseWriterLike;
+
+    beforeEach(async () => {
+        db = createSqliteExec();
+        runShardMigrations(db.sql, usersSchema);
+        writer = createShardCtxDb({ schema: usersSchema, sql: db.sql });
+
+        for (let index = 1; index <= 3; index += 1) {
+            await writer.insert("users", { _id: `u${String(index)}`, name: `user ${String(index)}`, email: `u${String(index)}@x.io` });
+        }
+
+        for (let index = 1; index <= 2; index += 1) {
+            await writer.insert("messages", { _id: `m${String(index)}`, channelId: "c1", text: `msg ${String(index)}` });
+        }
+    });
+
+    afterEach(() => {
+        db.close();
+    });
+
+    test("exports every row across tables", async () => {
+        const rows: ExportRow[] = [];
+
+        for await (const row of exportShardRows(writer, usersSchema, {})) {
+            rows.push(row);
+        }
+
+        expect(rows).toHaveLength(5);
+        expect(rows.filter((r) => r.table === "users")).toHaveLength(3);
+        expect(rows.filter((r) => r.table === "messages")).toHaveLength(2);
+    });
+
+    test("respects a table allowlist", async () => {
+        const rows: ExportRow[] = [];
+
+        for await (const row of exportShardRows(writer, usersSchema, { tables: ["users"] })) {
+            rows.push(row);
+        }
+
+        expect(rows.map((r) => r.table)).toEqual(["users", "users", "users"]);
+    });
+
+    test("import inserts a batch and surfaces per-table counts", async () => {
+        const freshDb = createSqliteExec();
+
+        runShardMigrations(freshDb.sql, usersSchema);
+        const freshWriter = createShardCtxDb({ schema: usersSchema, sql: freshDb.sql });
+
+        const rows: ExportRow[] = [
+            { doc: { _id: "u9", email: "n@x.io", name: "Nina" }, table: "users" },
+            { doc: { _id: "u10", email: "k@x.io", name: "Kai" }, table: "users" },
+            { doc: { _id: "m9", channelId: "c1", text: "hello" }, table: "messages" },
+        ];
+
+        const result = await importShardRows(freshWriter, usersSchema, { rows });
+
+        expect(result.inserted).toEqual({ users: 2, messages: 1 });
+        expect(result.errors).toEqual([]);
+        expect(result.conflicts).toBe(0);
+
+        await expect(freshWriter.get("u9")).resolves.toMatchObject({ name: "Nina" });
+        await expect(freshWriter.get("m9")).resolves.toMatchObject({ text: "hello" });
+
+        freshDb.close();
+    });
+
+    test("schema-failed rows do not abort the batch — they're reported in errors[]", async () => {
+        const freshDb = createSqliteExec();
+
+        runShardMigrations(freshDb.sql, usersSchema);
+        const freshWriter = createShardCtxDb({ schema: usersSchema, sql: freshDb.sql });
+
+        const rows: ExportRow[] = [
+            { doc: { _id: "u9", email: "ok@x.io", name: "Nina" }, table: "users" },
+            { doc: { _id: "u10", email: 42, name: "Kai" }, table: "users" } as unknown as ExportRow,
+            { doc: { _id: "u11", email: "ok@x.io", name: "May" }, table: "users" },
+        ];
+
+        const result = await importShardRows(freshWriter, usersSchema, { rows, startLine: 10 });
+
+        expect(result.inserted).toEqual({ users: 2 });
+        expect(result.errors).toHaveLength(1);
+        expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", line: 11, table: "users" });
+
+        freshDb.close();
+    });
+
+    test("a row whose _id collides with an existing doc is skipped and counted as a conflict", async () => {
+        const rows: ExportRow[] = [
+            { doc: { _id: "u1", email: "should-not-overwrite@x.io", name: "Doppel" }, table: "users" },
+            { doc: { _id: "u99", email: "ok@x.io", name: "Fresh" }, table: "users" },
+        ];
+
+        const result = await importShardRows(writer, usersSchema, { rows });
+
+        expect(result.conflicts).toBe(1);
+        expect(result.inserted).toEqual({ users: 1 });
+
+        // The original row is still there, unchanged.
+        const existing = (await writer.get("u1")) as Record<string, unknown> | null;
+
+        expect(existing).toMatchObject({ email: "u1@x.io" });
+    });
+
+    test("roundtrip: export then import into a fresh shard produces identical rows", async () => {
+        const exported: ExportRow[] = [];
+
+        for await (const row of exportShardRows(writer, usersSchema, {})) {
+            exported.push(row);
+        }
+
+        const freshDb = createSqliteExec();
+
+        runShardMigrations(freshDb.sql, usersSchema);
+
+        const freshWriter = createShardCtxDb({ schema: usersSchema, sql: freshDb.sql });
+
+        const result = await importShardRows(freshWriter, usersSchema, { rows: exported });
+
+        expect(result.inserted).toEqual({ users: 3, messages: 2 });
+        expect(result.errors).toEqual([]);
+
+        for (const original of exported) {
+            const id = original.doc["_id"] as string;
+            const reloaded = (await freshWriter.get(id)) as Record<string, unknown> | null;
+
+            expect(reloaded).not.toBeNull();
+            expect(reloaded!["_id"]).toBe(id);
+
+            for (const [key, value] of Object.entries(original.doc)) {
+                expect(reloaded![key]).toEqual(value);
+            }
+        }
+
+        freshDb.close();
+    });
+});
+
+class ExportShardImpl extends ShardDO {
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
+        const writer = createShardCtxDb({ schema: usersSchema, sql: this.sql as never });
+        const rows: ExportRow[] = [];
+
+        return (async () => {
+            for await (const row of exportShardRows(writer, usersSchema, args)) {
+                rows.push(row);
+            }
+
+            return rows;
+        })();
+    }
+
+    protected override async runShardImport(args: RunShardImportArgs) {
+        const writer = createShardCtxDb({
+            broadcast: (delta) => {
+                this.recordChangedTable(delta.table);
+            },
+            schema: usersSchema,
+            sql: this.sql as never,
+        });
+
+        return importShardRows(writer, usersSchema, args);
+    }
+}
+
+describe("shardDO admin export/import dispatch", () => {
+    let db: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(async () => {
+        db = createSqliteExec();
+        runShardMigrations(db.sql, usersSchema);
+
+        const writer = createShardCtxDb({ schema: usersSchema, sql: db.sql });
+
+        await writer.insert("users", { _id: "u1", email: "a@b.com", name: "Alice" });
+        await writer.insert("messages", { _id: "m1", channelId: "c1", text: "hi" });
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: db.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        db.close();
+    });
+
+    const adminRequest = (functionPath: string, args: Record<string, unknown>): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    test("dispatches exportShard and returns rows", async () => {
+        const shard = new ExportShardImpl(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.exportShard, {}));
+
+        expect(response.status).toBe(200);
+
+        const body = (await response.json()) as { result: { rows: ExportRow[] } };
+
+        expect(body.result.rows).toHaveLength(2);
+        expect(body.result.rows.map((r) => r.table).sort()).toEqual(["messages", "users"]);
+    });
+
+    test("dispatches importShard and inserts rows", async () => {
+        const shard = new ExportShardImpl(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.importShard, {
+                rows: [
+                    { doc: { _id: "u2", email: "b@b.com", name: "Bob" }, table: "users" },
+                ],
+            }),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = (await response.json()) as { result: { errors: unknown[]; inserted: Record<string, number> } };
+
+        expect(body.result.inserted).toEqual({ users: 1 });
+        expect(body.result.errors).toEqual([]);
+    });
+
+    test("rejects without an admin token", async () => {
+        const shard = new ExportShardImpl(state, {});
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.exportShard, {}));
+
+        expect(response.status).toBe(403);
+    });
+});
