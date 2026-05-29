@@ -26,6 +26,7 @@
         "test": "vitest run"
     },
     "devDependencies": {
+        "@cirrus/do": "workspace:*",
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",

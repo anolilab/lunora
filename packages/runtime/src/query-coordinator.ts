@@ -236,9 +236,92 @@ export interface MigrationFanOutResult {
 
 export interface QueryCoordinator {
     fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
+    /**
+     * Fan an export admin RPC out to every live shard, returning the
+     * per-shard `{rows}` payloads alongside any per-shard errors. Each shard
+     * returns a JSON envelope (not a streaming body) so this method is the
+     * collector — the worker assembles the NDJSON stream.
+     */
+    orchestrateExport: (namespace: ShardNamespaceLike, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
+    /**
+     * Fan an import admin RPC out by routing each row to its owning shard. The
+     * shard registry resolves which shards exist; rows whose table has a
+     * `shardBy(field)` are bucketed using that field's value as the shard key,
+     * other tables fall back to the runtime's default `__root__` shard.
+     */
+    orchestrateImport: (namespace: ShardNamespaceLike, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
     /** Fan a migration admin RPC out to every live shard of a table and roll up the per-shard outcomes. */
     orchestrateMigration: (namespace: ShardNamespaceLike, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
     readonly registry: ShardRegistry;
+}
+
+/**
+ * Cross-shard export request. `tables` is the union of every table the caller
+ * wants exported (shard-local **or** global); `headers` carries the admin
+ * bearer the per-shard gate expects. Shard registries are queried for the
+ * complete set of live shards across all listed shard-local tables.
+ */
+export interface ExportFanOutRequest {
+    args?: Record<string, unknown>;
+    headers?: Record<string, string>;
+    /**
+     * Tables driving the fan-out. Shards are derived from the union of each
+     * table's live shard keys — so an export of `["users","messages"]` reaches
+     * every shard that holds either table. Globals are skipped here; the
+     * worker reads them from D1 directly.
+     */
+    tables: ReadonlyArray<string>;
+}
+
+/** Per-shard export outcome. */
+export interface ShardExportOutcome {
+    error?: { message: string; timedOut: boolean };
+    /** Rows from this shard, or undefined when an error occurred. */
+    rows?: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>;
+    shardKey: string;
+}
+
+export interface ExportFanOutResult {
+    failed: number;
+    ok: number;
+    shards: readonly ShardExportOutcome[];
+}
+
+/**
+ * Cross-shard import request. Rows have already been bucketed by the runtime
+ * into one batch per shard key — the coordinator's job is to forward each
+ * batch and roll up the per-shard insert counts + errors.
+ */
+export interface ImportFanOutRequest {
+    /**
+     * Per-shard batches keyed by shard key. Each entry will be POSTed as the
+     * `rows` arg of `__cirrus_admin__:importShard`. The shard's
+     * starting-line-number for error attribution is carried in `startLine`.
+     */
+    batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
+    headers?: Record<string, string>;
+}
+
+export interface ShardImportOutcome {
+    error?: { message: string; timedOut: boolean };
+    result?: {
+        conflicts: number;
+        errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
+        inserted: Record<string, number>;
+    };
+    shardKey: string;
+}
+
+export interface ImportFanOutResult {
+    /** Total conflicts (skipped `_id`s) across shards. */
+    conflicts: number;
+    /** Errors merged across all per-shard outcomes. */
+    errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
+    failed: number;
+    /** Per-table summed insert counts. */
+    inserted: Record<string, number>;
+    ok: number;
+    shards: readonly ShardImportOutcome[];
 }
 
 const DEFAULT_CONCURRENCY = 16;
@@ -286,6 +369,74 @@ export const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryC
             const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
 
             return rollUpMigration(results);
+        },
+        async orchestrateExport(namespace: ShardNamespaceLike, request: ExportFanOutRequest): Promise<ExportFanOutResult> {
+            // Union the shard keys across all requested shard-local tables so
+            // an export of `["users","messages"]` reaches every shard that
+            // holds either table. Skip globals — they live in D1, not a DO.
+            const union = new Set<string>();
+
+            for (const table of request.tables) {
+                const keys = await options.registry.listShardKeys(table);
+
+                for (const key of keys) {
+                    union.add(key);
+                }
+            }
+
+            const shardKeys = [...union];
+
+            const exportRequest: ShardRpcRequest = {
+                args: { tables: [...request.tables] },
+                functionPath: "__cirrus_admin__:exportShard",
+                headers: request.headers,
+            };
+
+            const results = await runBoundedFanOut(namespace, shardKeys, exportRequest, maxConcurrency, perShardTimeoutMs);
+
+            return rollUpExport(results);
+        },
+        async orchestrateImport(namespace: ShardNamespaceLike, request: ImportFanOutRequest): Promise<ImportFanOutResult> {
+            // Each shard gets its own pre-bucketed batch — we can't reuse
+            // `runBoundedFanOut` because that helper sends the same args to
+            // every shard. The structure mirrors it: bounded `Promise.all`
+            // workers pulling jobs off a shared cursor.
+            const { batches } = request;
+            const outcomes: ShardRpcOutcome[] = Array.from({ length: batches.length });
+            let cursor = 0;
+
+            const concurrency = Math.min(maxConcurrency, batches.length);
+
+            const worker = async (): Promise<void> => {
+                while (true) {
+                    const index = cursor;
+
+                    cursor += 1;
+
+                    if (index >= batches.length) {
+                        return;
+                    }
+
+                    const batch = batches[index]!;
+
+                    outcomes[index] = await callOneShard(
+                        namespace,
+                        batch.shardKey,
+                        {
+                            args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
+                            functionPath: "__cirrus_admin__:importShard",
+                            headers: request.headers,
+                        },
+                        perShardTimeoutMs,
+                    );
+                }
+            };
+
+            if (concurrency > 0) {
+                await Promise.all(Array.from({ length: concurrency }, () => worker()));
+            }
+
+            return rollUpImport(outcomes);
         },
         registry: options.registry,
     };
@@ -355,6 +506,83 @@ const rollUpMigration = (results: readonly ShardRpcOutcome[]): MigrationFanOutRe
     }
 
     return { changed, failed, ok, processed, shards, status: rollUpStatus(anyFailed, anyInProgress || failed > 0) };
+};
+
+/**
+ * Roll per-shard export outcomes into a flat list. The DO admin handler
+ * returns `{result: {rows: [...]}}` — `unwrapResult` peels the envelope and we
+ * project the inner `rows` array; an error surfaces an empty `rows` so the
+ * caller can write the failed-shard entries without a special case.
+ */
+const rollUpExport = (results: readonly ShardRpcOutcome[]): ExportFanOutResult => {
+    const shards: ShardExportOutcome[] = [];
+    let ok = 0;
+    let failed = 0;
+
+    for (const result of results) {
+        if (result.kind === "err") {
+            failed += 1;
+            shards.push({ error: { message: result.message, timedOut: result.timedOut }, shardKey: result.shardKey });
+            continue;
+        }
+
+        ok += 1;
+
+        const payload = unwrapResult(result.value) as { rows?: ReadonlyArray<{ doc: Record<string, unknown>; table: string }> };
+        const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+
+        shards.push({ rows, shardKey: result.shardKey });
+    }
+
+    return { failed, ok, shards };
+};
+
+/** Sum the per-shard import counts/errors into a single roll-up. */
+const rollUpImport = (results: readonly ShardRpcOutcome[]): ImportFanOutResult => {
+    const shards: ShardImportOutcome[] = [];
+    const inserted: Record<string, number> = {};
+    const errors: { code: string; line: number; message: string; table: string }[] = [];
+    let conflicts = 0;
+    let ok = 0;
+    let failed = 0;
+
+    for (const result of results) {
+        if (result.kind === "err") {
+            failed += 1;
+            shards.push({ error: { message: result.message, timedOut: result.timedOut }, shardKey: result.shardKey });
+            continue;
+        }
+
+        ok += 1;
+
+        const payload = unwrapResult(result.value) as {
+            conflicts?: number;
+            errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
+            inserted?: Record<string, number>;
+        };
+        const shardInserted = payload?.inserted ?? {};
+
+        for (const [table, count] of Object.entries(shardInserted)) {
+            inserted[table] = (inserted[table] ?? 0) + Number(count);
+        }
+
+        if (Array.isArray(payload?.errors)) {
+            errors.push(...payload.errors);
+        }
+
+        conflicts += Number(payload?.conflicts ?? 0);
+
+        shards.push({
+            result: {
+                conflicts: Number(payload?.conflicts ?? 0),
+                errors: payload?.errors ?? [],
+                inserted: shardInserted,
+            },
+            shardKey: result.shardKey,
+        });
+    }
+
+    return { conflicts, errors, failed, inserted, ok, shards };
 };
 
 interface ShardRpcOk {

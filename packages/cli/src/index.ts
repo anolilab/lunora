@@ -1,6 +1,8 @@
 export type { CommandName, RunCliOptions } from "./cli.js";
 export { COMMANDS, runCli, VERSION } from "./cli.js";
 export { runCodegenCommand } from "./commands/codegen.js";
+export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, ImportCommandResult, StreamingFetchLike } from "./commands/data-transfer.js";
+export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand } from "./commands/data-transfer.js";
 export type { DeployCommandOptions, DeployCommandResult } from "./commands/deploy.js";
 export { runDeployCommand } from "./commands/deploy.js";
 export type { DevCommandOptions, DevCommandPlan, DevMode } from "./commands/dev.js";
