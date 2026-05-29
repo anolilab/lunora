@@ -1,0 +1,487 @@
+/**
+ * Wiring tests: cache + ctx-db + shard-do together. Uses node's experimental
+ * SQLite (the same backend the existing ctx-db tests run against) so we
+ * exercise the real `onRead`/write-invalidation seam end-to-end.
+ */
+import { DatabaseSync } from "node:sqlite";
+
+import { beforeEach, describe, expect, test, vi } from "vitest";
+
+import { createShardCtxDb, runShardMigrations, type SchemaLike, type SqlExec } from "../src/ctx-db.js";
+import { ReactiveCache, reactiveCacheKey } from "../src/reactive-cache.js";
+import type { ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do.js";
+import { ShardDO } from "../src/shard-do.js";
+import type { SocketAttachment, SubscriptionEnvelope } from "../src/types.js";
+
+interface NodeStatement {
+    all: (...params: unknown[]) => Record<string, unknown>[];
+    get: (...params: unknown[]) => Record<string, unknown> | undefined;
+    run: (...params: unknown[]) => void;
+}
+
+const makeSql = (): SqlExec & { __raw: DatabaseSync } => {
+    const database = new DatabaseSync(":memory:");
+
+    return {
+        __raw: database,
+        exec: <Row = Record<string, unknown>>(sqlText: string, ...params: unknown[]) => {
+            const stmt = database.prepare(sqlText) as unknown as NodeStatement;
+            const rows = stmt.all(...params) as unknown as Row[];
+
+            return {
+                [Symbol.iterator]: () => rows[Symbol.iterator](),
+                one: () => rows[0] as Row,
+                toArray: () => rows,
+            };
+        },
+    };
+};
+
+const schema: SchemaLike = {
+    tables: {
+        users: {
+            indexes: [],
+            shape: {
+                name: { kind: "string" },
+            },
+        },
+        messages: {
+            indexes: [],
+            shape: {
+                text: { kind: "string" },
+                ownerId: { kind: "string" },
+            },
+        },
+    },
+};
+
+const newDb = () => {
+    const sql = makeSql();
+
+    runShardMigrations(sql, schema);
+
+    return sql;
+};
+
+describe("ctx-db + reactiveCache integration", () => {
+    test("insert invalidates the inserted row id AND the table's *scan deps", async () => {
+        const sql = newDb();
+        const cache = new ReactiveCache();
+        const writer = createShardCtxDb({ sql, schema, cache });
+
+        // Seed a row so we have something to read.
+        const u1 = await writer.insert("users", { name: "alice" });
+
+        // Pretend a query ran and recorded both per-id and *scan deps.
+        const tracker = new Set([`users:${u1}`]);
+        const scanTracker = new Set(["users:*scan"]);
+
+        await cache.run("byId", tracker, async () => ({ name: "alice" }));
+        await cache.run("listAll", scanTracker, async () => [{ name: "alice" }]);
+
+        expect(cache.size().entries).toBe(2);
+
+        // Insert a NEW user — neither cache entry's per-id dep matches, but
+        // the *scan entry MUST blow because any new row could appear in a
+        // scan-shaped result.
+        await writer.insert("users", { name: "bob" });
+
+        // listAll (*scan) is gone; byId (u1) survives.
+        expect(cache.size().entries).toBe(1);
+
+        // Confirm byId is still cached by re-running with a poisoned executor.
+        const cached = await cache.run("byId", tracker, async () => {
+            throw new Error("byId should still be cached");
+        });
+
+        expect(cached).toEqual({ name: "alice" });
+    });
+
+    test("patch invalidates the row's per-id deps AND *scan entries", async () => {
+        const sql = newDb();
+        const cache = new ReactiveCache();
+        const writer = createShardCtxDb({ sql, schema, cache });
+        const u1 = await writer.insert("users", { name: "alice" });
+
+        await cache.run("byId", new Set([`users:${u1}`]), async () => ({ name: "alice" }));
+        await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
+
+        await writer.patch(u1, { name: "ALICE" });
+
+        // Both go: per-id (u1 was patched) and *scan (predicate might flip).
+        expect(cache.size().entries).toBe(0);
+    });
+
+    test("delete invalidates the row's per-id deps AND *scan entries", async () => {
+        const sql = newDb();
+        const cache = new ReactiveCache();
+        const writer = createShardCtxDb({ sql, schema, cache });
+        const u1 = await writer.insert("users", { name: "alice" });
+
+        await cache.run("byId", new Set([`users:${u1}`]), async () => ({ name: "alice" }));
+        await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
+
+        await writer.delete(u1);
+
+        expect(cache.size().entries).toBe(0);
+    });
+
+    test("writes to one table do not blow cache entries on another table", async () => {
+        const sql = newDb();
+        const cache = new ReactiveCache();
+        const writer = createShardCtxDb({ sql, schema, cache });
+
+        await cache.run("messagesScan", new Set(["messages:*scan"]), async () => []);
+        await cache.run("usersScan", new Set(["users:*scan"]), async () => []);
+
+        await writer.insert("users", { name: "alice" });
+
+        // usersScan invalidated; messagesScan untouched.
+        expect(cache.size().entries).toBe(1);
+
+        const survivor = await cache.run("messagesScan", new Set(["messages:*scan"]), async () => {
+            throw new Error("messagesScan should still be cached");
+        });
+
+        expect(survivor).toEqual([]);
+    });
+
+    test("reads via writer.get stamp per-id deps on the configured ReadHook", async () => {
+        const sql = newDb();
+        const reads: { idOrScan?: string; table: string }[] = [];
+        const writer = createShardCtxDb({
+            sql,
+            schema,
+            onRead: (table, idOrScan) => {
+                reads.push({ table, idOrScan });
+            },
+        });
+        const u1 = await writer.insert("users", { name: "alice" });
+
+        reads.length = 0;
+        await writer.get(u1);
+
+        expect(reads).toEqual([{ table: "users", idOrScan: u1 }]);
+    });
+
+    test("findMany without where stamps *scan, with where stamps per-row ids", async () => {
+        const sql = newDb();
+        const reads: { idOrScan?: string; table: string }[] = [];
+        const writer = createShardCtxDb({
+            sql,
+            schema,
+            onRead: (table, idOrScan) => {
+                reads.push({ table, idOrScan });
+            },
+        });
+        const a = await writer.insert("users", { name: "alice" });
+        const b = await writer.insert("users", { name: "bob" });
+
+        reads.length = 0;
+        await writer.findMany("users");
+
+        // Full scan: one *scan stamp, no per-row stamps.
+        expect(reads).toEqual([{ table: "users", idOrScan: "*scan" }]);
+
+        reads.length = 0;
+        await writer.findMany("users", { where: { name: "alice" } });
+
+        // Predicated scan: leading bare-table stamp (legacy), plus per-row id stamp.
+        expect(reads).toContainEqual({ table: "users", idOrScan: a });
+        expect(reads).not.toContainEqual({ table: "users", idOrScan: b });
+    });
+
+    test("count() registers *scan deps so any write to the table invalidates the cached count", async () => {
+        const sql = newDb();
+        const reads: { idOrScan?: string; table: string }[] = [];
+        const writer = createShardCtxDb({
+            sql,
+            schema,
+            onRead: (table, idOrScan) => {
+                reads.push({ table, idOrScan });
+            },
+        });
+
+        await writer.insert("users", { name: "alice" });
+
+        reads.length = 0;
+        await writer.count("users");
+
+        expect(reads).toEqual([{ table: "users", idOrScan: "*scan" }]);
+    });
+});
+
+interface FakeWebSocket {
+    attachment: SocketAttachment | undefined;
+    close: () => void;
+    deserializeAttachment: () => unknown;
+    send: (data: string) => void;
+    sent: string[];
+    serializeAttachment: (value: unknown) => void;
+}
+
+const createFakeWebSocket = (): FakeWebSocket => ({
+    sent: [],
+    attachment: undefined,
+    send(data: string) {
+        this.sent.push(data);
+    },
+    close() {},
+    serializeAttachment(value: unknown) {
+        this.attachment = value as SocketAttachment | undefined;
+    },
+    deserializeAttachment() {
+        return this.attachment;
+    },
+});
+
+const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
+    const sockets: FakeWebSocket[] = [];
+
+    return {
+        sockets,
+        storage: { sql: { exec: vi.fn() } },
+        acceptWebSocket(ws) {
+            sockets.push(ws as unknown as FakeWebSocket);
+        },
+        getWebSockets() {
+            return sockets as unknown as WebSocket[];
+        },
+    };
+};
+
+/**
+ * Subclass that exposes `runCachedQuery` to handler code, lets us drive a fake
+ * dispatch table, and stamps deps via the base class's read-hook adapter. The
+ * test then drives RPC + subscribe + mutation to verify the bridge re-runs
+ * subscribers when the cache invalidates.
+ */
+class CachingShard extends ShardDO {
+    public handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+
+    public execCount = new Map<string, number>();
+
+    public mutationTablesToInvalidate: { id: string; table: string }[] = [];
+
+    public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
+        super(state, env, options);
+    }
+
+    public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        // Mutations advertise a table they wrote; the test fixture invalidates
+        // through the cache directly so we don't need a real ctx-db here.
+        if (functionPath.startsWith("mutation:")) {
+            for (const { table, id } of this.mutationTablesToInvalidate) {
+                this.reactiveCache?.invalidate(table, id);
+                this.recordChangedTable(table);
+            }
+
+            return { ok: true };
+        }
+
+        return this.runCachedQuery(functionPath, args, async () => {
+            const handler = this.handlers.get(functionPath);
+
+            if (!handler) {
+                throw new Error(`no handler for ${functionPath}`);
+            }
+
+            this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
+
+            return handler(args);
+        });
+    }
+
+    protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        const handler = this.handlers.get(functionPath);
+
+        if (!handler) {
+            return Promise.resolve(null);
+        }
+
+        return this.runCachedQuery(functionPath, args, async () => {
+            this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
+
+            return handler(args);
+        }).then((result) => ({ result, tables: new Set(["users"]) }));
+    }
+
+    public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment = { subs: {} }): void {
+        this.state.acceptWebSocket(ws as unknown as WebSocket);
+        ws.serializeAttachment(attachment);
+    }
+
+    public driveMessage(ws: FakeWebSocket, envelope: SubscriptionEnvelope): Promise<void> {
+        return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
+    }
+
+    /**
+     * Test-only: simulate a read inside the in-flight handler by calling the
+     * tracker that `runCachedQuery` installed. Real subclasses would plumb
+     * `getCtxDbReadHook()` into `createShardCtxDb`'s `onRead` option; this
+     * test fakes that wiring inline so we don't need to build a full ctx
+     * stack just to assert the cache-tracker contract.
+     */
+    public stampRead(table: string, idOrScan: string): void {
+        const hook = this.getCtxDbReadHook();
+
+        hook(table, idOrScan);
+    }
+
+    /** Test-only: expose the protected `reactiveCache` field for assertions. */
+    public cacheRef(): typeof this.reactiveCache {
+        return this.reactiveCache;
+    }
+}
+
+describe("shardDO + reactiveCache: dispatch path", () => {
+    let state: ReturnType<typeof createFakeState>;
+    let shard: CachingShard;
+
+    beforeEach(() => {
+        state = createFakeState();
+        shard = new CachingShard(state, {}, { reactiveCache: {} });
+    });
+
+    test("cache hit: identical query+args runs handler once across two RPC dispatches", async () => {
+        shard.handlers.set("users:list", async () => {
+            shard.stampRead("users", "*scan");
+
+            return [{ name: "alice" }];
+        });
+
+        await shard.handleRpc("users:list", {});
+        await shard.handleRpc("users:list", {});
+
+        expect(shard.execCount.get("users:list")).toBe(1);
+    });
+
+    test("args sensitivity: different args go to different cache slots", async () => {
+        shard.handlers.set("users:list", async (args) => {
+            shard.stampRead("users", "*scan");
+
+            return [args];
+        });
+
+        await shard.handleRpc("users:list", { limit: 10 });
+        await shard.handleRpc("users:list", { limit: 20 });
+        await shard.handleRpc("users:list", { limit: 10 });
+
+        expect(shard.execCount.get("users:list")).toBe(2);
+    });
+
+    test("opt-out: when no ReactiveCacheOptions is supplied, every dispatch re-runs (today's default)", async () => {
+        const uncached = new CachingShard(state, {});
+
+        uncached.handlers.set("users:list", async () => {
+            return [{ name: "alice" }];
+        });
+
+        await uncached.handleRpc("users:list", {});
+        await uncached.handleRpc("users:list", {});
+
+        expect(uncached.execCount.get("users:list")).toBe(2);
+    });
+
+    test("rLS interaction: restrictsCounts + baseWhere bake into the cache key", async () => {
+        shard.handlers.set("users:count", async () => 1);
+
+        await shard.handleRpc("users:count", {});
+        await shard.handleRpc("users:count", { restrictsCounts: true, baseWhere: { ownerId: "u1" } });
+        await shard.handleRpc("users:count", {});
+
+        // 2 slots: unrestricted (hit twice) and restricted (hit once).
+        expect(shard.execCount.get("users:count")).toBe(2);
+    });
+});
+
+describe("shardDO + reactiveCache: subscription bridge", () => {
+    let state: ReturnType<typeof createFakeState>;
+    let shard: CachingShard;
+
+    beforeEach(() => {
+        state = createFakeState();
+        shard = new CachingShard(state, {}, { reactiveCache: {} });
+    });
+
+    test("subscriber registered on a cached query gets a re-run + push when a mutation invalidates", async () => {
+        let counter = 0;
+
+        shard.handlers.set("users:list", async () => {
+            shard.stampRead("users", "*scan");
+            counter += 1;
+
+            return { version: counter };
+        });
+
+        // First HTTP dispatch lands the entry.
+        await shard.handleRpc("users:list", {});
+        // Subscribe explicitly on the cache key so the entry is pinned.
+        const key = reactiveCacheKey("users:list", {});
+
+        shard.cacheRef()?.subscribe(key, "sub-a");
+
+        // Open a WS subscription so refreshSubscriptions picks it up.
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await shard.driveMessage(ws, { type: "subscribe", id: "sub-a", query: { functionPath: "users:list", args: {} } });
+
+        const sentBefore = ws.sent.length;
+
+        // Mutate: invalidate the *scan entry + record changed table to
+        // trigger the bridge.
+        shard.mutationTablesToInvalidate = [{ table: "users", id: "irrelevant" }];
+        await shard.fetch(new Request("https://shard.internal/rpc", {
+            method: "POST",
+            body: JSON.stringify({ functionPath: "mutation:write", args: {} }),
+            headers: { "content-type": "application/json" },
+        }));
+
+        // The query re-ran and a fresh data frame went out.
+        const sentAfter = ws.sent.length;
+
+        expect(sentAfter).toBeGreaterThan(sentBefore);
+        // Counter advanced: initial subscribe seed + post-mutation refresh.
+        expect(counter).toBeGreaterThanOrEqual(2);
+
+        const data = ws.sent.filter((line) => JSON.parse(line).type === "data");
+        const lastPayload = JSON.parse(data.at(-1)!);
+
+        expect(lastPayload).toMatchObject({ id: "sub-a", type: "data" });
+    });
+
+    test("invalidation BEFORE broadcast: re-run after mutation sees post-write state", async () => {
+        const sequence: string[] = [];
+
+        shard.handlers.set("users:list", async () => {
+            shard.stampRead("users", "*scan");
+            sequence.push("query");
+
+            return Date.now();
+        });
+
+        await shard.handleRpc("users:list", {});
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await shard.driveMessage(ws, { type: "subscribe", id: "sub-a", query: { functionPath: "users:list", args: {} } });
+
+        // Mutation invalidates + records changed table; the bridge MUST see
+        // the cleared cache when it re-runs (otherwise the subscriber gets
+        // a stale memoized result).
+        shard.mutationTablesToInvalidate = [{ table: "users", id: "irrelevant" }];
+        sequence.length = 0;
+
+        await shard.fetch(new Request("https://shard.internal/rpc", {
+            method: "POST",
+            body: JSON.stringify({ functionPath: "mutation:write", args: {} }),
+            headers: { "content-type": "application/json" },
+        }));
+
+        // The handler ran AT LEAST once during the refresh — proves cache
+        // was empty when refresh kicked in.
+        expect(sequence.filter((s) => s === "query").length).toBeGreaterThanOrEqual(1);
+    });
+});

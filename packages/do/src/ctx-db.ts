@@ -29,8 +29,10 @@
 
 import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates.js";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForCount } from "./aggregates.js";
+import { SCAN_DEP } from "./dependency-tracker.js";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
+import type { ReactiveCache } from "./reactive-cache.js";
 import type { RelationDefinitionLike } from "./relations.js";
 import { applyOnDelete, resolveWith } from "./relations.js";
 import { ConflictError, NotFoundError } from "./transaction.js";
@@ -111,11 +113,22 @@ export interface ValidatorLike {
 export type BroadcastDelta = (delta: MutationDelta) => void;
 
 /**
- * Records that a query touched `table`. Wired only during subscription
- * re-execution so the DO learns which tables a query depends on; the normal
- * mutation path leaves it unset (default no-op) to avoid spurious reads.
+ * Records that a query touched `table`. Wired during subscription re-execution
+ * so the DO learns which tables a query depends on, AND by the reactive query
+ * cache so it can index entries by the rows they read.
+ *
+ * The optional `idOrScan` parameter is the row id when the read resolved a
+ * single row (via `get` / `findFirst` / `findFirstOrThrow`) or fell out of a
+ * `findMany` page, and the literal `"*scan"` sentinel (from
+ * `dependency-tracker.ts`) when the read swept the whole table (no index, no
+ * `where` reducing it to a small set). Callers that only care about
+ * table-level granularity (the legacy subscription bridge) ignore the second
+ * argument.
+ *
+ * The normal mutation path leaves the hook unset (default no-op) to avoid
+ * spurious reads.
  */
-export type ReadHook = (table: string) => void;
+export type ReadHook = (table: string, idOrScan?: string) => void;
 
 /** Pluggable wall clock — defaults to `Date.now`. */
 export type Clock = () => number;
@@ -140,6 +153,19 @@ export type WriteHook = (event: WriteEvent) => Promise<void> | void;
 
 export interface CtxDbOptions {
     broadcast?: BroadcastDelta;
+    /**
+     * Optional reactive cache. When supplied, every write (`insert`, `patch`,
+     * `replace`, `delete`) invalidates the rows it touches via
+     * `cache.invalidate(table, id)`; inserts additionally invalidate the
+     * table's `*scan` entries because a new row can change the result of any
+     * scan-based query (e.g. `findMany` without an index). Reads are NOT
+     * memoized at this layer — the cache wraps the query dispatch path in
+     * `shard-do.ts` so caching decisions stay at the function boundary; this
+     * surface only handles the invalidation half of the contract.
+     *
+     * Leave undefined to keep the legacy zero-cost behavior.
+     */
+    cache?: ReactiveCache;
     clock?: Clock;
     idGenerator?: IdGenerator;
     onRead?: ReadHook;
@@ -1024,6 +1050,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const broadcast = options.broadcast ?? (() => undefined);
     const onRead = options.onRead ?? (() => undefined);
     const onWrite = options.onWrite ?? (() => undefined);
+    const { cache } = options;
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const scheduler = options.scheduler ?? throwingScheduler;
@@ -1197,7 +1224,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 return null;
             }
 
-            onRead(tableName);
+            onRead(tableName, id);
 
             const cursor = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
             const rows = cursor.toArray();
@@ -1206,7 +1233,12 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         query(tableName) {
-            onRead(tableName);
+            // Fluent reader chain: we can't tell up front whether the caller
+            // will end with `.withIndex(...)` or a bare scan, so we stamp the
+            // safe upper bound (`*scan`). Future refinement would push the
+            // hook into `buildReader`'s terminal `runFetch` so an indexed read
+            // can record per-id deps.
+            onRead(tableName, SCAN_DEP);
 
             return buildReader(sql, schema, tableName);
         },
@@ -1216,7 +1248,17 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            onRead(tableName);
+            // A query with no `where` and no `baseWhere` is a true full-table
+            // scan — every write to the table can flip its result, so stamp
+            // the `*scan` marker. Predicated queries fall through to per-row
+            // stamping after the rows resolve below.
+            const isFullScan = !args.where && !args.baseWhere;
+
+            if (isFullScan) {
+                onRead(tableName, SCAN_DEP);
+            } else {
+                onRead(tableName);
+            }
 
             const orderKeys = normalizeOrderKeys(args.orderBy);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
@@ -1255,6 +1297,14 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                 if (doc) {
                     docs.push(doc);
+
+                    // For predicated reads we know exactly which rows matched
+                    // — stamp each so the cache only invalidates when one of
+                    // them actually changes. Full scans already stamped
+                    // `*scan` above (which subsumes per-row deps).
+                    if (!isFullScan && typeof doc["_id"] === "string") {
+                        onRead(tableName, doc["_id"] as string);
+                    }
                 }
             }
 
@@ -1314,7 +1364,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new CountRlsUnsupportedError(tableName);
             }
 
-            onRead(tableName);
+            // Counts and aggregates depend on every row in the table — a
+            // single insert or delete can shift the answer, so register a
+            // scan dependency regardless of `where`.
+            onRead(tableName, SCAN_DEP);
 
             const effective = mergeWhere(opts.baseWhere, opts.where);
 
@@ -1376,7 +1429,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
             }
 
-            onRead(tableName);
+            onRead(tableName, SCAN_DEP);
 
             const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
@@ -1406,7 +1459,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            onRead(tableName);
+            onRead(tableName, SCAN_DEP);
 
             const agg = groupOptions.agg ?? { op: "count" };
             const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
@@ -1486,6 +1539,14 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             syncSearch(tableName, id, docWithMeta);
             syncAggregates(tableName, undefined, docWithMeta);
 
+            // Invalidate BEFORE the broadcast so a subscriber that re-runs
+            // its query in response to the broadcast cannot read a stale
+            // cache entry. `ReactiveCache.invalidate(table, id)` clears both
+            // the per-id bucket AND the `table:*scan` bucket — inserts can
+            // flip any scan-shaped result, so the latter MUST go even though
+            // the new row id was never read by anything.
+            cache?.invalidate(tableName, id);
+
             broadcast({ table: tableName, op: "insert", key: id, row: docWithMeta });
             await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
             await onWrite({ op: "insert", table: tableName, id, doc: docWithMeta });
@@ -1518,6 +1579,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             syncSearch(tableName, id, merged);
             syncAggregates(tableName, existing, merged);
+
+            // A patch can flip a row from matching to not-matching (or vice
+            // versa) any scan-shaped predicate — `invalidate` blows both the
+            // row's per-id deps AND the `*scan` bucket on this table.
+            cache?.invalidate(tableName, id);
 
             broadcast({ table: tableName, op: "update", key: id, row: merged });
             await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
@@ -1556,6 +1622,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             syncSearch(tableName, id, replaced);
             syncAggregates(tableName, previous, replaced);
+
+            cache?.invalidate(tableName, id);
 
             broadcast({ table: tableName, op: "update", key: id, row: replaced });
             await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
@@ -1597,6 +1665,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             syncSearch(tableName, id, undefined);
             syncAggregates(tableName, existing ?? undefined, undefined);
+
+            cache?.invalidate(tableName, id);
 
             broadcast({ table: tableName, op: "delete", key: id });
             await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });

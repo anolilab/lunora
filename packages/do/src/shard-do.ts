@@ -4,7 +4,11 @@ import { drizzle as drizzleDO, type DrizzleSqliteDODatabase } from "drizzle-orm/
 import type { SqlExec } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
 import { readMigrationStatus } from "./data-migration.js";
+import type { DependencyTracker } from "./dependency-tracker.js";
+import { createDependencyTracker } from "./dependency-tracker.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
+import type { ReactiveCacheOptions } from "./reactive-cache.js";
+import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
 import { ConflictError, type TransactionSqlLike } from "./transaction.js";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
 
@@ -67,6 +71,27 @@ export interface HibernatableWebSocket {
 export interface SubscriptionOutcome {
     result: unknown;
     tables: Set<string>;
+}
+
+/**
+ * Optional shard-level configuration passed through `super(state, env, …)`.
+ * Reserved as a bag rather than positional args so subclasses don't break
+ * when new knobs land. Today the only knob is the reactive cache; future
+ * additions should keep the same shape (per-feature options object).
+ */
+export interface ShardDOOptions {
+    /**
+     * Enable the per-shard reactive query cache. When provided, the dispatch
+     * path uses {@link ShardDO.runCachedQuery} to memoize query results by
+     * `(functionPath, stable-stringified args)`. Omit to keep the legacy
+     * behavior (every dispatch re-runs the handler).
+     *
+     * The cache is invisible to the WS subscription bridge: invalidations
+     * land via the ctx-db write hooks (`@cirrus/do`'s `createShardCtxDb`
+     * `cache` option) BEFORE the broadcast goes out, so subscribers that
+     * re-run their queries in response always observe the post-write state.
+     */
+    reactiveCache?: ReactiveCacheOptions;
 }
 
 /** Arguments accepted by the `__cirrus_admin__:runMigration` admin RPC. */
@@ -186,9 +211,35 @@ export abstract class ShardDO {
      */
     private readonly subMemos = new WeakMap<WebSocket, Map<string, SubscriptionMemo>>();
 
-    constructor(state: ShardDOState, env: unknown) {
+    /**
+     * Opt-in per-shard reactive query cache. When the subclass passes
+     * `ReactiveCacheOptions` to `super(state, env, { reactiveCache: { … } })`
+     * the cache is instantiated here and exposed to subclasses via
+     * {@link runCachedQuery}; when omitted (today's default) it stays
+     * undefined and the dispatch path runs with zero cache overhead.
+     *
+     * The cache is per-shard and in-memory only — it is lost on DO restart
+     * and on workerd hibernation. That's fine: a cold shard simply re-runs
+     * the query on the first call, just like it does today.
+     */
+    protected readonly reactiveCache: ReactiveCache | undefined;
+
+    /**
+     * In-flight dependency tracker for the currently-executing query. Set by
+     * {@link runCachedQuery} so the ctx-db hooks (wired via `onRead`) can
+     * stamp deps without threading the tracker explicitly through every
+     * generated handler signature. Cleared in the `finally` of the same
+     * call so a leaked tracker can never bleed into a sibling RPC.
+     */
+    private currentTracker: DependencyTracker | undefined;
+
+    constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
+
+        if (options.reactiveCache) {
+            this.reactiveCache = new ReactiveCache(options.reactiveCache);
+        }
     }
 
     /** SQLite handle scoped to this Durable Object. */
@@ -710,6 +761,77 @@ export abstract class ShardDO {
         void args;
 
         return Promise.resolve(null);
+    }
+
+    /**
+     * Wrap a query handler in the reactive cache. The subclass passes the
+     * function path, parsed args, and a `run` callback that resolves to the
+     * handler's return value. When the cache is configured we key by
+     * `(functionPath, stable-stringified args)`, run a dep-tracked handler
+     * via {@link withTracker}, and store the result. When the cache is
+     * absent we just call `run()` — same shape, zero overhead.
+     *
+     * Subclasses should ALSO pass `getCtxDbReadHook()` as the `onRead`
+     * option on their `createShardCtxDb(...)` call so the tracker actually
+     * collects deps. Without that wiring the cache will memoize results
+     * with empty dep sets, so writes never invalidate them and stale
+     * results stick around — the {@link ReactiveCache} class is contract-
+     * neutral about who fills `deps`.
+     */
+    protected async runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R> {
+        if (!this.reactiveCache) {
+            return run();
+        }
+
+        const key = reactiveCacheKey(functionPath, args);
+
+        return this.reactiveCache.run(key, this.allocateTracker(), () => this.withTracker(run));
+    }
+
+    /**
+     * Run `task()` with a fresh {@link DependencyTracker} bound to this
+     * shard, so the ctx-db hooks plumbed through {@link getCtxDbReadHook}
+     * can stamp deps without an explicit ctx arg on every handler. The
+     * tracker is cleared in `finally` so a leaked reference can never
+     * survive into a sibling call.
+     */
+    protected async withTracker<R>(task: () => Promise<R>): Promise<R> {
+        const previous = this.currentTracker;
+
+        this.currentTracker ??= createDependencyTracker();
+
+        try {
+            return await task();
+        } finally {
+            this.currentTracker = previous;
+        }
+    }
+
+    /**
+     * Returns an `onRead` callback suitable to hand to `createShardCtxDb`'s
+     * `onRead` option. The returned function stamps the in-flight tracker (set
+     * by {@link runCachedQuery}/{@link withTracker}) when one exists and is a
+     * no-op otherwise — so subclasses can wire this hook unconditionally
+     * without checking whether the cache is enabled.
+     */
+    protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void {
+        return (table, idOrScan) => {
+            this.currentTracker?.recordRead(table, idOrScan ?? "*scan");
+        };
+    }
+
+    /**
+     * Allocate the dep set for the next cache miss. Returns a fresh `Set`
+     * paired with the tracker that fills it: the `Set` is what the cache
+     * stores; the tracker is what the ctx-db hooks write into.
+     */
+    private allocateTracker(): Set<string> {
+        const tracker = createDependencyTracker();
+        const deps = tracker.collect();
+
+        this.currentTracker = tracker;
+
+        return deps;
     }
 
     /**
