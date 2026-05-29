@@ -23,8 +23,8 @@
     "scripts": {
         "build": "pnpm exec packem build",
         "build:prod": "pnpm exec packem build",
-        "lint:types": "tsc --noEmit",
-        "test": "vitest run"
+        "lint:types": "pnpm exec tsc --noEmit",
+        "test": "pnpm exec vitest run"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
