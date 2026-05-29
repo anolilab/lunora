@@ -18,6 +18,9 @@ import type {
     DatabaseWriterLike,
     GroupByEntry,
     GroupByOptions,
+    RankIndexDefinitionLike,
+    RankPage,
+    RankResult,
     RestrictableQueryOptions,
     SchedulerLike,
     SchemaLike,
@@ -38,13 +41,19 @@ import {
     CountRlsUnsupportedError,
     decodeCursor,
     encodeCursor,
+    encodePartitionKey,
     hasTrigger,
+    matchesRankStaticWhere,
     mergeWhere,
     normalizeOrderKeys,
     NotFoundError,
+    RANK_TIEBREAK,
+    rankTableName,
+    resolveRankPartition,
     resolveWith,
     runTriggers,
     selectIndexForCount,
+    sortColumnName,
 } from "@cirrus/do";
 
 /**
@@ -426,6 +435,131 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         }
     };
 
+    // Per-(table, rankIndex) backfill state, same shape as aggregate
+    // counters. `true` ⇒ companion exists and has been rebuilt; `false` ⇒
+    // companion missing (skip indexed path forever for this ctx-db).
+    const rankBackfilled = new Map<string, boolean>();
+
+    const rankTableExists = async (table: string, indexName: string): Promise<boolean> => {
+        const rankTable = rankTableName(table, indexName);
+        const rows = await exec.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, [rankTable]);
+
+        return rows.length > 0;
+    };
+
+    /**
+     * Lazy backfill of a rank companion. Mirrors the aggregate counter twin —
+     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db.
+     */
+    const ensureRankBackfilled = async (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> => {
+        const cacheKey = `${tableName}::rank::${index.name}`;
+        const cached = rankBackfilled.get(cacheKey);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const exists = await rankTableExists(tableName, index.name);
+
+        if (!exists) {
+            rankBackfilled.set(cacheKey, false);
+
+            return false;
+        }
+
+        const definition = schema.tables[tableName]!;
+        const rows = await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)}`, []);
+        const rankTable = rankTableName(tableName, index.name);
+
+        await exec.run(`DELETE FROM ${quoteIdentifier(rankTable)}`, []);
+
+        const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+        const columnList = ["__id__", "__partition__", ...sortColumns].map(quoteIdentifier).join(", ");
+        const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
+        const insertSql = `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`;
+
+        for (const row of rows) {
+            const doc = decodeRow(definition, row);
+
+            if (!doc) {
+                continue;
+            }
+
+            if (index.where && !matchesRankStaticWhere(doc, index.where)) {
+                continue;
+            }
+
+            const partitionKey = encodePartitionKey(index.partitionBy ?? [], doc);
+            const sortValues = index.sortBy.map((key) => serializeColumnValue(doc[key.field] ?? null));
+
+            await exec.run(insertSql, [doc["_id"] as string, partitionKey, ...sortValues]);
+        }
+
+        rankBackfilled.set(cacheKey, true);
+
+        return true;
+    };
+
+    /** Pre-write hook: rebuild rank companions once per ctx-db. */
+    const ensureRankBackfilledForTable = async (tableName: string): Promise<void> => {
+        const indexes = schema.tables[tableName]?.rankIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            return;
+        }
+
+        for (const index of indexes) {
+            await ensureRankBackfilled(tableName, index);
+        }
+    };
+
+    /**
+     * Post-write hook: DELETE+INSERT keeps the companion in lockstep with the
+     * source row. Skips silently when the user hasn't materialized the
+     * companion (the SCAN-free rank path will be unavailable, but the data
+     * remains correct).
+     */
+    const syncRanks = async (
+        tableName: string,
+        id: string,
+        previous: Record<string, unknown> | undefined,
+        next: Record<string, unknown> | undefined,
+    ): Promise<void> => {
+        const indexes = schema.tables[tableName]?.rankIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            return;
+        }
+
+        for (const index of indexes) {
+            const exists = await rankTableExists(tableName, index.name);
+
+            if (!exists) {
+                continue;
+            }
+
+            const rankTable = rankTableName(tableName, index.name);
+
+            if (previous) {
+                await exec.run(`DELETE FROM ${quoteIdentifier(rankTable)} WHERE "__id__" = ?`, [id]);
+            }
+
+            if (next) {
+                if (index.where && !matchesRankStaticWhere(next, index.where)) {
+                    continue;
+                }
+
+                const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+                const columnList = ["__id__", "__partition__", ...sortColumns].map(quoteIdentifier).join(", ");
+                const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
+                const partitionKey = encodePartitionKey(index.partitionBy ?? [], next);
+                const sortValues = index.sortBy.map((key) => serializeColumnValue(next[key.field] ?? null));
+
+                await exec.run(`INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`, [id, partitionKey, ...sortValues]);
+            }
+        }
+    };
+
     /** Fire matching triggers with a depth guard against runaway self-triggering. */
     const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
         triggerDepth += 1;
@@ -601,6 +735,226 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             return result;
         },
 
+        async rank(tableName, indexName, rankOptions): Promise<null | RankResult> {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            const index = definition.rankIndexes?.find((i) => i.name === indexName);
+
+            if (!index) {
+                throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
+            }
+
+            // Same RLS coupling-seam semantics as count(): position is a
+            // count-rows-strictly-before; an RLS-restricted ctx can't return
+            // a correct count, so the rank throws the same error.
+            if (rankOptions.restrictsCounts) {
+                throw new CountRlsUnsupportedError(tableName);
+            }
+
+            const counterReady = await ensureRankBackfilled(tableName, index);
+
+            if (!counterReady) {
+                // No companion table — caller can't get a rank from D1 in
+                // this dialect. Surface as null (the row may exist in the
+                // source table but isn't tracked).
+                return null;
+            }
+
+            const rowId = typeof rankOptions.row === "string" ? rankOptions.row : (rankOptions.row["_id"] as string | undefined);
+
+            if (!rowId) {
+                return null;
+            }
+
+            const rankTable = rankTableName(tableName, index.name);
+            const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+            const sortColumnList = sortColumns.map(quoteIdentifier).join(", ");
+            const ownRows = await exec.all(
+                `SELECT "__partition__"${sortColumnList ? `, ${sortColumnList}` : ""} FROM ${quoteIdentifier(rankTable)} WHERE "__id__" = ?`,
+                [rowId],
+            );
+
+            if (ownRows.length === 0) {
+                return null;
+            }
+
+            const own = ownRows[0]!;
+            let partitionKey = own["__partition__"] as string;
+
+            const effective = mergeWhere(rankOptions.baseWhere, rankOptions.where);
+            const partitionFromWhere = resolveRankPartition(index, effective as Record<string, unknown> | undefined);
+
+            if (partitionFromWhere) {
+                const requestedKey = encodePartitionKey(index.partitionBy ?? [], partitionFromWhere);
+
+                if (requestedKey !== partitionKey) {
+                    return null;
+                }
+
+                partitionKey = requestedKey;
+            }
+
+            const beforeBranches: string[] = [];
+            const beforeParams: unknown[] = [];
+
+            for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
+                const conditions: string[] = [];
+
+                for (let prefix = 0; prefix < pivot; prefix += 1) {
+                    conditions.push(`${quoteIdentifier(sortColumns[prefix]!)} IS ?`);
+                    beforeParams.push(own[sortColumns[prefix]!] as unknown);
+                }
+
+                if (pivot < sortColumns.length) {
+                    const column = sortColumns[pivot]!;
+                    const { direction } = index.sortBy[pivot]!;
+                    const operator = direction === "desc" ? ">" : "<";
+
+                    conditions.push(`${quoteIdentifier(column)} ${operator} ?`);
+                    beforeParams.push(own[column] as unknown);
+                } else {
+                    conditions.push(`${quoteIdentifier(RANK_TIEBREAK)} < ?`);
+                    beforeParams.push(rowId);
+                }
+
+                beforeBranches.push(conditions.length === 1 ? conditions[0]! : `(${conditions.join(" AND ")})`);
+            }
+
+            const beforeRows = await exec.all(
+                `SELECT COUNT(*) AS c FROM ${quoteIdentifier(rankTable)} WHERE "__partition__" = ? AND (${beforeBranches.join(" OR ")})`,
+                [partitionKey, ...beforeParams],
+            );
+            const totalRows = await exec.all(`SELECT COUNT(*) AS c FROM ${quoteIdentifier(rankTable)} WHERE "__partition__" = ?`, [partitionKey]);
+
+            return { position: Number(beforeRows[0]?.["c"] ?? 0) + 1, total: Number(totalRows[0]?.["c"] ?? 0) };
+        },
+
+        async rankPage(tableName, indexName, rankPageOptions = {}): Promise<RankPage> {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            const index = definition.rankIndexes?.find((i) => i.name === indexName);
+
+            if (!index) {
+                throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
+            }
+
+            const counterReady = await ensureRankBackfilled(tableName, index);
+
+            if (!counterReady) {
+                return { continueCursor: null, isDone: true, page: [] };
+            }
+
+            const rankTable = rankTableName(tableName, index.name);
+            const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+            const take = Math.max(1, Math.min(1000, Math.floor(rankPageOptions.take ?? 100)));
+            const effective = mergeWhere(rankPageOptions.baseWhere, rankPageOptions.where);
+            const partitionFromWhere = resolveRankPartition(index, effective as Record<string, unknown> | undefined);
+
+            const orderClauses: string[] = [`"__partition__" ASC`];
+
+            for (const [i, column] of sortColumns.entries()) {
+                orderClauses.push(`${quoteIdentifier(column)} ${index.sortBy[i]!.direction === "desc" ? "DESC" : "ASC"}`);
+            }
+
+            orderClauses.push(`${quoteIdentifier(RANK_TIEBREAK)} ASC`);
+
+            const whereClauses: string[] = [];
+            const params: unknown[] = [];
+
+            if (partitionFromWhere) {
+                whereClauses.push(`"__partition__" = ?`);
+                params.push(encodePartitionKey(index.partitionBy ?? [], partitionFromWhere));
+            }
+
+            if (rankPageOptions.cursor) {
+                const decoded = decodeCursor(rankPageOptions.cursor) as Array<unknown>;
+                const expectedLength = 1 + sortColumns.length + 1;
+
+                if (decoded.length === expectedLength) {
+                    const cols: Array<{ column: string; direction: "asc" | "desc" }> = [{ column: "__partition__", direction: "asc" }];
+
+                    for (const [i, column] of sortColumns.entries()) {
+                        cols.push({ column, direction: index.sortBy[i]!.direction });
+                    }
+
+                    cols.push({ column: RANK_TIEBREAK, direction: "asc" });
+
+                    const branches: string[] = [];
+
+                    for (const [pivot, col] of cols.entries()) {
+                        const conditions: string[] = [];
+
+                        for (let prefix = 0; prefix < pivot; prefix += 1) {
+                            conditions.push(`${quoteIdentifier(cols[prefix]!.column)} IS ?`);
+                            params.push(decoded[prefix]);
+                        }
+
+                        const operator = col.direction === "desc" ? "<" : ">";
+
+                        conditions.push(`${quoteIdentifier(col.column)} ${operator} ?`);
+                        params.push(decoded[pivot]);
+                        branches.push(conditions.length === 1 ? conditions[0]! : `(${conditions.join(" AND ")})`);
+                    }
+
+                    whereClauses.push(`(${branches.join(" OR ")})`);
+                }
+            }
+
+            const sortColumnList = sortColumns.map(quoteIdentifier).join(", ");
+            const idColumn = quoteIdentifier(RANK_TIEBREAK);
+            const partitionColumn = `"__partition__"`;
+            const innerWhere = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(" AND ")}` : "";
+            const selectColumns = sortColumns.length > 0 ? `${idColumn}, ${partitionColumn}, ${sortColumnList}` : `${idColumn}, ${partitionColumn}`;
+            const querySql = `SELECT ${selectColumns} FROM ${quoteIdentifier(rankTable)}${innerWhere} ORDER BY ${orderClauses.join(", ")} LIMIT ${take + 1}`;
+            const rankRows = await exec.all(querySql, params);
+            const hasMore = rankRows.length > take;
+            const usable = hasMore ? rankRows.slice(0, take) : rankRows;
+
+            const docs: Array<Record<string, unknown>> = [];
+
+            for (const rankRow of usable) {
+                const docRows = await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" = ?`, [rankRow[RANK_TIEBREAK] as string]);
+                const doc = decodeRow(definition, docRows[0]);
+
+                if (doc) {
+                    docs.push(doc);
+                }
+            }
+
+            let continueCursor: null | string = null;
+
+            if (hasMore) {
+                const last = usable.at(-1)!;
+                const cursorValues: unknown[] = [last["__partition__"] as unknown];
+
+                for (const column of sortColumns) {
+                    cursorValues.push(last[column] as unknown);
+                }
+
+                cursorValues.push(last[RANK_TIEBREAK] as unknown);
+
+                const json = JSON.stringify(cursorValues);
+                const bytes = new TextEncoder().encode(json);
+                let binary = "";
+
+                for (const byte of bytes) {
+                    binary += String.fromCharCode(byte);
+                }
+
+                continueCursor = btoa(binary);
+            }
+
+            return { continueCursor, isDone: !hasMore, page: docs };
+        },
+
         async delete(id) {
             const tableName = await tableNameFromId(exec, schema, id);
 
@@ -630,10 +984,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             });
 
             await ensureBackfilledForTable(tableName);
+            await ensureRankBackfilledForTable(tableName);
 
             await runWrite(tableName, `DELETE FROM ${quoteIdentifier(tableName)} WHERE "id" = ?`, [id]);
 
             await syncAggregates(tableName, existing ?? undefined, undefined);
+            await syncRanks(tableName, id, existing ?? undefined, undefined);
             await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
         },
 
@@ -754,6 +1110,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
 
             await ensureBackfilledForTable(tableName);
+            await ensureRankBackfilledForTable(tableName);
 
             const { columns, values } = columnTuple(definition, id, creationTime, withDefaults);
             const placeholders = columns.map(() => "?").join(", ");
@@ -761,6 +1118,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             await runWrite(tableName, `INSERT INTO ${quoteIdentifier(tableName)} (${columns.join(", ")}) VALUES (${placeholders})`, values);
 
             await syncAggregates(tableName, undefined, docWithMeta);
+            await syncRanks(tableName, id, undefined, docWithMeta);
             await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
 
             return id;
@@ -787,6 +1145,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
 
             await ensureBackfilledForTable(tableName);
+            await ensureRankBackfilledForTable(tableName);
 
             const fields = Object.keys(definition.shape);
             const assignments = fields.map((field) => `${quoteIdentifier(field)} = ?`).join(", ");
@@ -795,6 +1154,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             await runWrite(tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${assignments} WHERE "id" = ?`, values);
 
             await syncAggregates(tableName, existing, merged);
+            await syncRanks(tableName, id, existing, merged);
             await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
         },
 
@@ -810,7 +1170,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             const definition = schema.tables[tableName]!;
-            const needsPrevious = hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0;
+            const needsPrevious = hasTrigger(schema, tableName, "update")
+                || (definition.aggregateIndexes ?? []).length > 0
+                || (definition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? await writer.get(id) ?? undefined : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
@@ -820,6 +1182,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
 
             await ensureBackfilledForTable(tableName);
+            await ensureRankBackfilledForTable(tableName);
 
             const fields = Object.keys(definition.shape);
             const assignments = ['"_creationTime" = ?', ...fields.map((field) => `${quoteIdentifier(field)} = ?`)].join(", ");
@@ -828,6 +1191,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             await runWrite(tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${assignments} WHERE "id" = ?`, values);
 
             await syncAggregates(tableName, previous, replaced);
+            await syncRanks(tableName, id, previous, replaced);
             await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
         },
     };
@@ -865,6 +1229,53 @@ export const runD1AggregateMigrations = async (exec: D1Exec, schema: SchemaLike)
                     "__key__" TEXT PRIMARY KEY,
                     "__value__" REAL NOT NULL
                 )`,
+                [],
+            );
+        }
+    }
+};
+
+/**
+ * Materialize the `__rank_<index>` companion tables for every declared
+ * `rankIndex` on a global table. Mirrors `runD1AggregateMigrations` — same
+ * opt-in pattern so production hosts decide whether to spend the DDL.
+ *
+ * Idempotent (`CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`).
+ */
+export const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        const indexes = definition.rankIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            continue;
+        }
+
+        for (const index of indexes) {
+            const rankTable = rankTableName(tableName, index.name);
+            const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+            const columnDdl = sortColumns.map((column) => `${quoteIdentifier(column)} BLOB`).join(", ");
+            const columnPart = sortColumns.length > 0 ? `, ${columnDdl}` : "";
+
+            await exec.run(
+                `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(rankTable)} (
+                    "__id__" TEXT PRIMARY KEY,
+                    "__partition__" TEXT NOT NULL${columnPart}
+                )`,
+                [],
+            );
+
+            const orderedColumns = ['"__partition__" ASC'];
+
+            for (const [i, column] of sortColumns.entries()) {
+                orderedColumns.push(`${quoteIdentifier(column)} ${index.sortBy[i]!.direction === "desc" ? "DESC" : "ASC"}`);
+            }
+
+            orderedColumns.push('"__id__" ASC');
+
+            const btreeName = `${tableName}__rank_${index.name}__btree`;
+
+            await exec.run(
+                `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(btreeName)} ON ${quoteIdentifier(rankTable)} (${orderedColumns.join(", ")})`,
                 [],
             );
         }
