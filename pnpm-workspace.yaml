@@ -36,7 +36,7 @@ catalogs:
     "@commitlint/cli": ^21.0.1
     "@commitlint/config-conventional": ^21.0.1
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 1.0.0-alpha.24
+    "@visulima/vis": 1.0.0-alpha.25
     "@visulima/tabular": 4.0.0-alpha.11
   test:
     "@vitest/coverage-v8": 4.1.7

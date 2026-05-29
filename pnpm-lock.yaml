@@ -132,8 +132,8 @@ catalogs:
       specifier: 4.0.0-alpha.11
       version: 4.0.0-alpha.11
     '@visulima/vis':
-      specifier: 1.0.0-alpha.24
-      version: 1.0.0-alpha.24
+      specifier: 1.0.0-alpha.25
+      version: 1.0.0-alpha.25
     cz-conventional-changelog:
       specifier: ^3.3.0
       version: 3.3.0
@@ -206,7 +206,7 @@ importers:
         version: 4.0.0-alpha.11
       '@visulima/vis':
         specifier: catalog:prod
-        version: 1.0.0-alpha.24(@shikijs/langs@4.1.0)(@shikijs/themes@4.1.0)(@visulima/tabular@4.0.0-alpha.11)(marked@15.0.12)(shiki@4.1.0)(ws@8.20.1)
+        version: 1.0.0-alpha.25(@shikijs/langs@4.1.0)(@shikijs/themes@4.1.0)(marked@15.0.12)(shiki@4.1.0)(ws@8.20.1)
       cz-conventional-changelog:
         specifier: catalog:prod
         version: 3.3.0(@types/node@25.9.1)(typescript@6.0.3)
@@ -2348,12 +2348,6 @@ packages:
         optional: true
       tailwindcss:
         optional: true
-
-  '@hono/node-server@2.0.4':
-    resolution: {integrity: sha512-Ut3y0dMMPWy6bZ2kVfx25EOVbZlm15dhF4mOsezMlhpNHy+4MkU1qN9Y6lnruYi4wPmFzimGX2X7LF/FwHli4A==}
-    engines: {node: '>=20'}
-    peerDependencies:
-      hono: ^4
 
   '@html-eslint/core@0.60.0':
     resolution: {integrity: sha512-P2+ymEBt7EZ8sh1xc4XNA1/zSyDhSA1ppWyBBwPvGfY8VnDfmtd5UKr6AD24htABwzNJ6WcBIV3lAx5crtozfg==}
@@ -4776,10 +4770,6 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@visulima/ansi@4.0.0-alpha.14':
-    resolution: {integrity: sha512-/ObULAHfLMalj+lumrBJOJGOBjYnwd66QiFR3ccZ4DH/tt7bgqyX+Ek/UGcODusoZnXBLGhuUARk6JX4/Xl9RQ==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-
   '@visulima/boxen@2.0.10':
     resolution: {integrity: sha512-ljghUzl32eUxIixARh8HBBJ2SXz2mJoD7C7Tl9/AEerN/PNihq1PMkzX/QPvMYOXpKrwoPt8ISNOc2EUacX5Wg==}
     engines: {node: '>=20.18 <=25.x'}
@@ -4839,11 +4829,6 @@ packages:
     engines: {node: ^22.14.0 || >=24.10.0}
     os: [darwin, linux, win32]
 
-  '@visulima/colorize@2.0.0-alpha.11':
-    resolution: {integrity: sha512-eDw8KSE/5hMbix8ZfhLiwttvbQ45Hs/gDG8K8+iCukzNxaDbfGaO/whZYkKoWYDm1pf1Z7fbN6EBlHeyn5q+bg==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    os: [darwin, linux, win32]
-
   '@visulima/css-style-inject@1.0.0-alpha.15':
     resolution: {integrity: sha512-BsCKXf26Cyhz3Il2ZycZRHJmUUykk3PETkmowsOgWjCgnkAmv6OyWnrIrEaREFHkg+CnpTOZb/SizjkvT6vd/Q==}
     engines: {node: '>=20.19 <=25.*'}
@@ -4892,16 +4877,6 @@ packages:
       ai:
         optional: true
 
-  '@visulima/error@6.0.0-alpha.28':
-    resolution: {integrity: sha512-23KQqDvarPXnExVOWfCnhjcnVdbuDwqRIX4mMqECfiMvitbhb+gUB4RWlcZPEemkX3iYQuYq9kbXUMvQiM8Hrg==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    os: [darwin, linux, win32]
-    peerDependencies:
-      ai: 6.0.184
-    peerDependenciesMeta:
-      ai:
-        optional: true
-
   '@visulima/find-cache-dir@3.0.0-alpha.9':
     resolution: {integrity: sha512-fp4h/pUodZWV64gLLriyEi6iZpkOO3+TCQHore8PPJC9ldVUgvOfFQ2Vb+Y92cFBQ7h24lDpQa/Tgjxr0oNA0w==}
     engines: {node: ^22.14.0 || >=24.10.0}
@@ -4940,6 +4915,10 @@ packages:
 
   '@visulima/humanizer@3.0.0-alpha.11':
     resolution: {integrity: sha512-urWZvtPuBbkGb6EHWECAO32RKHO3AUg9FEwKiKwJlpjN8EpCpaRisSA+B2uWnyY8FHbefDVCQwp5GRPsedhZmg==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+
+  '@visulima/humanizer@3.0.0-alpha.12':
+    resolution: {integrity: sha512-gQWdhhXX3kCmrh5a3LIof1oCTuZJHd308qwPc8FElf4AqG2snVkj7/tfzmStabN2BCCrCddrsPpYkfENoyxLcg==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
   '@visulima/interactive-manager@1.0.0-alpha.2':
@@ -5155,6 +5134,11 @@ packages:
     engines: {node: ^22.14.0 || >=24.10.0}
     os: [darwin, linux, win32]
 
+  '@visulima/path@3.0.0-alpha.11':
+    resolution: {integrity: sha512-bkgDWoqc6kVO0R1wxDzt2eoAYqlaRq2nUKgiotXCY7uOFD+eKWXRIW3XE86Z43ZokyP8nWa27CAE/q9pGGv8FQ==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+    os: [darwin, linux, win32]
+
   '@visulima/rollup-plugin-css@1.0.0-alpha.45':
     resolution: {integrity: sha512-GQeyyHosl7JVrXUbe3bzxDQc5jULhqqdFjI/kL19Dw0HCw2toV6Q3Dx70v54HSgp/5ccCoP4YgQgs0MZz6HwXw==}
     engines: {node: ^22.14.0 || >= 24.10.0}
@@ -5260,60 +5244,60 @@ packages:
       vue-tsc:
         optional: true
 
-  '@visulima/secret-scanner-binding-darwin-arm64@1.0.0-alpha.3':
-    resolution: {integrity: sha512-UEgCUD6lb+BWNIeIGoiOOMRaTkSk0EhQ9WF2vcUfWYDZ03b8ksTcOfYOpeYWs7FBfWZJX4QdPIQ/4w0mHiYAMA==}
+  '@visulima/secret-scanner-binding-darwin-arm64@1.0.0-alpha.4':
+    resolution: {integrity: sha512-FaP22HDAYWSBeIgzHSs/p2Dc9cunBkUuJxV7kcjTJ9P69180MOXLsZKiJoX72EMEvoVfFnl+Y+fi2rjv3euBEA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [darwin]
 
-  '@visulima/secret-scanner-binding-darwin-x64@1.0.0-alpha.3':
-    resolution: {integrity: sha512-46p4yGgJnVNie7HFyG4iQP7bUytMXblPTkNNgjXDJ15weIz9OwAS1GU8NSgGwojnrlzs77n2q/PESaS2Lnr5lQ==}
+  '@visulima/secret-scanner-binding-darwin-x64@1.0.0-alpha.4':
+    resolution: {integrity: sha512-dto9gZ0e0mitArqXg/a2f20ldlnqUITwQR1+O8gSl8d+qF+R0TsRHeNSbhGCdM5TCPn2CNx5P/2QVIjHTY4BWw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [darwin]
 
-  '@visulima/secret-scanner-binding-linux-arm64-gnu@1.0.0-alpha.3':
-    resolution: {integrity: sha512-a+AWHsasmxhuCtALqkun/rF5C1oY4GM1E8EuUg8Uaa2HDfIgis2b5c/S6BEBk6fKqpZfaEipxkTIxhj99NWGpA==}
+  '@visulima/secret-scanner-binding-linux-arm64-gnu@1.0.0-alpha.4':
+    resolution: {integrity: sha512-FvZ66DD52Hx3T9LcVDRnJ66boHEW/I9tST2cPNOKgzA1GydkCla7+lHrhTBSSl2w+1otmz3OVi6Xc9L1X7Hnqg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/secret-scanner-binding-linux-arm64-musl@1.0.0-alpha.3':
-    resolution: {integrity: sha512-djRY1EYHZ3LplPh5Y4O8SoGCNR46GThJIF666g8kXmpYYjey38rQ0w59OJ+OSYhgB2l3WvzFJEUT2k9hH6eOxA==}
+  '@visulima/secret-scanner-binding-linux-arm64-musl@1.0.0-alpha.4':
+    resolution: {integrity: sha512-mxY98N4s2RBN9bRe/m0KNS2YExEjGXbl8LFAPQFwTDNvOFxZAJ+yPukF+sUljzEbTcsDTsV3xRueNlXlTCCslQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/secret-scanner-binding-linux-x64-gnu@1.0.0-alpha.3':
-    resolution: {integrity: sha512-2WiwHqWfzRAaw8FBtqQ8UfWvDIqWs7yyGKqIs6itJXAdgWoW9hSgTJyRZUrkdISeyZDY2EotVhWJS76U7nr2mA==}
+  '@visulima/secret-scanner-binding-linux-x64-gnu@1.0.0-alpha.4':
+    resolution: {integrity: sha512-FTVOvL7BBF0/sXjNcqmKOWDoTttS5j59llYs8wFnab47mF9Jpr3DssdAacsgXiliYQwjaKOiQlh99xgHC8CoDw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/secret-scanner-binding-linux-x64-musl@1.0.0-alpha.3':
-    resolution: {integrity: sha512-DQr15SMmJ11lROp7TEcQ9f0FDeR+xoTJ541IAgVF7XelDUdVS2BAO1GF68bjV6gvnE9oMYkzh64YEIP9H31XgQ==}
+  '@visulima/secret-scanner-binding-linux-x64-musl@1.0.0-alpha.4':
+    resolution: {integrity: sha512-Y/MReEHhDFBhEIvx1hnMpCD7EJuQkUUbM6yVCF/VAj4J/c1iCk7LQIxG6Qbyw8CPDSuxxJfb9MZSNAV/L/7wHQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/secret-scanner-binding-win32-arm64-msvc@1.0.0-alpha.3':
-    resolution: {integrity: sha512-ElCGe6Z3C0sgW2B3pqR/3evfmefNLOLEfADfpHCaRwwbYsTDUnoYQpOhGv4MFfCJ3RBRdq6lo+DtVOAeMBGBQA==}
+  '@visulima/secret-scanner-binding-win32-arm64-msvc@1.0.0-alpha.4':
+    resolution: {integrity: sha512-R0dfPKPY4VqeL6FuCMygfipGiiH0TfUgTCklaUz3ZGgRZYFFICLCjzbqrK1ijI72IpsZp/4h0xq3Arew41eWCA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [win32]
 
-  '@visulima/secret-scanner-binding-win32-x64-msvc@1.0.0-alpha.3':
-    resolution: {integrity: sha512-gpTORX1eZOuSrkhg5mzawzk9sC2VivapbllWf6LRA6/j1yVAMJEahMHBTQfC9jg7hT6tOPzxxp/cfc5gYQ7p3Q==}
+  '@visulima/secret-scanner-binding-win32-x64-msvc@1.0.0-alpha.4':
+    resolution: {integrity: sha512-otR0jo+hN0MBnUHLa14bOcEnDXNXjGAgqbPoB22udL9GIklUHQA65J2EapXCanh13W/Myp1RyciicCkLx8uO4Q==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [win32]
 
-  '@visulima/secret-scanner@1.0.0-alpha.3':
-    resolution: {integrity: sha512-P90JAz6extOC/3ih/XUtK+4m+48L8QE77gWCJGGh9zzN0Y1UUpcHYhqYIW2maQEapX40hZZfpKphjMofaq5r7A==}
+  '@visulima/secret-scanner@1.0.0-alpha.4':
+    resolution: {integrity: sha512-CNFz1uh5zP6bPAFnJA1avahjaFV6HHHWh3/lhZ7rgxBxb6PJeeDmC9IXv4mume4kJ6d7LQ5yx6XFZX6AGKsxnA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@aws-sdk/client-sts': '*'
@@ -5343,14 +5327,6 @@ packages:
     resolution: {integrity: sha512-Kgdff7t2LvDBAe2/nIErUoxYZGSVTCwSodjgcU7mx7V0rSrCP2ZW57oliBGezny//MCGb4UUdiJG3C/WLr04RQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/spinner@1.0.0-alpha.1':
-    resolution: {integrity: sha512-UPp6KRAgd+OXRqrDT3bE0+rHujG/cgUZe9wfHVRgjH4Og1chGBlxVRcxX8UH01FSzLjMzfseLppDdSEUJz2XqQ==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-
-  '@visulima/string@3.0.0-alpha.13':
-    resolution: {integrity: sha512-1iUnjuVWPk4C90tEuGQ0qyX8HCSP8rgkGmtBFHd14/fzkLkEqiOZs0+LL/HyestTzBsSLLpfHzz8LYc7kYwFFA==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-
   '@visulima/tabular@3.1.3':
     resolution: {integrity: sha512-egA4Zh+iP94W8Aj9HCVvtyXAwgZATVvnNEPZj3zgx2WqM7HCmKfMhRFwlGIeuBYFT0pR/5D8xQChc0j4gQL2/Q==}
     engines: {node: '>=20.19 <=25.x'}
@@ -5359,60 +5335,64 @@ packages:
     resolution: {integrity: sha512-nxocBCT/b6oazcuUSUbIgPbMxGwHn6YARq/I7SeS+GtmQRVhp/XY65pCIXqpfSyoNXaMLA25BULK/AvGIOziMA==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/task-runner-binding-darwin-arm64@1.0.0-alpha.15':
-    resolution: {integrity: sha512-OYCIJFpKsx+ks4nFpbhzKCKJs0NKlYC/gls7QoO2NFTOppZIWDaj0CpjlMO7phSSxdhhN2rAVSp1RsLZDmTSZw==}
+  '@visulima/tabular@4.0.0-alpha.12':
+    resolution: {integrity: sha512-Mfyz/YhKrs3g4inuQtagveWbP2OzS7AZDmPraGktLE/Qsab/hXHjxr4DtBXY8WNQVxPP3eKRi4Tl0Tl+zQk1IQ==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+
+  '@visulima/task-runner-binding-darwin-arm64@1.0.0-alpha.16':
+    resolution: {integrity: sha512-4eXGPuDMe8OiUK1107cf0d+T+LTY236llkRU4cW2yEylUZr2RrRjpdCX/X6DU2lNBcyd0ngQOOjTUrJuEzLYPw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [darwin]
 
-  '@visulima/task-runner-binding-darwin-x64@1.0.0-alpha.15':
-    resolution: {integrity: sha512-lZXk7KsbKhZPpIS8J6rwg5M2YgMEN0oVppZBYEvSJkk1B7ICvPzATbjRb+mwm9gfQx/iggZFxlFM9k72281ZWQ==}
+  '@visulima/task-runner-binding-darwin-x64@1.0.0-alpha.16':
+    resolution: {integrity: sha512-Ywa4utm6t+4P62kuM7AldMxzkeZOfiCvYm+HJ/16jTbtNEo/pBxs5V2xRIhgrGzu91nUA4x0uMTqs22IiZorNg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [darwin]
 
-  '@visulima/task-runner-binding-linux-arm64-gnu@1.0.0-alpha.15':
-    resolution: {integrity: sha512-SFG9dt5563lYPiquUegN5GmA2VET6CkpvKrVxJNjU92JQ5NUz4dMhqe2BNJ1qEjpOJeaWjf0sq4/BX9BNm0ISQ==}
+  '@visulima/task-runner-binding-linux-arm64-gnu@1.0.0-alpha.16':
+    resolution: {integrity: sha512-kDpozEc55ZOs6EE9izuUzx5eK2CKRcxNcZzxC8W4/hOvLHQaomPA3w7OqTyhL7P7OsFYdBxcCjGW6qDnNHQ0fA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/task-runner-binding-linux-arm64-musl@1.0.0-alpha.15':
-    resolution: {integrity: sha512-fnKAe/n6iKXLB4f8eak61g05Gy7bq79vMP3ul4aKlklkzwcFh+CgE1wx7C8SIWx0ZSdAN4ch+OuMDGXC6iU+WA==}
+  '@visulima/task-runner-binding-linux-arm64-musl@1.0.0-alpha.16':
+    resolution: {integrity: sha512-mKVGd/G2d9Ecm7ph9StbA+fM8hvQWBjXOuDY8nXCOLYK4YDTfbzcd7SZi6XeyLcLDnjlvHfopNV9W5lKNxX+Nw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/task-runner-binding-linux-x64-gnu@1.0.0-alpha.15':
-    resolution: {integrity: sha512-gzXwFYvwYwJZoW9uKnibFUfCNPNfaUdnEo58RCUwChygZosGPz4Xi8urUZdPPvpfJD91DR+j/PdmsKmrXv3jnw==}
+  '@visulima/task-runner-binding-linux-x64-gnu@1.0.0-alpha.16':
+    resolution: {integrity: sha512-4zYUduEN+RsJppD8oAxSDvegtNRK255HLtsLPUak/Xs8Aan613DK9Io5SdtRuvKQPvHgFMO+a0rRBULoSzhxkw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/task-runner-binding-linux-x64-musl@1.0.0-alpha.15':
-    resolution: {integrity: sha512-YUJvfdcp+58gbyJfiSBVgwo2gOrLIZ7abkgA8G2N8PjDiAbqFA9hYS0TDiMrDvjYVDKpv8rAK2PBwtvGHSUEeA==}
+  '@visulima/task-runner-binding-linux-x64-musl@1.0.0-alpha.16':
+    resolution: {integrity: sha512-A86DLMdQqEsqdi5jCc8TRDK/smQvaIMZ0SE2GZQtfBJlzn+LUryAwZ3srMex33tH8oqHtVQJk5HY/+n7kBxOJg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/task-runner-binding-win32-arm64-msvc@1.0.0-alpha.15':
-    resolution: {integrity: sha512-MMU8rPERm8+50CCo2n4MkJBIVlY8EnbmcqkPqSdIsW3HFILj9BrQeIbwhr7+xl/Pn64NYfV+npk6oQqw1CsC+A==}
+  '@visulima/task-runner-binding-win32-arm64-msvc@1.0.0-alpha.16':
+    resolution: {integrity: sha512-mjkSdvw9iKW5p2YZxIRlqMu4ad8duY+o7fJBTWigf30PlDw0cHhBXioWuQC0GFgjwfJxwF9tNsGCJRyNguXPuA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [win32]
 
-  '@visulima/task-runner-binding-win32-x64-msvc@1.0.0-alpha.15':
-    resolution: {integrity: sha512-euCxwAhUpKqumwwjG5k6Ej+cRJZoBMbrAjItfDwx8s5OBy0o/efEzRDzz8dxLkScEQqBLIDycPA/Lcj1cniBSQ==}
+  '@visulima/task-runner-binding-win32-x64-msvc@1.0.0-alpha.16':
+    resolution: {integrity: sha512-JhHgrzUHhrPr0ZuhdjZSU2to+vVUenzboKaDB8PxBOrE5cH7lYcklTRwyP8gk5GasGrVw7rENKZIS55yNXIdyQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [win32]
 
-  '@visulima/task-runner@1.0.0-alpha.15':
-    resolution: {integrity: sha512-atN1NVMSL4TYKPYXRn8+aHiajOaM0X9I67WA6A9/U5kPG7oWs2/V6g7zK6WA+EWAFFZNHzs5F808IHiZd9vi/w==}
+  '@visulima/task-runner@1.0.0-alpha.16':
+    resolution: {integrity: sha512-aywEtsDdVnVFGpUcRnKl0LpT8SRKGyWIoIqBvL4eN91cT1eVA4P7aC7CqOYfRyHkZBSBYdrBHKLdE39KE04pzg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@grpc/grpc-js': '*'
@@ -5431,65 +5411,65 @@ packages:
     resolution: {integrity: sha512-m9A6i5861+yJWJtsfoPRk/B/mr1gazs6mR+xrTNd13iEjntTSV83lygRWEE5dQoBoG3KcKv+ajzlRzbGMozIVg==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/tui-binding-darwin-arm64@1.0.0-alpha.19':
-    resolution: {integrity: sha512-cLCWFdu1WmAHcjyhcufYhYun18JLREiK/EnZMHtD45eWK1yU5bIGRpIsb+88TrnsfCndSURqH1lJivSZCliRIQ==}
+  '@visulima/tui-binding-darwin-arm64@1.0.0-alpha.20':
+    resolution: {integrity: sha512-YIt50ZSmBoNw/+vzWsnGlxnSdq2G/uFxk1qDPyK9E3Dn4g+Jn60w6ic/dlbpQj4uZJ5Qw6WqEgwPbQ4AYfg9VA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [darwin]
 
-  '@visulima/tui-binding-darwin-x64@1.0.0-alpha.19':
-    resolution: {integrity: sha512-RQ5lo3BYoGfPuPRlmP3g7jFB9AqB/FSNBevQgTC7ptuSjnfBAzDqEF0UUZhw4iOTdc/hXJBHRgiu9MdgD8TXpw==}
+  '@visulima/tui-binding-darwin-x64@1.0.0-alpha.20':
+    resolution: {integrity: sha512-OlKQINkhWhMPrPE262mBQ5fN+bA7R3VsXRgGyDltm8gbYfCKzdvLkqD7la1AgD6ihwAfjJ0hLaQZLpI7+qnNAg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [darwin]
 
-  '@visulima/tui-binding-linux-arm64-gnu@1.0.0-alpha.19':
-    resolution: {integrity: sha512-ERUZnuUv/dBcuL6/3liQwXzsmOZrPHQiIWiduXg67Sa0zm32kRB1TFHfS8SSHrqbTqP7JcUWeJhqwAra5lzZ6A==}
+  '@visulima/tui-binding-linux-arm64-gnu@1.0.0-alpha.20':
+    resolution: {integrity: sha512-ztZUai+fSjeZFzAPSQJIQBaGTFWQIxgOASdDIWUTjIiBoLcS+rYg86rQgMQgLPXTz451YPilI0R70oMabRr/Zg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/tui-binding-linux-arm64-musl@1.0.0-alpha.19':
-    resolution: {integrity: sha512-Uql9isXfI4C+wgnzm4IrJAnFN/n1eCvEuYrMKSSlkPAUcEgHlkW+jWzmHph2D7qPIOUPzPneY2h0vkhg+N41tQ==}
+  '@visulima/tui-binding-linux-arm64-musl@1.0.0-alpha.20':
+    resolution: {integrity: sha512-AIAsTjqllYkHM4V4kBgEK3L7zFiMZEAQ4KAudqobRjogDTuh3QB61YnD1IurLpdGFOYiofDp17Y7LIj3+zdq1g==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/tui-binding-linux-x64-gnu@1.0.0-alpha.19':
-    resolution: {integrity: sha512-SNc1DFbqrbo2jyzHnU+pjC7w/syDHp1OH5nwDGglk2A3KJk1P/Okvp+c3r/JoLaKXii1JoOS6TvlfGf+GbhK4w==}
+  '@visulima/tui-binding-linux-x64-gnu@1.0.0-alpha.20':
+    resolution: {integrity: sha512-Wpz3a2rYAUGmD9gi4OAPV+m3UTMACdnrzr/a1ZzhkrrZENbTPPnSt9u8YWG4uVwYDOPoNslg8dqBtrqmErLMvg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/tui-binding-linux-x64-musl@1.0.0-alpha.19':
-    resolution: {integrity: sha512-0gUnld4yDOOFTxDYqJ/PHwnIE6DZFGLuS+pk4BR4C+eEvzYel7aBFGDBLGIG3P3ktCVcx53V5gRzkHtltTuL7w==}
+  '@visulima/tui-binding-linux-x64-musl@1.0.0-alpha.20':
+    resolution: {integrity: sha512-nUQtqp7BstmWQFYaZPrfjzzXtSFFBUpLppRiTt9Yz+3nTsGD5h6DOEMk1P+W71ACkyggWLXzA2BMleBTXLBOHw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/tui-binding-win32-arm64-msvc@1.0.0-alpha.19':
-    resolution: {integrity: sha512-PcqNSlfs4boONBCmrAXmKgFN+qL6gZlAhbsZ0WgpjoBlgn159N+glg9+5xhqH67mMraWPl97osVb1DHETn1Y9g==}
+  '@visulima/tui-binding-win32-arm64-msvc@1.0.0-alpha.20':
+    resolution: {integrity: sha512-zIcJB/Ces/zX9dASz0wgksRd2XZPXUbHP4AFmZKcfVYf9M+G8buz39kpjcqGRBh/lZx2B+8uAZ5UvUebcrIQEg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [win32]
 
-  '@visulima/tui-binding-win32-x64-msvc@1.0.0-alpha.19':
-    resolution: {integrity: sha512-UzTsHpjL9YmSr+EJxxajE817k86ujq0i/LS8te+tE9j21xKEE/sWeXQWwViYIzuVssr1pSJePicbrj498M8AFg==}
+  '@visulima/tui-binding-win32-x64-msvc@1.0.0-alpha.20':
+    resolution: {integrity: sha512-JN6buNXVe3ZK5LEt3tPIbfQHAfhbWROtDELsxuIQtZwjPFTabY1wzMsmsVYiJ7OkrwzTN90y+29YPfuuY7RZhQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [win32]
 
-  '@visulima/tui@1.0.0-alpha.19':
-    resolution: {integrity: sha512-0Y2MniOS1Bo77Tbeg0wlIeCkbbIvnxVhtof40S3H+5EzHnyaB8Nhz3fWdCk50rl1me5+K080Dii2a8X2EKlDbw==}
+  '@visulima/tui@1.0.0-alpha.20':
+    resolution: {integrity: sha512-8Bynfh/VZZGEOpFmcvbKzgSH8dVOEwEIqfvWj6RIZ/nqWsJq0RY9cg2f//1lbYzZdPjzwKgDF60nOiWbjHHP/A==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@shikijs/langs': ^4.0.2
       '@shikijs/themes': ^4.0.2
-      '@visulima/tabular': 4.0.0-alpha.11
+      '@visulima/tabular': 4.0.0-alpha.12
       cfonts: ^3.3.1
       diff: ^9.0.0
       marked: ^18.0.3
@@ -5518,60 +5498,60 @@ packages:
       ws:
         optional: true
 
-  '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.24':
-    resolution: {integrity: sha512-ULA4h0NAqDaxGGllFQ9IqcyJYqMVqob5LzLz9Mb5p6lw5gd9Ybj0iDR5WG6+IeQLbLZeJbn1HrnFrVEQVoi9JA==}
+  '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.25':
+    resolution: {integrity: sha512-LvkSFdtkHPsNey7q3Ikb6EnZqCIOFxoN8m+aFy/ymzttdkmT955OcAfJK3pVHoPh/QnOCLK47RItK2LnITT9BQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [darwin]
 
-  '@visulima/vis-binding-darwin-x64@1.0.0-alpha.24':
-    resolution: {integrity: sha512-Veva4uAJbx3shVPtahqPYsIhRgbehFh+zvDSJ6eB9zAlkBmdf543I0UXd8VA4/FgIEHm5ANmCY97vh90GiwNxA==}
+  '@visulima/vis-binding-darwin-x64@1.0.0-alpha.25':
+    resolution: {integrity: sha512-JS87D+furfjJJ9p2QfYktisrgEkQe4Tsa6Q+Oe/XPaeI0QYMMSGTLf117uSsnqR6A/mysBM5oSSNzNh8bKY02g==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [darwin]
 
-  '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.24':
-    resolution: {integrity: sha512-GIFsyScHpgKIsrd7NLLsnqaM05MoBAuEK5ShQ2jWjtFgQQpwVt24rtG6sKCWMcJoDgQLJHf6iz3H+IBdHS21kw==}
+  '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.25':
+    resolution: {integrity: sha512-GUFz1P1/ln/hdb/uKVoOVgO7dUiEYjcTNLf5JM/98Lbv03nD8BJ++kkUd5cr347q/Q9jFEGzT2YQGJR9MNdAxg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.24':
-    resolution: {integrity: sha512-hAD+Un+Jdh9z/j7xifIoQYUnYEn9TMyTiI/nS1pFu5gVJQyFP6Wmhll04l5sBvreKlxPhPTAjIoIEk/flVWwBA==}
+  '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.25':
+    resolution: {integrity: sha512-fzFYG+utA17AGLQKGsBgYMoSX1rwh31f5OCt0F3mabB4S3iAFH0J6+MpaAIT66vvGZxtBjjmX6bXStsddqlX9A==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.24':
-    resolution: {integrity: sha512-m7KDEWncNxmxOxJkWsuiSdbZH3F/UDEwJqgTdM1A01J7coxPN3i/arTlLhq+Yphgc92dJ77Vb25sJdSAYSitmQ==}
+  '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.25':
+    resolution: {integrity: sha512-DaBeyaTI/0i+V2wjKTS/iFcBKpZEeIe0ihO19KBfkd1dI1n6dtP4jL+d6cnU0gjddrS3jwA49HAmmaG8kc8lLg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.24':
-    resolution: {integrity: sha512-Neolt3DrUFkA2YPicOsIbT414aGG4z0SXImnVnMV1p5096Rj0rZYkNsSEmMSn/hqgV4ylxQ4zfp59tQBQ5G8Vg==}
+  '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.25':
+    resolution: {integrity: sha512-CSBWJ2m0nSpZqsybxiG86kV91gqhE83ZnBneABs73FgyrohbCGjFifwtNPM5iTk0uiD4bYwUcbcYB44wrbFDrg==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.24':
-    resolution: {integrity: sha512-D1gkXxPzlP2f/geNI+FKWU0TwtAyNJFD0abR323UMw3TvzjzeFyijLJhr/NcMiJ0/M32ctRQlZW6gz0D0o0Lag==}
+  '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.25':
+    resolution: {integrity: sha512-MRb3IygVbsvPedy8Z9OBoKyQuw5vSKodqErSqAveNx5I8EKWyLdQaEEgd6yufW/JULbQfaPw0NjO2bpVFyVBnw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [win32]
 
-  '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.24':
-    resolution: {integrity: sha512-39FE8ANNjr56vmWclaJYk2PCnjrlyGvz9nyfHLaJeyvLghOKeQ/07X0vapmjG+Pmh4VqFLOwxljbw7r8nq5ExA==}
+  '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.25':
+    resolution: {integrity: sha512-xVidYFuMUR3l+zwOjG6F55MRg7EGaRWY1kmDwptUTMKWyvnFYgQl63PZIomgIrdvYZAOl77v2iPlh1Xc+AwkTw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [win32]
 
-  '@visulima/vis@1.0.0-alpha.24':
-    resolution: {integrity: sha512-E7sJ4zmcgcwgx0u+/QNrrfmnSTcQ/xd3ThxCHtv6qBqQlU73sjTtSAlNy4niIKb7N44CJc7wUrT7nJcdX+imFg==}
+  '@visulima/vis@1.0.0-alpha.25':
+    resolution: {integrity: sha512-avFAvs2/FTfU40BgyqyhlidK7FQGL67EVFxya8SFf1VYmMdQ0k30eWNrgotnesjY+33qbolZuh+wO9U8unJdPw==}
     engines: {node: ^22.14.0 || >=24.10.0}
     hasBin: true
     peerDependencies:
@@ -6107,10 +6087,6 @@ packages:
     resolution: {integrity: sha512-9ngPTOhYGQqNVSfeJkYXHmF7AGWp4/nN5D/QqNQs3Dvxd1Kk/WpjHfNujKHYUQ/5CoGyOyFNoWSPk5afzP0QVg==}
     engines: {node: '>=14.16'}
 
-  cli-boxes@4.0.1:
-    resolution: {integrity: sha512-5IOn+jcCEHEraYolBPs/sT4BxYCe2nHg374OPiItB1O96KZFseS2gthU4twyYzeDcFew4DaUM/xwc5BQf08JJw==}
-    engines: {node: '>=18.20 <19 || >=20.10'}
-
   cli-cursor@3.1.0:
     resolution: {integrity: sha512-I/zHAwsKf9FqGoXM4WWRACob9+SNukZTd94DWF57E4toouRulbCxcUh6RKUEOQlYTHJnzkPMySvPNaaSLNfLZw==}
     engines: {node: '>=8'}
@@ -6160,10 +6136,6 @@ packages:
 
   code-block-writer@13.0.3:
     resolution: {integrity: sha512-Oofo0pq3IKnsFtuHqSF7TqBfr71aeyZDVJ0HpmqB7FBM2qEigL0iPONSCZSO9pE9dZTAxANe5XHG9Uy0YMv8cg==}
-
-  code-excerpt@4.0.0:
-    resolution: {integrity: sha512-xxodCmBen3iy2i0WtAK8FlFNrRzjUqjRsMfho58xT/wvZU1YTM3fCnRjcy1gJPMepaRlgm/0e6w8SpWHpn3/cA==}
-    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   collapse-white-space@2.1.0:
     resolution: {integrity: sha512-loKTxY1zCOuG4j9f6EPnuyyYkf58RnhhWTvRoZEokgB+WbdXehfjFviyOVYkqzEWz1Q5kRiZdBYS5SwxbQYwzw==}
@@ -6275,10 +6247,6 @@ packages:
 
   convert-source-map@2.0.0:
     resolution: {integrity: sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==}
-
-  convert-to-spaces@2.0.1:
-    resolution: {integrity: sha512-rcQ1bsQO9799wq24uE5AM2tAILy4gXGIK/njFWcVQkGNZ96edlpY+A7bjwvzjYvLDyzmG1MmMLZhpcsb+klNMQ==}
-    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   cookie@1.1.1:
     resolution: {integrity: sha512-ei8Aos7ja0weRpFzJnEA9UHJ/7XQmqglbRwnf2ATjcB9Wq874VKH9kfjjirM6UhU2/E5fFYadylyhFldcqSidQ==}
@@ -7031,10 +6999,6 @@ packages:
   eventemitter3@5.0.4:
     resolution: {integrity: sha512-mlsTRyGaPBjPedk6Bvw+aqbsXDtoAyAzm5MO7JgU+yVRyMQ5O8bD4Kcci7BS85f93veegeCPkL8R4GLClnjLFw==}
 
-  events@3.3.0:
-    resolution: {integrity: sha512-mQw+2fkQbALzQ7V0MY0IqdnXNOeTtP4r0lN9z7AAawCXgqea7bDii20AYrIBrFd/Hx0M2Ocz6S111CaFkUcb0Q==}
-    engines: {node: '>=0.8.x'}
-
   execa@5.1.1:
     resolution: {integrity: sha512-8uSpZZocAZRBAPIEINJj3Lo9HyGitllczc27Eh5YYojjMFMn8yHMDMaUHE2Jqfq05D/wucwI4JGURyXt1vchyg==}
     engines: {node: '>=10'}
@@ -7467,24 +7431,6 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  graphology-layout-forceatlas2@0.10.1:
-    resolution: {integrity: sha512-ogzBeF1FvWzjkikrIFwxhlZXvD2+wlY54lqhsrWprcdPjopM2J9HoMweUmIgwaTvY4bUYVimpSsOdvDv1gPRFQ==}
-    peerDependencies:
-      graphology-types: '>=0.19.0'
-
-  graphology-types@0.24.8:
-    resolution: {integrity: sha512-hDRKYXa8TsoZHjgEaysSRyPdT6uB78Ci8WnjgbStlQysz7xR52PInxNsmnB7IBOM1BhikxkNyCVEFgmPKnpx3Q==}
-
-  graphology-utils@2.5.2:
-    resolution: {integrity: sha512-ckHg8MXrXJkOARk56ZaSCM1g1Wihe2d6iTmz1enGOz4W/l831MBCKSayeFQfowgF8wd+PQ4rlch/56Vs/VZLDQ==}
-    peerDependencies:
-      graphology-types: '>=0.23.0'
-
-  graphology@0.26.0:
-    resolution: {integrity: sha512-8SSImzgUUYC89Z042s+0r/vMibY7GX/Emz4LDO5e7jYXhuoWfHISPFJYjpRLUSJGq6UQ6xlenvX1p/hJdfXuXg==}
-    peerDependencies:
-      graphology-types: '>=0.24.0'
-
   handlebars@4.7.9:
     resolution: {integrity: sha512-4E71E0rpOaQuJR2A3xDZ+GM1HyWYv1clR58tC8emQNeQe3RH7MAzSbat+V0wG78LQBo6m6bzSG/L4pBuCsgnUQ==}
     engines: {node: '>=0.4.7'}
@@ -7818,11 +7764,6 @@ packages:
 
   is-hexadecimal@2.0.1:
     resolution: {integrity: sha512-DgZQp241c8oO6cA1SbTEWiXeoxV42vlcJxgH+B3hi1AiqqKruZR3ZGF8In3fj4+/y/7rHvlOZLZtgJ/4ttYGZg==}
-
-  is-in-ci@2.0.0:
-    resolution: {integrity: sha512-cFeerHriAnhrQSbpAxL37W1wcJKUUX07HyLWZCW1URJT/ra3GyUTzBgUnh24TMVfNTV2Hij2HLxkPHFZfOZy5w==}
-    engines: {node: '>=20'}
-    hasBin: true
 
   is-in-ssh@1.0.0:
     resolution: {integrity: sha512-jYa6Q9rH90kR1vKB6NM7qqd1mge3Fx4Dhw5TVlK1MUBqhEOuCagrEHMevNuCcbECmXZ0ThXkRm+Ymr51HwEPAw==}
@@ -8982,10 +8923,6 @@ packages:
   parseley@0.13.1:
     resolution: {integrity: sha512-uNBJZzmb60l6p6VWLTmevizNAGnE0xoSf1n0B4q3ntegDNzcS68NRCcBDZTcyXHxt2XhBChsCuqj4M+nChvE/A==}
 
-  patch-console@2.0.0:
-    resolution: {integrity: sha512-0YNdUceMdaQwoKce1gatDScmMo5pu/tfABfnzEqeG0gtTmd7mh/WcwgUjtAeOU7N8nFFlbQBnFK2gXW5fGvmMA==}
-    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
-
   path-browserify@1.0.1:
     resolution: {integrity: sha512-b7uo2UCUOYZcnF/3ID0lulOJi/bafxa1xPe7ZPsammBSpjSWQkjNxlt635YGS2MiR9GjvuXCtz2emr3jbsz98g==}
 
@@ -9594,9 +9531,6 @@ packages:
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
 
-  sigma@3.0.3:
-    resolution: {integrity: sha512-5H0zFlx6/NTQpqBg4Rm569ZOpnBOXMaS25UQThIWMU3XyzI5AhmorK/gnl87BvJBLhQd0tW4C0LIp3enWzMoNw==}
-
   signal-exit@3.0.7:
     resolution: {integrity: sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ==}
 
@@ -9843,10 +9777,6 @@ packages:
     resolution: {integrity: sha512-d79HhZya5Djd7am0q+W4RTsSU+D/aJzM+4Y4AGJGuGlgM2L6sx5ZvOYTmZjqPhrDrV6xJTtRSm1JCLj6V6LHLQ==}
     engines: {node: '>=14.16'}
 
-  terminal-size@4.0.1:
-    resolution: {integrity: sha512-avMLDQpUI9I5XFrklECw1ZEUPJhqzcwSWsyyI8blhRLT+8N1jLJWLWWYQpB2q2xthq8xDvjZPISVh53T/+CLYQ==}
-    engines: {node: '>=18'}
-
   terser@5.48.0:
     resolution: {integrity: sha512-J/9An6vs9Us6wKRriSFXBWdRZapREHqFzdNUKk0pmu804EMR6dr6winwo7e5JDxN4xahxQsuysyYFwlwj4XN/Q==}
     engines: {node: '>=10'}
@@ -9955,9 +9885,6 @@ packages:
 
   ts-morph@28.0.0:
     resolution: {integrity: sha512-Wp3tnZ2bzwxyTZMtgWVzXDfm7lB1Drz+y9DmmYH/L702PQhPyVrp3pkou3yIz4qjS14GY9kcpmLiOOMvl8oG1g==}
-
-  tseep@1.3.1:
-    resolution: {integrity: sha512-ZPtfk1tQnZVyr7BPtbJ93qaAh2lZuIOpTMjhrYa4XctT8xe7t4SAW9LIxrySDuYMsfNNayE51E/WNGrNVgVicQ==}
 
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
@@ -11643,10 +11570,6 @@ snapshots:
   '@fumadocs/tailwind@0.0.5(tailwindcss@4.3.0)':
     optionalDependencies:
       tailwindcss: 4.3.0
-
-  '@hono/node-server@2.0.4(hono@4.12.19)':
-    dependencies:
-      hono: 4.12.19
 
   '@html-eslint/core@0.60.0':
     dependencies:
@@ -13611,8 +13534,6 @@ snapshots:
   '@unrs/resolver-binding-win32-x64-msvc@1.12.2':
     optional: true
 
-  '@visulima/ansi@4.0.0-alpha.14': {}
-
   '@visulima/boxen@2.0.10': {}
 
   '@visulima/cerebro@2.1.5(@visulima/boxen@2.0.10)(@visulima/pail@3.2.2)(github-slugger@2.0.0)':
@@ -13644,10 +13565,6 @@ snapshots:
     dependencies:
       '@visulima/is-ansi-color-supported': 3.0.0-alpha.10
 
-  '@visulima/colorize@2.0.0-alpha.11':
-    dependencies:
-      '@visulima/is-ansi-color-supported': 3.0.0-alpha.10
-
   '@visulima/css-style-inject@1.0.0-alpha.15': {}
 
   '@visulima/disposable-email-domains@1.0.0-alpha.14': {}
@@ -13674,8 +13591,6 @@ snapshots:
       - rrule
 
   '@visulima/error@5.0.6': {}
-
-  '@visulima/error@6.0.0-alpha.28': {}
 
   '@visulima/find-cache-dir@3.0.0-alpha.9': {}
 
@@ -13704,6 +13619,8 @@ snapshots:
       yaml: 2.8.3
 
   '@visulima/humanizer@3.0.0-alpha.11': {}
+
+  '@visulima/humanizer@3.0.0-alpha.12': {}
 
   '@visulima/interactive-manager@1.0.0-alpha.2': {}
 
@@ -13894,6 +13811,8 @@ snapshots:
 
   '@visulima/path@3.0.0-alpha.10': {}
 
+  '@visulima/path@3.0.0-alpha.11': {}
+
   '@visulima/rollup-plugin-css@1.0.0-alpha.45(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)(@csstools/postcss-slow-plugins@2.0.0(postcss@8.5.15))(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@visulima/css-style-inject@1.0.0-alpha.15)(esbuild@0.28.0)(ini@6.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(lightningcss@1.32.0)(oxc-transform@0.127.0)(postcss@8.5.15)(rollup@4.60.1)(typescript@6.0.3)(yaml@2.8.3)':
     dependencies:
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.0)
@@ -13951,96 +13870,92 @@ snapshots:
       - smol-toml
       - yaml
 
-  '@visulima/secret-scanner-binding-darwin-arm64@1.0.0-alpha.3':
+  '@visulima/secret-scanner-binding-darwin-arm64@1.0.0-alpha.4':
     optional: true
 
-  '@visulima/secret-scanner-binding-darwin-x64@1.0.0-alpha.3':
+  '@visulima/secret-scanner-binding-darwin-x64@1.0.0-alpha.4':
     optional: true
 
-  '@visulima/secret-scanner-binding-linux-arm64-gnu@1.0.0-alpha.3':
+  '@visulima/secret-scanner-binding-linux-arm64-gnu@1.0.0-alpha.4':
     optional: true
 
-  '@visulima/secret-scanner-binding-linux-arm64-musl@1.0.0-alpha.3':
+  '@visulima/secret-scanner-binding-linux-arm64-musl@1.0.0-alpha.4':
     optional: true
 
-  '@visulima/secret-scanner-binding-linux-x64-gnu@1.0.0-alpha.3':
+  '@visulima/secret-scanner-binding-linux-x64-gnu@1.0.0-alpha.4':
     optional: true
 
-  '@visulima/secret-scanner-binding-linux-x64-musl@1.0.0-alpha.3':
+  '@visulima/secret-scanner-binding-linux-x64-musl@1.0.0-alpha.4':
     optional: true
 
-  '@visulima/secret-scanner-binding-win32-arm64-msvc@1.0.0-alpha.3':
+  '@visulima/secret-scanner-binding-win32-arm64-msvc@1.0.0-alpha.4':
     optional: true
 
-  '@visulima/secret-scanner-binding-win32-x64-msvc@1.0.0-alpha.3':
+  '@visulima/secret-scanner-binding-win32-x64-msvc@1.0.0-alpha.4':
     optional: true
 
-  '@visulima/secret-scanner@1.0.0-alpha.3':
+  '@visulima/secret-scanner@1.0.0-alpha.4':
     dependencies:
       ignore: 7.0.5
     optionalDependencies:
-      '@visulima/secret-scanner-binding-darwin-arm64': 1.0.0-alpha.3
-      '@visulima/secret-scanner-binding-darwin-x64': 1.0.0-alpha.3
-      '@visulima/secret-scanner-binding-linux-arm64-gnu': 1.0.0-alpha.3
-      '@visulima/secret-scanner-binding-linux-arm64-musl': 1.0.0-alpha.3
-      '@visulima/secret-scanner-binding-linux-x64-gnu': 1.0.0-alpha.3
-      '@visulima/secret-scanner-binding-linux-x64-musl': 1.0.0-alpha.3
-      '@visulima/secret-scanner-binding-win32-arm64-msvc': 1.0.0-alpha.3
-      '@visulima/secret-scanner-binding-win32-x64-msvc': 1.0.0-alpha.3
+      '@visulima/secret-scanner-binding-darwin-arm64': 1.0.0-alpha.4
+      '@visulima/secret-scanner-binding-darwin-x64': 1.0.0-alpha.4
+      '@visulima/secret-scanner-binding-linux-arm64-gnu': 1.0.0-alpha.4
+      '@visulima/secret-scanner-binding-linux-arm64-musl': 1.0.0-alpha.4
+      '@visulima/secret-scanner-binding-linux-x64-gnu': 1.0.0-alpha.4
+      '@visulima/secret-scanner-binding-linux-x64-musl': 1.0.0-alpha.4
+      '@visulima/secret-scanner-binding-win32-arm64-msvc': 1.0.0-alpha.4
+      '@visulima/secret-scanner-binding-win32-x64-msvc': 1.0.0-alpha.4
 
   '@visulima/source-map@3.0.0-alpha.9':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
 
-  '@visulima/spinner@1.0.0-alpha.1':
-    dependencies:
-      '@visulima/interactive-manager': 1.0.0-alpha.2
-
-  '@visulima/string@3.0.0-alpha.13': {}
-
   '@visulima/tabular@3.1.3': {}
 
   '@visulima/tabular@4.0.0-alpha.11': {}
 
-  '@visulima/task-runner-binding-darwin-arm64@1.0.0-alpha.15':
+  '@visulima/tabular@4.0.0-alpha.12': {}
+
+  '@visulima/task-runner-binding-darwin-arm64@1.0.0-alpha.16':
     optional: true
 
-  '@visulima/task-runner-binding-darwin-x64@1.0.0-alpha.15':
+  '@visulima/task-runner-binding-darwin-x64@1.0.0-alpha.16':
     optional: true
 
-  '@visulima/task-runner-binding-linux-arm64-gnu@1.0.0-alpha.15':
+  '@visulima/task-runner-binding-linux-arm64-gnu@1.0.0-alpha.16':
     optional: true
 
-  '@visulima/task-runner-binding-linux-arm64-musl@1.0.0-alpha.15':
+  '@visulima/task-runner-binding-linux-arm64-musl@1.0.0-alpha.16':
     optional: true
 
-  '@visulima/task-runner-binding-linux-x64-gnu@1.0.0-alpha.15':
+  '@visulima/task-runner-binding-linux-x64-gnu@1.0.0-alpha.16':
     optional: true
 
-  '@visulima/task-runner-binding-linux-x64-musl@1.0.0-alpha.15':
+  '@visulima/task-runner-binding-linux-x64-musl@1.0.0-alpha.16':
     optional: true
 
-  '@visulima/task-runner-binding-win32-arm64-msvc@1.0.0-alpha.15':
+  '@visulima/task-runner-binding-win32-arm64-msvc@1.0.0-alpha.16':
     optional: true
 
-  '@visulima/task-runner-binding-win32-x64-msvc@1.0.0-alpha.15':
+  '@visulima/task-runner-binding-win32-x64-msvc@1.0.0-alpha.16':
     optional: true
 
-  '@visulima/task-runner@1.0.0-alpha.15':
+  '@visulima/task-runner@1.0.0-alpha.16':
     dependencies:
       '@lydell/node-pty': 1.2.0-beta.12
-      '@visulima/humanizer': 3.0.0-alpha.11
-      '@visulima/path': 3.0.0-alpha.10
+      '@visulima/humanizer': 3.0.0-alpha.12
+      '@visulima/path': 3.0.0-alpha.11
       nanotar: 0.3.0
     optionalDependencies:
-      '@visulima/task-runner-binding-darwin-arm64': 1.0.0-alpha.15
-      '@visulima/task-runner-binding-darwin-x64': 1.0.0-alpha.15
-      '@visulima/task-runner-binding-linux-arm64-gnu': 1.0.0-alpha.15
-      '@visulima/task-runner-binding-linux-arm64-musl': 1.0.0-alpha.15
-      '@visulima/task-runner-binding-linux-x64-gnu': 1.0.0-alpha.15
-      '@visulima/task-runner-binding-linux-x64-musl': 1.0.0-alpha.15
-      '@visulima/task-runner-binding-win32-arm64-msvc': 1.0.0-alpha.15
-      '@visulima/task-runner-binding-win32-x64-msvc': 1.0.0-alpha.15
+      '@visulima/task-runner-binding-darwin-arm64': 1.0.0-alpha.16
+      '@visulima/task-runner-binding-darwin-x64': 1.0.0-alpha.16
+      '@visulima/task-runner-binding-linux-arm64-gnu': 1.0.0-alpha.16
+      '@visulima/task-runner-binding-linux-arm64-musl': 1.0.0-alpha.16
+      '@visulima/task-runner-binding-linux-x64-gnu': 1.0.0-alpha.16
+      '@visulima/task-runner-binding-linux-x64-musl': 1.0.0-alpha.16
+      '@visulima/task-runner-binding-win32-arm64-msvc': 1.0.0-alpha.16
+      '@visulima/task-runner-binding-win32-x64-msvc': 1.0.0-alpha.16
 
   '@visulima/tsconfig@2.1.3(yaml@2.9.0)':
     dependencies:
@@ -14064,121 +13979,96 @@ snapshots:
       - smol-toml
       - yaml
 
-  '@visulima/tui-binding-darwin-arm64@1.0.0-alpha.19':
+  '@visulima/tui-binding-darwin-arm64@1.0.0-alpha.20':
     optional: true
 
-  '@visulima/tui-binding-darwin-x64@1.0.0-alpha.19':
+  '@visulima/tui-binding-darwin-x64@1.0.0-alpha.20':
     optional: true
 
-  '@visulima/tui-binding-linux-arm64-gnu@1.0.0-alpha.19':
+  '@visulima/tui-binding-linux-arm64-gnu@1.0.0-alpha.20':
     optional: true
 
-  '@visulima/tui-binding-linux-arm64-musl@1.0.0-alpha.19':
+  '@visulima/tui-binding-linux-arm64-musl@1.0.0-alpha.20':
     optional: true
 
-  '@visulima/tui-binding-linux-x64-gnu@1.0.0-alpha.19':
+  '@visulima/tui-binding-linux-x64-gnu@1.0.0-alpha.20':
     optional: true
 
-  '@visulima/tui-binding-linux-x64-musl@1.0.0-alpha.19':
+  '@visulima/tui-binding-linux-x64-musl@1.0.0-alpha.20':
     optional: true
 
-  '@visulima/tui-binding-win32-arm64-msvc@1.0.0-alpha.19':
+  '@visulima/tui-binding-win32-arm64-msvc@1.0.0-alpha.20':
     optional: true
 
-  '@visulima/tui-binding-win32-x64-msvc@1.0.0-alpha.19':
+  '@visulima/tui-binding-win32-x64-msvc@1.0.0-alpha.20':
     optional: true
 
-  '@visulima/tui@1.0.0-alpha.19(@shikijs/langs@4.1.0)(@shikijs/themes@4.1.0)(@visulima/tabular@4.0.0-alpha.11)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.6))(react@19.2.6)(shiki@4.1.0)(ws@8.20.1)':
+  '@visulima/tui@1.0.0-alpha.20(@shikijs/langs@4.1.0)(@shikijs/themes@4.1.0)(@visulima/tabular@4.0.0-alpha.12)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.6))(react@19.2.6)(shiki@4.1.0)(ws@8.20.1)':
     dependencies:
-      '@visulima/ansi': 4.0.0-alpha.14
-      '@visulima/colorize': 2.0.0-alpha.11
-      '@visulima/error': 6.0.0-alpha.28
-      '@visulima/spinner': 1.0.0-alpha.1
-      '@visulima/string': 3.0.0-alpha.13
-      cli-boxes: 4.0.1
-      code-excerpt: 4.0.0
-      is-in-ci: 2.0.0
-      patch-console: 2.0.0
       react: 19.2.6
       react-reconciler: 0.33.0(react@19.2.6)
-      scheduler: 0.27.0
-      signal-exit: 4.1.0
-      terminal-size: 4.0.1
-      tseep: 1.3.1
-      type-fest: 5.6.0
       yoga-layout: 3.2.1
     optionalDependencies:
       '@shikijs/langs': 4.1.0
       '@shikijs/themes': 4.1.0
-      '@visulima/tabular': 4.0.0-alpha.11
-      '@visulima/tui-binding-darwin-arm64': 1.0.0-alpha.19
-      '@visulima/tui-binding-darwin-x64': 1.0.0-alpha.19
-      '@visulima/tui-binding-linux-arm64-gnu': 1.0.0-alpha.19
-      '@visulima/tui-binding-linux-arm64-musl': 1.0.0-alpha.19
-      '@visulima/tui-binding-linux-x64-gnu': 1.0.0-alpha.19
-      '@visulima/tui-binding-linux-x64-musl': 1.0.0-alpha.19
-      '@visulima/tui-binding-win32-arm64-msvc': 1.0.0-alpha.19
-      '@visulima/tui-binding-win32-x64-msvc': 1.0.0-alpha.19
+      '@visulima/tabular': 4.0.0-alpha.12
+      '@visulima/tui-binding-darwin-arm64': 1.0.0-alpha.20
+      '@visulima/tui-binding-darwin-x64': 1.0.0-alpha.20
+      '@visulima/tui-binding-linux-arm64-gnu': 1.0.0-alpha.20
+      '@visulima/tui-binding-linux-arm64-musl': 1.0.0-alpha.20
+      '@visulima/tui-binding-linux-x64-gnu': 1.0.0-alpha.20
+      '@visulima/tui-binding-linux-x64-musl': 1.0.0-alpha.20
+      '@visulima/tui-binding-win32-arm64-msvc': 1.0.0-alpha.20
+      '@visulima/tui-binding-win32-x64-msvc': 1.0.0-alpha.20
       marked: 15.0.12
       shiki: 4.1.0
       ws: 8.20.1
-    transitivePeerDependencies:
-      - ai
 
-  '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.24':
+  '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.25':
     optional: true
 
-  '@visulima/vis-binding-darwin-x64@1.0.0-alpha.24':
+  '@visulima/vis-binding-darwin-x64@1.0.0-alpha.25':
     optional: true
 
-  '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.24':
+  '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.25':
     optional: true
 
-  '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.24':
+  '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.25':
     optional: true
 
-  '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.24':
+  '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.25':
     optional: true
 
-  '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.24':
+  '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.25':
     optional: true
 
-  '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.24':
+  '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.25':
     optional: true
 
-  '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.24':
+  '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.25':
     optional: true
 
-  '@visulima/vis@1.0.0-alpha.24(@shikijs/langs@4.1.0)(@shikijs/themes@4.1.0)(@visulima/tabular@4.0.0-alpha.11)(marked@15.0.12)(shiki@4.1.0)(ws@8.20.1)':
+  '@visulima/vis@1.0.0-alpha.25(@shikijs/langs@4.1.0)(@shikijs/themes@4.1.0)(marked@15.0.12)(shiki@4.1.0)(ws@8.20.1)':
     dependencies:
-      '@floating-ui/core': 1.7.5
-      '@floating-ui/dom': 1.7.6
-      '@hono/node-server': 2.0.4(hono@4.12.19)
-      '@visulima/error': 6.0.0-alpha.28
-      '@visulima/secret-scanner': 1.0.0-alpha.3
-      '@visulima/source-map': 3.0.0-alpha.9
-      '@visulima/task-runner': 1.0.0-alpha.15
-      '@visulima/tui': 1.0.0-alpha.19(@shikijs/langs@4.1.0)(@shikijs/themes@4.1.0)(@visulima/tabular@4.0.0-alpha.11)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.6))(react@19.2.6)(shiki@4.1.0)(ws@8.20.1)
-      graphology: 0.26.0(graphology-types@0.24.8)
-      graphology-layout-forceatlas2: 0.10.1(graphology-types@0.24.8)
-      graphology-types: 0.24.8
-      hono: 4.12.19
+      '@visulima/secret-scanner': 1.0.0-alpha.4
+      '@visulima/tabular': 4.0.0-alpha.12
+      '@visulima/task-runner': 1.0.0-alpha.16
+      '@visulima/tui': 1.0.0-alpha.20(@shikijs/langs@4.1.0)(@shikijs/themes@4.1.0)(@visulima/tabular@4.0.0-alpha.12)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.6))(react@19.2.6)(shiki@4.1.0)(ws@8.20.1)
       jiti: 2.7.0
       module-replacements: 2.11.0
       module-replacements-codemods: 1.2.1
       react: 19.2.6
       react-reconciler: 0.33.0(react@19.2.6)
-      sigma: 3.0.3(graphology-types@0.24.8)
       tinyexec: 1.2.2
     optionalDependencies:
-      '@visulima/vis-binding-darwin-arm64': 1.0.0-alpha.24
-      '@visulima/vis-binding-darwin-x64': 1.0.0-alpha.24
-      '@visulima/vis-binding-linux-arm64-gnu': 1.0.0-alpha.24
-      '@visulima/vis-binding-linux-arm64-musl': 1.0.0-alpha.24
-      '@visulima/vis-binding-linux-x64-gnu': 1.0.0-alpha.24
-      '@visulima/vis-binding-linux-x64-musl': 1.0.0-alpha.24
-      '@visulima/vis-binding-win32-arm64-msvc': 1.0.0-alpha.24
-      '@visulima/vis-binding-win32-x64-msvc': 1.0.0-alpha.24
+      '@visulima/vis-binding-darwin-arm64': 1.0.0-alpha.25
+      '@visulima/vis-binding-darwin-x64': 1.0.0-alpha.25
+      '@visulima/vis-binding-linux-arm64-gnu': 1.0.0-alpha.25
+      '@visulima/vis-binding-linux-arm64-musl': 1.0.0-alpha.25
+      '@visulima/vis-binding-linux-x64-gnu': 1.0.0-alpha.25
+      '@visulima/vis-binding-linux-x64-musl': 1.0.0-alpha.25
+      '@visulima/vis-binding-win32-arm64-msvc': 1.0.0-alpha.25
+      '@visulima/vis-binding-win32-x64-msvc': 1.0.0-alpha.25
     transitivePeerDependencies:
       - '@aws-sdk/client-sts'
       - '@azure/storage-blob'
@@ -14187,8 +14077,6 @@ snapshots:
       - '@grpc/proto-loader'
       - '@shikijs/langs'
       - '@shikijs/themes'
-      - '@visulima/tabular'
-      - ai
       - cfonts
       - diff
       - google-auth-library
@@ -14680,8 +14568,6 @@ snapshots:
     dependencies:
       escape-string-regexp: 5.0.0
 
-  cli-boxes@4.0.1: {}
-
   cli-cursor@3.1.0:
     dependencies:
       restore-cursor: 3.1.0
@@ -14732,10 +14618,6 @@ snapshots:
   clsx@2.1.1: {}
 
   code-block-writer@13.0.3: {}
-
-  code-excerpt@4.0.0:
-    dependencies:
-      convert-to-spaces: 2.0.1
 
   collapse-white-space@2.1.0: {}
 
@@ -14849,8 +14731,6 @@ snapshots:
   convert-hrtime@5.0.0: {}
 
   convert-source-map@2.0.0: {}
-
-  convert-to-spaces@2.0.1: {}
 
   cookie@1.1.1: {}
 
@@ -15738,8 +15618,6 @@ snapshots:
 
   eventemitter3@5.0.4: {}
 
-  events@3.3.0: {}
-
   execa@5.1.1:
     dependencies:
       cross-spawn: 7.0.6
@@ -16188,22 +16066,6 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  graphology-layout-forceatlas2@0.10.1(graphology-types@0.24.8):
-    dependencies:
-      graphology-types: 0.24.8
-      graphology-utils: 2.5.2(graphology-types@0.24.8)
-
-  graphology-types@0.24.8: {}
-
-  graphology-utils@2.5.2(graphology-types@0.24.8):
-    dependencies:
-      graphology-types: 0.24.8
-
-  graphology@0.26.0(graphology-types@0.24.8):
-    dependencies:
-      events: 3.3.0
-      graphology-types: 0.24.8
-
   handlebars@4.7.9:
     dependencies:
       minimist: 1.2.8
@@ -16357,7 +16219,8 @@ snapshots:
     dependencies:
       parse-passwd: 1.0.0
 
-  hono@4.12.19: {}
+  hono@4.12.19:
+    optional: true
 
   hook-std@4.0.0: {}
 
@@ -16602,8 +16465,6 @@ snapshots:
       is-extglob: 2.1.1
 
   is-hexadecimal@2.0.1: {}
-
-  is-in-ci@2.0.0: {}
 
   is-in-ssh@1.0.0: {}
 
@@ -18051,8 +17912,6 @@ snapshots:
       leac: 0.7.0
       peberminta: 0.10.0
 
-  patch-console@2.0.0: {}
-
   path-browserify@1.0.1: {}
 
   path-exists@3.0.0: {}
@@ -18846,13 +18705,6 @@ snapshots:
 
   siginfo@2.0.0: {}
 
-  sigma@3.0.3(graphology-types@0.24.8):
-    dependencies:
-      events: 3.3.0
-      graphology-utils: 2.5.2(graphology-types@0.24.8)
-    transitivePeerDependencies:
-      - graphology-types
-
   signal-exit@3.0.7: {}
 
   signal-exit@4.1.0: {}
@@ -19097,8 +18949,6 @@ snapshots:
       type-fest: 2.19.0
       unique-string: 3.0.0
 
-  terminal-size@4.0.1: {}
-
   terser@5.48.0:
     dependencies:
       '@jridgewell/source-map': 0.3.11
@@ -19198,8 +19048,6 @@ snapshots:
     dependencies:
       '@ts-morph/common': 0.29.0
       code-block-writer: 13.0.3
-
-  tseep@1.3.1: {}
 
   tslib@2.8.1: {}
 
