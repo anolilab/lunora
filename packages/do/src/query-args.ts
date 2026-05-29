@@ -24,9 +24,27 @@ export type SortDirection = "asc" | "desc";
 export type OrderByInput = Record<string, SortDirection>;
 
 export interface QueryArgs {
+    /**
+     * Predicate injected by the runtime (e.g. by `@cirrus/server`'s RLS
+     * middleware, §3.2). AND-merged into `where` before compilation so the
+     * policy is enforced at the SQL layer regardless of caller input. This is
+     * an internal seam; user-facing call sites should pass `where`, not
+     * `baseWhere`. Public on the option type so cross-package consumers
+     * (RLS in `@cirrus/server`, aggregates in §3.1) can populate it without
+     * a server-only import.
+     */
+    baseWhere?: WhereInput;
     cursor?: null | string;
     limit?: number;
     orderBy?: OrderByInput[];
+    /**
+     * When `true`, `count()` invocations on the same table are rejected with
+     * `CirrusError("COUNT_RLS_UNSUPPORTED")`. Set alongside `baseWhere` by RLS
+     * to mirror kitcn's documented constraint that count is unsupported in an
+     * RLS-restricted context. The `baseWhere` itself still applies to row
+     * reads (`findMany`/`findFirst`) — this flag specifically guards `count`.
+     */
+    restrictsCounts?: boolean;
     where?: WhereInput;
     with?: WithInput;
 }

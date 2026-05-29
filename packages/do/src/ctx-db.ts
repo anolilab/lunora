@@ -191,8 +191,22 @@ export interface TableReaderLike {
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
 }
 
+/**
+ * Options accepted by `count()`. `baseWhere` and `restrictsCounts` mirror the
+ * same fields on {@link QueryArgs} — RLS (`@cirrus/server` §3.2) and aggregates
+ * (§3.1) populate them from the request context. When `restrictsCounts` is
+ * `true`, the reader throws `CirrusError("COUNT_RLS_UNSUPPORTED")` (422)
+ * rather than scanning, matching kitcn's documented behavior for counts in an
+ * RLS-restricted context.
+ */
+export interface CountArgs {
+    baseWhere?: WhereInput;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+}
+
 export interface DatabaseWriterLike {
-    count: (tableName: string, where?: WhereInput) => Promise<number>;
+    count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
     delete: (id: string) => Promise<void>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
@@ -711,6 +725,42 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
 /** DO dialect: fields resolve through `json_extract`; values via {@link serializeSqlValue}. */
 const doWhereStrategy: WhereCompilerStrategy = { fieldRef: jsonPath, serialize: serializeSqlValue };
 
+/**
+ * AND-merge an injected `baseWhere` (RLS / aggregates §3.1) onto the caller's
+ * predicate. `undefined`/`{}` collapse to the other side so the seam is no-op
+ * when no policy is in scope; both present produce a `{ AND: [...] }` node so
+ * the compiler renders them with explicit precedence.
+ */
+const mergeBaseWhere = (where: undefined | WhereInput, baseWhere: undefined | WhereInput): undefined | WhereInput => {
+    if (!baseWhere || Object.keys(baseWhere).length === 0) {
+        return where;
+    }
+
+    if (!where || Object.keys(where).length === 0) {
+        return baseWhere;
+    }
+
+    return { AND: [baseWhere, where] };
+};
+
+/**
+ * Thrown by the DO reader when `count()` runs against an RLS-restricted
+ * context (`restrictsCounts: true`). The string is the same `code` the server
+ * package's `CirrusError("COUNT_RLS_UNSUPPORTED")` carries; the DO package
+ * stays runtime-clean of `@cirrus/server`, so we throw a plain `Error` with a
+ * recognizable `name` and the server/runtime layer maps it to the canonical
+ * `CirrusError`.
+ */
+export class CountRlsUnsupportedError extends Error {
+    override readonly name = "CountRlsUnsupportedError";
+
+    readonly code = "COUNT_RLS_UNSUPPORTED" as const;
+
+    constructor(table: string) {
+        super(`count() is not supported on table "${table}" inside an RLS-restricted context`);
+    }
+}
+
 /** Invert the reader's staged SQL comparators back into `where`-tree operators. */
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
@@ -977,7 +1027,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const orderKeys = normalizeOrderKeys(args.orderBy);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
-            let predicate: WhereInput | undefined = args.where;
+            // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
+            // before the keyset seek so policy + cursor compose cleanly.
+            let predicate: WhereInput | undefined = mergeBaseWhere(args.where, args.baseWhere);
 
             if (seek) {
                 predicate = predicate ? { AND: [predicate, seek] } : seek;
@@ -1051,14 +1103,33 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return document;
         },
 
-        async count(tableName, where) {
+        async count(tableName, whereOrArgs) {
             if (!schema.tables[tableName]) {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
+            // Tolerate both the legacy `count(table, where)` shape and the new
+            // `count(table, { where, baseWhere, restrictsCounts })` options
+            // bag. We treat a plain object that carries any of the option keys
+            // as the options bag; everything else is a raw `where` (incl. an
+            // empty object — which is a vacuously-true filter, not "no opts").
+            const isCountArgs = (value: unknown): value is CountArgs =>
+                value !== null
+                && typeof value === "object"
+                && !Array.isArray(value)
+                && ("baseWhere" in value || "restrictsCounts" in value);
+            const countOptions: CountArgs = isCountArgs(whereOrArgs)
+                ? whereOrArgs
+                : { where: whereOrArgs as WhereInput | undefined };
+
+            if (countOptions.restrictsCounts) {
+                throw new CountRlsUnsupportedError(tableName);
+            }
+
             onRead(tableName);
 
-            const { params, sql: whereSql } = compileWhere(where, doWhereStrategy);
+            const merged = mergeBaseWhere(countOptions.where, countOptions.baseWhere);
+            const { params, sql: whereSql } = compileWhere(merged, doWhereStrategy);
 
             let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
 

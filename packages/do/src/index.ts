@@ -2,6 +2,7 @@ export type {
     BroadcastDelta,
     Clock,
     ColumnMetaLike,
+    CountArgs,
     CtxDbOptions,
     DatabaseWriterLike,
     IdGenerator,
@@ -18,7 +19,7 @@ export type {
     WriteEvent,
     WriteHook,
 } from "./ctx-db.js";
-export { createShardCtxDb, runShardMigrations } from "./ctx-db.js";
+export { CountRlsUnsupportedError, createShardCtxDb, runShardMigrations } from "./ctx-db.js";
 export type {
     DataMigrationDocument,
     DataMigrationLike,
