@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
+import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { backfillAggregateIndexes, createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
