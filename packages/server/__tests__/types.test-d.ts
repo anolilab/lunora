@@ -87,10 +87,14 @@ const pingRoute = httpRoute.get("/api/ping").handler(() => ({ ok: true }));
 export type _Check12 = Assert<Equal<typeof pingRoute, CirrusRouteHandler>>;
 
 // `.output()` constrains the handler's return — a mismatch is a compile error.
-// @ts-expect-error - handler returns number, but .output declares string
+// The directive sits immediately before `.handler(() => 42)` because TypeScript
+// attributes the type error to that specific line within the multi-line chain;
+// prettier re-splits long chains, so an above-the-const placement won't survive
+// the pre-commit hook.
 const routeOutputMismatch = httpRoute
     .get("/api/x")
     .output(v.string())
+    // @ts-expect-error - handler returns number, but .output declares string
     .handler(() => 42);
 
 export type _Check13 = Assert<Equal<typeof routeOutputMismatch, CirrusRouteHandler>>;
