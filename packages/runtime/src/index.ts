@@ -1,26 +1,36 @@
 export type {
+    AdminTableResolver,
     ExecutionContextLike,
+    GlobalExportFn,
+    GlobalImportFn,
     HttpActionContext,
     HttpActionLike,
     HttpRouterLike,
     Route,
     RpcContext,
     RpcEnvelope,
+    ShardingInfo,
     WorkerOptions,
 } from "./create-worker.js";
 export { createWorker, defineRpcEnvelope } from "./create-worker.js";
 export type { CirrusErrorBody } from "./errors.js";
 export { CirrusError, toErrorResponse } from "./errors.js";
 export type {
+    ExportFanOutRequest,
+    ExportFanOutResult,
     FanOutRequest,
     FanOutResult,
     FanOutSpec,
+    ImportFanOutRequest,
+    ImportFanOutResult,
     MergeStrategy,
     MigrationFanOutRequest,
     MigrationFanOutResult,
     QueryCoordinator,
     QueryCoordinatorOptions,
     ShardError,
+    ShardExportOutcome,
+    ShardImportOutcome,
     ShardMigrationOutcome,
     ShardRegistry,
 } from "./query-coordinator.js";

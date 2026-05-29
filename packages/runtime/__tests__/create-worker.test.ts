@@ -277,7 +277,7 @@ describe("createWorker", () => {
 
         const worker = createWorker({
             shardDO: shard.namespace,
-            queryCoordinator: { fanOut: fanOut as never, orchestrateMigration: fanOut as never, registry: {} as never },
+            queryCoordinator: { fanOut: fanOut as never, orchestrateMigration: fanOut as never, orchestrateExport: vi.fn() as never, orchestrateImport: vi.fn() as never, registry: {} as never },
             resolveIdentity: () => ({ userId: "user_42", email: "u@example.com" }),
         });
 
@@ -322,7 +322,7 @@ describe("createWorker — migration endpoint", () => {
         );
 
         const worker = createWorker({
-            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: orchestrateMigration as never, registry: {} as never },
+            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: orchestrateMigration as never, orchestrateExport: vi.fn() as never, orchestrateImport: vi.fn() as never, registry: {} as never },
             shardDO: shard.namespace,
         });
 
@@ -355,7 +355,7 @@ describe("createWorker — migration endpoint", () => {
 
     test("rejects a non-migration functionPath with 400", async () => {
         const worker = createWorker({
-            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: vi.fn() as never, registry: {} as never },
+            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: vi.fn() as never, orchestrateExport: vi.fn() as never, orchestrateImport: vi.fn() as never, registry: {} as never },
             shardDO: shard.namespace,
         });
 
@@ -366,7 +366,7 @@ describe("createWorker — migration endpoint", () => {
 
     test("rejects a missing table with 400", async () => {
         const worker = createWorker({
-            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: vi.fn() as never, registry: {} as never },
+            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: vi.fn() as never, orchestrateExport: vi.fn() as never, orchestrateImport: vi.fn() as never, registry: {} as never },
             shardDO: shard.namespace,
         });
 
@@ -377,7 +377,7 @@ describe("createWorker — migration endpoint", () => {
 
     test("rejects non-POST with 405", async () => {
         const worker = createWorker({
-            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: vi.fn() as never, registry: {} as never },
+            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: vi.fn() as never, orchestrateExport: vi.fn() as never, orchestrateImport: vi.fn() as never, registry: {} as never },
             shardDO: shard.namespace,
         });
 

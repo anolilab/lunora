@@ -83,7 +83,46 @@ export interface ResolvedIdentity {
     userId: string;
 }
 
+/**
+ * Per-table sharding metadata the admin import endpoint needs to route rows.
+ * Structural so this package stays free of `@cirrus/server`. The codegen-
+ * generated worker entry passes a thin projection of the user's schema.
+ */
+export interface ShardingInfo {
+    /** `global` when the table lives in D1; `shardBy` when keyed by a field; `root` (or absent) otherwise. */
+    mode: { field?: string; kind: "global" | "root" | "shardBy" };
+}
+
+/**
+ * Lookup the runtime uses to bucket an import row to its owning shard. Returns
+ * `undefined` for unknown tables — the row is reported as a hard error.
+ */
+export type AdminTableResolver = (table: string) => ShardingInfo | undefined;
+
+/**
+ * Streamed bulk export of `.global()` tables, materialised as an async iterable
+ * of `{table, doc}` rows. The runtime concatenates this stream after the
+ * shard-local stream so the receiver sees a single NDJSON body.
+ */
+export type GlobalExportFn = (request: { tables: ReadonlyArray<string> }) => AsyncIterable<{ doc: Record<string, unknown>; table: string }>;
+
+/** Bulk import of `.global()` rows. Returns insert counts + errors merged across tables. */
+export type GlobalImportFn = (request: {
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>;
+    startLine?: number;
+}) => Promise<{
+    conflicts: number;
+    errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
+    inserted: Record<string, number>;
+}>;
+
 export interface WorkerOptions {
+    /**
+     * Admin bearer token expected by the export/import endpoints. When unset,
+     * the endpoints respond with `ADMIN_FORBIDDEN` — the same posture the
+     * per-shard admin gate uses.
+     */
+    adminToken?: string;
     /**
      * D1 binding for `.global()` tables. Currently unused by the routing
      * layer; downstream packages will read it from `env.DB` directly.
@@ -91,6 +130,11 @@ export interface WorkerOptions {
     d1?: unknown;
     /** Default shard key used when an envelope omits one. */
     defaultShardKey?: string;
+    /**
+     * Stream `.global()` rows for the admin export endpoint. When omitted,
+     * the export endpoint covers only shard-local tables.
+     */
+    exportGlobals?: GlobalExportFn;
     /**
      * Router for HTTP actions (`httpRouter()` from `@cirrus/server`, a hono app).
      * Consulted for requests that miss the explicit {@link WorkerOptions.routes}
@@ -101,6 +145,11 @@ export interface WorkerOptions {
      * own 404 (a path-match with the wrong verb is a 404, not a 405).
      */
     httpRouter?: HttpRouterLike;
+    /**
+     * Insert `.global()` rows for the admin import endpoint. When omitted,
+     * rows targeting global tables are reported as hard errors.
+     */
+    importGlobals?: GlobalImportFn;
     /**
      * When true, the runtime calls `ctx.passThroughOnException()` at the top
      * of the fetch handler. Forwards uncaught exceptions to the origin
@@ -124,6 +173,11 @@ export interface WorkerOptions {
      */
     resolveIdentity?: (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     /**
+     * Resolve a table's sharding metadata. Required by the import endpoint to
+     * bucket rows; when omitted, every row routes to the default shard.
+     */
+    resolveTableSharding?: AdminTableResolver;
+    /**
      * Map of routes for custom HTTP handlers (auth callbacks etc.). Keys can
      * be either `"METHOD path"` (e.g. `"GET /healthz"`) or just `"path"`
      * (e.g. `"/healthz"`) — the runtime will match the more specific form
@@ -144,6 +198,8 @@ export interface RpcContext {
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 const MIGRATE_PATH = "/_cirrus/migrate";
+const EXPORT_PATH = "/_cirrus/admin/export";
+const IMPORT_PATH = "/_cirrus/admin/import";
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -253,6 +309,14 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             return handleMigrate(request, env);
         }
 
+        if (url.pathname === EXPORT_PATH) {
+            return handleExport(request, env);
+        }
+
+        if (url.pathname === IMPORT_PATH) {
+            return handleImport(request, env);
+        }
+
         // HTTP actions are the lowest-priority matcher: explicit routes and the
         // internal `/_cirrus/*` endpoints above always win. Once the request
         // reaches the router, hono owns routing — its 404 is the terminal 404.
@@ -286,6 +350,128 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             headers: forwardedHeaders,
             table: migrate.table,
         });
+
+        return Response.json(result, {
+            headers: { "content-type": "application/json" },
+            status: 200,
+        });
+    };
+
+    const handleExport = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Export endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin export endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        if (!options.queryCoordinator) {
+            throw new CirrusError("Export endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const body = await parseExportBody(request);
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        // Partition the requested tables into shard-local vs global. `null`
+        // tables means "every table" — we let the per-shard exporter decide.
+        const shardLocalTables: string[] = [];
+        const globalTables: string[] = [];
+
+        if (body.tables && body.tables.length > 0) {
+            for (const table of body.tables) {
+                const info = options.resolveTableSharding?.(table);
+
+                if (info?.mode.kind === "global") {
+                    globalTables.push(table);
+                } else {
+                    shardLocalTables.push(table);
+                }
+            }
+        }
+
+        const wantGlobals = body.tables === undefined || globalTables.length > 0;
+        const exportGlobalsFn = options.exportGlobals;
+
+        // Stream NDJSON: shard-local rows first (from `orchestrateExport`'s
+        // collected envelopes), then global rows (from the D1 helper). The
+        // shard fan-out is materialised because each shard returns a single
+        // envelope; we still write the response incrementally so a slow
+        // consumer never inflates worker memory.
+        const stream = new ReadableStream<Uint8Array>({
+            async pull(controller) {
+                const encoder = new TextEncoder();
+                const writeRow = (row: { doc: Record<string, unknown>; table: string }): void => {
+                    controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
+                };
+
+                try {
+                    // Shard-local: only fan out when caller wants any of them.
+                    if (body.tables === undefined || shardLocalTables.length > 0) {
+                        const coordinator = options.queryCoordinator!;
+                        const exportTables = body.tables === undefined ? [] : shardLocalTables;
+                        // When tables is undefined the per-shard exporter
+                        // visits every shard-local table, but we still need a
+                        // table list to seed the registry probe. Fall back to
+                        // `resolveTableSharding`'s keys if the caller passed
+                        // none — best effort; a project without the resolver
+                        // will simply not fan out automatically.
+                        const probeTables = exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
+
+                        const result = await coordinator.orchestrateExport(options.shardDO, {
+                            args: { tables: exportTables },
+                            headers: forwardedHeaders,
+                            tables: probeTables,
+                        });
+
+                        for (const shard of result.shards) {
+                            if (shard.error) {
+                                continue;
+                            }
+
+                            for (const row of shard.rows ?? []) {
+                                writeRow(row);
+                            }
+                        }
+                    }
+
+                    // Globals: stream rows from the D1 helper when configured.
+                    if (wantGlobals && exportGlobalsFn) {
+                        const tablesArg = body.tables === undefined ? [] : globalTables;
+                        const iter = exportGlobalsFn({ tables: tablesArg });
+
+                        for await (const row of iter) {
+                            writeRow(row);
+                        }
+                    }
+
+                    controller.close();
+                } catch (error: unknown) {
+                    controller.error(error);
+                }
+            },
+        });
+
+        return new Response(stream, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
+    };
+
+    const handleImport = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin import endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        if (!options.queryCoordinator) {
+            throw new CirrusError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const result = await streamingImport(request, options, forwardedHeaders);
 
         return Response.json(result, {
             headers: { "content-type": "application/json" },
@@ -483,6 +669,289 @@ const forwardToShard = async (namespace: ShardNamespaceLike, shardKey: string, r
     const stub = resolveShard(namespace, shardKey);
 
     return stub.fetch(request);
+};
+
+interface ExportBody {
+    tables: ReadonlyArray<string> | undefined;
+}
+
+const parseExportBody = async (request: Request): Promise<ExportBody> => {
+    let body: unknown;
+
+    try {
+        const text = await request.text();
+
+        body = text === "" ? {} : JSON.parse(text);
+    } catch {
+        throw new CirrusError("Export body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const candidate = (body ?? {}) as { tables?: unknown };
+
+    if (candidate.tables === undefined) {
+        return { tables: undefined };
+    }
+
+    if (!Array.isArray(candidate.tables)) {
+        throw new CirrusError("Export `tables` must be a string array", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const tables: string[] = [];
+
+    for (const entry of candidate.tables) {
+        if (typeof entry !== "string" || entry.length === 0) {
+            throw new CirrusError("Export `tables` entries must be non-empty strings", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        tables.push(entry);
+    }
+
+    return { tables };
+};
+
+/**
+ * Best-effort enumeration of known tables for the auto-export path. The
+ * runtime doesn't carry the schema, so we ask the resolver for a sentinel set
+ * by probing common conventions; in practice the codegen-generated worker
+ * wraps `resolveTableSharding` with `Object.keys(schema.tables)` and returns
+ * via a side channel. For now this falls through to an empty list — the CLI
+ * always passes explicit `--tables` so this path is mainly defensive.
+ */
+const collectKnownTables = (resolver: AdminTableResolver | undefined): string[] => {
+    void resolver;
+
+    return [];
+};
+
+interface AdminBatch {
+    rows: { doc: Record<string, unknown>; table: string }[];
+    shardKey: string;
+    startLine: number;
+}
+
+/**
+ * Stream the inbound NDJSON body, bucket rows per shard, and forward them to
+ * the coordinator's import fan-out. Globals are siphoned off and handed to the
+ * `importGlobals` callback (if present) so the two storage planes can run in
+ * parallel.
+ */
+const streamingImport = async (
+    request: Request,
+    options: WorkerOptions,
+    forwardedHeaders: Record<string, string>,
+): Promise<{
+    conflicts: number;
+    errors: { code: string; line: number; message: string; table: string }[];
+    inserted: Record<string, number>;
+}> => {
+    const defaultShard = options.defaultShardKey ?? "__root__";
+
+    if (!request.body) {
+        throw new CirrusError("Import endpoint requires a request body", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const errors: { code: string; line: number; message: string; table: string }[] = [];
+    const globalRows: { doc: Record<string, unknown>; table: string }[] = [];
+    const globalLineMap: number[] = [];
+    const perShard = new Map<string, AdminBatch>();
+    let lineNumber = 0;
+
+    const reader = request.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const handleLine = (line: string): void => {
+        const trimmed = line.trim();
+
+        if (trimmed.length === 0) {
+            return;
+        }
+
+        lineNumber += 1;
+
+        let parsed: unknown;
+
+        try {
+            parsed = JSON.parse(trimmed);
+        } catch {
+            errors.push({ code: "BAD_ROW", line: lineNumber, message: "line is not valid JSON", table: "" });
+
+            return;
+        }
+
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            errors.push({ code: "BAD_ROW", line: lineNumber, message: "row must be a JSON object", table: "" });
+
+            return;
+        }
+
+        const candidate = parsed as { doc?: unknown; table?: unknown };
+
+        if (typeof candidate.table !== "string" || candidate.table.length === 0) {
+            errors.push({ code: "BAD_ROW", line: lineNumber, message: "row is missing `table`", table: "" });
+
+            return;
+        }
+
+        if (!candidate.doc || typeof candidate.doc !== "object" || Array.isArray(candidate.doc)) {
+            errors.push({ code: "BAD_ROW", line: lineNumber, message: "row is missing or malformed `doc`", table: candidate.table });
+
+            return;
+        }
+
+        const { table } = candidate;
+        const doc = candidate.doc as Record<string, unknown>;
+        const info = options.resolveTableSharding?.(table);
+
+        if (info?.mode.kind === "global") {
+            globalRows.push({ doc, table });
+            globalLineMap.push(lineNumber);
+
+            return;
+        }
+
+        // Shard-local routing: shardBy(field) picks the value of `doc[field]`;
+        // root/undefined modes route to the default shard.
+        let shardKey = defaultShard;
+
+        if (info?.mode.kind === "shardBy" && typeof info.mode.field === "string") {
+            const raw = doc[info.mode.field];
+
+            if (raw === undefined || raw === null) {
+                errors.push({
+                    code: "BAD_ROW",
+                    line: lineNumber,
+                    message: `row missing shard field "${info.mode.field}" for table "${table}"`,
+                    table,
+                });
+
+                return;
+            }
+
+            shardKey = String(raw);
+        }
+
+        const existing = perShard.get(shardKey);
+
+        if (existing) {
+            existing.rows.push({ doc, table });
+        } else {
+            perShard.set(shardKey, { rows: [{ doc, table }], shardKey, startLine: lineNumber });
+        }
+    };
+
+    while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex = buffer.indexOf("\n");
+
+        while (newlineIndex !== -1) {
+            const line = buffer.slice(0, newlineIndex);
+
+            buffer = buffer.slice(newlineIndex + 1);
+            handleLine(line);
+            newlineIndex = buffer.indexOf("\n");
+        }
+    }
+
+    if (buffer.length > 0) {
+        handleLine(buffer);
+    }
+
+    const inserted: Record<string, number> = {};
+    let conflicts = 0;
+
+    // Fan shard-local batches out via the coordinator. The order of batches
+    // is insertion order so error line numbers reflect the source NDJSON.
+    if (perShard.size > 0) {
+        const coordinator = options.queryCoordinator!;
+        const result = await coordinator.orchestrateImport(options.shardDO, {
+            batches: [...perShard.values()],
+            headers: forwardedHeaders,
+        });
+
+        for (const [table, count] of Object.entries(result.inserted)) {
+            inserted[table] = (inserted[table] ?? 0) + count;
+        }
+
+        for (const e of result.errors) {
+            errors.push({ ...e });
+        }
+
+        conflicts += result.conflicts;
+    }
+
+    // Run global imports through the user-supplied helper.
+    if (globalRows.length > 0) {
+        if (options.importGlobals) {
+            const startLine = globalLineMap[0] ?? 1;
+            const result = await options.importGlobals({ rows: globalRows, startLine });
+
+            for (const [table, count] of Object.entries(result.inserted)) {
+                inserted[table] = (inserted[table] ?? 0) + count;
+            }
+
+            for (const e of result.errors) {
+                errors.push({ ...e });
+            }
+
+            conflicts += result.conflicts;
+        } else {
+            for (const [index, globalRow] of globalRows.entries()) {
+                errors.push({
+                    code: "GLOBAL_NOT_CONFIGURED",
+                    line: globalLineMap[index]!,
+                    message: `row targets global table "${globalRow!.table}" but no \`importGlobals\` is configured`,
+                    table: globalRow!.table,
+                });
+            }
+        }
+    }
+
+    return { conflicts, errors, inserted };
+};
+
+/**
+ * Constant-time-ish bearer check used by the admin endpoints. We accept the
+ * token as a verbatim string match because the worker's existing
+ * `Authorization` header handling is also plain — the per-shard gate is what
+ * provides the constant-time check downstream.
+ */
+const checkAdminAuth = (request: Request, expected: string | undefined): boolean => {
+    if (!expected || expected.length === 0) {
+        return false;
+    }
+
+    const authorization = request.headers.get("authorization");
+
+    if (!authorization) {
+        return false;
+    }
+
+    const [scheme, ...rest] = authorization.split(" ");
+
+    if (scheme?.toLowerCase() !== "bearer") {
+        return false;
+    }
+
+    const supplied = rest.join(" ").trim();
+    const max = Math.max(expected.length, supplied.length);
+    let diff = expected.length ^ supplied.length;
+
+    for (let index = 0; index < max; index += 1) {
+        const ca = index < expected.length ? expected.charCodeAt(index) : 0;
+        const cb = index < supplied.length ? supplied.charCodeAt(index) : 0;
+
+        diff |= ca ^ cb;
+    }
+
+    return diff === 0;
 };
 
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
