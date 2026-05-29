@@ -218,6 +218,26 @@ describe("findFirst", () => {
     });
 });
 
+describe("findFirstOrThrow", () => {
+    test("returns the matched row, mirroring findFirst on a hit", async () => {
+        const writer = setupTodos();
+
+        await seed(writer);
+
+        const top = await writer.findFirstOrThrow("todos", { orderBy: [{ seq: "desc" }], where: { projectId: "p1" } });
+
+        expect(top["_id"]).toBe("t3");
+    });
+
+    test("throws NotFoundError when no row matches", async () => {
+        const writer = setupTodos();
+
+        await seed(writer);
+
+        await expect(writer.findFirstOrThrow("todos", { where: { projectId: "nope" } })).rejects.toThrow(/findFirstOrThrow/);
+    });
+});
+
 describe("count", () => {
     test("counts rows matching the where filter", async () => {
         const writer = setupTodos();

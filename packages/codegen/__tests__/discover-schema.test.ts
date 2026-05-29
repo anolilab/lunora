@@ -186,6 +186,31 @@ describe("discoverSchema", () => {
         expect(todos?.shape.plain).toEqual({ kind: "string" });
     });
 
+    test("captures timestamp/date kinds and the $type/defaultNow modifiers", () => {
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                events: defineTable({
+                    at: v.timestamp(),
+                    due: v.date(),
+                    startedAt: v.timestamp().defaultNow(),
+                    externalId: v.string().$type<\`ext_\${string}\`>(),
+                }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const events = schema.tables.find((table) => table.name === "events");
+
+        expect(events?.shape.at).toEqual({ kind: "timestamp" });
+        expect(events?.shape.due).toEqual({ kind: "date" });
+        // defaultNow records a default like .default(), making the column insert-optional.
+        expect(events?.shape.startedAt).toEqual({ column: { hasDefault: true, notNull: true }, kind: "timestamp" });
+        // $type is a type-only override: it leaves the discovered kind untouched.
+        expect(events?.shape.externalId).toEqual({ column: { notNull: true }, kind: "string" });
+    });
+
     test("parses .relations() into one/many descriptors with references defaulting to _id", () => {
         const { project, schemaPath } = projectWith(`
             import { defineSchema, defineTable, v } from "@cirrus/server";

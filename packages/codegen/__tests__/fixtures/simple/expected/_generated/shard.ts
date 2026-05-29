@@ -86,11 +86,20 @@ const bindTable = (writer: DatabaseWriterLike, tableName: string) => ({
     count: (where?: WhereInput) => writer.count(tableName, where),
     delete: (id: string) => writer.delete(id),
     findFirst: (args?: QueryArgs) => writer.findFirst(tableName, args),
+    findFirstOrThrow: (args?: QueryArgs) => writer.findFirstOrThrow(tableName, args),
     findMany: (args?: QueryArgs) => writer.findMany(tableName, args),
     get: (id: string) => writer.get(id),
     insert: (values: Record<string, unknown>) => writer.insert(tableName, values),
     patch: (id: string, values: Record<string, unknown>) => writer.patch(id, values),
     replace: (id: string, values: Record<string, unknown>) => writer.replace(id, values),
+});
+
+const bindOrm = (facade: Record<string, ReturnType<typeof bindTable>>) => ({
+    delete: (table: string, id: string) => facade[table].delete(id),
+    insert: (table: string) => ({ values: (values: Record<string, unknown>) => facade[table].insert(values) }),
+    query: facade,
+    replace: (table: string, id: string) => ({ with: (values: Record<string, unknown>) => facade[table].replace(id, values) }),
+    update: (table: string, id: string) => ({ set: (values: Record<string, unknown>) => facade[table].patch(id, values) }),
 });
 
 const dispatchRun = (expected: FunctionKind, functionPath: string, args: Record<string, unknown>, ctx: unknown): Promise<unknown> | unknown => {
@@ -211,7 +220,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             });
             const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;
 
-            const facade = db as unknown as Record<string, unknown>;
+            const facade = db as unknown as Record<string, ReturnType<typeof bindTable>>;
             facade["messages"] = bindTable(db, "messages");
             facade["users"] = bindTable(globalDb, "users");
             facade["attachments"] = bindTable(globalDb, "attachments");
@@ -223,6 +232,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 },
                 db,
                 fetch: globalThis.fetch.bind(globalThis),
+                orm: bindOrm(facade),
                 scheduler,
                 storage: config.storage?.(env) ?? storageStub,
             };

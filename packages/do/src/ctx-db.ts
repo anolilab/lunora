@@ -31,7 +31,7 @@ import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
 import type { RelationDefinitionLike } from "./relations.js";
 import { applyOnDelete, resolveWith } from "./relations.js";
-import { ConflictError } from "./transaction.js";
+import { ConflictError, NotFoundError } from "./transaction.js";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 import { hasTrigger, runTriggers } from "./triggers.js";
 import type { MutationDelta } from "./types.js";
@@ -195,6 +195,7 @@ export interface DatabaseWriterLike {
     count: (tableName: string, where?: WhereInput) => Promise<number>;
     delete: (id: string) => Promise<void>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
+    findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
@@ -1038,6 +1039,16 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const result = await writer.findMany(tableName, { ...args, limit: 1 });
 
             return result.page[0] ?? null;
+        },
+
+        async findFirstOrThrow(tableName, args = {}) {
+            const document = await writer.findFirst(tableName, args);
+
+            if (document === null) {
+                throw new NotFoundError(`findFirstOrThrow: no "${tableName}" document matched`);
+            }
+
+            return document;
         },
 
         async count(tableName, where) {

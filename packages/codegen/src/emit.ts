@@ -21,6 +21,11 @@ const validatorToType = (validator: ValidatorIR): string => {
         case "bytes": {
             return "ArrayBuffer";
         }
+        case "date":
+        case "timestamp": {
+            // Epoch-millisecond numbers; the distinction is semantic only.
+            return "number";
+        }
         case "id": {
             return `Id<"${validator.tableName ?? "_unknown_"}">`;
         }
@@ -318,6 +323,7 @@ export type LoadWith<T extends keyof DataModel, W> = Doc<T> & LoadedRelations<T,
 export interface TableReaderFacade<T extends keyof DataModel> {
     count: (where?: Where<Doc<T>>) => Promise<number>;
     findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;
+    findFirstOrThrow: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W>>;
     findMany: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<QueryPage<LoadWith<T, W>>>;
     get: (id: Id<T>) => Promise<Doc<T> | null>;
 }
@@ -339,6 +345,34 @@ export type DatabaseReaderFacade = {
 export type DatabaseWriterFacade = {
     readonly [T in keyof DataModel]: TableWriterFacade<T>;
 };
+
+/** Insert builder returned by \`ctx.orm.insert(table)\`. */
+export interface OrmInsertBuilder<T extends keyof DataModel> {
+    values: (values: Insert<T>) => Promise<Id<T>>;
+}
+
+/** Replace builder returned by \`ctx.orm.replace(table, id)\` — swaps the whole document. */
+export interface OrmReplaceBuilder<T extends keyof DataModel> {
+    with: (values: Insert<T>) => Promise<void>;
+}
+
+/** Update builder returned by \`ctx.orm.update(table, id)\` — patches the named fields. */
+export interface OrmUpdateBuilder<T extends keyof DataModel> {
+    set: (values: Partial<Insert<T>>) => Promise<void>;
+}
+
+/** Read-only ORM surface — \`ctx.orm\` on a \`QueryCtx\`. Mirrors \`ctx.db\` reads under a kitcn-style \`query\` namespace. */
+export interface OrmReader {
+    query: DatabaseReaderFacade;
+}
+
+/** Read-write ORM surface — \`ctx.orm\` on a \`MutationCtx\` / \`ActionCtx\`. Writes are addressed by id, like \`ctx.db\`. */
+export interface OrmWriter extends OrmReader {
+    delete: <T extends keyof DataModel>(table: T, id: Id<T>) => Promise<void>;
+    insert: <T extends keyof DataModel>(table: T) => OrmInsertBuilder<T>;
+    replace: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmReplaceBuilder<T>;
+    update: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmUpdateBuilder<T>;
+}
 `;
 };
 
@@ -601,7 +635,7 @@ import type {
     RegisteredQuery,
 } from "@cirrus/server";
 
-import type { DatabaseReaderFacade, DatabaseWriterFacade${dataModelImportTail} } from "./dataModel.js";
+import type { DatabaseReaderFacade, DatabaseWriterFacade${dataModelImportTail}, OrmReader, OrmWriter } from "./dataModel.js";
 
 export type { DataModel, Doc, Id } from "./dataModel.js";
 
@@ -613,14 +647,17 @@ export type { DataModel, Doc, Id } from "./dataModel.js";
  */
 export interface QueryCtx extends Omit<QueryCtxBase, "db"> {
     readonly db: DatabaseReader & DatabaseReaderFacade;
+    readonly orm: OrmReader;
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
+    readonly orm: OrmWriter;
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
+    readonly orm: OrmWriter;
 }
 
 /** \`query()\` bound to this project's typed {@link QueryCtx}. */
@@ -886,6 +923,10 @@ const vectorsStub: VectorSearchLike = {
 
     const hasTables = schema.tables.length > 0;
 
+    // `ctx.orm` mirrors the per-table facade under a kitcn-style namespace; it
+    // only exists when the project declares tables (otherwise `facade` is unbuilt).
+    const ormCtxField = hasTables ? `\n                orm: bindOrm(facade),` : "";
+
     // The per-table facade (`ctx.db.<table>.findMany(...)`) is a thin binding
     // over the structural `DatabaseWriterLike`: it pins `tableName` so callers
     // don't repeat it. `delete`/`get`/`patch`/`replace` address rows by id, so
@@ -896,11 +937,20 @@ const bindTable = (writer: DatabaseWriterLike, tableName: string) => ({
     count: (where?: WhereInput) => writer.count(tableName, where),
     delete: (id: string) => writer.delete(id),
     findFirst: (args?: QueryArgs) => writer.findFirst(tableName, args),
+    findFirstOrThrow: (args?: QueryArgs) => writer.findFirstOrThrow(tableName, args),
     findMany: (args?: QueryArgs) => writer.findMany(tableName, args),
     get: (id: string) => writer.get(id),
     insert: (values: Record<string, unknown>) => writer.insert(tableName, values),
     patch: (id: string, values: Record<string, unknown>) => writer.patch(id, values),
     replace: (id: string, values: Record<string, unknown>) => writer.replace(id, values),
+});
+
+const bindOrm = (facade: Record<string, ReturnType<typeof bindTable>>) => ({
+    delete: (table: string, id: string) => facade[table].delete(id),
+    insert: (table: string) => ({ values: (values: Record<string, unknown>) => facade[table].insert(values) }),
+    query: facade,
+    replace: (table: string, id: string) => ({ with: (values: Record<string, unknown>) => facade[table].replace(id, values) }),
+    update: (table: string, id: string) => ({ set: (values: Record<string, unknown>) => facade[table].patch(id, values) }),
 });
 `
         : "";
@@ -910,7 +960,7 @@ const bindTable = (writer: DatabaseWriterLike, tableName: string) => ({
     const globalDbLine = hasGlobalTables ? `\n            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;` : "";
 
     const facadeBlock = hasTables
-        ? `\n            const facade = db as unknown as Record<string, unknown>;
+        ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTable>>;
 ${schema.tables
     .map(
         (table) =>
@@ -1081,7 +1131,7 @@ ${facadeBlock}
                     userId: userId ?? null,
                 },
                 db,
-                fetch: globalThis.fetch.bind(globalThis),
+                fetch: globalThis.fetch.bind(globalThis),${ormCtxField}
                 scheduler,
                 storage: config.storage?.(env) ?? storageStub,${vectorsCtxField}
             };
@@ -1130,6 +1180,11 @@ const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
         }
         case "bytes": {
             return { builder: "blob", mode: "buffer", notNull: true };
+        }
+        case "date":
+        case "timestamp": {
+            // Stored as epoch-millisecond integers.
+            return { builder: "integer", notNull: true };
         }
         case "id": {
             return { builder: "text", notNull: true };

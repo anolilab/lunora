@@ -25,7 +25,7 @@ import type {
     RegisteredQuery,
 } from "@cirrus/server";
 
-import type { DatabaseReaderFacade, DatabaseWriterFacade, Id } from "./dataModel.js";
+import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, OrmReader, OrmWriter } from "./dataModel.js";
 
 export type { DataModel, Doc, Id } from "./dataModel.js";
 
@@ -37,14 +37,17 @@ export type { DataModel, Doc, Id } from "./dataModel.js";
  */
 export interface QueryCtx extends Omit<QueryCtxBase, "db"> {
     readonly db: DatabaseReader & DatabaseReaderFacade;
+    readonly orm: OrmReader;
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
+    readonly orm: OrmWriter;
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
+    readonly orm: OrmWriter;
 }
 
 /** `query()` bound to this project's typed {@link QueryCtx}. */

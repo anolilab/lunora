@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { emitApi, emitServer, emitShard, runCodegen } from "../src/index.js";
+import { emitApi, emitDataModel, emitDrizzleSchema, emitServer, emitShard, runCodegen } from "../src/index.js";
 import type { FunctionIR, SchemaIR } from "../src/ir.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -128,7 +128,7 @@ describe("runCodegen", () => {
         expect(result.generated.server).toContain("readonly db: DatabaseWriter & DatabaseWriterFacade;");
         // `Id` is pulled into the facade import because the typed `Caller` arg
         // types reference it (the `messages:*` functions take `Id<"channels">`).
-        expect(result.generated.server).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade, Id } from "./dataModel.js"');
+        expect(result.generated.server).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, OrmReader, OrmWriter } from "./dataModel.js"');
     });
 
     test("emits a typed createCaller covering public and internal functions", () => {
@@ -164,6 +164,29 @@ describe("runCodegen", () => {
         expect(result.generated.dataModel).toContain("export interface TableWriterFacade<T extends keyof DataModel>");
         expect(result.generated.dataModel).toContain("export type DatabaseReaderFacade");
         expect(result.generated.dataModel).toContain("export type DatabaseWriterFacade");
+    });
+
+    test("emits the ctx.orm namespace + findFirstOrThrow on the read facade", () => {
+        const result = runCodegen({ projectRoot: workdir });
+
+        // findFirstOrThrow joins the read facade alongside findFirst.
+        expect(result.generated.dataModel).toContain("findFirstOrThrow:");
+
+        // The kitcn-style ORM surfaces, all defined in dataModel.ts.
+        expect(result.generated.dataModel).toContain("export interface OrmReader");
+        expect(result.generated.dataModel).toContain("export interface OrmWriter extends OrmReader");
+        expect(result.generated.dataModel).toContain("export interface OrmInsertBuilder<T extends keyof DataModel>");
+        expect(result.generated.dataModel).toContain("export interface OrmUpdateBuilder<T extends keyof DataModel>");
+        expect(result.generated.dataModel).toContain("export interface OrmReplaceBuilder<T extends keyof DataModel>");
+
+        // Wired onto the typed contexts: reads get OrmReader, writes get OrmWriter.
+        expect(result.generated.server).toContain("readonly orm: OrmReader;");
+        expect(result.generated.server).toContain("readonly orm: OrmWriter;");
+
+        // Runtime: bindTable gains findFirstOrThrow; bindOrm mirrors the facade into ctx.orm.
+        expect(result.generated.shard).toContain("findFirstOrThrow: (args?: QueryArgs) => writer.findFirstOrThrow(tableName, args)");
+        expect(result.generated.shard).toContain("const bindOrm = (facade:");
+        expect(result.generated.shard).toContain("orm: bindOrm(facade),");
     });
 
     test("emits server.ts dispatch table keyed by `<namespace>:<fnName>`", () => {
@@ -501,7 +524,38 @@ describe("emitServer", () => {
         expect(output).toContain("export const createCaller = (_context: CallerCtx): Caller => ({});");
         expect(output).not.toContain("const callRegistered");
 
-        // Nothing references Doc/Id, so the facade import stays minimal.
-        expect(output).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade } from "./dataModel.js";');
+        // Nothing references Doc/Id, so the facade import stays minimal (ORM types are always pulled in).
+        expect(output).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade, OrmReader, OrmWriter } from "./dataModel.js";');
+    });
+});
+
+describe("timestamp/date column kinds", () => {
+    const schema: SchemaIR = {
+        tables: [
+            {
+                indexes: [],
+                name: "events",
+                relations: [],
+                searchIndexes: [],
+                shape: { at: { kind: "timestamp" }, due: { kind: "date" } },
+                shardMode: "root",
+                vectorIndexes: [],
+            },
+        ],
+        vectorIndexes: [],
+    };
+
+    test("renders timestamp/date as epoch-millisecond numbers in dataModel.ts", () => {
+        const output = emitDataModel(schema);
+
+        expect(output).toContain("at: number;");
+        expect(output).toContain("due: number;");
+    });
+
+    test("maps timestamp/date to integer drizzle columns", () => {
+        const { shard } = emitDrizzleSchema(schema);
+
+        expect(shard).toContain('at: integer("at").notNull()');
+        expect(shard).toContain('due: integer("due").notNull()');
     });
 });

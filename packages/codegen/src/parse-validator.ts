@@ -8,14 +8,15 @@ import type { ColumnMetaIR, ValidatorIR } from "./ir.js";
  * `defineTable`. They unwrap to the base validator's IR with the constraint
  * recorded under `column`, rather than counting as their own validator kind.
  */
-const COLUMN_MODIFIERS = new Set(["$defaultFn", "$onUpdateFn", "default", "nullable", "unique"]);
+const COLUMN_MODIFIERS = new Set(["$defaultFn", "$onUpdateFn", "$type", "default", "defaultNow", "nullable", "unique"]);
 
 const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR => {
     const column: ColumnMetaIR = { notNull: true, ...base.column };
 
     switch (modifier) {
         case "$defaultFn":
-        case "default": {
+        case "default":
+        case "defaultNow": {
             column.hasDefault = true;
 
             break;
@@ -23,6 +24,11 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
         case "$onUpdateFn": {
             column.hasOnUpdate = true;
 
+            break;
+        }
+        case "$type": {
+            // Type-only override: the generated code can't import the caller's
+            // override type, so it stays a no-op and we emit the base kind.
             break;
         }
         case "nullable": {
@@ -99,9 +105,11 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
         case "bigint":
         case "boolean":
         case "bytes":
+        case "date":
         case "null":
         case "number":
-        case "string": {
+        case "string":
+        case "timestamp": {
             return { kind: member };
         }
 

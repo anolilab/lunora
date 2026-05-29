@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
 import type { Id, Infer } from "../src/index.js";
 import { v, ValidationError } from "../src/index.js";
@@ -124,6 +124,38 @@ describe("id", () => {
 
     test("rejects non-string", () => {
         expect(() => v.id("users").parse(7)).toThrow(ValidationError);
+    });
+});
+
+describe("time validators", () => {
+    test("timestamp and date parse epoch-millisecond numbers and reject the rest", () => {
+        const now = Date.now();
+
+        expect(v.timestamp().parse(now)).toBe(now);
+        expect(v.date().parse(0)).toBe(0);
+        expect(() => v.timestamp().parse("2026-01-01")).toThrow(ValidationError);
+        expect(() => v.date().parse(Number.NaN)).toThrow(ValidationError);
+    });
+
+    test("defaultNow records a Date.now() default factory", () => {
+        const { column } = (v.timestamp().defaultNow() as unknown as { _meta: { column: { defaultFn?: () => unknown } } })._meta;
+
+        expectTypeOf(column.defaultFn).toBeFunction();
+        expectTypeOf(column.defaultFn?.()).toBeNumber();
+    });
+});
+
+describe("$type override", () => {
+    test("retypes the validator without changing runtime parsing", () => {
+        const userId = v.string().$type<Id<"users">>();
+        const out = userId.parse("u_123");
+
+        expect(out).toBe("u_123");
+
+        // Compile-time: the override surfaces through Infer.
+        const check: Assert<Equal<Infer<typeof userId>, Id<"users">>> = true;
+
+        expect(check).toBe(true);
     });
 });
 

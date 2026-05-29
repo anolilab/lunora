@@ -41,7 +41,7 @@ export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
 export type { HibernatableWebSocket, RunShardMigrationArgs, ShardDOState, SubscriptionOutcome } from "./shard-do.js";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "./shard-do.js";
 export type { TransactionSqlLike } from "./transaction.js";
-export { ConflictError } from "./transaction.js";
+export { ConflictError, NotFoundError } from "./transaction.js";
 export type {
     RunTriggersOptions,
     SchedulerLike,

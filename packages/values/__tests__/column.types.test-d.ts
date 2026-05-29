@@ -47,6 +47,25 @@ const composed = v.string().unique().default("x");
 
 export type _ComposedInsert = Assert<Equal<InferInsert<typeof composed>, string | undefined>>;
 
+// `.$type<T>()` overrides both select and insert without touching runtime parsing.
+const externalId = v.string().$type<Id<"users">>();
+
+export type _TypeOverrideSelect = Assert<Equal<InferSelect<typeof externalId>, Id<"users">>>;
+export type _TypeOverrideInsert = Assert<Equal<InferInsert<typeof externalId>, Id<"users">>>;
+
+// `v.timestamp()` / `v.date()` are epoch-millisecond numbers.
+const createdOn = v.timestamp();
+const dueOn = v.date();
+
+export type _TimestampSelect = Assert<Equal<InferSelect<typeof createdOn>, number>>;
+export type _DateSelect = Assert<Equal<InferSelect<typeof dueOn>, number>>;
+
+// `.defaultNow()` leaves select alone but makes insert accept `undefined`.
+const startedAt = v.timestamp().defaultNow();
+
+export type _DefaultNowSelect = Assert<Equal<InferSelect<typeof startedAt>, number>>;
+export type _DefaultNowInsert = Assert<Equal<InferInsert<typeof startedAt>, number | undefined>>;
+
 // --- $inferSelect vs $inferInsert divergence over a table shape ---------------
 
 const shape = {

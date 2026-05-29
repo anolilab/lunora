@@ -14,6 +14,7 @@ export type ValidatorKind
         | "bigint"
         | "boolean"
         | "bytes"
+        | "date"
         | "id"
         | "literal"
         | "null"
@@ -22,6 +23,7 @@ export type ValidatorKind
         | "optional"
         | "record"
         | "string"
+        | "timestamp"
         | "union";
 
 export interface Validator<T = unknown> {
@@ -75,12 +77,24 @@ export interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInse
     $defaultFn: (fn: () => TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
     /** Recompute the field on every patch/replace when not explicitly provided. */
     $onUpdateFn: (fn: () => TSelect) => ColumnValidator<TSelect, TInsert>;
+    /** Override the inferred select/insert type without changing runtime parsing (e.g. `v.string().$type<Id<"users">>()`). */
+    $type: <TOverride>() => ColumnValidator<TOverride, TOverride>;
     /** Literal default applied in the write layer; field becomes optional on insert. */
     default: (value: TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
     /** Allow SQL NULL — widens the select type to `T | null`. */
     nullable: () => ColumnValidator<null | TSelect, null | TInsert>;
     /** Enforce a UNIQUE constraint (synthesizes a unique index). */
     unique: () => ColumnValidator<TSelect, TInsert>;
+}
+
+/**
+ * A time-valued {@link ColumnValidator} (epoch milliseconds). Adds
+ * {@link TimestampColumnValidator.defaultNow} so the field can default to the
+ * insert-time clock.
+ */
+export interface TimestampColumnValidator extends ColumnValidator<number, number> {
+    /** Default to the current epoch-ms (`Date.now()`) at insert time; field becomes optional on insert. */
+    defaultNow: () => ColumnValidator<number, number | undefined>;
 }
 
 /** The type a validator/column presents on **select** (reads). */
@@ -125,7 +139,9 @@ interface InternalValidator<T> extends Validator<T> {
 interface InternalColumnValidator<T> extends InternalValidator<T> {
     $defaultFn: (fn: () => T) => InternalColumnValidator<T>;
     $onUpdateFn: (fn: () => T) => InternalColumnValidator<T>;
+    $type: <TOverride>() => InternalColumnValidator<TOverride>;
     default: (value: T) => InternalColumnValidator<T>;
+    defaultNow: () => InternalColumnValidator<T>;
     nullable: () => InternalColumnValidator<null | T>;
     unique: () => InternalColumnValidator<T>;
 }
@@ -174,9 +190,13 @@ const createValidator = <T>(
     const rebuild = (patch: Partial<ColumnMeta>): InternalColumnValidator<T> => createValidator<T>(kind, parser, { ...meta, column: { ...column, ...patch } });
 
     validator.default = (value) => rebuild({ defaultValue: value });
+    validator.defaultNow = () => rebuild({ defaultFn: () => Date.now() });
     validator.unique = () => rebuild({ unique: true });
     validator.$defaultFn = (fn) => rebuild({ defaultFn: fn });
     validator.$onUpdateFn = (fn) => rebuild({ onUpdateFn: fn });
+    // `$type` is a compile-time-only override; runtime parsing is unchanged, so
+    // it clones the validator and lets the public signature retype the result.
+    validator.$type = (() => rebuild({})) as InternalColumnValidator<T>["$type"];
     validator.nullable = () => {
         const nullableParser = (value: unknown, context: ParseContext): null | T => {
             return value === null ? null : parser(value, context);
@@ -215,6 +235,21 @@ const number = (): ColumnValidator<number, number> =>
             return value;
         }),
     );
+
+/** Shared parser for the time validators: a finite epoch-millisecond number. */
+const parseEpochMillis = (value: unknown, context: ParseContext): number => {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+        fail(context, "number", value);
+    }
+
+    return value;
+};
+
+/** Epoch-millisecond timestamp (`number`). Pair with `.defaultNow()` for an insert-time clock. */
+const timestamp = (): TimestampColumnValidator => createValidator<number>("timestamp", parseEpochMillis) as unknown as TimestampColumnValidator;
+
+/** Calendar date stored as an epoch-millisecond `number`. Pair with `.defaultNow()` for an insert-time clock. */
+const date = (): TimestampColumnValidator => createValidator<number>("date", parseEpochMillis) as unknown as TimestampColumnValidator;
 
 const boolean = (): ColumnValidator<boolean, boolean> =>
     asColumn(
@@ -435,6 +470,7 @@ export const v: {
     bigint: typeof bigintValidator;
     boolean: typeof boolean;
     bytes: typeof bytes;
+    date: typeof date;
     id: typeof id;
     literal: typeof literal;
     null: typeof nullValidator;
@@ -443,6 +479,7 @@ export const v: {
     optional: typeof optional;
     record: typeof record;
     string: typeof string;
+    timestamp: typeof timestamp;
     union: typeof union;
 } = {
     any,
@@ -450,6 +487,7 @@ export const v: {
     bigint: bigintValidator,
     boolean,
     bytes,
+    date,
     id,
     literal,
     null: nullValidator,
@@ -458,5 +496,6 @@ export const v: {
     optional,
     record,
     string,
+    timestamp,
     union,
 };

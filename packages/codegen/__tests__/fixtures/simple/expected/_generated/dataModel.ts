@@ -206,6 +206,7 @@ export type LoadWith<T extends keyof DataModel, W> = Doc<T> & LoadedRelations<T,
 export interface TableReaderFacade<T extends keyof DataModel> {
     count: (where?: Where<Doc<T>>) => Promise<number>;
     findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;
+    findFirstOrThrow: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W>>;
     findMany: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<QueryPage<LoadWith<T, W>>>;
     get: (id: Id<T>) => Promise<Doc<T> | null>;
 }
@@ -227,3 +228,31 @@ export type DatabaseReaderFacade = {
 export type DatabaseWriterFacade = {
     readonly [T in keyof DataModel]: TableWriterFacade<T>;
 };
+
+/** Insert builder returned by `ctx.orm.insert(table)`. */
+export interface OrmInsertBuilder<T extends keyof DataModel> {
+    values: (values: Insert<T>) => Promise<Id<T>>;
+}
+
+/** Replace builder returned by `ctx.orm.replace(table, id)` — swaps the whole document. */
+export interface OrmReplaceBuilder<T extends keyof DataModel> {
+    with: (values: Insert<T>) => Promise<void>;
+}
+
+/** Update builder returned by `ctx.orm.update(table, id)` — patches the named fields. */
+export interface OrmUpdateBuilder<T extends keyof DataModel> {
+    set: (values: Partial<Insert<T>>) => Promise<void>;
+}
+
+/** Read-only ORM surface — `ctx.orm` on a `QueryCtx`. Mirrors `ctx.db` reads under a kitcn-style `query` namespace. */
+export interface OrmReader {
+    query: DatabaseReaderFacade;
+}
+
+/** Read-write ORM surface — `ctx.orm` on a `MutationCtx` / `ActionCtx`. Writes are addressed by id, like `ctx.db`. */
+export interface OrmWriter extends OrmReader {
+    delete: <T extends keyof DataModel>(table: T, id: Id<T>) => Promise<void>;
+    insert: <T extends keyof DataModel>(table: T) => OrmInsertBuilder<T>;
+    replace: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmReplaceBuilder<T>;
+    update: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmUpdateBuilder<T>;
+}

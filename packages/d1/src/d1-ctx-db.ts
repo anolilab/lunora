@@ -33,6 +33,7 @@ import {
     encodeCursor,
     hasTrigger,
     normalizeOrderKeys,
+    NotFoundError,
     resolveWith,
     runTriggers,
 } from "@cirrus/do";
@@ -313,6 +314,16 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const result = await writer.findMany(tableName, { ...args, limit: 1 });
 
             return result.page[0] ?? null;
+        },
+
+        async findFirstOrThrow(tableName, args = {}) {
+            const document = await writer.findFirst(tableName, args);
+
+            if (document === null) {
+                throw new NotFoundError(`findFirstOrThrow: no "${tableName}" document matched`);
+            }
+
+            return document;
         },
 
         async findMany(tableName, args = {}) {
