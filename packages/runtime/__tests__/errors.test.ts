@@ -57,4 +57,22 @@ describe("cirrusError", () => {
         expect(response.status).toBe(409);
         await expect(response.json()).resolves.toEqual({ error: { code: "CONFLICT", message: "stale version" } });
     });
+
+    test("toErrorResponse maps a structural CirrusError shape (name + code + status) to its status", async () => {
+        // `@cirrus/do`'s `CountRlsUnsupportedError` (and any future
+        // cross-package error mirroring CirrusError's shape) lets the runtime
+        // route it without an `instanceof` check, so the DO package stays
+        // free of a runtime dep on `@cirrus/server`.
+        const countUnsupported = Object.assign(new Error("count() is not supported in an RLS-restricted context"), {
+            name: "CirrusError",
+            code: "COUNT_RLS_UNSUPPORTED",
+            status: 422,
+        });
+        const response = toErrorResponse(countUnsupported);
+
+        expect(response.status).toBe(422);
+        await expect(response.json()).resolves.toEqual({
+            error: { code: "COUNT_RLS_UNSUPPORTED", message: "count() is not supported in an RLS-restricted context" },
+        });
+    });
 });
