@@ -48,6 +48,42 @@ export interface AggregateIndexDefinition {
     where?: Record<string, unknown>;
 }
 
+/**
+ * One ordering key on a `rankIndex.sortBy`: which column to sort by, and the
+ * direction. The runtime breaks ties on the row's `_id` ASC so the order is
+ * total and `rank()` always returns a deterministic 1-based position.
+ */
+export interface RankSortKey {
+    direction: "asc" | "desc";
+    field: string;
+}
+
+/**
+ * Declared rank index — a sorted companion table per `(partition tuple, sortBy)`
+ * maintained by triggers, so:
+ *
+ *   - `rank(row)` returns the row's 1-based position within its partition under
+ *     the declared `sortBy` order, plus the partition's total row count, in
+ *     O(log n) lookups against the SQLite btree on the companion table.
+ *   - `rankPage({ where, take, from })` walks the same companion table to
+ *     return rows in the declared order — a sorted-pagination accelerator.
+ *
+ * Fields mirror `AggregateIndexDefinition`:
+ *
+ *   - `on` — the source table whose rows feed the rank.
+ *   - `sortBy` — ordered keys driving the rank. Required.
+ *   - `partitionBy` — columns that scope each rank context (e.g. `["channelId"]`
+ *     to rank within a channel). Omitted ⇒ one global rank across the table.
+ *   - `where` — static predicate baked into the index; only matching rows enter.
+ */
+export interface RankIndexDefinition {
+    name: string;
+    on: string;
+    partitionBy?: ReadonlyArray<string>;
+    sortBy: ReadonlyArray<RankSortKey>;
+    where?: Record<string, unknown>;
+}
+
 /** FK behavior when a referenced parent row is deleted (mirrors SQL `ON DELETE`). */
 export type OnDeleteAction = "cascade" | "restrict" | "set null";
 
@@ -103,6 +139,14 @@ export interface TableDefinition<Shape extends Record<string, Validator> = Recor
      */
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
+    /**
+     * Rank indexes declared via `.rankIndex(name, opts)`. The runtime maintains
+     * a sorted companion table per declared rank with a btree on
+     * `(partition, sortBy)` so `rank(row)` returns the row's 1-based position
+     * within its partition in O(log n), and `rankPage()` walks the index for
+     * sorted pagination.
+     */
+    rankIndexes: ReadonlyArray<RankIndexDefinition>;
     /**
      * Declared relations keyed by accessor name; empty unless `.relations()`
      * was called. Named `relationMap` (not `relations`) so the fluent
@@ -319,19 +363,80 @@ export interface TriggerQueryArgs {
 }
 
 /**
+ * Args accepted by {@link TriggerDatabase.aggregate} — structural mirror of
+ * `@cirrus/do`'s `AggregateOptions`, kept local so trigger handlers in
+ * `@cirrus/server` don't take a hard dep on the DO runtime.
+ */
+export interface TriggerAggregateOptions {
+    baseWhere?: Record<string, unknown>;
+    field?: string;
+    op: AggregateOp;
+    restrictsCounts?: boolean;
+    where?: Record<string, unknown>;
+}
+
+/** Args accepted by {@link TriggerDatabase.groupBy}. */
+export interface TriggerGroupByOptions {
+    agg?: { field?: string; op: AggregateOp };
+    baseWhere?: Record<string, unknown>;
+    by: ReadonlyArray<string>;
+    restrictsCounts?: boolean;
+    where?: Record<string, unknown>;
+}
+
+/** One entry returned by {@link TriggerDatabase.groupBy}. */
+export interface TriggerGroupByEntry {
+    key: Record<string, unknown>;
+    value: null | number;
+}
+
+/** Args accepted by {@link TriggerDatabase.rank}. */
+export interface TriggerRankOptions {
+    baseWhere?: Record<string, unknown>;
+    restrictsCounts?: boolean;
+    /** Either the row id or the full row document. */
+    row: Record<string, unknown> | string;
+    where?: Record<string, unknown>;
+}
+
+/** Result of {@link TriggerDatabase.rank} — 1-based position + partition total. */
+export interface TriggerRankResult {
+    position: number;
+    total: number;
+}
+
+/** Args accepted by {@link TriggerDatabase.rankPage}. */
+export interface TriggerRankPageOptions {
+    baseWhere?: Record<string, unknown>;
+    cursor?: null | string;
+    take?: number;
+    where?: Record<string, unknown>;
+}
+
+/**
  * Portable, table/id-addressed ORM writer handed to trigger handlers via
  * `ctx.db`. Mirrors `@cirrus/do`'s runtime `DatabaseWriterLike` surface — it is
  * **not** the generated per-table `ctx.db.<table>` facade (which can't be typed
  * from inside `defineTable`, where the full schema isn't known).
+ *
+ * `aggregate`/`groupBy`/`count`/`rank`/`rankPage` route through the same
+ * trigger-maintained counter and rank tables the user-facing reader uses, so
+ * a handler's `ctx.db.<table>.aggregate(...)` observes the just-staged write
+ * within the same DO transaction (the counter step happens before the trigger
+ * fires).
  */
 export interface TriggerDatabase {
+    aggregate: (tableName: string, options: TriggerAggregateOptions) => Promise<null | number>;
     count: (tableName: string, where?: Record<string, unknown>) => Promise<number>;
     delete: (id: string) => Promise<void>;
     findFirst: (tableName: string, args?: TriggerQueryArgs) => Promise<Record<string, unknown> | null>;
     findMany: (tableName: string, args?: TriggerQueryArgs) => Promise<TriggerQueryPage>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
+    groupBy: (tableName: string, options: TriggerGroupByOptions) => Promise<ReadonlyArray<TriggerGroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    rank: (tableName: string, indexName: string, options: TriggerRankOptions) => Promise<null | TriggerRankResult>;
+    rankPage: (tableName: string, indexName: string, options?: TriggerRankPageOptions) => Promise<TriggerQueryPage>;
     replace: (id: string, document: Record<string, unknown>) => Promise<void>;
 }
 
