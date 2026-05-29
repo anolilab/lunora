@@ -184,7 +184,9 @@ describe("createWorker", () => {
 
         expect(namespace.getByName).toHaveBeenCalledWith("a");
         expect(namespace.idFromName).not.toHaveBeenCalled();
-        expect(stub.fetch).toHaveBeenCalledWith();
+        // Confirms the stub returned by getByName received the forwarded RPC,
+        // i.e. dispatch went through getByName rather than the idFromName + get fallback.
+        expect(stub.fetch).toHaveBeenCalledWith(expect.any(Request));
     });
 
     test("forwards resolveIdentity userId on the x-cirrus-userid header", async () => {
