@@ -248,6 +248,59 @@ describe("rls — read path", () => {
         expect((countCall?.args as { restrictsCounts?: boolean }).restrictsCounts).toBe(true);
     });
 
+    test("get() does NOT leak a row that the read policy denied (regression)", async () => {
+        // Policy applies to "documents" and would AND-merge `{ ownerId: "u1" }`.
+        // Our row has `ownerId: "u2"` so the policy denies it.
+        const policy = definePolicy<TestCtx>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => ({ ownerId: auth.userId }),
+        });
+
+        // Honest fake: when `baseWhere` is set the membership check returns
+        // null if the row doesn't satisfy the predicate — mirroring what
+        // `@cirrus/do`'s `findFirst` does at runtime. The buggy wrapper used
+        // to swallow this null and fall through to the unrestricted `row`
+        // from `base.get()`, leaking what the policy was meant to hide.
+        const fake = createFakeDb([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+        const wrappedFindFirst = fake.writer.findFirst;
+
+        fake.writer.findFirst = async (tableName, args) => {
+            const candidate = await wrappedFindFirst(tableName, args);
+            const baseWhere = (args as { baseWhere?: { ownerId?: unknown } } | undefined)?.baseWhere;
+
+            if (!candidate || !baseWhere || !("ownerId" in baseWhere)) {
+                return candidate;
+            }
+
+            return candidate["ownerId"] === baseWhere.ownerId ? candidate : null;
+        };
+
+        const handler = cirrus.query.use(rlsForTest<TestCtx>([policy])).query(async ({ ctx }) => ctx.db.get("d1"));
+
+        await expect(handler.handler(makeCtx(fake, "u1"), {})).resolves.toBeNull();
+    });
+
+    test("get() on a row outside every policy-gated table returns the row unrestricted", async () => {
+        // Policy applies to "documents"; the requested row lives in "audit",
+        // which carries no policy — the wrapper must pass it through, not
+        // accidentally treat it as policy-denied.
+        const policy = definePolicy<TestCtx>({
+            on: "read",
+            table: "documents",
+            when: () => ({ ownerId: "anyone" }),
+        });
+
+        const fake = createFakeDb([{ _id: "a1", table: "audit", event: "login" }]);
+
+        const handler = cirrus.query.use(rlsForTest<TestCtx>([policy])).query(async ({ ctx }) => ctx.db.get("a1"));
+
+        const result = await handler.handler(makeCtx(fake, "u1"), {});
+
+        expect(result?.["_id"]).toBe("a1");
+        expect(result?.["event"]).toBe("login");
+    });
+
     test("count() on a non-policy table does NOT mark restrictsCounts", async () => {
         const policy = definePolicy<TestCtx>({
             on: "read",

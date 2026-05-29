@@ -332,6 +332,8 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
      * with a direct `get` against the underlying writer. The unwrapped
      * `base.get` is intentionally used so policy enforcement on writes
      * doesn't recurse through itself when we go fetch the pre-write row.
+     * Probes run concurrently: id-to-table latency is bounded by the
+     * slowest single probe rather than the sum of all probes.
      */
     const findRowTable = async (id: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
         const row = await base.get(id);
@@ -340,21 +342,22 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
             return undefined;
         }
 
-        // The underlying writer has its own id-to-table lookup but doesn't
-        // expose it; the row we just fetched is enough — we just need its
-        // table for policy lookup, and we don't have it. Walk the policy
-        // tables looking for the row's id.
-        for (const tableName of perTable.keys()) {
-            const probe = await base.findFirst(tableName, { where: { _id: id }, limit: 1 });
+        // Ids are globally unique, so at most one probe hits; settle all of
+        // them in parallel and pick the hit instead of serializing the
+        // round-trips.
+        const probes = await Promise.all(
+            [...perTable.keys()].map(async (tableName) => {
+                const probe = await base.findFirst(tableName, { where: { _id: id }, limit: 1 });
 
-            if (probe?.["_id"] === id) {
-                return { row, tableName };
-            }
-        }
+                return probe?.["_id"] === id ? tableName : null;
+            }),
+        );
+
+        const tableName = probes.find((entry): entry is string => entry !== null);
 
         // The row exists but isn't in any policy-gated table — fall through
         // unrestricted by returning `undefined` (no policy applies).
-        return undefined;
+        return tableName === undefined ? undefined : { row, tableName };
     };
 
     /**
@@ -422,28 +425,45 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
                 return null;
             }
 
-            // The reader only has the id; we have to determine the row's
-            // table to know which policies apply. Probe each policy-gated
-            // table — same shape as the writer's own id-to-table lookup.
-            for (const tableName of perTable.keys()) {
-                const { baseWhere, restricts } = readBase(tableName);
+            // Two-step lookup, in parallel across the policy-gated tables:
+            //   1. **Membership** — does this row belong to this table?
+            //      A `findFirst` WITHOUT `baseWhere` so it can't be confused
+            //      with a policy denial.
+            //   2. **Policy check** — re-fetch WITH `baseWhere` only on the
+            //      table that owns the row; null here means deny, not absent.
+            // Without step 1 a denied row would silently fall through to the
+            // unguarded `row` below, leaking what the policy is meant to hide.
+            const probes = await Promise.all(
+                [...perTable.keys()].map(async (tableName) => {
+                    const membership = await base.findFirst(tableName, { where: { _id: id }, limit: 1 });
 
-                if (!restricts) {
-                    continue;
-                }
+                    if (membership?.["_id"] !== id) {
+                        return null;
+                    }
 
-                const candidate = await base.findFirst(tableName, { where: { _id: id }, baseWhere, limit: 1 });
+                    const { baseWhere, restricts } = readBase(tableName);
 
-                if (candidate?.["_id"] === id) {
-                    return candidate;
-                }
+                    if (!restricts || !baseWhere) {
+                        return { allowed: membership };
+                    }
 
-                // If `findFirst` came back null on a restricting table, the
-                // policy denied it; keep probing other tables — the row may
-                // belong to a non-policy table.
+                    const allowed = await base.findFirst(tableName, { where: { _id: id }, baseWhere, limit: 1 });
+
+                    return { allowed: allowed?.["_id"] === id ? allowed : null };
+                }),
+            );
+
+            // Ids are globally unique, so at most one probe matches.
+            const hit = probes.find((entry): entry is { allowed: null | Record<string, unknown> } => entry !== null);
+
+            // Row exists but isn't in any policy-gated table → unrestricted.
+            if (!hit) {
+                return row;
             }
 
-            return row;
+            // Row owned by a policy-gated table; surface the policy verdict
+            // (a deliberate null means "denied", NOT "fall back to row").
+            return hit.allowed;
         },
 
         async insert(tableName, document) {
@@ -624,9 +644,14 @@ export const rls = <Ctx extends RlsCtxIn = RlsCtxIn>(policies: ReadonlyArray<Pol
 
     return async ({ ctx, next }) => {
         const auth = ctx.auth ?? {};
+        // Resolve identity once per RLS-protected procedure so policies can
+        // branch on claims (`ctx.auth.identity.email` etc.) without each
+        // policy paying for its own `getIdentity()` call. `null` covers both
+        // the anonymous case and the no-resolver case (older auth states).
+        const identity = await auth.getIdentity?.() ?? null;
         const policyContext: PolicyContext<Ctx> = {
             auth: {
-                identity: undefined,
+                identity,
                 roles: auth.roles ?? [],
                 userId: auth.userId ?? null,
             },

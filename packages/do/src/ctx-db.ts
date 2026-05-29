@@ -838,12 +838,6 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
 /** DO dialect: fields resolve through `json_extract`; values via {@link serializeSqlValue}. */
 const doWhereStrategy: WhereCompilerStrategy = { fieldRef: jsonPath, serialize: serializeSqlValue };
 
-/**
- * AND-merge an injected `baseWhere` (RLS / aggregates §3.1) onto the caller's
- * predicate. `undefined`/`{}` collapse to the other side so the seam is no-op
- * when no policy is in scope; both present produce a `{ AND: [...] }` node so
- * the compiler renders them with explicit precedence.
- */
 /** Invert the reader's staged SQL comparators back into `where`-tree operators. */
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
