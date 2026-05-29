@@ -1,6 +1,12 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { createQueryCoordinator, createStaticShardRegistry, type FanOutRequest, type ShardRegistry } from "../src/query-coordinator.js";
+import {
+    createQueryCoordinator,
+    createStaticShardRegistry,
+    type FanOutRequest,
+    type MigrationFanOutRequest,
+    type ShardRegistry,
+} from "../src/query-coordinator.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
 interface ShardCall {
@@ -41,8 +47,7 @@ const createShardSpy = (handler: (shardKey: string) => Promise<Response> | Respo
     return { calls, namespace };
 };
 
-const json = (value: unknown, init?: ResponseInit): Response =>
-    Response.json(value, { headers: { "content-type": "application/json" }, status: 200, ...init });
+const json = (value: unknown, init?: ResponseInit): Response => Response.json(value, { headers: { "content-type": "application/json" }, status: 200, ...init });
 
 const buildRequest = (overrides: Partial<FanOutRequest> = {}): FanOutRequest => ({
     args: {},
@@ -283,6 +288,127 @@ describe("error handling", () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+describe("orchestrateMigration", () => {
+    const migrationRequest = (overrides: Partial<MigrationFanOutRequest> = {}): MigrationFanOutRequest => ({
+        args: { id: "backfill" },
+        functionPath: "__cirrus_admin__:runMigration",
+        headers: { authorization: "Bearer admin" },
+        table: "messages",
+        ...overrides,
+    });
+
+    /** Mimic a shard's admin `runMigration` envelope: `{ result: MigrationRunResult }`. */
+    const runResult = (changed: number, processed: number, status = "completed"): Response =>
+        json({ result: { changed, cursor: null, direction: "up", dryRun: false, id: "backfill", processed, status } });
+
+    test("forwards the admin bearer and migration args to every shard", async () => {
+        const registry = createStaticShardRegistry({ messages: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+        const spy = createShardSpy(() => runResult(2, 5));
+
+        await coordinator.orchestrateMigration(spy.namespace, migrationRequest({ args: { dryRun: true, id: "backfill" } }));
+
+        expect(spy.calls).toHaveLength(2);
+        expect(spy.calls.every((c) => c.body.functionPath === "__cirrus_admin__:runMigration")).toBe(true);
+        expect(spy.calls.every((c) => c.headers.authorization === "Bearer admin")).toBe(true);
+        expect(spy.calls.every((c) => c.body.args.dryRun === true)).toBe(true);
+    });
+
+    test("sums counts and reports completed when every shard finishes", async () => {
+        const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const counts: Record<string, [number, number]> = { a: [2, 5], b: [3, 4], c: [0, 6] };
+        const spy = createShardSpy((shardKey) => {
+            const [changed, processed] = counts[shardKey] ?? [0, 0];
+
+            return runResult(changed, processed);
+        });
+
+        const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest());
+
+        expect(result.ok).toBe(3);
+        expect(result.failed).toBe(0);
+        expect(result.changed).toBe(5);
+        expect(result.processed).toBe(15);
+        expect(result.status).toBe("completed");
+        expect(result.shards).toHaveLength(3);
+        expect(result.shards[0]).toMatchObject({ shardKey: "a", result: { changed: 2, processed: 5, status: "completed" } });
+    });
+
+    test("rolls up to failed when any shard's runner reports failure", async () => {
+        const registry = createStaticShardRegistry({ messages: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy((shardKey) => shardKey === "b" ? runResult(1, 1, "failed") : runResult(2, 2));
+
+        const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest());
+
+        expect(result.ok).toBe(2);
+        expect(result.status).toBe("failed");
+    });
+
+    test("rolls up to in_progress when a shard is cut short by maxBatches", async () => {
+        const registry = createStaticShardRegistry({ messages: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy((shardKey) => shardKey === "b" ? runResult(2, 2, "in_progress") : runResult(2, 2));
+
+        const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest());
+
+        expect(result.status).toBe("in_progress");
+    });
+
+    test("an unreachable shard surfaces as an error and leaves the run in_progress", async () => {
+        const registry = createStaticShardRegistry({ messages: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy((shardKey) => {
+            if (shardKey === "b") {
+                return new Response("boom", { status: 500 });
+            }
+
+            return runResult(4, 4);
+        });
+
+        const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest());
+
+        expect(result.ok).toBe(1);
+        expect(result.failed).toBe(1);
+        expect(result.changed).toBe(4);
+        expect(result.status).toBe("in_progress");
+        expect(result.shards.find((s) => s.shardKey === "b")?.error?.message).toContain("500");
+    });
+
+    test("no live shards yields an empty, completed roll-up", async () => {
+        const registry = createStaticShardRegistry({ messages: [] });
+        const coordinator = createQueryCoordinator({ registry });
+        const spy = createShardSpy(() => runResult(1, 1));
+
+        const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest());
+
+        expect(spy.calls).toHaveLength(0);
+        expect(result).toEqual({ changed: 0, failed: 0, ok: 0, processed: 0, shards: [], status: "completed" });
+    });
+
+    test("status calls pass through each shard's payload without inventing counts", async () => {
+        const registry = createStaticShardRegistry({ messages: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy((shardKey) =>
+            json({ result: { migrations: [{ changed: 9, id: "backfill", processed: 9, shardKey, status: "completed" }] } }),
+        );
+
+        const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest({ functionPath: "__cirrus_admin__:migrationStatus" }));
+
+        expect(result.ok).toBe(2);
+        // Top-level counts are 0 — status payloads carry counts per row, not at the top.
+        expect(result.changed).toBe(0);
+        expect(result.processed).toBe(0);
+        expect(result.shards[0]?.result).toMatchObject({ migrations: [{ id: "backfill", status: "completed" }] });
     });
 });
 

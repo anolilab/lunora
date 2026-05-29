@@ -2,6 +2,8 @@ import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import { drizzle as drizzleDO, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 
 import type { SqlExec } from "./ctx-db.js";
+import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
+import { readMigrationStatus } from "./data-migration.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 import { ConflictError, type TransactionSqlLike } from "./transaction.js";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
@@ -65,6 +67,15 @@ export interface HibernatableWebSocket {
 export interface SubscriptionOutcome {
     result: unknown;
     tables: Set<string>;
+}
+
+/** Arguments accepted by the `__cirrus_admin__:runMigration` admin RPC. */
+export interface RunShardMigrationArgs {
+    batchSize?: number;
+    direction?: MigrationDirection;
+    dryRun?: boolean;
+    id: string;
+    maxBatches?: number;
 }
 
 /** Per-subscription memo used to suppress no-op pushes. */
@@ -454,7 +465,7 @@ export abstract class ShardDO {
      * is raw table contents, so the default is closed — unlike the WebSocket
      * upgrade gate, which defaults open for local dev.
      */
-    private handleAdminRpc(request: Request, functionPath: string, args: Record<string, unknown>): Response {
+    private async handleAdminRpc(request: Request, functionPath: string, args: Record<string, unknown>): Promise<Response> {
         if (!this.isAdminAuthorized(request)) {
             return jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "admin introspection is disabled or the bearer token is invalid" } }, 403);
         }
@@ -476,10 +487,40 @@ export abstract class ShardDO {
                 return jsonResponse({ result: page }, 200);
             }
 
+            if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
+                const id = typeof args["id"] === "string" ? args["id"] : undefined;
+
+                return jsonResponse({ result: { migrations: readMigrationStatus(sql, id) } }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.runMigration) {
+                const result = await this.runShardDataMigration(parseRunMigrationArgs(args));
+
+                // The migration rewrites rows through the writer, which records
+                // the touched tables; flush so live subscribers re-run against
+                // the new values. No-op on a dryRun (nothing was written).
+                await this.flushChangedTables();
+
+                return jsonResponse({ result }, 200);
+            }
+
             return jsonResponse({ error: { code: "UNKNOWN_ADMIN_OP", message: `unknown admin op: ${functionPath}` } }, 404);
         } catch (error: unknown) {
             return this.errorToResponse(error);
         }
+    }
+
+    /**
+     * Run a data migration by id against this shard, returning the runner's
+     * result. The base class can't reach the project's generated
+     * `CIRRUS_MIGRATIONS` registry or build a schema-aware writer, so it reports
+     * the migration as unknown; the codegen-generated subclass overrides this to
+     * look the migration up and invoke `runDataMigration`.
+     */
+    protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
+        return Promise.reject(
+            Object.assign(new Error(`data migration "${args.id}" is not registered`), { name: "CirrusError", code: "MIGRATION_NOT_FOUND", status: 404 }),
+        );
     }
 
     /**
@@ -866,6 +907,27 @@ const setsIntersect = (a: Set<string>, b: Set<string>): boolean => {
     }
 
     return false;
+};
+
+/**
+ * Coerce the loosely-typed `runMigration` admin args into a typed shape.
+ * `id` is required; `direction` defaults to `"up"` and only flips to `"down"`
+ * on an exact match; numeric limits pass through when present.
+ */
+const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigrationArgs => {
+    const id = typeof args["id"] === "string" ? args["id"] : "";
+
+    if (id.trim() === "") {
+        throw Object.assign(new Error("runMigration: `id` is required"), { name: "CirrusError", code: "MIGRATION_ID_REQUIRED", status: 400 });
+    }
+
+    return {
+        batchSize: typeof args["batchSize"] === "number" ? args["batchSize"] : undefined,
+        direction: args["direction"] === "down" ? "down" : "up",
+        dryRun: args["dryRun"] === true,
+        id,
+        maxBatches: typeof args["maxBatches"] === "number" ? args["maxBatches"] : undefined,
+    };
 };
 
 const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {

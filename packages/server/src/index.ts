@@ -31,6 +31,8 @@ export type {
     RouteSpec,
 } from "./http.js";
 export { httpAction, httpRouter } from "./http.js";
+export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";
+export { defineMigration } from "./migration.js";
 export type { ManyRelation, OneRelation, RelationBuilder, TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";
 export { defineSchema, defineTable, defineVectorIndex } from "./schema.js";
 export type {

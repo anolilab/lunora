@@ -274,7 +274,7 @@ describe("createWorker", () => {
 
         const worker = createWorker({
             shardDO: shard.namespace,
-            queryCoordinator: { fanOut: fanOut as never, registry: {} as never },
+            queryCoordinator: { fanOut: fanOut as never, orchestrateMigration: fanOut as never, registry: {} as never },
             resolveIdentity: () => ({ userId: "user_42", email: "u@example.com" }),
         });
 
@@ -293,6 +293,94 @@ describe("createWorker", () => {
 
         expect(headers["x-cirrus-userid"]).toBe("user_42");
         expect(JSON.parse(headers["x-cirrus-identity"]!)).toEqual({ email: "u@example.com" });
+    });
+});
+
+describe("createWorker — migration endpoint", () => {
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    const migrateRequest = (body: unknown, headers: Record<string, string> = {}): Request =>
+        new Request("https://app.example/_cirrus/migrate", { body: JSON.stringify(body), headers, method: "POST" });
+
+    test("drives orchestrateMigration with the table, args and forwarded bearer", async () => {
+        const orchestrateMigration = vi.fn(
+            async (_namespace: unknown, _request: { args: Record<string, unknown>; functionPath: string; headers: Record<string, string>; table: string }) => ({
+                changed: 3,
+                failed: 0,
+                ok: 2,
+                processed: 3,
+                shards: [],
+                status: "completed",
+            }),
+        );
+
+        const worker = createWorker({
+            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: orchestrateMigration as never, registry: {} as never },
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            migrateRequest(
+                { args: { direction: "up", id: "backfill" }, functionPath: "__cirrus_admin__:runMigration", table: "messages" },
+                { authorization: "Bearer s3cret" },
+            ),
+            {},
+            fakeCtx,
+        );
+
+        expect(res.status).toBe(200);
+        await expect(res.json()).resolves.toMatchObject({ changed: 3, ok: 2, status: "completed" });
+        expect(orchestrateMigration).toHaveBeenCalledTimes(1);
+
+        const request = orchestrateMigration.mock.calls[0]![1];
+
+        expect(request).toMatchObject({ args: { direction: "up", id: "backfill" }, functionPath: "__cirrus_admin__:runMigration", table: "messages" });
+        expect(request.headers.authorization).toBe("Bearer s3cret");
+    });
+
+    test("400s when no queryCoordinator is configured", async () => {
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(migrateRequest({ functionPath: "__cirrus_admin__:runMigration", table: "messages" }), {}, fakeCtx);
+
+        expect(res.status).toBe(400);
+    });
+
+    test("rejects a non-migration functionPath with 400", async () => {
+        const worker = createWorker({
+            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: vi.fn() as never, registry: {} as never },
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(migrateRequest({ functionPath: "messages:list", table: "messages" }), {}, fakeCtx);
+
+        expect(res.status).toBe(400);
+    });
+
+    test("rejects a missing table with 400", async () => {
+        const worker = createWorker({
+            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: vi.fn() as never, registry: {} as never },
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(migrateRequest({ functionPath: "__cirrus_admin__:runMigration" }), {}, fakeCtx);
+
+        expect(res.status).toBe(400);
+    });
+
+    test("rejects non-POST with 405", async () => {
+        const worker = createWorker({
+            queryCoordinator: { fanOut: vi.fn() as never, orchestrateMigration: vi.fn() as never, registry: {} as never },
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/_cirrus/migrate"), {}, fakeCtx);
+
+        expect(res.status).toBe(405);
     });
 });
 

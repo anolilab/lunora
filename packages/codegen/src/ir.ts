@@ -116,7 +116,25 @@ export interface FunctionIR {
     visibility?: "internal" | "public";
 }
 
+/**
+ * A `defineMigration({...})` declaration discovered in the user's cirrus
+ * sources. The emitted `CIRRUS_MIGRATIONS` registry keys on {@link id}; the
+ * import wiring needs {@link exportName}/{@link filePath}. {@link table} is
+ * informational (the runtime object carries the authoritative value).
+ */
+export interface MigrationIR {
+    /** Export binding name, used to reference the module member in generated imports. */
+    exportName: string;
+    /** Path relative to `<projectRoot>/cirrus/` without extension, e.g. "migrations". */
+    filePath: string;
+    /** Stable migration id — the registry key and per-shard run-state key. */
+    id: string;
+    /** Table the migration iterates; `""` when not a static string literal. */
+    table: string;
+}
+
 export interface ProjectIR {
     functions: ReadonlyArray<FunctionIR>;
+    migrations: ReadonlyArray<MigrationIR>;
     schema: SchemaIR;
 }

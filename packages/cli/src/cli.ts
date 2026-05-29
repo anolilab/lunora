@@ -9,7 +9,7 @@ import { runDeployCommand } from "./commands/deploy.js";
 import { runDevCommand } from "./commands/dev.js";
 import type { Template } from "./commands/init.js";
 import { runInitCommand } from "./commands/init.js";
-import { runMigrateGenerateCommand } from "./commands/migrate.js";
+import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "./commands/migrate.js";
 import { runResetCommand } from "./commands/reset.js";
 import { runRpcCommand } from "./commands/run.js";
 import { createLogger } from "./util/logger.js";
@@ -70,7 +70,7 @@ interface BuildCliResult {
  * options to the front of argv. We need to know which options take a value
  * so we can keep "option value" pairs together during the reorder.)
  */
-const BOOLEAN_OPTIONS = new Set<string>(["all", "no-vite"]);
+const BOOLEAN_OPTIONS = new Set<string>(["all", "dry-run", "no-vite", "prod"]);
 
 const isOptionToken = (token: string): boolean => {
     return token.startsWith("-");
@@ -299,28 +299,81 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 
     cli.addCommand({
         name: "migrate",
-        description: "Generate D1 migration SQL by diffing cirrus/schema.ts against the snapshot",
-        argument: { name: "subcommandAndName", description: "<subcommand> [name] — only `generate` is supported", type: String },
-        options: [{ name: "name", type: String, description: "Migration name slug (e.g. add_users_email)" }],
-        execute: ({ argument, options: parsed }) => {
+        description: "Schema (generate) and online data (create | up | down | status) migrations",
+        argument: { name: "subcommand", description: "generate | create | up | down | status [name|id]", type: String },
+        options: [
+            { name: "name", type: String, description: "Migration name slug (e.g. add_users_email)" },
+            { name: "table", type: String, description: "Target table for `create`" },
+            { name: "dry-run", type: Boolean, description: "Preview a data migration without rewriting rows" },
+            { name: "batch-size", type: Number, description: "Rows per batch for a data migration" },
+            { name: "steps", type: Number, description: "Cap batches processed this run (maps to the runner's maxBatches)" },
+            { name: "prod", type: Boolean, description: "Target production — requires an explicit --url" },
+            { name: "url", type: String, description: "Worker URL (default http://localhost:8787)" },
+            { name: "token", type: String, description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)" },
+        ],
+        execute: async ({ argument, options: parsed }) => {
             const sub = argument[0];
 
-            if (sub !== "generate") {
-                logger.error(`unknown migrate subcommand: "${sub ?? ""}" — only \`generate\` is supported`);
-                exitCode.value = 1;
+            if (sub === "generate") {
+                const result = runMigrateGenerateCommand({ cwd, logger, name: argument[1] ?? toStringOrUndefined(parsed.name) });
+
+                exitCode.value = result.code;
 
                 return;
             }
 
-            const nameArg = argument[1] ?? toStringOrUndefined(parsed.name);
+            if (sub === "create") {
+                const name = argument[1] ?? toStringOrUndefined(parsed.name);
 
-            const result = runMigrateGenerateCommand({
-                cwd,
-                logger,
-                name: nameArg,
-            });
+                if (!name) {
+                    logger.error("migrate create requires a name. Usage: cirrus migrate create <name> [--table <table>]");
+                    exitCode.value = 1;
 
-            exitCode.value = result.code;
+                    return;
+                }
+
+                const result = runMigrateCreateCommand({ cwd, logger, name, table: toStringOrUndefined(parsed.table) });
+
+                exitCode.value = result.code;
+
+                return;
+            }
+
+            if (sub === "up" || sub === "down" || sub === "status") {
+                const id = argument[1] ?? toStringOrUndefined(parsed.name);
+
+                if (!id) {
+                    logger.error(`migrate ${sub} requires a migration id. Usage: cirrus migrate ${sub} <id>`);
+                    exitCode.value = 1;
+
+                    return;
+                }
+
+                try {
+                    const result = await runMigrateDataCommand({
+                        batchSize: toNumberOrUndefined(parsed.batchSize),
+                        cwd,
+                        dryRun: parsed.dryRun === true,
+                        id,
+                        logger,
+                        maxBatches: toNumberOrUndefined(parsed.steps),
+                        prod: parsed.prod === true,
+                        subcommand: sub,
+                        token: toStringOrUndefined(parsed.token),
+                        url: toStringOrUndefined(parsed.url),
+                    });
+
+                    exitCode.value = result.code;
+                } catch (error: unknown) {
+                    logger.error(error instanceof Error ? error.message : String(error));
+                    exitCode.value = 1;
+                }
+
+                return;
+            }
+
+            logger.error(`unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`);
+            exitCode.value = 1;
         },
     });
 
@@ -340,6 +393,12 @@ Commands:
   run <fn> [--args <json>]      Send a single RPC to a running Cirrus Worker
        [--shard <key>] [--url <url>]
   migrate generate [name]       Diff cirrus/schema.ts against the snapshot and emit migration SQL
+  migrate create <name>         Scaffold a defineMigration block in cirrus/migrations.ts
+          [--table <table>]
+  migrate up|down <id>          Run a data migration across shards (forward/reverse)
+          [--dry-run] [--batch-size <n>] [--steps <n>] [--prod] [--url <url>] [--token <t>]
+  migrate status <id>           Report a data migration's per-shard status
+          [--url <url>] [--token <t>]
   reset [--all]                 Clear local Miniflare state (and .cirrus-cache with --all)
 
 Global options:

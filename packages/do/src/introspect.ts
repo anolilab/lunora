@@ -16,7 +16,9 @@ export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
  */
 export const ADMIN_FUNCTIONS = {
     listTables: "__cirrus_admin__:listTables",
+    migrationStatus: "__cirrus_admin__:migrationStatus",
     readTablePage: "__cirrus_admin__:readTablePage",
+    runMigration: "__cirrus_admin__:runMigration",
 } as const;
 
 /** A user table plus its current row count. */

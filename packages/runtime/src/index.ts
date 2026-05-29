@@ -17,9 +17,12 @@ export type {
     FanOutResult,
     FanOutSpec,
     MergeStrategy,
+    MigrationFanOutRequest,
+    MigrationFanOutResult,
     QueryCoordinator,
     QueryCoordinatorOptions,
     ShardError,
+    ShardMigrationOutcome,
     ShardRegistry,
 } from "./query-coordinator.js";
 export { createQueryCoordinator, createStaticShardRegistry } from "./query-coordinator.js";

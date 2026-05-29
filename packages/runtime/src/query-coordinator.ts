@@ -103,8 +103,59 @@ export interface FanOutRequest {
     headers?: Record<string, string>;
 }
 
+/** The bits of a request the per-shard RPC actually needs; `FanOutRequest` is a superset. */
+type ShardRpcRequest = Pick<FanOutRequest, "args" | "functionPath" | "headers">;
+
+/**
+ * Cross-shard migration request. Unlike {@link FanOutRequest} there is no merge
+ * strategy — per-shard payloads are `MigrationRunResult`-shaped objects, not
+ * rows, so {@link QueryCoordinator.orchestrateMigration} rolls them up with the
+ * fixed semantics documented on {@link MigrationFanOutResult}.
+ *
+ * `functionPath` is the admin RPC to invoke on each shard
+ * (`__cirrus_admin__:runMigration` or `:migrationStatus`); `headers` must carry
+ * the `Authorization` bearer header the shard's admin gate requires (the
+ * configured admin token), or every shard comes back as a 403 error.
+ */
+export interface MigrationFanOutRequest {
+    args?: Record<string, unknown>;
+    functionPath: string;
+    headers?: Record<string, string>;
+    /** Table whose live shard keys the migration runs across. */
+    table: string;
+}
+
+/** One shard's outcome: either the unwrapped admin `result` payload, or an error. */
+export interface ShardMigrationOutcome {
+    error?: { message: string; timedOut: boolean };
+    /** The shard's admin `result`, peeled out of the `{ result }` envelope. */
+    result?: unknown;
+    shardKey: string;
+}
+
+export interface MigrationFanOutResult {
+    /** Summed `changed` across shards whose result carried a numeric count. */
+    changed: number;
+    /** Shards that errored or timed out. */
+    failed: number;
+    /** Shards that returned a 2xx result. */
+    ok: number;
+    /** Summed `processed` across shards whose result carried a numeric count. */
+    processed: number;
+    /** Per-shard outcomes, in registry order. */
+    shards: readonly ShardMigrationOutcome[];
+    /**
+     * Rolled-up status. `"failed"` if any shard's runner reported failure;
+     * `"in_progress"` if any shard is incomplete or unreachable (the run stays
+     * resumable); `"completed"` only when every shard finished cleanly.
+     */
+    status: "completed" | "failed" | "in_progress";
+}
+
 export interface QueryCoordinator {
     fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
+    /** Fan a migration admin RPC out to every live shard of a table and roll up the per-shard outcomes. */
+    orchestrateMigration: (namespace: ShardNamespaceLike, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
     readonly registry: ShardRegistry;
 }
 
@@ -147,8 +198,81 @@ export const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryC
                 ok: okShards.length,
             };
         },
+        async orchestrateMigration(namespace: ShardNamespaceLike, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
+            const keys = await options.registry.listShardKeys(request.table);
+
+            const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
+
+            return rollUpMigration(results);
+        },
         registry: options.registry,
     };
+};
+
+/** Admin RPCs wrap their payload in `{ result }`; peel it so callers see the runner's value. */
+const unwrapResult = (value: unknown): unknown =>
+    value !== null && typeof value === "object" && "result" in value ? (value as { result: unknown }).result : value;
+
+/** Numeric counts + status read defensively off a `MigrationRunResult`-shaped payload. */
+const readRunCounts = (payload: unknown): { changed: number; processed: number; status: string | undefined } => {
+    const run = (payload ?? {}) as { changed?: unknown; processed?: unknown; status?: unknown };
+
+    return {
+        changed: typeof run.changed === "number" ? run.changed : 0,
+        processed: typeof run.processed === "number" ? run.processed : 0,
+        status: typeof run.status === "string" ? run.status : undefined,
+    };
+};
+
+/** `"failed"` dominates, then incompleteness; an all-clean run reports `"completed"`. */
+const rollUpStatus = (anyFailed: boolean, incomplete: boolean): MigrationFanOutResult["status"] => {
+    if (anyFailed) {
+        return "failed";
+    }
+
+    if (incomplete) {
+        return "in_progress";
+    }
+
+    return "completed";
+};
+
+/**
+ * Fold per-shard RPC outcomes into a {@link MigrationFanOutResult}: sum the
+ * numeric counts, collect each shard's payload (or error), and roll the
+ * statuses up so a single failed shard reports `"failed"` and an incomplete or
+ * unreachable shard reports `"in_progress"`.
+ */
+const rollUpMigration = (results: readonly ShardRpcOutcome[]): MigrationFanOutResult => {
+    const shards: ShardMigrationOutcome[] = [];
+    let ok = 0;
+    let failed = 0;
+    let changed = 0;
+    let processed = 0;
+    let anyInProgress = false;
+    let anyFailed = false;
+
+    for (const result of results) {
+        if (result.kind === "err") {
+            failed += 1;
+            shards.push({ error: { message: result.message, timedOut: result.timedOut }, shardKey: result.shardKey });
+            continue;
+        }
+
+        ok += 1;
+
+        const payload = unwrapResult(result.value);
+        const counts = readRunCounts(payload);
+
+        changed += counts.changed;
+        processed += counts.processed;
+        anyInProgress ||= counts.status === "in_progress";
+        anyFailed ||= counts.status === "failed";
+
+        shards.push({ result: payload, shardKey: result.shardKey });
+    }
+
+    return { changed, failed, ok, processed, shards, status: rollUpStatus(anyFailed, anyInProgress || failed > 0) };
 };
 
 interface ShardRpcOk {
@@ -169,7 +293,7 @@ type ShardRpcOutcome = ShardRpcErr | ShardRpcOk;
 const runBoundedFanOut = async (
     namespace: ShardNamespaceLike,
     keys: readonly string[],
-    request: FanOutRequest,
+    request: ShardRpcRequest,
     maxConcurrency: number,
     timeoutMs: number,
 ): Promise<readonly ShardRpcOutcome[]> => {
@@ -201,7 +325,7 @@ const runBoundedFanOut = async (
     return outcomes;
 };
 
-const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, request: FanOutRequest, timeoutMs: number): Promise<ShardRpcOutcome> => {
+const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, request: ShardRpcRequest, timeoutMs: number): Promise<ShardRpcOutcome> => {
     const stub = resolveShard(namespace, shardKey);
 
     const headers: Record<string, string> = { "content-type": "application/json", ...request.headers };

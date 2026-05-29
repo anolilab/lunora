@@ -2,6 +2,7 @@
 // Run `cirrus codegen` to regenerate.
 
 import * as cirrus_messages_0 from "../messages.js";
+import * as cirrus_migrations_1 from "../migrations.js";
 
 import {
     action as actionBase,
@@ -124,4 +125,25 @@ export const dispatchCirrusFunction = async (functionPath: string, context: unkn
     }
 
     return registered.handler(context, args);
+};
+
+/**
+ * Single registered data migration, narrowed to the shape the per-shard runner
+ * consumes. `up`/`down` are erased to a structural transform; the authoring
+ * validation lives in `defineMigration`.
+ */
+export interface RegisteredDataMigration {
+    batchSize?: number;
+    down?: (document: Record<string, unknown>) => Record<string, unknown> | undefined;
+    id: string;
+    table: string;
+    up: (document: Record<string, unknown>) => Record<string, unknown> | undefined;
+}
+
+/**
+ * Registry of online data migrations keyed by `defineMigration`'s `id`. The
+ * shard DO's admin RPC and the CLI resolve migrations to run through this map.
+ */
+export const CIRRUS_MIGRATIONS: Record<string, RegisteredDataMigration> = {
+    "backfill-read-by": cirrus_migrations_1.backfillReadBy as unknown as RegisteredDataMigration,
 };

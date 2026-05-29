@@ -241,7 +241,7 @@ describe("runCodegen", () => {
         const result = runCodegen({ projectRoot: workdir });
 
         expect(result.generated.shard).toContain("export const createShardDO");
-        expect(result.generated.shard).toContain('import { CIRRUS_FUNCTIONS } from "./server.js"');
+        expect(result.generated.shard).toContain('import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./server.js"');
         expect(result.generated.shard).toContain('import schema from "../schema.js"');
         expect(result.generated.shard).toContain("class extends ShardDOBase");
         expect(result.generated.shard).toContain("runShardMigrations");

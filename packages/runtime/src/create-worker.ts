@@ -136,6 +136,14 @@ export interface RpcContext {
 
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
+const MIGRATE_PATH = "/_cirrus/migrate";
+
+/**
+ * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
+ * inline (rather than importing `@cirrus/do`) to keep the runtime free of a
+ * hard dependency on the DO package.
+ */
+const MIGRATION_ADMIN_OPS = new Set<string>(["__cirrus_admin__:migrationStatus", "__cirrus_admin__:runMigration"]);
 
 /**
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
@@ -234,6 +242,10 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             return response;
         }
 
+        if (url.pathname === MIGRATE_PATH) {
+            return handleMigrate(request, env);
+        }
+
         // HTTP actions are the lowest-priority matcher: explicit routes and the
         // internal `/_cirrus/*` endpoints above always win.
         const httpRouteResponse = await dispatchHttpRoute(request, env, url);
@@ -243,6 +255,34 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
         }
 
         return new Response("Not found", { status: 404 });
+    };
+
+    const handleMigrate = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Migration endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!options.queryCoordinator) {
+            throw new CirrusError("Migration endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const migrate = await parseMigrateRequest(request);
+
+        // Forward the inbound `Authorization` bearer so each shard's admin gate
+        // accepts the fanned-out RPC.
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const result = await options.queryCoordinator.orchestrateMigration(options.shardDO, {
+            args: migrate.args,
+            functionPath: migrate.functionPath,
+            headers: forwardedHeaders,
+            table: migrate.table,
+        });
+
+        return Response.json(result, {
+            headers: { "content-type": "application/json" },
+            status: 200,
+        });
     };
 
     const dispatchHttpRoute = async (request: Request, env: unknown, url: URL): Promise<null | Response> => {
@@ -398,6 +438,43 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
         fanOut: envelope.fanOut,
         functionPath: envelope.functionPath,
         shardKey: envelope.shardKey,
+    };
+};
+
+interface MigrateRequest {
+    args: Record<string, unknown>;
+    functionPath: string;
+    table: string;
+}
+
+/**
+ * Parse and validate a `POST /_cirrus/migrate` body. `functionPath` is
+ * restricted to the migration admin ops so the endpoint can't be used to
+ * fan arbitrary RPCs across every shard.
+ */
+const parseMigrateRequest = async (request: Request): Promise<MigrateRequest> => {
+    let body: unknown;
+
+    try {
+        body = await request.json();
+    } catch {
+        throw new CirrusError("Migration body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; table?: unknown };
+
+    if (typeof candidate.table !== "string" || candidate.table.length === 0) {
+        throw new CirrusError("Migration request is missing `table`", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (typeof candidate.functionPath !== "string" || !MIGRATION_ADMIN_OPS.has(candidate.functionPath)) {
+        throw new CirrusError("Migration request `functionPath` must be a migration admin op", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return {
+        args: (candidate.args ?? {}) as Record<string, unknown>,
+        functionPath: candidate.functionPath,
+        table: candidate.table,
     };
 };
 

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { Project } from "ts-morph";
 
 import { discoverFunctions } from "./discover-functions.js";
+import { discoverMigrations } from "./discover-migrations.js";
 import { discoverSchema } from "./discover-schema.js";
 import { emitApi, emitDataModel, emitDrizzleSchema, emitServer, emitShard } from "./emit.js";
 
@@ -82,10 +83,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     const schema = discoverSchema(project, schemaPath);
     const functions = discoverFunctions(project, cirrusDirectory);
+    const migrations = discoverMigrations(project, cirrusDirectory);
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
-    const serverContent = emitServer(functions);
+    const serverContent = emitServer(functions, migrations);
     const shardContent = emitShard(schema);
     const drizzleFiles = emitDrizzleSchema(schema);
 

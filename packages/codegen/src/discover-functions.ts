@@ -73,7 +73,12 @@ const resolveCalleeKind = (identifier: Identifier): string | null => {
     return null;
 };
 
-const walk = (directory: string, accumulator: string[] = []): string[] => {
+/**
+ * Recursively collect `.ts` files under a cirrus source directory, skipping
+ * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
+ * migration discovery so both walk the same file set.
+ */
+export const listCirrusSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
     let entries: string[] = [];
 
     try {
@@ -91,7 +96,7 @@ const walk = (directory: string, accumulator: string[] = []): string[] => {
                 continue;
             }
 
-            walk(full, accumulator);
+            listCirrusSourceFiles(full, accumulator);
         } else if (info.isFile() && extname(entry) === ".ts" && entry !== "schema.ts") {
             accumulator.push(full);
         }
@@ -351,7 +356,7 @@ const referencesUnreachableLocalType = (type: Type, handlerFilePath: string, see
  * for top-level `export const x = query/mutation/action({...})` registrations.
  */
 export const discoverFunctions = (project: Project, cirrusDirectory: string): FunctionIR[] => {
-    const filePaths = walk(cirrusDirectory);
+    const filePaths = listCirrusSourceFiles(cirrusDirectory);
     const functions: FunctionIR[] = [];
 
     for (const filePath of filePaths) {

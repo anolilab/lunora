@@ -4,7 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { runMigrateGenerateCommand } from "../../src/commands/migrate.js";
+import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "../../src/commands/migrate.js";
+import type { FetchLike } from "../../src/commands/run.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => ({
@@ -251,5 +252,273 @@ export const schema = defineSchema({
         expect(sql).toContain("NOT auto-generated");
         expect(sql).toContain("legacy");
         expect(warnings.join("\n")).toMatch(/unsupported diff/u);
+    });
+});
+
+const writeMigrations = (source: string): void => {
+    const cirrus = join(workdir, "cirrus");
+
+    mkdirSync(cirrus, { recursive: true });
+    writeFileSync(join(cirrus, "migrations.ts"), source, "utf8");
+};
+
+const migrationsFile = (): string => join(workdir, "cirrus", "migrations.ts");
+
+describe("cirrus migrate create", () => {
+    test("scaffolds cirrus/migrations.ts with a defineMigration block", () => {
+        const result = runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "Backfill Read By", table: "messages" });
+
+        expect(result.code).toBe(0);
+        expect(result.file).toBe(migrationsFile());
+
+        const content = readFileSync(result.file, "utf8");
+
+        expect(content).toContain('import { defineMigration } from "@cirrus/server";');
+        expect(content).toContain("export const backfillReadBy = defineMigration({");
+        expect(content).toContain('id: "backfill-read-by",');
+        expect(content).toContain('table: "messages",');
+        expect(content).toContain("up: (document) => document,");
+    });
+
+    test("appends a second migration without duplicating the import", () => {
+        runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "first", table: "a" });
+        const result = runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "second", table: "b" });
+
+        expect(result.code).toBe(0);
+
+        const content = readFileSync(result.file, "utf8");
+
+        expect(content.match(/import \{ defineMigration \}/gu)).toHaveLength(1);
+        expect(content).toContain("export const first = defineMigration({");
+        expect(content).toContain("export const second = defineMigration({");
+    });
+
+    test("refuses to clobber an existing migration of the same id", () => {
+        runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "dupe", table: "a" });
+
+        const errors: string[] = [];
+        const result = runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name: "dupe", table: "a" });
+
+        expect(result.code).toBe(1);
+        expect(errors.join("\n")).toContain("already exists");
+    });
+
+    test("rejects a name with no alphanumeric characters", () => {
+        const errors: string[] = [];
+        const result = runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name: "---" });
+
+        expect(result.code).toBe(1);
+        expect(errors.join("\n")).toContain("invalid migration name");
+    });
+
+    test("warns and writes a TODO placeholder when --table is omitted", () => {
+        const warnings: string[] = [];
+        const result = runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), warn: (m) => warnings.push(m) }, name: "needs_table" });
+
+        expect(result.code).toBe(0);
+        expect(readFileSync(result.file, "utf8")).toContain('table: "TODO_table",');
+        expect(warnings.join("\n")).toContain("set the `table` field");
+    });
+});
+
+const MIGRATIONS_SOURCE = `import { defineMigration } from "@cirrus/server";
+
+export const backfillReadBy = defineMigration({
+    id: "backfill-read-by",
+    table: "messages",
+    up: (document) => document,
+});
+`;
+
+interface CapturedCall {
+    body: { args: Record<string, unknown>; functionPath: string; table: string };
+    headers?: Record<string, string>;
+    url: string;
+}
+
+const captureFetch = (calls: CapturedCall[], response: { json: () => Promise<unknown>; ok: boolean; status: number }): FetchLike => {
+    return async (url, init) => {
+        calls.push({ body: init?.body ? (JSON.parse(init.body) as CapturedCall["body"]) : ({} as CapturedCall["body"]), headers: init?.headers, url });
+
+        return { json: response.json, ok: response.ok, status: response.status, text: async () => "" };
+    };
+};
+
+const okResponse = (body: unknown = { ok: 1 }): { json: () => Promise<unknown>; ok: boolean; status: number } => ({
+    json: async () => body,
+    ok: true,
+    status: 200,
+});
+
+describe("cirrus migrate up/down/status", () => {
+    beforeEach(() => {
+        writeMigrations(MIGRATIONS_SOURCE);
+    });
+
+    test("up POSTs a runMigration admin RPC to /_cirrus/migrate with the resolved table and bearer", async () => {
+        const calls: CapturedCall[] = [];
+
+        const result = await runMigrateDataCommand({
+            cwd: workdir,
+            fetchImpl: captureFetch(calls, okResponse()),
+            id: "backfill-read-by",
+            logger: silentLogger(),
+            subcommand: "up",
+            token: "s3cret",
+            url: "http://localhost:9999",
+        });
+
+        expect(result.code).toBe(0);
+        expect(result.requestUrl).toBe("http://localhost:9999/_cirrus/migrate");
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.body).toEqual({ args: { direction: "up", id: "backfill-read-by" }, functionPath: "__cirrus_admin__:runMigration", table: "messages" });
+        expect(calls[0]?.headers?.authorization).toBe("Bearer s3cret");
+    });
+
+    test("forwards --dry-run, --batch-size and --steps into the runner args", async () => {
+        const calls: CapturedCall[] = [];
+
+        await runMigrateDataCommand({
+            batchSize: 250,
+            cwd: workdir,
+            dryRun: true,
+            fetchImpl: captureFetch(calls, okResponse()),
+            id: "backfill-read-by",
+            logger: silentLogger(),
+            maxBatches: 3,
+            subcommand: "up",
+            token: "s3cret",
+        });
+
+        expect(calls[0]?.body.args).toEqual({ batchSize: 250, direction: "up", dryRun: true, id: "backfill-read-by", maxBatches: 3 });
+    });
+
+    test("down sets direction to down", async () => {
+        const calls: CapturedCall[] = [];
+
+        await runMigrateDataCommand({
+            cwd: workdir,
+            fetchImpl: captureFetch(calls, okResponse()),
+            id: "backfill-read-by",
+            logger: silentLogger(),
+            subcommand: "down",
+            token: "s3cret",
+        });
+
+        expect(calls[0]?.body.args.direction).toBe("down");
+    });
+
+    test("status sends migrationStatus with no direction", async () => {
+        const calls: CapturedCall[] = [];
+
+        await runMigrateDataCommand({
+            cwd: workdir,
+            fetchImpl: captureFetch(calls, okResponse({ changed: 0, failed: 0, ok: 1, processed: 0, shards: [], status: "in_progress" })),
+            id: "backfill-read-by",
+            logger: silentLogger(),
+            subcommand: "status",
+            token: "s3cret",
+        });
+
+        expect(calls[0]?.body.functionPath).toBe("__cirrus_admin__:migrationStatus");
+        expect(calls[0]?.body.args).toEqual({ id: "backfill-read-by" });
+    });
+
+    test("falls back to CIRRUS_ADMIN_TOKEN when --token is omitted", async () => {
+        const calls: CapturedCall[] = [];
+        const previous = process.env.CIRRUS_ADMIN_TOKEN;
+
+        process.env.CIRRUS_ADMIN_TOKEN = "from-env";
+
+        try {
+            await runMigrateDataCommand({
+                cwd: workdir,
+                fetchImpl: captureFetch(calls, okResponse()),
+                id: "backfill-read-by",
+                logger: silentLogger(),
+                subcommand: "up",
+            });
+        } finally {
+            if (previous === undefined) {
+                delete process.env.CIRRUS_ADMIN_TOKEN;
+            } else {
+                process.env.CIRRUS_ADMIN_TOKEN = previous;
+            }
+        }
+
+        expect(calls[0]?.headers?.authorization).toBe("Bearer from-env");
+    });
+
+    test("errors when no admin token is available", async () => {
+        const errors: string[] = [];
+        const previous = process.env.CIRRUS_ADMIN_TOKEN;
+
+        delete process.env.CIRRUS_ADMIN_TOKEN;
+
+        try {
+            const result = await runMigrateDataCommand({
+                cwd: workdir,
+                fetchImpl: captureFetch([], okResponse()),
+                id: "backfill-read-by",
+                logger: { ...silentLogger(), error: (m) => errors.push(m) },
+                subcommand: "up",
+            });
+
+            expect(result.code).toBe(1);
+        } finally {
+            if (previous !== undefined) {
+                process.env.CIRRUS_ADMIN_TOKEN = previous;
+            }
+        }
+
+        expect(errors.join("\n")).toContain("admin token required");
+    });
+
+    test("errors when the migration id is not declared under cirrus/", async () => {
+        const errors: string[] = [];
+
+        const result = await runMigrateDataCommand({
+            cwd: workdir,
+            fetchImpl: captureFetch([], okResponse()),
+            id: "ghost",
+            logger: { ...silentLogger(), error: (m) => errors.push(m) },
+            subcommand: "up",
+            token: "s3cret",
+        });
+
+        expect(result.code).toBe(1);
+        expect(errors.join("\n")).toContain('"ghost" not found');
+    });
+
+    test("--prod without --url is refused before any request", async () => {
+        const calls: CapturedCall[] = [];
+        const errors: string[] = [];
+
+        const result = await runMigrateDataCommand({
+            cwd: workdir,
+            fetchImpl: captureFetch(calls, okResponse()),
+            id: "backfill-read-by",
+            logger: { ...silentLogger(), error: (m) => errors.push(m) },
+            prod: true,
+            subcommand: "up",
+            token: "s3cret",
+        });
+
+        expect(result.code).toBe(1);
+        expect(calls).toHaveLength(0);
+        expect(errors.join("\n")).toContain("--prod requires an explicit --url");
+    });
+
+    test("returns non-zero on an HTTP error response", async () => {
+        const result = await runMigrateDataCommand({
+            cwd: workdir,
+            fetchImpl: captureFetch([], { json: async () => ({ error: { code: "ADMIN_FORBIDDEN" } }), ok: false, status: 403 }),
+            id: "backfill-read-by",
+            logger: silentLogger(),
+            subcommand: "up",
+            token: "s3cret",
+        });
+
+        expect(result.code).toBe(1);
     });
 });
