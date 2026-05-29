@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import type { Id, Infer } from "../src/index.js";
 import { v, ValidationError } from "../src/index.js";
@@ -140,8 +140,8 @@ describe("time validators", () => {
     test("defaultNow records a Date.now() default factory", () => {
         const { column } = (v.timestamp().defaultNow() as unknown as { _meta: { column: { defaultFn?: () => unknown } } })._meta;
 
-        expectTypeOf(column.defaultFn).toBeFunction();
-        expectTypeOf(column.defaultFn?.()).toBeNumber();
+        expect(column.defaultFn).toBeTypeOf("function");
+        expect(column.defaultFn?.()).toBeTypeOf("number");
     });
 });
 
