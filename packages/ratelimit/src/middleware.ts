@@ -5,8 +5,8 @@ import type { RateLimitReason } from "./types.js";
 
 /**
  * Either a fixed {@link RateLimiter} or a function that derives one from `ctx`
- * — the latter lets a procedure bind a per-DO SQLite-backed limiter at call
- * time (e.g. `(ctx) => new RateLimiter({ config, store: createSqlStore({ sql: ctx.sql }) })`).
+ * — the latter lets a procedure bind a durable, ORM-backed limiter at call time
+ * (e.g. `(ctx) => new RateLimiter({ config, store: createDbStore({ db: ctx.db }) })`).
  */
 export type LimiterResolver<Ctx> = ((ctx: Ctx) => Promise<RateLimiter> | RateLimiter) | RateLimiter;
 

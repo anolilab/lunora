@@ -1,12 +1,12 @@
 export type { EvaluateOptions, EvaluateResult } from "./algorithms.js";
-export { evaluate } from "./algorithms.js";
+export { availableAt, evaluate } from "./algorithms.js";
 export { RateLimitError } from "./error.js";
 export type { LimiterResolver, RateLimitMiddlewareOptions } from "./middleware.js";
 export { rateLimit } from "./middleware.js";
 export type { RateLimiterOptions } from "./rate-limiter.js";
 export { RateLimiter } from "./rate-limiter.js";
-export type { SqlLike, SqlStoreOptions } from "./store.js";
-export { createMemoryStore, createSqlStore } from "./store.js";
+export type { DbStoreOptions, RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, SqlLike, SqlStoreOptions } from "./store.js";
+export { createDbStore, createMemoryStore, createSqlStore } from "./store.js";
 export type {
     RateLimitArgs,
     RateLimitConfig,

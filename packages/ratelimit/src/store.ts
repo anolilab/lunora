@@ -1,3 +1,5 @@
+import type { Id } from "@cirrus/values";
+
 import type { RateLimitStore, RateLimitValue } from "./types.js";
 
 /**
@@ -79,6 +81,114 @@ export const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
                 value.ts,
                 value.prev ?? null,
             );
+        },
+    };
+};
+
+/**
+ * The slice of an index-range builder the store uses. Mirrors `@cirrus/server`'s
+ * `IndexRangeBuilder` field-for-field so the real `ctx.db` query builder is
+ * assignable; only `eq` is exercised.
+ */
+export interface RateLimitDbIndexRange {
+    eq: (field: string, value: unknown) => RateLimitDbIndexRange;
+    gt: (field: string, value: unknown) => RateLimitDbIndexRange;
+    gte: (field: string, value: unknown) => RateLimitDbIndexRange;
+    lt: (field: string, value: unknown) => RateLimitDbIndexRange;
+    lte: (field: string, value: unknown) => RateLimitDbIndexRange;
+}
+
+/** The slice of a `ctx.db` table query the store relies on. */
+export interface RateLimitDbQuery {
+    first: () => Promise<Record<string, unknown> | null>;
+    withIndex: (indexName: string, range: (q: RateLimitDbIndexRange) => RateLimitDbIndexRange) => RateLimitDbQuery;
+}
+
+/**
+ * The slice of the Cirrus ORM writer (`ctx.db` on a mutation/action) the store
+ * needs. The real `DatabaseWriter` is structurally assignable, so pass `ctx.db`
+ * directly — declared here (rather than imported) to keep `@cirrus/ratelimit`
+ * free of a runtime dependency on `@cirrus/server`.
+ */
+export interface RateLimitDb {
+    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    insert: <T extends string>(table: T, document: Record<string, unknown>) => Promise<Id<T>>;
+    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    query: (table: string) => RateLimitDbQuery;
+}
+
+export interface DbStoreOptions {
+    /** The Cirrus ORM writer — `ctx.db` inside a mutation or action. */
+    db: RateLimitDb;
+    /** Index that resolves a row by its key column. Defaults to `by_key`. */
+    index?: string;
+    /** Column storing the opaque key. Defaults to `key`. */
+    keyField?: string;
+    /** Table holding one row per `(name, key)` pair. Defaults to `rateLimits`. */
+    table?: string;
+}
+
+/**
+ * Store backed by a Cirrus table through `ctx.db`, for durable per-DO limits
+ * inside a procedure (the procedure context exposes no raw SQL). Declare a
+ * table with the key column and its index, e.g.
+ *
+ * ```ts
+ * rateLimits: defineTable({
+ *     key: v.string(),
+ *     ts: v.number(),
+ *     value: v.number(),
+ *     prev: v.optional(v.number()),
+ * }).index("by_key", ["key"])
+ * ```
+ *
+ * Each operation is a read-then-write; inside a mutation/action that pair runs
+ * under the DO's input gate, so it is atomic against concurrent calls.
+ */
+export const createDbStore = (options: DbStoreOptions): RateLimitStore => {
+    const { db } = options;
+    const table = options.table ?? "rateLimits";
+    const index = options.index ?? "by_key";
+    const keyField = options.keyField ?? "key";
+
+    const find = async (storageKey: string): Promise<Record<string, unknown> | null> =>
+        db
+            .query(table)
+            .withIndex(index, (q) => q.eq(keyField, storageKey))
+            .first();
+
+    return {
+        delete: async (storageKey) => {
+            const row = await find(storageKey);
+
+            if (row) {
+                await db.delete(row._id as Id<string>);
+            }
+        },
+        get: async (storageKey) => {
+            const row = await find(storageKey);
+
+            if (!row) {
+                return undefined;
+            }
+
+            const value: RateLimitValue = { ts: row.ts as number, value: row.value as number };
+
+            if (row.prev !== null && row.prev !== undefined) {
+                value.prev = row.prev as number;
+            }
+
+            return value;
+        },
+        set: async (storageKey, value) => {
+            const row = await find(storageKey);
+            const document: Record<string, unknown> = { [keyField]: storageKey, ts: value.ts, value: value.value };
+
+            if (value.prev !== undefined) {
+                document.prev = value.prev;
+            }
+
+            await (row ? db.patch(row._id as Id<string>, document) : db.insert(table, document));
         },
     };
 };

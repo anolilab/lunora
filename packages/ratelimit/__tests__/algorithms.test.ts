@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { evaluate } from "../src/algorithms.js";
+import { availableAt, evaluate } from "../src/algorithms.js";
 import type { RateLimitConfig } from "../src/types.js";
 
 const tokenBucket: RateLimitConfig = { kind: "token bucket", period: 1000, rate: 10 };
@@ -180,6 +180,37 @@ describe("sliding window", () => {
         expect(status.ok).toBe(true);
         expect(value).toEqual({ prev: 0, ts: 0, value: 12 });
         expect(status.retryAfter).toBe(1200);
+    });
+});
+
+describe("availableAt", () => {
+    test("a fresh token bucket reports full capacity", () => {
+        expect(availableAt(tokenBucket, undefined, 0)).toEqual({ ts: 0, value: 10 });
+    });
+
+    test("token bucket refills toward capacity without consuming", () => {
+        // 500ms accrues 5 tokens on top of the drained 0.
+        expect(availableAt(tokenBucket, { ts: 0, value: 0 }, 500)).toEqual({ ts: 500, value: 5 });
+    });
+
+    test("token bucket never reports beyond capacity", () => {
+        expect(availableAt(tokenBucket, { ts: 0, value: 8 }, 10_000)).toEqual({ ts: 10_000, value: 10 });
+    });
+
+    test("fixed window reports remaining tokens, resetting at the boundary", () => {
+        // Same window: 2 of 5 left.
+        expect(availableAt(fixedWindow, { ts: 0, value: 2 }, 400)).toEqual({ ts: 0, value: 2 });
+        // Next window: a fresh `rate`.
+        expect(availableAt(fixedWindow, { ts: 0, value: 0 }, 1000)).toEqual({ ts: 1000, value: 5 });
+    });
+
+    test("sliding window reports the remaining allowance under the weighted estimate", () => {
+        // Previous window saw the full 10; 100ms in, estimate is 9, leaving 1.
+        expect(availableAt(slidingWindow, { ts: 0, value: 10 }, 1100)).toEqual({ ts: 1000, value: 1 });
+    });
+
+    test("sliding window floors the allowance at zero when over the limit", () => {
+        expect(availableAt(slidingWindow, { prev: 0, ts: 0, value: 12 }, 0)).toEqual({ ts: 0, value: 0 });
     });
 });
 

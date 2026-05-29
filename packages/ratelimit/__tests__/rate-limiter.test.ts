@@ -184,3 +184,94 @@ describe("clock progression", () => {
         await expect(limiter.limit("poll")).resolves.toMatchObject({ ok: true });
     });
 });
+
+describe("live refill", () => {
+    test("getValue projects token-bucket refill to the current clock", async () => {
+        const clock = { now: 0 };
+        const limiter = makeLimiter({ clock });
+
+        await limiter.limit("send", { count: 5 });
+
+        // Drained now; nothing to spend.
+        expect((await limiter.getValue("send")).value).toBe(0);
+
+        // Half a period later, the 5/1000ms refill has accrued 2.5 tokens — a live
+        // figure, not the 0 that was persisted.
+        clock.now = 500;
+
+        expect((await limiter.getValue("send")).value).toBe(2.5);
+    });
+});
+
+describe("sharding", () => {
+    const shardedConfig = { hits: { kind: "token bucket", period: 1000, rate: 4, shards: 2 } } satisfies RateLimitConfigMap<"hits">;
+
+    const shardedLimiter = (random: () => number) => new RateLimiter({ config: shardedConfig, now: () => 0, random });
+
+    test("spreads requests across shards and enforces the aggregate rate", async () => {
+        // Alternate shard 0 and shard 1; each holds rate/shards = 2.
+        const sequence = [0, 0.5, 0, 0.5, 0];
+        let calls = 0;
+        const limiter = shardedLimiter(() => {
+            const value = sequence[calls % sequence.length] ?? 0;
+
+            calls += 1;
+
+            return value;
+        });
+
+        for (let n = 0; n < 4; n += 1) {
+            await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: true });
+        }
+
+        // Both shards are now empty; the fifth request (shard 0) is rejected.
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: false, reason: "rate" });
+    });
+
+    test("getValue aggregates the remaining capacity of every shard", async () => {
+        const limiter = shardedLimiter(() => 0);
+
+        const full = await limiter.getValue("hits");
+
+        // Two shards, each full at 2.
+        expect(full.value).toBe(4);
+        expect(full.config).toMatchObject({ rate: 4, shards: 2 });
+
+        await limiter.limit("hits");
+        await limiter.limit("hits");
+
+        // Shard 0 is drained (0); shard 1 is untouched (2).
+        expect((await limiter.getValue("hits")).value).toBe(2);
+    });
+
+    test("an unlucky shard rejects while a sibling still holds capacity", async () => {
+        const limiter = shardedLimiter(() => 0);
+
+        await limiter.limit("hits");
+        await limiter.limit("hits");
+
+        // Shard 0 is empty even though shard 1 still has 2 — the variance the
+        // sharding tradeoff accepts.
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: false });
+        expect((await limiter.getValue("hits")).value).toBe(2);
+    });
+
+    test("reset clears every shard", async () => {
+        const limiter = shardedLimiter(() => 0);
+
+        await limiter.limit("hits");
+        await limiter.limit("hits");
+
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: false });
+
+        await limiter.reset("hits");
+
+        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: true });
+    });
+
+    test("rejects a non-integer shard count at construction", () => {
+        expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", period: 1000, rate: 4, shards: 1.5 } }, now: () => 0 })).toThrow(
+            /positive integer/,
+        );
+    });
+});

@@ -138,6 +138,53 @@ const slidingWindow = (config: RateLimitConfig, prior: RateLimitValue | undefine
 };
 
 /**
+ * Project a limit's stored state forward to `now` without consuming: how many
+ * units could be admitted right now. Token bucket → the refilled token count;
+ * fixed window → tokens left in the current (possibly rolled-over) window;
+ * sliding window → `rate` minus the weighted estimate, floored at zero. Pure,
+ * like {@link evaluate}. Backs {@link RateLimiter.getValue} so it reports a
+ * live figure rather than the last value that happened to be persisted.
+ */
+export const availableAt = (config: RateLimitConfig, prior: RateLimitValue | undefined, now: number): { ts: number; value: number } => {
+    if (config.kind === "token bucket") {
+        const capacity = capacityOf(config);
+        const ratePerMs = config.rate / config.period;
+        const base = prior ?? { ts: now, value: capacity };
+        const elapsed = Math.max(0, now - base.ts);
+
+        return { ts: now, value: Math.min(capacity, base.value + elapsed * ratePerMs) };
+    }
+
+    const start = config.start ?? 0;
+    const windowStart = start + Math.floor((now - start) / config.period) * config.period;
+
+    if (config.kind === "sliding window") {
+        const elapsed = now - windowStart;
+        const weight = (config.period - elapsed) / config.period;
+
+        let previousCount = 0;
+        let currentCount = 0;
+
+        if (prior?.ts === windowStart) {
+            previousCount = prior.prev ?? 0;
+            currentCount = prior.value;
+        } else if (prior?.ts === windowStart - config.period) {
+            previousCount = prior.value;
+        }
+
+        return { ts: windowStart, value: Math.max(0, config.rate - (previousCount * weight + currentCount)) };
+    }
+
+    if (!prior || prior.ts < windowStart) {
+        const carry = prior && config.capacity !== undefined ? Math.max(0, prior.value) : 0;
+
+        return { ts: windowStart, value: Math.min(capacityOf(config), carry + config.rate) };
+    }
+
+    return { ts: prior.ts, value: prior.value };
+};
+
+/**
  * Evaluate a request against a limit's prior state. Pure: it never reads a
  * clock or persists — the caller supplies `now` and writes back `value` when
  * it is non-`null`.

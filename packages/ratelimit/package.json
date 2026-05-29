@@ -1,7 +1,7 @@
 {
     "name": "@cirrus/ratelimit",
     "version": "0.0.0",
-    "description": "Rate limiting: token-bucket / fixed-window algorithms, deny list, and procedure middleware",
+    "description": "Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware",
     "files": [
         "dist",
         "README.md",
@@ -28,6 +28,7 @@
     },
     "devDependencies": {
         "@cirrus/server": "workspace:*",
+        "@cirrus/values": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
