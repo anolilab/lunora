@@ -1,6 +1,8 @@
 import type { Validator } from "@cirrus/values";
 
 import type {
+    AggregateIndexDefinition,
+    AggregateOp,
     IndexDefinition,
     OnDeleteAction,
     RelationDefinition,
@@ -51,7 +53,25 @@ export interface RelationBuilder {
     one: <Target extends string>(table: Target, options: { field: string; onDelete?: OnDeleteAction; references?: string }) => OneRelation<Target>;
 }
 
+/**
+ * Options for the inline `.aggregateIndex(name, opts)` builder. `op` defaults to
+ * `count` so `aggregateIndex("byUser", { by: ["userId"] })` is a single-line
+ * `COUNT(*) GROUP BY userId` accelerator.
+ */
+export interface InlineAggregateIndexOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
+    /** Group keys; counter rows are one per distinct tuple. Omitted = single-row aggregate over the whole table. */
+    by?: ReadonlyArray<keyof Shape & string>;
+    /** The column the reducer applies to. Required for `sum`/`min`/`max`/`avg`; ignored for `count`. */
+    field?: keyof Shape & string;
+    /** Reducer (default `count`). */
+    op?: AggregateOp;
+    /** Static predicate baked into the counter — only matching rows are aggregated. */
+    where?: Record<string, unknown>;
+}
+
 export interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
+    /** Declare an aggregate (counter/sum/…) maintained by triggers for O(1) reads. */
+    aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
     /** Mark this table as global (D1-backed, cross-shard). */
     global: () => TableBuilder<Shape>;
     /** Add a secondary index. */
@@ -108,6 +128,7 @@ export interface VectorIndexOptions {
  * `defineSchema`) and a fluent builder for indexes + sharding metadata.
  */
 export const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): TableBuilder<Shape> => {
+    const aggregateIndexes: AggregateIndexDefinition[] = [];
     const indexes: IndexDefinition[] = [];
     const relations: Record<string, RelationDefinition> = {};
     const searchIndexes: SearchIndexDefinition[] = [];
@@ -117,6 +138,9 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
     let shardMode: ShardMode = { kind: "root" };
 
     const builder: TableBuilder<Shape> = {
+        get aggregateIndexes() {
+            return aggregateIndexes;
+        },
         get indexes() {
             return indexes;
         },
@@ -135,6 +159,27 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
         },
         get vectorIndexes() {
             return vectorIndexes;
+        },
+        aggregateIndex(name, options) {
+            const op: AggregateOp = options?.op ?? "count";
+
+            if (op !== "count" && !options?.field) {
+                throw new Error(`aggregateIndex "${name}": op "${op}" requires a "field"`);
+            }
+
+            aggregateIndexes.push({
+                by: options?.by,
+                field: options?.field,
+                name,
+                // `on` is filled in by `defineSchema` once the table is keyed; we
+                // stash the placeholder so the AggregateIndexDefinition shape stays
+                // straightforward for D1/DO consumers (who read `on`).
+                on: "",
+                op,
+                where: options?.where,
+            });
+
+            return builder;
         },
         global() {
             shardMode = { kind: "global" };
@@ -199,10 +244,69 @@ export const defineVectorIndex = (options: VectorIndexOptions): VectorIndexDefin
 });
 
 /**
+ * Options for the standalone `defineAggregateIndex(name, opts)` helper (DSL
+ * Shape B). Unlike the inline `.aggregateIndex(...)` builder, this form takes
+ * the owning table explicitly via `on` — handy when a single counter wants to
+ * live next to the schema map rather than inside a table chain.
+ */
+export interface AggregateIndexOptions {
+    by?: ReadonlyArray<string>;
+    field?: string;
+    on: string;
+    op?: AggregateOp;
+    where?: Record<string, unknown>;
+}
+
+/**
+ * Declare a standalone aggregate index. Pass the returned value to
+ * `defineSchema(tables, vectorIndexes, aggregateIndexes)` keyed by index name —
+ * the schema attaches it to `tables[on].aggregateIndexes` so runtime consumers
+ * (DO + D1) read every index uniformly off the table definition.
+ */
+export const defineAggregateIndex = (name: string, options: AggregateIndexOptions): AggregateIndexDefinition => {
+    const op: AggregateOp = options.op ?? "count";
+
+    if (op !== "count" && !options.field) {
+        throw new Error(`aggregateIndex "${name}": op "${op}" requires a "field"`);
+    }
+
+    return { by: options.by, field: options.field, name, on: options.on, op, where: options.where };
+};
+
+/**
  * Build the application schema. The first argument is the table map; the
  * optional second argument registers standalone `defineVectorIndex(...)`
- * declarations (DSL Shape B) keyed by index name.
+ * declarations (DSL Shape B) keyed by index name. The optional third argument
+ * registers standalone `defineAggregateIndex(...)` declarations (DSL Shape B);
+ * they are folded into the matching `tables[on].aggregateIndexes` array so
+ * runtime backends read all indexes from one place.
  */
-export const defineSchema = <T extends Record<string, TableDefinition>>(tables: T, vectorIndexes: Record<string, VectorIndexDefinition> = {}): Schema<T> => {
+export const defineSchema = <T extends Record<string, TableDefinition>>(
+    tables: T,
+    vectorIndexes: Record<string, VectorIndexDefinition> = {},
+    aggregateIndexes: Record<string, AggregateIndexDefinition> = {},
+): Schema<T> => {
+    // Fill in the `on` field for every inline `.aggregateIndex(...)` decl —
+    // the builder stashes `""` because it doesn't know its own table name.
+    for (const [tableName, table] of Object.entries(tables)) {
+        for (const index of table.aggregateIndexes) {
+            if (index.on === "") {
+                (index as { on: string }).on = tableName;
+            }
+        }
+    }
+
+    // Fold standalone decls onto their owning table so the runtime can read
+    // every aggregate uniformly off `tables[name].aggregateIndexes`.
+    for (const index of Object.values(aggregateIndexes)) {
+        const table = (tables as Record<string, TableDefinition>)[index.on];
+
+        if (!table) {
+            throw new Error(`defineAggregateIndex "${index.name}": unknown table "${index.on}"`);
+        }
+
+        (table.aggregateIndexes as AggregateIndexDefinition[]).push(index);
+    }
+
     return { tables, vectorIndexes };
 };

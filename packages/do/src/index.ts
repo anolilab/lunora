@@ -1,4 +1,14 @@
 export type {
+    AggregateIndexDefinitionLike,
+    AggregateOp,
+    AggregateOptions,
+    AggregateResult,
+    GroupByEntry,
+    GroupByOptions,
+    RestrictableQueryOptions,
+} from "./aggregates.js";
+export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForCount } from "./aggregates.js";
+export type {
     BroadcastDelta,
     Clock,
     ColumnMetaLike,
@@ -18,7 +28,7 @@ export type {
     WriteEvent,
     WriteHook,
 } from "./ctx-db.js";
-export { createShardCtxDb, runShardMigrations } from "./ctx-db.js";
+export { backfillAggregateIndexes, createShardCtxDb, runShardMigrations } from "./ctx-db.js";
 export type {
     DataMigrationDocument,
     DataMigrationLike,

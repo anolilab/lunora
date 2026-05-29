@@ -23,6 +23,31 @@ export interface SearchIndexDefinition {
     name: string;
 }
 
+/** Reducer applied by an aggregate index. */
+export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
+
+/**
+ * Declared aggregate index — the schema-level seam that lets the runtime keep
+ * O(1) counters/sums in step with row writes (via the trigger runner) and
+ * route matching reads through them.
+ *
+ * - `on` — the table whose rows feed the aggregate.
+ * - `op` — the reducer. `count` is field-less; the others take `field`.
+ * - `field` — the column the reducer applies to (required for non-count ops).
+ * - `by` — group keys. When all `where` keys in a read participate in `by`,
+ *   the reader can answer from the counter table without scanning rows.
+ * - `where` — optional static predicate baked into the counter (only the rows
+ *   matching it ever land in the counter).
+ */
+export interface AggregateIndexDefinition {
+    by?: ReadonlyArray<string>;
+    field?: string;
+    name: string;
+    on: string;
+    op: AggregateOp;
+    where?: Record<string, unknown>;
+}
+
 /** FK behavior when a referenced parent row is deleted (mirrors SQL `ON DELETE`). */
 export type OnDeleteAction = "cascade" | "restrict" | "set null";
 
@@ -70,6 +95,13 @@ export interface TableVectorIndex {
 }
 
 export interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
+    /**
+     * Aggregate indexes declared via `.aggregateIndex(name, opts)`. The runtime
+     * maintains a counter row per `by` group via the trigger seam, so reads
+     * whose `where` keys all participate in the index's `by` set are answered
+     * without scanning the underlying table.
+     */
+    aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
     /**
      * Declared relations keyed by accessor name; empty unless `.relations()`
