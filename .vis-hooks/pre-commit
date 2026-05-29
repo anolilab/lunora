@@ -11,36 +11,29 @@ pnpm exec vis secrets --staged
 pnpm exec vis staged
 
 # react-doctor hook start
-react_doctor_scan_staged_files() {
-  if [ -x "./node_modules/.bin/react-doctor" ]; then
-    "./node_modules/.bin/react-doctor" --staged --fail-on warning
-    return
-  fi
+# react-doctor is per-project: `--staged` builds a temp project from the staged
+# files and resolves React from the *current directory's* package.json. Run from
+# the monorepo root it dies with "No React dependency found", so scan each
+# React-bearing package that actually has staged files, from inside that package.
+# Advisory only — a finding never blocks the commit (the vis runner puts
+# node_modules/.bin on PATH and runs us under `sh -e`, hence the guarded call).
+# Always use the workspace-pinned binary (absolute path: safe after `cd`, and
+# never an accidental global install of a different version).
+react_doctor="$(git rev-parse --show-toplevel)/node_modules/.bin/react-doctor"
 
-  if command -v react-doctor >/dev/null 2>&1; then
-    react-doctor --staged --fail-on warning
-    return
-  fi
-
-  if command -v pnpm >/dev/null 2>&1; then
-    pnpm dlx react-doctor@latest --staged --fail-on warning
-    return
-  fi
-
-  if command -v npx >/dev/null 2>&1; then
-    npx --yes react-doctor@latest --staged --fail-on warning
-    return
-  fi
-
-  printf '%s\n' "react-doctor: command not found; skipping staged scan."
-}
-
-react_doctor_output=$(mktemp "${TMPDIR:-/tmp}/react-doctor-hook.XXXXXX")
-if react_doctor_scan_staged_files > "$react_doctor_output" 2>&1; then
-  rm -f "$react_doctor_output"
-else
-  rm -f "$react_doctor_output"
-  printf '%s\n' "React Doctor found staged regressions." "Run react-doctor --staged --fail-on warning to inspect." "Want them fixed? Ask your agent to run that command and resolve the findings." >&2
+if [ -x "$react_doctor" ]; then
+  git diff --cached --name-only --diff-filter=ACMR \
+    | sed -n -E 's#^((packages|apps)/[^/]+)/.*#\1#p' \
+    | sort -u \
+    | while IFS= read -r project; do
+        [ -f "$project/package.json" ] || continue
+        grep -qE '"react":' "$project/package.json" || continue
+        if ! ( cd "$project" && "$react_doctor" --staged --fail-on warning ); then
+          printf '%s\n' \
+            "React Doctor flagged staged regressions in $project (advisory — commit not blocked)." \
+            "Inspect / fix: (cd $project && react-doctor --staged --fail-on warning)" >&2
+        fi
+      done
 fi
 # react-doctor hook end
 
