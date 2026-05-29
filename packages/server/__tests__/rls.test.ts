@@ -133,6 +133,12 @@ const makeCtx = (db: FakeDb, userId: null | string, roles: string[] = []): TestC
     db: db.writer,
 });
 
+/** Build a one-off insert handler running through an `rls()` chain over a single policy. */
+const insertWithPolicy = (policy: Policy<TestCtx>) => (document: Record<string, unknown>) =>
+    cirrus.mutation
+        .use(rlsForTest<TestCtx>([policy]))
+        .mutation(async ({ ctx }) => ctx.db.insert("documents", document));
+
 /* -------------------------------------------------------------------------
  * Tests
  * ---------------------------------------------------------------------- */
@@ -349,6 +355,161 @@ describe("rls — write path", () => {
         await expect(handler.handler(makeCtx(db, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
             name: "CirrusError",
+        });
+    });
+});
+
+describe("rls — write policies returning a WhereInput predicate", () => {
+    test("insert: predicate matches the candidate document → allow", async () => {
+        const policy = definePolicy<TestCtx>({
+            on: "insert",
+            table: "documents",
+            when: ({ auth }) => ({ ownerId: { eq: auth.userId } }),
+        });
+        const db = createFakeDb([]);
+
+        const handler = cirrus.mutation
+            .use(rlsForTest<TestCtx>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.insert("documents", { ownerId: "u1", title: "x" }));
+
+        await handler.handler(makeCtx(db, "u1"), {});
+
+        expect(db.calls.some((call) => call.method === "insert")).toBe(true);
+    });
+
+    test("insert: predicate mismatch denies with FORBIDDEN", async () => {
+        const policy = definePolicy<TestCtx>({
+            on: "insert",
+            table: "documents",
+            when: ({ auth }) => ({ ownerId: { eq: auth.userId } }),
+        });
+        const db = createFakeDb([]);
+
+        const handler = cirrus.mutation
+            .use(rlsForTest<TestCtx>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.insert("documents", { ownerId: "someone-else", title: "x" }));
+
+        await expect(handler.handler(makeCtx(db, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            name: "CirrusError",
+        });
+        expect(db.calls.some((call) => call.method === "insert")).toBe(false);
+    });
+
+    test("update: predicate evaluates against the pre-write row", async () => {
+        const policy = definePolicy<TestCtx>({
+            on: "update",
+            table: "documents",
+            when: () => ({ archived: { eq: false } }),
+        });
+        const allowed = createFakeDb([{ _id: "d1", archived: false, table: "documents" }]);
+        const denied = createFakeDb([{ _id: "d2", archived: true, table: "documents" }]);
+
+        const allowedHandler = cirrus.mutation
+            .use(rlsForTest<TestCtx>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
+        const deniedHandler = cirrus.mutation
+            .use(rlsForTest<TestCtx>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.patch("d2", { title: "new" }));
+
+        await allowedHandler.handler(makeCtx(allowed, "u1"), {});
+        expect(allowed.calls.some((call) => call.method === "patch")).toBe(true);
+
+        await expect(deniedHandler.handler(makeCtx(denied, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+        expect(denied.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    test("delete: predicate evaluates against the pre-write row", async () => {
+        const policy = definePolicy<TestCtx>({
+            on: "delete",
+            table: "documents",
+            when: ({ auth }) => ({ ownerId: { eq: auth.userId } }),
+        });
+        const db = createFakeDb([
+            { _id: "mine", ownerId: "u1", table: "documents" },
+            { _id: "theirs", ownerId: "u2", table: "documents" },
+        ]);
+
+        const allowedHandler = cirrus.mutation
+            .use(rlsForTest<TestCtx>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.delete("mine"));
+        const deniedHandler = cirrus.mutation
+            .use(rlsForTest<TestCtx>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.delete("theirs"));
+
+        await allowedHandler.handler(makeCtx(db, "u1"), {});
+        expect(db.calls.some((call) => call.method === "delete")).toBe(true);
+
+        await expect(deniedHandler.handler(makeCtx(db, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+    });
+
+    test("operator coverage: lt / in / contains / AND honored on writes", async () => {
+        const policy = definePolicy<TestCtx>({
+            on: "insert",
+            table: "documents",
+            when: () => ({
+                AND: [
+                    { priority: { lt: 5 } },
+                    { status: { in: ["draft", "review"] } },
+                    { title: { contains: "urgent" } },
+                ],
+            }),
+        });
+        const db = createFakeDb([]);
+
+        const handler = insertWithPolicy(policy);
+
+        // Matches every branch — allowed.
+        await handler({ priority: 3, status: "draft", title: "urgent fix" }).handler(makeCtx(db, "u1"), {});
+        expect(db.calls.filter((call) => call.method === "insert")).toHaveLength(1);
+
+        // lt fails (5 is NOT less than 5).
+        await expect(handler({ priority: 5, status: "draft", title: "urgent fix" }).handler(makeCtx(db, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+
+        // in fails.
+        await expect(handler({ priority: 1, status: "archived", title: "urgent" }).handler(makeCtx(db, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+
+        // contains fails.
+        await expect(handler({ priority: 1, status: "draft", title: "trivial" }).handler(makeCtx(db, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+
+        // null/undefined never matches an ordered comparator (SQL NULL
+        // semantics) — `priority: null` with `lt: 5` denies.
+        await expect(handler({ priority: null, status: "draft", title: "urgent" }).handler(makeCtx(db, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+    });
+
+    test("OR branch: any matching sub-predicate allows the write", async () => {
+        const policy = definePolicy<TestCtx>({
+            on: "insert",
+            table: "documents",
+            when: ({ auth }) => ({
+                OR: [{ ownerId: { eq: auth.userId } }, { visibility: { eq: "public" } }],
+            }),
+        });
+        const db = createFakeDb([]);
+
+        const handler = insertWithPolicy(policy);
+
+        // OR-left matches (ownerId).
+        await handler({ ownerId: "u1", visibility: "private" }).handler(makeCtx(db, "u1"), {});
+
+        // OR-right matches (public visibility — different owner).
+        await handler({ ownerId: "u2", visibility: "public" }).handler(makeCtx(db, "u1"), {});
+
+        // Neither matches — denied.
+        await expect(handler({ ownerId: "u2", visibility: "private" }).handler(makeCtx(db, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
         });
     });
 });

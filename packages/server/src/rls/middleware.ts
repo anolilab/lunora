@@ -207,6 +207,20 @@ const computeReadBaseWhere = <Ctx>(
  * the write, `false` to deny. The convention is "every matching write policy
  * must allow" — the most restrictive policy wins, mirroring SQL RLS.
  *
+ * Decision semantics:
+ *
+ *  - `true`            → allow.
+ *  - `false`           → deny (`CirrusError("FORBIDDEN")` at the call site).
+ *  - `WhereInput`      → allow only when the candidate row (insert) or
+ *                        pre-write row (update/delete) matches the predicate;
+ *                        a mismatch denies the write. Evaluated by
+ *                        {@link matchesWhere} with the same operator set as
+ *                        the SQL compiler (`eq`/`ne`/`in`/`notIn`/`lt`/`lte`/
+ *                        `gt`/`gte`/`isNull`/`contains` + `AND`/`OR`/`NOT`).
+ *                        A predicate without a row to evaluate (defensive
+ *                        case — the wrapper always passes one) denies.
+ *  - `undefined`       → policy opts out; doesn't count as a decision.
+ *
  * If no write policy matches the op, the write is *allowed by default* —
  * RLS guards declared reads; unguarded writes flow through. Authors who
  * want every write to be policy-gated should declare a matching write
@@ -217,8 +231,6 @@ const evaluateWrite = <Ctx>(
     op: Exclude<Policy["on"], "read">,
     context: PolicyContext<Ctx>,
 ): boolean => {
-    let sawDecision = false;
-
     for (const policy of policies) {
         if (policy.on !== op) {
             continue;
@@ -226,23 +238,24 @@ const evaluateWrite = <Ctx>(
 
         const decision = policy.when(context);
 
-        if (decision === undefined) {
+        if (decision === undefined || decision === true) {
             continue;
         }
-
-        sawDecision = true;
 
         if (decision === false) {
             return false;
         }
 
-        // `true` or a WhereInput both pass write evaluation. A WhereInput
-        // on a write policy reads as "this row qualifies if it matches the
-        // predicate" — we evaluate it as `true` for now (a future iteration
-        // can apply the predicate against the row in JS).
+        // WhereInput predicate — the row qualifies only if it matches.
+        // Without a row to evaluate against we deny (safer default; in
+        // practice the wrapper always supplies the candidate or pre-write
+        // row, so this branch is defensive).
+        if (!context.row || !matchesWhere(context.row, decision)) {
+            return false;
+        }
     }
 
-    return !sawDecision || true;
+    return true;
 };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -356,6 +369,36 @@ const wrapDb = <Ctx>(
         return undefined;
     };
 
+    /**
+     * Locate the row + table, evaluate the matching write policy against the
+     * pre-write row, then perform the underlying mutation. Shared by
+     * `delete`/`patch`/`replace` so the three id-keyed write paths agree on
+     * deny semantics and on the "no policy → pass through" fast path.
+     */
+    const gateById = async <R>(
+        id: string,
+        op: Exclude<Policy["on"], "insert" | "read">,
+        perform: () => Promise<R>,
+    ): Promise<R> => {
+        const located = await findRowTable(id);
+
+        if (!located) {
+            return perform();
+        }
+
+        const policies = perTable.get(located.tableName);
+
+        if (policies) {
+            const writeOk = evaluateWrite(policies, op, { ...context, row: located.row });
+
+            if (!writeOk) {
+                throw new CirrusError("FORBIDDEN", `${op} on "${located.tableName}" denied by policy`);
+            }
+        }
+
+        return perform();
+    };
+
     return {
         async count(tableName, whereOrArgs) {
             const { baseWhere, restricts } = readBase(tableName);
@@ -368,25 +411,7 @@ const wrapDb = <Ctx>(
             });
         },
 
-        async delete(id) {
-            const located = await findRowTable(id);
-
-            if (!located) {
-                return base.delete(id);
-            }
-
-            const policies = perTable.get(located.tableName);
-
-            if (policies) {
-                const writeOk = evaluateWrite(policies, "delete", { ...context, row: located.row });
-
-                if (!writeOk) {
-                    throw new CirrusError("FORBIDDEN", `delete on "${located.tableName}" denied by policy`);
-                }
-            }
-
-            return base.delete(id);
-        },
+        delete: (id) => gateById(id, "delete", () => base.delete(id)),
 
         async findFirst(tableName, args) {
             const { baseWhere } = readBase(tableName);
@@ -451,25 +476,7 @@ const wrapDb = <Ctx>(
             return base.insert(tableName, document);
         },
 
-        async patch(id, patch) {
-            const located = await findRowTable(id);
-
-            if (!located) {
-                return base.patch(id, patch);
-            }
-
-            const policies = perTable.get(located.tableName);
-
-            if (policies) {
-                const writeOk = evaluateWrite(policies, "update", { ...context, row: located.row });
-
-                if (!writeOk) {
-                    throw new CirrusError("FORBIDDEN", `update on "${located.tableName}" denied by policy`);
-                }
-            }
-
-            return base.patch(id, patch);
-        },
+        patch: (id, patch) => gateById(id, "update", () => base.patch(id, patch)),
 
         query(tableName) {
             const { baseWhere } = readBase(tableName);
@@ -489,34 +496,35 @@ const wrapDb = <Ctx>(
             return reader.filter((document) => matchesWhere(document, baseWhere));
         },
 
-        replace: async (id, document) => {
-            const located = await findRowTable(id);
-
-            if (!located) {
-                return base.replace(id, document);
-            }
-
-            const policies = perTable.get(located.tableName);
-
-            if (policies) {
-                const writeOk = evaluateWrite(policies, "update", { ...context, row: located.row });
-
-                if (!writeOk) {
-                    throw new CirrusError("FORBIDDEN", `update on "${located.tableName}" denied by policy`);
-                }
-            }
-
-            return base.replace(id, document);
-        },
+        replace: (id, document) => gateById(id, "update", () => base.replace(id, document)),
     };
 };
 
+/** Operator keys the JS evaluator recognises. Mirrors `FieldOperators` from the SQL compiler. */
+const OPERATOR_KEYS = ["contains", "eq", "gt", "gte", "in", "isNull", "lt", "lte", "ne", "notIn"] as const;
+
 /**
- * Tiny JS-side `WhereInput` evaluator used by the legacy `query()` wrapper.
- * Only the operators emitted by RLS today are supported (eq, ne, in, AND,
- * OR, NOT) — enough to gate the iterator reader without dragging the SQL
- * compiler into the JS path. The full compiler stays the single source of
- * truth for SQL-bound predicates.
+ * SQL NULL semantics for ordered comparators: `null`/`undefined` never
+ * compares as less-than/greater-than/contains anything. Without this guard JS
+ * would silently coerce `null` to `0` and let `null < 5` evaluate truthy —
+ * surprising and at odds with the SQL compiler the predicate flows through on
+ * reads.
+ */
+const isOrderable = (value: unknown): value is bigint | number | string => {
+    const type = typeof value;
+
+    return type === "number" || type === "string" || type === "bigint";
+};
+
+/**
+ * JS-side `WhereInput` evaluator. Used by the legacy `query()` wrapper to
+ * push read predicates down as `.filter()`, and by {@link evaluateWrite} to
+ * gate write policies whose `when` returns a `WhereInput` against the
+ * candidate row (insert) or pre-write row (update/delete). Supports the same
+ * operator set as the SQL compiler (`eq`, `ne`, `in`, `notIn`, `lt`, `lte`,
+ * `gt`, `gte`, `isNull`, `contains`) plus `AND`/`OR`/`NOT` composition. The
+ * full compiler stays the single source of truth for SQL-bound predicates;
+ * this evaluator is a deliberate parallel for the in-memory path.
  */
 const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boolean => {
     for (const key of Object.keys(where)) {
@@ -548,7 +556,7 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
 
         const docValue = document[key];
 
-        if (isPlainObject(value) && Object.keys(value).every((k) => ["contains", "eq", "gt", "gte", "in", "isNull", "lt", "lte", "ne", "notIn"].includes(k))) {
+        if (isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k))) {
             const operators = value as Record<string, unknown>;
 
             if ("eq" in operators && docValue !== operators["eq"]) {
@@ -571,6 +579,30 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
                 const list = operators["notIn"];
 
                 if (Array.isArray(list) && list.includes(docValue)) {
+                    return false;
+                }
+            }
+
+            if ("lt" in operators && (!isOrderable(docValue) || !isOrderable(operators["lt"]) || (docValue as number) >= (operators["lt"] as number))) {
+                return false;
+            }
+
+            if ("lte" in operators && (!isOrderable(docValue) || !isOrderable(operators["lte"]) || (docValue as number) > (operators["lte"] as number))) {
+                return false;
+            }
+
+            if ("gt" in operators && (!isOrderable(docValue) || !isOrderable(operators["gt"]) || (docValue as number) <= (operators["gt"] as number))) {
+                return false;
+            }
+
+            if ("gte" in operators && (!isOrderable(docValue) || !isOrderable(operators["gte"]) || (docValue as number) < (operators["gte"] as number))) {
+                return false;
+            }
+
+            if ("contains" in operators) {
+                const needle = operators["contains"];
+
+                if (typeof docValue !== "string" || typeof needle !== "string" || !docValue.includes(needle)) {
                     return false;
                 }
             }

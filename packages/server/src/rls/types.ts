@@ -29,8 +29,14 @@ export type PolicyOperation = "delete" | "insert" | "read" | "update";
 /**
  * A policy's `when` decision:
  *
- * - `WhereInput` (read only): predicate AND-merged into every query against
- *   the table — the row is invisible unless it matches.
+ * - `WhereInput`: a row-shape predicate.
+ *   - On reads: AND-merged into every query against the table — the row is
+ *     invisible unless it matches.
+ *   - On writes: evaluated against the candidate document (`insert`) or the
+ *     pre-write row (`update`/`delete`); a mismatch denies the write with
+ *     `CirrusError("FORBIDDEN")`. Same operator set as the SQL compiler
+ *     (`eq`/`ne`/`in`/`notIn`/`lt`/`lte`/`gt`/`gte`/`isNull`/`contains` +
+ *     `AND`/`OR`/`NOT`).
  * - `true`: unrestricted. On reads no predicate is merged; on writes the row
  *   is allowed.
  * - `false`: deny. On reads the table is forced to match zero rows (a
