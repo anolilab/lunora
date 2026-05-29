@@ -47,6 +47,26 @@ export interface UsePaginatedQueryResult<T> {
     status: PaginationStatus;
 }
 
+export interface UseInfiniteQueryOptions {
+    /** Page size for the first page (and the default for `fetchNextPage`). */
+    initialNumItems: number;
+    shardKey?: string;
+}
+
+export interface UseInfiniteQueryResult<T> {
+    /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
+    fetchNextPage: (numItems?: number) => void;
+    /** `true` when the loaded tail reports it can load another page. */
+    hasNextPage: boolean;
+    /** `true` while a `fetchNextPage` page (beyond the first) is in flight. */
+    isFetchingNextPage: boolean;
+    /** `true` while the first page is in flight. */
+    isLoading: boolean;
+    /** One inner array per loaded page, in order; unresolved pages are omitted. */
+    pages: T[][];
+    status: PaginationStatus;
+}
+
 export interface UseAuthResult {
     setToken: (token: string | null) => void;
     token: string | null;

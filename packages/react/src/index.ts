@@ -9,6 +9,8 @@ export type {
     Preloaded,
     ReturnOf,
     UseAuthResult,
+    UseInfiniteQueryOptions,
+    UseInfiniteQueryResult,
     UseMutationCallOptions,
     UsePaginatedQueryOptions,
     UsePaginatedQueryResult,
@@ -17,6 +19,7 @@ export type {
     UseSubscriptionResult,
 } from "./types.js";
 export { useAuth } from "./use-auth.js";
+export { useInfiniteQuery } from "./use-infinite-query.js";
 export type { MutationHook } from "./use-mutation.js";
 export { useMutation } from "./use-mutation.js";
 export type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
