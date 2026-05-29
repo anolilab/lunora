@@ -23,6 +23,10 @@ export type {
     HttpActionCtx,
     HttpActionHandler,
     HttpMethod,
+    HttpRoute,
+    HttpRouteBuilder,
+    HttpRouteFactory,
+    HttpRouteHandlerOptions,
     HttpRouter,
     PrefixRouteSpec,
     RegisteredHttpAction,
@@ -30,7 +34,7 @@ export type {
     RouteLookup,
     RouteSpec,
 } from "./http.js";
-export { httpAction, httpRouter } from "./http.js";
+export { httpAction, httpRoute, httpRouter } from "./http.js";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";
 export { defineMigration } from "./migration.js";
 export type { ManyRelation, OneRelation, RelationBuilder, TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";
