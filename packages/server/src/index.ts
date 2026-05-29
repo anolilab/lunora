@@ -33,6 +33,8 @@ export type {
 export { httpAction, httpRoute, httpRouter } from "./http.js";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";
 export { defineMigration } from "./migration.js";
+export type { DefinePolicyInput, Policy, PolicyContext, PolicyDecision, PolicyOperation, Role, WhereInput } from "./rls/index.js";
+export { definePolicies, definePolicy, defineRole, rls } from "./rls/index.js";
 export type { ManyRelation, OneRelation, RelationBuilder, TableBuilder, VectorIndexOptions, VectorizeOptions } from "./schema.js";
 export { defineSchema, defineTable, defineVectorIndex } from "./schema.js";
 export type {

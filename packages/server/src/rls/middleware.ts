@@ -1,0 +1,630 @@
+/**
+ * `rls(policies)` — the procedure-builder middleware that activates
+ * Row-Level Security for the downstream handler.
+ *
+ * What it does, at runtime:
+ *
+ *  1. **Reads** — wraps `ctx.db.findMany`/`findFirst`/`findFirstOrThrow`/
+ *     `query`/`count`/`get`. Per table with a `read` policy, builds the
+ *     effective `baseWhere` (intersection of role-applicable predicates) and
+ *     threads it through the underlying ORM via the public
+ *     `QueryArgs.baseWhere` seam (see `@cirrus/do/src/query-args.ts`). Also
+ *     sets `restrictsCounts: true` for the same tables, so `count()` throws
+ *     `COUNT_RLS_UNSUPPORTED` (kitcn's documented constraint).
+ *
+ *  2. **Writes** — wraps `insert`/`patch`/`replace`/`delete`. For an
+ *     `update`/`delete` it fetches the pre-write row through the *unwrapped*
+ *     writer (RLS doesn't apply to the policy evaluator itself, only to the
+ *     caller-visible reader) and runs the matching write policy with `row`
+ *     set; for `insert` it runs the policy against the candidate document.
+ *     A policy returning `false` aborts the write with
+ *     `CirrusError("FORBIDDEN")`.
+ *
+ *  3. **Opt-in scope** — a policy applies only inside procedures whose
+ *     builder chain includes this middleware. The `rls()` call site is the
+ *     boundary; procedures without it see the unwrapped `ctx.db` and ignore
+ *     every policy in the list. This is by design (PLAN2 §3.2).
+ *
+ * What it deliberately does **not** touch:
+ *
+ *  - The `{ kind, args, handler }` dispatch contract.
+ *  - Triggers — cross-row trigger logic by design has the full row already
+ *    (`event.before`/`event.after`), so RLS gates the user-facing DB methods
+ *    inside trigger handlers but never the trigger payload itself. The
+ *    wrapper is installed on `ctx.db`; trigger internals use the underlying
+ *    writer.
+ *  - `count()` is intercepted only on tables with an active read policy —
+ *    unrelated tables count freely.
+ *
+ * The middleware is signature-compatible with the builder's `Middleware<>`,
+ * so `.use(rls(policies))` slots in like any other middleware.
+ */
+import type { Middleware } from "../builder/types.js";
+import { CirrusError } from "../error.js";
+import type { Policy, PolicyContext, WhereInput } from "./types.js";
+
+/**
+ * Structural mirror of `@cirrus/do`'s `QueryArgs` and `CountArgs`. The
+ * runtime ORM in `@cirrus/do`/`@cirrus/d1` reads `baseWhere` /
+ * `restrictsCounts` straight off these option objects, so as long as the
+ * fields here stay name-compatible the wrapper is portable across the two
+ * dialects without an inter-package dependency.
+ */
+interface QueryArgs {
+    baseWhere?: WhereInput;
+    cursor?: null | string;
+    limit?: number;
+    orderBy?: ReadonlyArray<unknown>;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+    with?: Record<string, unknown>;
+}
+
+interface CountArgs {
+    baseWhere?: WhereInput;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+}
+
+interface QueryPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: Array<Record<string, unknown>>;
+}
+
+interface TableReaderLike {
+    collect: () => Promise<Array<Record<string, unknown>>>;
+    filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
+    first: () => Promise<Record<string, unknown> | null>;
+    paginate: (options: { cursor?: null | string; numItems: number }) => Promise<QueryPage>;
+    take: (limit: number) => Promise<Array<Record<string, unknown>>>;
+    withIndex: (indexName: string, range?: (q: unknown) => unknown) => TableReaderLike;
+    withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike;
+}
+
+/**
+ * Structural projection of the runtime ORM writer. The wrapper relies only
+ * on these fields, so it's interchangeable between `@cirrus/do`'s
+ * `DatabaseWriterLike` and `@cirrus/d1`'s `DatabaseWriterLike`.
+ */
+interface DatabaseWriterLike {
+    count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
+    delete: (id: string) => Promise<void>;
+    findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
+    findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
+    findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
+    get: (id: string) => Promise<Record<string, unknown> | null>;
+    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    query: (tableName: string) => TableReaderLike;
+    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+}
+
+/**
+ * What a procedure's `ctx.db` must structurally satisfy for the middleware
+ * to wrap it. We deliberately mirror `@cirrus/do`'s `DatabaseWriterLike`
+ * rather than `@cirrus/server`'s nominal `DatabaseWriter`/`DatabaseReader`:
+ * the runtime adapter that flows in is the `DatabaseWriterLike`-shaped one,
+ * and structural matching keeps this module free of an `@cirrus/do`-typed
+ * `ctx`.
+ */
+export type RlsDatabase = DatabaseWriterLike;
+
+/** Roles list source on the context. Tolerant of older auth states. */
+type AuthLike = {
+    getIdentity?: () => Promise<Record<string, unknown> | null>;
+    roles?: ReadonlyArray<string>;
+    userId?: null | string;
+};
+
+/** Minimal shape the middleware needs on the incoming ctx. */
+interface RlsCtxIn {
+    auth?: AuthLike;
+    db: RlsDatabase;
+}
+
+/** Sentinel `WhereInput` that compiles to a vacuously-false predicate. */
+const FALSE_PREDICATE: WhereInput = { OR: [] };
+
+/**
+ * Collect a per-table map from a flat policy list. Order within each table
+ * is preserved so the merge below honors author-declared precedence.
+ */
+const indexByTable = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Map<string, Array<Policy<Ctx>>> => {
+    const map = new Map<string, Array<Policy<Ctx>>>();
+
+    for (const policy of policies) {
+        const existing = map.get(policy.table) ?? [];
+
+        existing.push(policy);
+        map.set(policy.table, existing);
+    }
+
+    return map;
+};
+
+/**
+ * Decide the effective read `baseWhere` for a table given the request's
+ * applicable read policies:
+ *
+ *  - any `true`        → unrestricted (return `undefined`).
+ *  - any `WhereInput`  → OR them (multiple policies broaden access).
+ *  - all `false`/empty → deny (return the FALSE sentinel).
+ *
+ * The Convex / kitcn convention is "any matching policy reveals the row";
+ * we mirror that by OR-ing the predicates.
+ */
+const computeReadBaseWhere = <Ctx>(
+    policies: ReadonlyArray<Policy<Ctx>>,
+    context: PolicyContext<Ctx>,
+): undefined | WhereInput => {
+    const predicates: WhereInput[] = [];
+    let sawTrue = false;
+    let sawDecision = false;
+
+    for (const policy of policies) {
+        if (policy.on !== "read") {
+            continue;
+        }
+
+        const decision = policy.when(context);
+
+        if (decision === undefined) {
+            continue;
+        }
+
+        sawDecision = true;
+
+        if (decision === true) {
+            sawTrue = true;
+            break;
+        }
+
+        if (decision === false) {
+            continue;
+        }
+
+        predicates.push(decision);
+    }
+
+    if (!sawDecision) {
+        return undefined;
+    }
+
+    if (sawTrue) {
+        return undefined;
+    }
+
+    if (predicates.length === 0) {
+        return FALSE_PREDICATE;
+    }
+
+    return predicates.length === 1 ? predicates[0] : { OR: predicates };
+};
+
+/**
+ * Evaluate write policies for a `(table, op)` pair. Returns `true` to allow
+ * the write, `false` to deny. The convention is "every matching write policy
+ * must allow" — the most restrictive policy wins, mirroring SQL RLS.
+ *
+ * If no write policy matches the op, the write is *allowed by default* —
+ * RLS guards declared reads; unguarded writes flow through. Authors who
+ * want every write to be policy-gated should declare a matching write
+ * policy explicitly.
+ */
+const evaluateWrite = <Ctx>(
+    policies: ReadonlyArray<Policy<Ctx>>,
+    op: Exclude<Policy["on"], "read">,
+    context: PolicyContext<Ctx>,
+): boolean => {
+    let sawDecision = false;
+
+    for (const policy of policies) {
+        if (policy.on !== op) {
+            continue;
+        }
+
+        const decision = policy.when(context);
+
+        if (decision === undefined) {
+            continue;
+        }
+
+        sawDecision = true;
+
+        if (decision === false) {
+            return false;
+        }
+
+        // `true` or a WhereInput both pass write evaluation. A WhereInput
+        // on a write policy reads as "this row qualifies if it matches the
+        // predicate" — we evaluate it as `true` for now (a future iteration
+        // can apply the predicate against the row in JS).
+    }
+
+    return !sawDecision || true;
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Coerce `args` into the `QueryArgs` shape. Tolerates `undefined` (no args)
+ * and a `WhereInput` (legacy `count(table, where)`).
+ */
+const intoQueryArgs = (args: QueryArgs | undefined): QueryArgs => args ?? {};
+
+/**
+ * Tolerantly read the count argument: either a `WhereInput` (legacy) or a
+ * `CountArgs` options bag. We never strip caller-supplied `baseWhere`; we
+ * AND-merge the RLS one on top.
+ */
+const intoCountArgs = (arg: CountArgs | undefined | WhereInput): CountArgs => {
+    if (arg === undefined) {
+        return {};
+    }
+
+    if (isPlainObject(arg) && ("baseWhere" in arg || "restrictsCounts" in arg || "where" in arg)) {
+        return arg as CountArgs;
+    }
+
+    return { where: arg as WhereInput };
+};
+
+const mergeBaseWhere = (caller: undefined | WhereInput, injected: undefined | WhereInput): undefined | WhereInput => {
+    if (!injected || Object.keys(injected).length === 0) {
+        return caller;
+    }
+
+    if (!caller || Object.keys(caller).length === 0) {
+        return injected;
+    }
+
+    return { AND: [injected, caller] };
+};
+
+/**
+ * Build a writer that intercepts table-scoped reads/writes against the
+ * underlying `DatabaseWriterLike`, applying the policy evaluator on every
+ * call. The wrapper is a fresh closure per request so the evaluator sees the
+ * current `ctx`.
+ */
+const wrapDb = <Ctx>(
+    base: RlsDatabase,
+    perTable: Map<string, Array<Policy<Ctx>>>,
+    context: PolicyContext<Ctx>,
+): RlsDatabase => {
+    /**
+     * Cached effective read `baseWhere` per table. Cached for the lifetime
+     * of one wrapped writer — i.e. one request — so a single procedure
+     * doesn't re-evaluate the same policy chain on every read.
+     */
+    const readBaseCache = new Map<string, { baseWhere: undefined | WhereInput; restricts: boolean }>();
+
+    const readBase = (tableName: string): { baseWhere: undefined | WhereInput; restricts: boolean } => {
+        const cached = readBaseCache.get(tableName);
+
+        if (cached) {
+            return cached;
+        }
+
+        const policies = perTable.get(tableName);
+
+        if (!policies || policies.length === 0 || !policies.some((policy) => policy.on === "read")) {
+            const result = { baseWhere: undefined, restricts: false };
+
+            readBaseCache.set(tableName, result);
+
+            return result;
+        }
+
+        const baseWhere = computeReadBaseWhere(policies, context);
+        const result = { baseWhere, restricts: true };
+
+        readBaseCache.set(tableName, result);
+
+        return result;
+    };
+
+    /**
+     * Resolve the writer's id-to-table lookup by probing each policy table
+     * with a direct `get` against the underlying writer. The unwrapped
+     * `base.get` is intentionally used so policy enforcement on writes
+     * doesn't recurse through itself when we go fetch the pre-write row.
+     */
+    const findRowTable = async (id: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
+        const row = await base.get(id);
+
+        if (!row) {
+            return undefined;
+        }
+
+        // The underlying writer has its own id-to-table lookup but doesn't
+        // expose it; the row we just fetched is enough — we just need its
+        // table for policy lookup, and we don't have it. Walk the policy
+        // tables looking for the row's id.
+        for (const tableName of perTable.keys()) {
+            const probe = await base.findFirst(tableName, { where: { _id: id }, limit: 1 });
+
+            if (probe?.["_id"] === id) {
+                return { row, tableName };
+            }
+        }
+
+        // The row exists but isn't in any policy-gated table — fall through
+        // unrestricted by returning `undefined` (no policy applies).
+        return undefined;
+    };
+
+    return {
+        async count(tableName, whereOrArgs) {
+            const { baseWhere, restricts } = readBase(tableName);
+            const args = intoCountArgs(whereOrArgs);
+
+            return base.count(tableName, {
+                ...args,
+                baseWhere: mergeBaseWhere(args.baseWhere, baseWhere),
+                restrictsCounts: args.restrictsCounts || restricts,
+            });
+        },
+
+        async delete(id) {
+            const located = await findRowTable(id);
+
+            if (!located) {
+                return base.delete(id);
+            }
+
+            const policies = perTable.get(located.tableName);
+
+            if (policies) {
+                const writeOk = evaluateWrite(policies, "delete", { ...context, row: located.row });
+
+                if (!writeOk) {
+                    throw new CirrusError("FORBIDDEN", `delete on "${located.tableName}" denied by policy`);
+                }
+            }
+
+            return base.delete(id);
+        },
+
+        async findFirst(tableName, args) {
+            const { baseWhere } = readBase(tableName);
+
+            return base.findFirst(tableName, { ...intoQueryArgs(args), baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere) });
+        },
+
+        async findFirstOrThrow(tableName, args) {
+            const { baseWhere } = readBase(tableName);
+
+            return base.findFirstOrThrow(tableName, { ...intoQueryArgs(args), baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere) });
+        },
+
+        async findMany(tableName, args) {
+            const { baseWhere } = readBase(tableName);
+
+            return base.findMany(tableName, { ...intoQueryArgs(args), baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere) });
+        },
+
+        async get(id) {
+            const row = await base.get(id);
+
+            if (!row) {
+                return null;
+            }
+
+            // The reader only has the id; we have to determine the row's
+            // table to know which policies apply. Probe each policy-gated
+            // table — same shape as the writer's own id-to-table lookup.
+            for (const tableName of perTable.keys()) {
+                const { baseWhere, restricts } = readBase(tableName);
+
+                if (!restricts) {
+                    continue;
+                }
+
+                const candidate = await base.findFirst(tableName, { where: { _id: id }, baseWhere, limit: 1 });
+
+                if (candidate?.["_id"] === id) {
+                    return candidate;
+                }
+
+                // If `findFirst` came back null on a restricting table, the
+                // policy denied it; keep probing other tables — the row may
+                // belong to a non-policy table.
+            }
+
+            return row;
+        },
+
+        async insert(tableName, document) {
+            const policies = perTable.get(tableName);
+
+            if (policies) {
+                const writeOk = evaluateWrite(policies, "insert", { ...context, row: document });
+
+                if (!writeOk) {
+                    throw new CirrusError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
+                }
+            }
+
+            return base.insert(tableName, document);
+        },
+
+        async patch(id, patch) {
+            const located = await findRowTable(id);
+
+            if (!located) {
+                return base.patch(id, patch);
+            }
+
+            const policies = perTable.get(located.tableName);
+
+            if (policies) {
+                const writeOk = evaluateWrite(policies, "update", { ...context, row: located.row });
+
+                if (!writeOk) {
+                    throw new CirrusError("FORBIDDEN", `update on "${located.tableName}" denied by policy`);
+                }
+            }
+
+            return base.patch(id, patch);
+        },
+
+        query(tableName) {
+            const { baseWhere } = readBase(tableName);
+
+            const reader = base.query(tableName);
+
+            if (!baseWhere) {
+                return reader;
+            }
+
+            // The legacy reader doesn't take a `baseWhere` — push the
+            // predicate down as an in-memory `.filter()`. This trades the
+            // SQL-side prune for a row-by-row JS check, but the legacy
+            // `query()` path is already an iterator-style reader.
+            //
+            // We compile the predicate once into a JS-side checker.
+            return reader.filter((document) => matchesWhere(document, baseWhere));
+        },
+
+        replace: async (id, document) => {
+            const located = await findRowTable(id);
+
+            if (!located) {
+                return base.replace(id, document);
+            }
+
+            const policies = perTable.get(located.tableName);
+
+            if (policies) {
+                const writeOk = evaluateWrite(policies, "update", { ...context, row: located.row });
+
+                if (!writeOk) {
+                    throw new CirrusError("FORBIDDEN", `update on "${located.tableName}" denied by policy`);
+                }
+            }
+
+            return base.replace(id, document);
+        },
+    };
+};
+
+/**
+ * Tiny JS-side `WhereInput` evaluator used by the legacy `query()` wrapper.
+ * Only the operators emitted by RLS today are supported (eq, ne, in, AND,
+ * OR, NOT) — enough to gate the iterator reader without dragging the SQL
+ * compiler into the JS path. The full compiler stays the single source of
+ * truth for SQL-bound predicates.
+ */
+const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boolean => {
+    for (const key of Object.keys(where)) {
+        const value = where[key];
+
+        if (key === "AND") {
+            if (!Array.isArray(value) || !value.every((branch) => matchesWhere(document, branch as WhereInput))) {
+                return false;
+            }
+
+            continue;
+        }
+
+        if (key === "OR") {
+            if (!Array.isArray(value) || !value.some((branch) => matchesWhere(document, branch as WhereInput))) {
+                return false;
+            }
+
+            continue;
+        }
+
+        if (key === "NOT") {
+            if (matchesWhere(document, (value ?? {}) as WhereInput)) {
+                return false;
+            }
+
+            continue;
+        }
+
+        const docValue = document[key];
+
+        if (isPlainObject(value) && Object.keys(value).every((k) => ["contains", "eq", "gt", "gte", "in", "isNull", "lt", "lte", "ne", "notIn"].includes(k))) {
+            const operators = value as Record<string, unknown>;
+
+            if ("eq" in operators && docValue !== operators["eq"]) {
+                return false;
+            }
+
+            if ("ne" in operators && docValue === operators["ne"]) {
+                return false;
+            }
+
+            if ("in" in operators) {
+                const list = operators["in"];
+
+                if (!Array.isArray(list) || !list.includes(docValue)) {
+                    return false;
+                }
+            }
+
+            if ("notIn" in operators) {
+                const list = operators["notIn"];
+
+                if (Array.isArray(list) && list.includes(docValue)) {
+                    return false;
+                }
+            }
+
+            if ("isNull" in operators) {
+                const expectsNull = operators["isNull"] === true;
+
+                if (expectsNull !== (docValue === null || docValue === undefined)) {
+                    return false;
+                }
+            }
+
+            continue;
+        }
+
+        if (docValue !== value) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
+/**
+ * Procedure-builder middleware. Apply per-request via `.use(rls(policies))`.
+ * Closes over the policy list at builder-construction time; resolves the
+ * effective decision per call against the live ctx.
+ *
+ * IMPORTANT: a policy MUST be in scope only for procedures whose builder
+ * chain includes this middleware — opt-in, never global. This is the
+ * `PLAN2 §3.2` invariant.
+ */
+export const rls = <Ctx extends RlsCtxIn = RlsCtxIn>(policies: ReadonlyArray<Policy<Ctx>>): Middleware<Ctx, Ctx> => {
+    const perTable = indexByTable(policies);
+
+    return async ({ ctx, next }) => {
+        const auth = ctx.auth ?? {};
+        const policyContext: PolicyContext<Ctx> = {
+            auth: {
+                identity: undefined,
+                roles: auth.roles ?? [],
+                userId: auth.userId ?? null,
+            },
+            ctx,
+        };
+
+        const wrapped = wrapDb<Ctx>(ctx.db, perTable, policyContext);
+        // `next({ ctx: extension })` expects an extension shape — we only
+        // replace `db`, so the downstream context type is unchanged (`Ctx`
+        // in / `Ctx` out). The cast routes the wrapped db through the same
+        // middleware-extension channel without leaking RLS internals into
+        // the builder's typed surface.
+        const extension = { db: wrapped } as unknown as Record<string, unknown>;
+
+        return next({ ctx: extension }) as Promise<Ctx>;
+    };
+};
