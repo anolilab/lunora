@@ -9,6 +9,7 @@ import { readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
 import { createDependencyTracker } from "./dependency-tracker.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
+import { LogBuffer } from "./log-buffer.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
 import { ConflictError, type TransactionSqlLike } from "./transaction.js";
@@ -273,6 +274,16 @@ export abstract class ShardDO {
     private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now() };
 
     /**
+     * Recent RPC errors on this shard instance, surfaced by the
+     * `__cirrus_admin__:getLogs` RPC. In-memory only and bounded — like
+     * {@link metrics}, it resets on hibernation/restart. We only capture RPC
+     * dispatch failures here (path + error message), not user `console.*` output:
+     * intercepting the console cheaply isn't possible, so this is honestly a
+     * "recent RPC errors on this instance" feed, not a general application log.
+     */
+    private readonly logs = new LogBuffer();
+
+    /**
      * In-flight dependency tracker for the currently-executing query. Set by
      * {@link runCachedQuery} so the ctx-db hooks (wired via `onRead`) can
      * stamp deps without threading the tracker explicitly through every
@@ -447,6 +458,12 @@ export abstract class ShardDO {
                 return response;
             } catch (error: unknown) {
                 this.metrics.errors += 1;
+                this.logs.push({
+                    functionPath: payload.functionPath,
+                    level: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                });
 
                 return this.errorToResponse(error);
             } finally {
@@ -610,6 +627,10 @@ export abstract class ShardDO {
 
             if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
                 return jsonResponse({ result: this.collectMetrics() }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.getLogs) {
+                return jsonResponse({ result: { entries: this.logs.entries() } }, 200);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.readTablePage) {

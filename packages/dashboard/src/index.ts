@@ -3,6 +3,9 @@ export type {
     ExportRow,
     ImportError,
     ImportShardResult,
+    LogEntry,
+    LogLevel,
+    LogsResult,
     MigrationDirection,
     MigrationRunResult,
     MigrationStatus,
@@ -30,6 +33,8 @@ export type { FunctionRunnerProps } from "./function-runner.js";
 export { FunctionRunner } from "./function-runner.js";
 export type { GlobalDataBrowserProps } from "./global-data-browser.js";
 export { GlobalDataBrowser } from "./global-data-browser.js";
+export type { LogsPanelProps } from "./logs-panel.js";
+export { LogsPanel } from "./logs-panel.js";
 export type { MetricsPanelProps } from "./metrics-panel.js";
 export { MetricsPanel } from "./metrics-panel.js";
 export type { MigrationsPanelProps } from "./migrations.js";

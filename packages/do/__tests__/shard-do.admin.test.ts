@@ -21,6 +21,28 @@ class AdminShard extends ShardDO {
 
 const ADMIN_TOKEN = "s3cret-admin";
 
+/**
+ * A shard whose `handleRpc` fails for one marked path, so the request/error
+ * counters and the log buffer can be driven through the public `fetch` surface.
+ */
+class CountingShard extends ShardDO {
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        if (functionPath === "boom:explode") {
+            throw new Error("boom");
+        }
+
+        return { ok: true };
+    }
+}
+
+/** An ordinary (non-admin) RPC request — no bearer, so it routes to `handleRpc`. */
+const userRequest = (functionPath: string): Request =>
+    new Request("https://shard.internal/rpc", {
+        body: JSON.stringify({ args: {}, functionPath }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+    });
+
 describe("shardDO admin introspection", () => {
     let db: ReturnType<typeof createSqliteExec>;
     let state: ShardDOState;
@@ -272,26 +294,7 @@ describe("shardDO admin data migrations", () => {
     });
 
     test("getMetrics returns a health snapshot with request/error counts", async () => {
-        // A shard whose handleRpc fails for a marked path, so we can drive the
-        // request/error counters through the public fetch surface.
-        class CountingShard extends ShardDO {
-            public override async handleRpc(functionPath: string): Promise<unknown> {
-                if (functionPath === "boom:explode") {
-                    throw new Error("boom");
-                }
-
-                return { ok: true };
-            }
-        }
-
         const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
-
-        const userRequest = (functionPath: string): Request =>
-            new Request("https://shard.internal/rpc", {
-                body: JSON.stringify({ args: {}, functionPath }),
-                headers: { "content-type": "application/json" },
-                method: "POST",
-            });
 
         await shard.fetch(userRequest("messages:list"));
         await shard.fetch(userRequest("boom:explode"));
@@ -307,6 +310,24 @@ describe("shardDO admin data migrations", () => {
         expect(body.result.cache).toBeNull();
 
         expectTypeOf(body.result.shard).toBeString();
+    });
+
+    test("getLogs returns the captured RPC errors, newest first", async () => {
+        // A failed dispatch is what the log buffer captures (path + message), so
+        // a single boom call yields exactly one row; the successful call is not logged.
+        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(userRequest("messages:list"));
+        await shard.fetch(userRequest("boom:explode"));
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}));
+
+        expect(response.status).toBe(200);
+
+        const body = (await response.json()) as { result: { entries: { functionPath?: string; level: string; message: string }[] } };
+
+        expect(body.result.entries).toHaveLength(1);
+        expect(body.result.entries[0]).toMatchObject({ functionPath: "boom:explode", level: "error", message: "boom" });
     });
 });
 

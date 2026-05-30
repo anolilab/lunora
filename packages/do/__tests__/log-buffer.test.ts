@@ -1,0 +1,64 @@
+import { describe, expect, test } from "vitest";
+
+import type { LogEntry } from "../src/log-buffer.js";
+import { LogBuffer } from "../src/log-buffer.js";
+
+const entry = (message: string, timestamp: number): LogEntry => ({ level: "error", message, timestamp });
+
+describe("logBuffer", () => {
+    test("returns entries newest-first", () => {
+        const buffer = new LogBuffer();
+
+        for (const event of [entry("first", 1), entry("second", 2), entry("third", 3)]) {
+            buffer.push(event);
+        }
+
+        expect(buffer.size).toBe(3);
+        expect(buffer.entries().map((event) => event.message)).toEqual(["third", "second", "first"]);
+    });
+
+    test("evicts the oldest entry once capacity is exceeded", () => {
+        const buffer = new LogBuffer(2);
+
+        for (const event of [entry("a", 1), entry("b", 2), entry("c", 3)]) {
+            buffer.push(event);
+        }
+
+        // "a" was dropped to make room; newest-first leaves c, b.
+        expect(buffer.size).toBe(2);
+        expect(buffer.entries().map((event) => event.message)).toEqual(["c", "b"]);
+    });
+
+    test("clear() empties the buffer", () => {
+        const buffer = new LogBuffer();
+
+        buffer.push(entry("x", 1));
+        buffer.clear();
+
+        expect(buffer.size).toBe(0);
+        expect(buffer.entries()).toEqual([]);
+    });
+
+    test("entries() returns a fresh array the caller can mutate safely", () => {
+        const buffer = new LogBuffer();
+
+        buffer.push(entry("only", 1));
+
+        const snapshot = buffer.entries();
+
+        snapshot.pop();
+
+        expect(buffer.size).toBe(1);
+    });
+
+    test("falls back to the default capacity for a non-positive bound", () => {
+        const buffer = new LogBuffer(0);
+
+        for (let index = 0; index < 600; index += 1) {
+            buffer.push(entry(`m${String(index)}`, index));
+        }
+
+        // Default capacity is 500: the buffer must not grow unbounded.
+        expect(buffer.size).toBe(500);
+    });
+});

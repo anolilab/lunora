@@ -5,6 +5,7 @@ import { ExportImportPanel } from "./export-import.js";
 import { FileBrowser } from "./file-browser.js";
 import { FunctionRunner } from "./function-runner.js";
 import { GlobalDataBrowser } from "./global-data-browser.js";
+import { LogsPanel } from "./logs-panel.js";
 import { MetricsPanel } from "./metrics-panel.js";
 import { MigrationsPanel } from "./migrations.js";
 import { ScheduledJobs, type ScheduledJobsProps } from "./scheduled-jobs.js";
@@ -13,7 +14,7 @@ import type { FunctionDescriptor } from "./types.js";
 import { UsersPanel } from "./users-panel.js";
 
 /** Identifier for each built-in dashboard tab. */
-export type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "metrics" | "migrations" | "schedule" | "schema" | "users";
+export type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "logs" | "metrics" | "migrations" | "schedule" | "schema" | "users";
 
 export interface DashboardProps {
     /**
@@ -47,6 +48,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
     files: "Files",
     functions: "Functions",
     globals: "Global Tables",
+    logs: "Logs",
     metrics: "Metrics",
     migrations: "Migrations",
     schedule: "Scheduled",
@@ -68,7 +70,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
 export function Dashboard({ dataEditable = false, functions, initialShardKey, scheduledCancel, scheduledLoad }: DashboardProps): ReactElement {
     // Every tab is always shown: the function runner auto-discovers its list
     // from the worker when no `functions` prop is passed, so it's never empty.
-    const tabs: DashboardTab[] = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics"];
+    const tabs: DashboardTab[] = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics", "logs"];
 
     const [active, setActive] = useState<DashboardTab>("data");
     const current = tabs.includes(active) ? active : "data";
@@ -103,6 +105,7 @@ export function Dashboard({ dataEditable = false, functions, initialShardKey, sc
                 {current === "schedule" && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
                 {current === "users" && <UsersPanel />}
                 {current === "metrics" && <MetricsPanel initialShardKey={initialShardKey} />}
+                {current === "logs" && <LogsPanel initialShardKey={initialShardKey} />}
             </div>
         </div>
     );
