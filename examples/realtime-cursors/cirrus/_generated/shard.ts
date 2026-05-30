@@ -2,7 +2,7 @@
 // Run `cirrus codegen` to regenerate.
 
 import type { AggregateOptions, GroupByOptions, DatabaseWriterLike, DataMigrationLike, MigrationRunResult, QueryArgs, RankOptions, RankPageOptions, RestrictableQueryOptions, RunShardMigrationArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SchemaLike, ShardDOState, SqlExec, WhereInput } from "@cirrus/do";
-import { createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";
+import { createShardCtxDb, DATA_MIGRATION_STATE_TABLE, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";
 
 import schema from "../schema.js";
 import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./server.js";
@@ -174,6 +174,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 dryRun: args.dryRun,
                 maxBatches: args.maxBatches,
                 migration: migration as unknown as DataMigrationLike,
+                onBatch: async () => {
+                    // persistState wrote the reserved state table via raw SQL,
+                    // which the writer can't see; record it so the flush re-runs
+                    // live migrationStatus subscribers with the new progress.
+                    this.recordChangedTable(DATA_MIGRATION_STATE_TABLE);
+                    await this.flushChangedTables();
+                },
                 sql: this.sql as SqlExec,
                 writer,
             });

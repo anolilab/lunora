@@ -115,6 +115,52 @@ describe("runDataMigration — up", () => {
         expect(row?.["started_at"]).toBe(1_800_000_000_000);
         expect(row?.["updated_at"]).toBe(1_800_000_000_000);
     });
+
+    test("invokes onBatch once per persisted batch with climbing progress", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        const progress: { changed: number; processed: number }[] = [];
+
+        // 5 rows at batchSize 2 → batches of 2, 2, 1.
+        await runDataMigration({
+            batchSize: 2,
+            migration: bumpVersion,
+            onBatch: ({ changed, processed }) => {
+                progress.push({ changed, processed });
+            },
+            sql: harness.sql,
+            writer,
+        });
+
+        expect(progress).toEqual([
+            { changed: 2, processed: 2 },
+            { changed: 4, processed: 4 },
+            { changed: 5, processed: 5 },
+        ]);
+    });
+
+    test("does not invoke onBatch on a dry run (nothing is persisted)", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        let calls = 0;
+
+        await runDataMigration({
+            batchSize: 2,
+            dryRun: true,
+            migration: bumpVersion,
+            onBatch: () => {
+                calls += 1;
+            },
+            sql: harness.sql,
+            writer,
+        });
+
+        expect(calls).toBe(0);
+    });
 });
 
 describe("runDataMigration — resume", () => {

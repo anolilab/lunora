@@ -72,6 +72,13 @@ export interface RunDataMigrationOptions {
     /** Stop after this many batches, leaving the run resumable; defaults to no limit. */
     maxBatches?: number;
     migration: DataMigrationLike;
+    /**
+     * Called after each non-dry-run batch persists its progress, so a caller
+     * (the Durable Object) can flush and let live `migrationStatus` subscribers
+     * observe processed/changed counts climb mid-run rather than only at the
+     * end. Awaited between batches; a throw aborts the run like any batch error.
+     */
+    onBatch?: (progress: { batches: number; changed: number; processed: number }) => Promise<void> | void;
     /** Raw SQL handle for the reserved state table (outside the user schema). */
     sql: SqlExec;
     /** Schema-aware writer used to scan and rewrite the user table. */
@@ -335,6 +342,9 @@ export const runDataMigration = async (options: RunDataMigrationOptions): Promis
                     status: isDone ? "completed" : "in_progress",
                     updatedAt: clock(),
                 });
+
+                // eslint-disable-next-line no-await-in-loop -- progress is reported in batch order; the callback flushes the DO between sequential batches.
+                await options.onBatch?.({ batches, changed, processed });
             }
         }
     } catch (error) {

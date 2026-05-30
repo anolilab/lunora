@@ -1075,9 +1075,11 @@ export abstract class ShardDO {
     /**
      * Drain the tables written during the in-flight RPC and re-run every
      * subscription that depends on one of them. Called after `handleRpc`
-     * resolves. No-op when nothing was written.
+     * resolves, and per-batch by the codegen subclass's data-migration runner
+     * (via `onBatch`) so live `migrationStatus` subscribers see progress
+     * mid-run. No-op when nothing was written.
      */
-    private async flushChangedTables(): Promise<void> {
+    protected async flushChangedTables(): Promise<void> {
         const changed = this.pendingChangedTables;
 
         this.pendingChangedTables = null;
