@@ -76,7 +76,11 @@ describe("offlineQueue — persistence", () => {
 
         expect(persisted).toHaveLength(1);
         expect(persisted[0]).toMatchObject({ functionPath: "posts:create", args: { title: "hi" }, shardKey: "room-1" });
-        expect(typeof persisted[0]?.id).toBe("string");
+        // Runtime check that enqueue minted a non-empty string id. `toBeTypeOf`
+        // (not `expectTypeOf`) is deliberate: the field is statically
+        // `string | undefined`, so a compile-time type assertion would verify
+        // nothing — we need to confirm an id was actually assigned at runtime.
+        expect(persisted[0]?.id).toBeTypeOf("string");
         expect(persisted[0]?.id).not.toBe("");
     });
 

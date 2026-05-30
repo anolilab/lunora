@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, expectTypeOf, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -308,8 +308,7 @@ describe("shardDO admin data migrations", () => {
         expect(body.result.requests).toBe(2);
         expect(body.result.errors).toBe(1);
         expect(body.result.cache).toBeNull();
-
-        expectTypeOf(body.result.shard).toBeString();
+        expect(body.result.shard).toBeTypeOf("string");
     });
 
     test("getLogs returns the captured RPC errors, newest first", async () => {
