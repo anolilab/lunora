@@ -4,13 +4,14 @@ import { DataBrowser } from "./data-browser.js";
 import { ExportImportPanel } from "./export-import.js";
 import { FileBrowser } from "./file-browser.js";
 import { FunctionRunner } from "./function-runner.js";
+import { GlobalDataBrowser } from "./global-data-browser.js";
 import { MigrationsPanel } from "./migrations.js";
 import { ScheduledJobs, type ScheduledJobsProps } from "./scheduled-jobs.js";
 import { SchemaViewer } from "./schema-viewer.js";
 import type { FunctionDescriptor } from "./types.js";
 
 /** Identifier for each built-in dashboard tab. */
-export type DashboardTab = "data" | "export" | "files" | "functions" | "migrations" | "schedule" | "schema";
+export type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "migrations" | "schedule" | "schema";
 
 export interface DashboardProps {
     /**
@@ -38,6 +39,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
     export: "Export / Import",
     files: "Files",
     functions: "Functions",
+    globals: "Global Tables",
     migrations: "Migrations",
     schedule: "Scheduled",
     schema: "Schema",
@@ -57,7 +59,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
 export function Dashboard({ functions, initialShardKey, scheduledCancel, scheduledLoad }: DashboardProps): ReactElement {
     // Every tab is always shown: the function runner auto-discovers its list
     // from the worker when no `functions` prop is passed, so it's never empty.
-    const tabs: DashboardTab[] = ["data", "schema", "functions", "migrations", "export", "files", "schedule"];
+    const tabs: DashboardTab[] = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule"];
 
     const [active, setActive] = useState<DashboardTab>("data");
     const current = tabs.includes(active) ? active : "data";
@@ -83,6 +85,7 @@ export function Dashboard({ functions, initialShardKey, scheduledCancel, schedul
 
             <div data-testid="dash-panel" role="tabpanel">
                 {current === "data" && <DataBrowser initialShardKey={initialShardKey} />}
+                {current === "globals" && <GlobalDataBrowser />}
                 {current === "schema" && <SchemaViewer initialShardKey={initialShardKey} />}
                 {current === "functions" && <FunctionRunner functions={functions} />}
                 {current === "migrations" && <MigrationsPanel initialShardKey={initialShardKey} />}

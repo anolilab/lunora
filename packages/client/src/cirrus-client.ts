@@ -9,6 +9,8 @@ import type {
     ClientMessage,
     FunctionDescriptor,
     FunctionReference,
+    GlobalTableInfo,
+    GlobalTablePage,
     PersistenceAdapter,
     ReconnectOptions,
     ReturnOf,
@@ -26,6 +28,8 @@ const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
+const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
+const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
 
@@ -315,6 +319,33 @@ export class CirrusClient {
         const body = (await this.adminFetch(path, "GET")) as { cursor?: string; objects?: StorageObject[] };
 
         return { cursor: body.cursor, objects: body.objects ?? [] };
+    }
+
+    // --- Global (D1) tables admin -------------------------------------------
+
+    /**
+     * List the `.global()` (D1-backed) tables with their row counts. Hits the
+     * admin-gated `GET /_cirrus/admin/global/tables` endpoint — the worker must
+     * be built with a `globalIntrospector` and `adminToken`. Powers the data
+     * browser's global mode.
+     */
+    public async listGlobalTables(): Promise<GlobalTableInfo[]> {
+        return (await this.adminFetch(GLOBAL_TABLES_PATH, "GET")) as GlobalTableInfo[];
+    }
+
+    /** Read a page of rows from one `.global()` table. */
+    public async readGlobalTablePage(options: { limit?: number; offset?: number; table: string }): Promise<GlobalTablePage> {
+        const params = new URLSearchParams({ table: options.table });
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        if (options.offset !== undefined) {
+            params.set("offset", String(options.offset));
+        }
+
+        return (await this.adminFetch(`${GLOBAL_TABLE_PATH}?${params.toString()}`, "GET")) as GlobalTablePage;
     }
 
     // --- Subscriptions ------------------------------------------------------

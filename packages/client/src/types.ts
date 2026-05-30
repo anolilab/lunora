@@ -200,3 +200,16 @@ export interface FunctionDescriptor {
     kind: "action" | "mutation" | "query";
     path: string;
 }
+
+/** A `.global()` (D1-backed) table plus its row count, from `/_cirrus/admin/global/tables`. */
+export interface GlobalTableInfo {
+    name: string;
+    rowCount: number;
+}
+
+/** A window of rows from one global table, from `/_cirrus/admin/global/table`. */
+export interface GlobalTablePage {
+    columns: string[];
+    rows: Record<string, unknown>[];
+    total: number;
+}

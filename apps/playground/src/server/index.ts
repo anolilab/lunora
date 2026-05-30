@@ -1,6 +1,8 @@
 import type { CirrusAuth } from "@cirrus/auth";
 import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
-import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@cirrus/runtime";
+import type { D1DatabaseLike, D1Exec } from "@cirrus/d1";
+import { listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
+import type { ExecutionContextLike, GlobalIntrospector, Route, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
@@ -8,6 +10,36 @@ import { buildSignedUrl, createStorage } from "@cirrus/storage";
 
 import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/server.js";
 import { createShardDO } from "../../cirrus/_generated/shard.js";
+import schema from "../../cirrus/schema.js";
+
+/**
+ * Adapt the raw D1 binding to `@cirrus/d1`'s `D1Exec` so the dashboard's global
+ * data browser can introspect `.global()` tables. Reads only — `run` is needed
+ * by the shared helper signature but the introspector never writes.
+ */
+const d1Introspector = (db: D1DatabaseLike): GlobalIntrospector => {
+    const exec: D1Exec = {
+        all: async (sql, parameters) => {
+            const result = await db
+                .prepare(sql)
+                .bind(...parameters)
+                .all<Record<string, unknown>>();
+
+            return result.results;
+        },
+        run: async (sql, parameters) => {
+            await db
+                .prepare(sql)
+                .bind(...parameters)
+                .run();
+        },
+    };
+
+    return {
+        listTables: () => listGlobalTables(exec, schema as never),
+        readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
+    };
+};
 
 export { SchedulerDO } from "./scheduler-do.js";
 
@@ -93,6 +125,9 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // Exposes /_cirrus/admin/functions so the dashboard's runner can
         // auto-discover queries/mutations/actions.
         functions: CIRRUS_FUNCTIONS,
+        // Exposes /_cirrus/admin/global/* so the dashboard can browse `.global()`
+        // (D1-backed) tables.
+        globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
         resolveIdentity: async (request) => {
             if (!auth) {
                 return null;

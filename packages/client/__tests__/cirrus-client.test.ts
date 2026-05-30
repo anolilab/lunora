@@ -690,3 +690,46 @@ describe("cirrusClient — functions admin", () => {
         await expect(client.listFunctions()).resolves.toEqual([]);
     });
 });
+
+// --- Global (D1) tables admin -----------------------------------------------
+
+describe("cirrusClient — global tables admin", () => {
+    test("listGlobalTables GETs the admin endpoint", async () => {
+        const tables = [{ name: "organizations", rowCount: 2 }];
+        const fetchMock = vi.fn(async () => jsonResponse(tables));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listGlobalTables()).resolves.toEqual(tables);
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/global/tables");
+        expect(init.method).toBe("GET");
+    });
+
+    test("readGlobalTablePage encodes table / limit / offset as query params", async () => {
+        const page = { columns: ["_id"], rows: [{ _id: "o1" }], total: 1 };
+        const fetchMock = vi.fn(async () => jsonResponse(page));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.readGlobalTablePage({ limit: 10, offset: 5, table: "organizations" })).resolves.toEqual(page);
+
+        const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+        const parsed = new URL(requestUrl);
+
+        expect(parsed.pathname).toBe("/_cirrus/admin/global/table");
+        expect(parsed.searchParams.get("table")).toBe("organizations");
+        expect(parsed.searchParams.get("limit")).toBe("10");
+        expect(parsed.searchParams.get("offset")).toBe("5");
+    });
+});

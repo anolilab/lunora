@@ -31,7 +31,7 @@ describe("dashboard", () => {
     test("shows every tab by default", () => {
         render(renderDashboard(createClient()));
 
-        for (const tab of ["data", "schema", "functions", "migrations", "export", "files", "schedule"]) {
+        for (const tab of ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule"]) {
             expect(screen.getByTestId(`dash-tab-${tab}`)).toBeDefined();
         }
     });

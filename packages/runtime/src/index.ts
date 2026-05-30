@@ -1,8 +1,14 @@
 export type {
     AdminTableResolver,
     ExecutionContextLike,
+    FunctionDescriptor,
+    FunctionRegistryEntry,
+    FunctionRegistryLike,
     GlobalExportFn,
     GlobalImportFn,
+    GlobalIntrospector,
+    GlobalTableInfo as GlobalTableInfoMeta,
+    GlobalTablePage as GlobalTablePageMeta,
     HttpActionContext,
     HttpActionLike,
     HttpRouterLike,
@@ -10,6 +16,8 @@ export type {
     RpcContext,
     RpcEnvelope,
     ShardingInfo,
+    StorageListFn,
+    StorageObject,
     WorkerOptions,
 } from "./create-worker.js";
 export { createWorker, defineRpcEnvelope } from "./create-worker.js";

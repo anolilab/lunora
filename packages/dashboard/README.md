@@ -12,6 +12,7 @@ panels yourself, or mount the ready-made `<Dashboard>` shell.
   provider. Tabs whose data source isn't configured are omitted.
 - `DataBrowser` — list a shard's tables and page through their rows, with a
   table/JSON view toggle and refresh.
+- `GlobalDataBrowser` — the same, for `.global()` (D1-backed) tables.
 - `SchemaViewer` — every table with its row count, expandable to its columns.
 - `FunctionRunner` — pick a registered function, edit its JSON args, and invoke
   it (query / mutation / action), showing the result or error. Auto-discovers the
@@ -124,4 +125,38 @@ To skip discovery (or expose a curated subset), pass the list directly:
 
 ```tsx
 <FunctionRunner functions={[{ kind: "query", path: "messages:list" }]} />
+```
+
+### Global (D1) tables
+
+`GlobalDataBrowser` reads `.global()` tables — which live in D1, not the shard
+DOs — via the client's `listGlobalTables()` / `readGlobalTablePage()`, hitting
+the admin-gated `/_cirrus/admin/global/*` endpoints. Build a `globalIntrospector`
+from `@cirrus/d1` over your D1 binding and your schema:
+
+```ts
+import { listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
+import schema from "./cirrus/schema.js";
+
+const exec = {
+    all: (sql, params) =>
+        env.DB.prepare(sql)
+            .bind(...params)
+            .all()
+            .then((r) => r.results),
+    run: (sql, params) =>
+        env.DB.prepare(sql)
+            .bind(...params)
+            .run()
+            .then(() => undefined),
+};
+
+createWorker({
+    shardDO: env.SHARD,
+    adminToken: env.CIRRUS_ADMIN_TOKEN,
+    globalIntrospector: {
+        listTables: () => listGlobalTables(exec, schema),
+        readTablePage: (opts) => readGlobalTablePage(exec, schema, opts),
+    },
+});
 ```

@@ -1,4 +1,4 @@
-import type { CirrusClient, FunctionDescriptor, FunctionReference, ScheduleRecord, StorageListPage } from "@cirrus/client";
+import type { CirrusClient, FunctionDescriptor, FunctionReference, GlobalTableInfo, GlobalTablePage, ScheduleRecord, StorageListPage } from "@cirrus/client";
 import { vi } from "vitest";
 
 export interface MockClientHooks {
@@ -6,10 +6,12 @@ export interface MockClientHooks {
     asClient: CirrusClient;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
     listFunctions: ReturnType<typeof vi.fn>;
+    listGlobalTables: ReturnType<typeof vi.fn>;
     listScheduledJobs: ReturnType<typeof vi.fn>;
     listStorageObjects: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
+    readGlobalTablePage: ReturnType<typeof vi.fn>;
 }
 
 type Impl = (reference: string, args: unknown, options: unknown) => unknown;
@@ -23,10 +25,12 @@ export interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
     listFunctions?: () => FunctionDescriptor[];
+    listGlobalTables?: () => GlobalTableInfo[];
     listScheduledJobs?: () => ScheduleRecord[];
     listStorageObjects?: (options: { cursor?: string; limit?: number; prefix?: string }) => StorageListPage;
     mutation?: Impl;
     query?: Impl;
+    readGlobalTablePage?: (options: { limit?: number; offset?: number; table: string }) => GlobalTablePage;
 }
 
 export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks => {
@@ -39,16 +43,33 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const listStorageObjects = vi.fn(
         async (options: { cursor?: string; limit?: number; prefix?: string } = {}) => impls.listStorageObjects?.(options) ?? { objects: [] },
     );
+    const listGlobalTables = vi.fn(async () => impls.listGlobalTables?.() ?? []);
+    const readGlobalTablePage = vi.fn(
+        async (options: { limit?: number; offset?: number; table: string }) => impls.readGlobalTablePage?.(options) ?? { columns: [], rows: [], total: 0 },
+    );
 
     const asClient = {
         action,
         cancelScheduledJob,
         listFunctions,
+        listGlobalTables,
         listScheduledJobs,
         listStorageObjects,
         mutation,
         query,
+        readGlobalTablePage,
     } as unknown as CirrusClient;
 
-    return { action, asClient, cancelScheduledJob, listFunctions, listScheduledJobs, listStorageObjects, mutation, query };
+    return {
+        action,
+        asClient,
+        cancelScheduledJob,
+        listFunctions,
+        listGlobalTables,
+        listScheduledJobs,
+        listStorageObjects,
+        mutation,
+        query,
+        readGlobalTablePage,
+    };
 };

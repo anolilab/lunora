@@ -157,6 +157,30 @@ export type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
  */
 export type StorageListFn = (prefix?: string, opts?: { cursor?: string; limit?: number }) => Promise<{ cursor?: string; objects: StorageObject[] }>;
 
+/** One `.global()` table plus its row count. Mirrors `@cirrus/d1`'s `GlobalTableInfo`. */
+export interface GlobalTableInfo {
+    name: string;
+    rowCount: number;
+}
+
+/** A window of rows from one global table. Mirrors `@cirrus/d1`'s `GlobalTablePage`. */
+export interface GlobalTablePage {
+    columns: string[];
+    rows: Record<string, unknown>[];
+    total: number;
+}
+
+/**
+ * Introspect `.global()` (D1-backed) tables for the data browser. Structurally
+ * compatible with `@cirrus/d1`'s `listGlobalTables` / `readGlobalTablePage`
+ * (curried with the D1 exec + schema) — the runtime stays free of a hard
+ * dependency on the D1 package.
+ */
+export interface GlobalIntrospector {
+    listTables: () => Promise<GlobalTableInfo[]>;
+    readTablePage: (options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>;
+}
+
 export interface WorkerOptions {
     /**
      * Admin bearer token expected by the export/import endpoints. When unset,
@@ -184,6 +208,14 @@ export interface WorkerOptions {
      * `FUNCTIONS_NOT_CONFIGURED`.
      */
     functions?: FunctionRegistryLike;
+    /**
+     * Read-only introspector for `.global()` (D1) tables, backing the data
+     * browser's global mode via `GET /_cirrus/admin/global/tables` and
+     * `/_cirrus/admin/global/table`. Build it from `@cirrus/d1`'s
+     * `listGlobalTables` / `readGlobalTablePage`. Omit it and those endpoints
+     * respond `GLOBALS_NOT_CONFIGURED`.
+     */
+    globalIntrospector?: GlobalIntrospector;
     /**
      * Router for HTTP actions (`httpRouter()` from `@cirrus/server`, a hono app).
      * Consulted for requests that miss the explicit {@link WorkerOptions.routes}
@@ -281,6 +313,8 @@ const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
+const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
+const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -454,6 +488,14 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
         if (url.pathname === FUNCTIONS_PATH) {
             return handleFunctionsList(request);
+        }
+
+        if (url.pathname === GLOBAL_TABLES_PATH) {
+            return handleGlobalTables(request);
+        }
+
+        if (url.pathname === GLOBAL_TABLE_PATH) {
+            return handleGlobalTablePage(request);
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the
@@ -715,6 +757,57 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             .sort((a, b) => a.path.localeCompare(b.path));
 
         return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    /** Shared gate for the global-introspection endpoints: admin auth + a configured introspector. */
+    const requireGlobalIntrospector = (request: Request): GlobalIntrospector => {
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin global endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        if (!options.globalIntrospector) {
+            throw new CirrusError("global endpoints require a `globalIntrospector` on the worker", { code: "GLOBALS_NOT_CONFIGURED", status: 400 });
+        }
+
+        return options.globalIntrospector;
+    };
+
+    const handleGlobalTables = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireGlobalIntrospector(request);
+        const tables = await introspector.listTables();
+
+        return Response.json(tables, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleGlobalTablePage = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireGlobalIntrospector(request);
+        const url = new URL(request.url);
+        const table = url.searchParams.get("table");
+
+        if (table === null || table === "") {
+            throw new CirrusError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const limitParam = url.searchParams.get("limit");
+        const offsetParam = url.searchParams.get("offset");
+        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
+        const offset = offsetParam === null ? undefined : Number.parseInt(offsetParam, 10);
+
+        const page = await introspector.readTablePage({
+            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
+            table,
+        });
+
+        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     const dispatchHttpRoute = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<null | Response> => {

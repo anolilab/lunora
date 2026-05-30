@@ -16,6 +16,8 @@ export type {
     ClientMessage,
     FunctionDescriptor,
     FunctionReference,
+    GlobalTableInfo,
+    GlobalTablePage,
     OfflineQueueOptions,
     PersistedMutation,
     PersistenceAdapter,
