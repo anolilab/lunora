@@ -91,7 +91,7 @@ export function UsersPanel({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                             <th>name</th>
                             <th>verified</th>
                             <th>created</th>
-                            <th />
+                            <th aria-label="Actions" />
                         </tr>
                     </thead>
                     <tbody>

@@ -364,7 +364,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                                     {page.columns.map((column) => (
                                         <th key={column}>{column}</th>
                                     ))}
-                                    {editable && <th />}
+                                    {editable && <th aria-label="Row actions" />}
                                 </tr>
                             </thead>
                             <tbody>

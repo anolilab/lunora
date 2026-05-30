@@ -62,11 +62,11 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
         <div data-testid="cirrus-dashboard-app">
             <header data-testid="dash-app-header">
                 <strong>Cirrus Dashboard</strong>
-                <label>
+                <label htmlFor="dash-app-token">
                     {" admin token "}
                     <input
-                        aria-label="Admin token"
                         data-testid="dash-app-token"
+                        id="dash-app-token"
                         onChange={(event) => {
                             setToken(event.target.value);
                         }}

@@ -77,7 +77,7 @@ export function Dashboard({ dataEditable = false, functions, initialShardKey, sc
 
     return (
         <div data-testid="cirrus-dashboard">
-            <nav data-testid="dash-tabs" role="tablist">
+            <div aria-label="Dashboard sections" data-testid="dash-tabs" role="tablist">
                 {tabs.map((tab) => (
                     <button
                         aria-selected={current === tab}
@@ -92,7 +92,7 @@ export function Dashboard({ dataEditable = false, functions, initialShardKey, sc
                         {TAB_LABELS[tab]}
                     </button>
                 ))}
-            </nav>
+            </div>
 
             <div data-testid="dash-panel" role="tabpanel">
                 {current === "data" && <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />}

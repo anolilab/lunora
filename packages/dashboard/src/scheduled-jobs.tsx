@@ -126,7 +126,7 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                             <th>scheduled for</th>
                             <th>shard</th>
                             <th>id</th>
-                            {cancelImpl !== undefined && <th />}
+                            {cancelImpl !== undefined && <th aria-label="Actions" />}
                         </tr>
                     </thead>
                     <tbody>

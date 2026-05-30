@@ -164,11 +164,11 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
                     <option value="up">up</option>
                     <option value="down">down</option>
                 </select>
-                <label>
+                <label htmlFor="mg-dry-run">
                     <input
-                        aria-label="Dry run"
                         checked={dryRun}
                         data-testid="mg-dry-run"
+                        id="mg-dry-run"
                         onChange={(event: ChangeEvent<HTMLInputElement>) => {
                             setDryRun(event.target.checked);
                         }}

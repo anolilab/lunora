@@ -41,7 +41,9 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
 
     // When the host supplies a list we use it verbatim; otherwise fall back to
     // whatever discovery has loaded so far (empty until the effect resolves).
-    const functions = functionsProp ?? discovered ?? [];
+    // Memoised so it stays referentially stable across renders — otherwise the
+    // effects/memos below would re-run every render.
+    const functions = useMemo(() => functionsProp ?? discovered ?? [], [functionsProp, discovered]);
 
     const [selectedPath, setSelectedPath] = useState<string>("");
     const [argsText, setArgsText] = useState<string>("{}");
@@ -51,8 +53,9 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
     const [error, setError] = useState<null | string>(null);
 
     useEffect(() => {
+        // The host supplied the list — nothing to discover, no cleanup needed.
         if (functionsProp !== undefined) {
-            return;
+            return undefined;
         }
 
         let cancelled = false;
@@ -63,6 +66,8 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
                 if (!cancelled) {
                     setDiscovered(list);
                 }
+
+                return list;
             })
             .catch((error_: unknown) => {
                 if (!cancelled) {
@@ -75,14 +80,12 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
         };
     }, [client, functionsProp]);
 
-    // Default the selection to the first function once a list is available.
-    useEffect(() => {
-        if (selectedPath === "" && functions.length > 0) {
-            setSelectedPath(functions[0]?.path ?? "");
-        }
-    }, [functions, selectedPath]);
+    // The selection defaults to the first function until the user picks one.
+    // Derived (not synced via an effect) so there's no extra render and the
+    // value is always consistent with the current list.
+    const effectivePath = selectedPath === "" ? functions[0]?.path ?? "" : selectedPath;
 
-    const selected = useMemo(() => functions.find((descriptor) => descriptor.path === selectedPath), [functions, selectedPath]);
+    const selected = useMemo(() => functions.find((descriptor) => descriptor.path === effectivePath), [functions, effectivePath]);
 
     const run = useCallback(async (): Promise<void> => {
         if (!selected) {
@@ -149,7 +152,7 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
                 onChange={(event: ChangeEvent<HTMLSelectElement>) => {
                     setSelectedPath(event.target.value);
                 }}
-                value={selectedPath}
+                value={effectivePath}
             >
                 {functions.map((descriptor) => (
                     <option key={descriptor.path} value={descriptor.path}>

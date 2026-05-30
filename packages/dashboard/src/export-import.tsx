@@ -25,8 +25,8 @@ const parseNdjson = (text: string): ExportRow[] => {
 
     const lines = text.split("\n");
 
-    for (const [index, line_] of lines.entries()) {
-        const line = (line_ ?? "").trim();
+    for (const [index, rawLine] of lines.entries()) {
+        const line = (rawLine ?? "").trim();
 
         if (line === "") {
             continue;
