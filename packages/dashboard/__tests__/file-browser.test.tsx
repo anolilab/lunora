@@ -34,11 +34,11 @@ const renderBrowser = (mock: MockClientHooks): ReactElement => (
 
 describe("fileBrowser", () => {
     test("lists objects with formatted sizes on mount", async () => {
+        expect.assertions(4);
+
         render(renderBrowser(createClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("fb-table")).toBeDefined();
-        });
+        await screen.findByTestId("fb-table");
 
         const rows = screen.getAllByTestId("fb-row");
 
@@ -49,19 +49,21 @@ describe("fileBrowser", () => {
     });
 
     test("forwards the prefix when listing", async () => {
+        expect.assertions(1);
+
         const mock = createClient();
 
         render(renderBrowser(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("fb-table")).toBeDefined();
-        });
+        await screen.findByTestId("fb-table");
 
         fireEvent.change(screen.getByTestId("fb-prefix-input"), { target: { value: "avatars/" } });
         fireEvent.click(screen.getByTestId("fb-list"));
 
         await waitFor(() => {
-            expect(mock.listStorageObjects.mock.calls.length).toBeGreaterThan(1);
+            if (mock.listStorageObjects.mock.calls.length <= 1) {
+                throw new Error("not relisted yet");
+            }
         });
 
         const lastCall = mock.listStorageObjects.mock.calls.at(-1) as [{ prefix?: string }];
@@ -70,16 +72,16 @@ describe("fileBrowser", () => {
     });
 
     test("appends the next page via the cursor", async () => {
+        expect.assertions(1);
+
         render(renderBrowser(createClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("fb-next")).toBeDefined();
-        });
-
-        fireEvent.click(screen.getByTestId("fb-next"));
+        fireEvent.click(await screen.findByTestId("fb-next"));
 
         await waitFor(() => {
-            expect(screen.getAllByTestId("fb-row")).toHaveLength(3);
+            if (screen.getAllByTestId("fb-row").length !== 3) {
+                throw new Error("next page not appended yet");
+            }
         });
 
         // The final page has no cursor, so "Load more" disappears.
@@ -87,6 +89,8 @@ describe("fileBrowser", () => {
     });
 
     test("surfaces a listing error", async () => {
+        expect.assertions(1);
+
         const mock = createMockClient({
             listStorageObjects: () => {
                 throw new Error("STORAGE_NOT_CONFIGURED");
@@ -95,8 +99,8 @@ describe("fileBrowser", () => {
 
         render(renderBrowser(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("fb-error").textContent).toBe("STORAGE_NOT_CONFIGURED");
-        });
+        const error = await screen.findByTestId("fb-error");
+
+        expect(error.textContent).toBe("STORAGE_NOT_CONFIGURED");
     });
 });

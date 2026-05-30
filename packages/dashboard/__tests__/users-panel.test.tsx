@@ -1,6 +1,6 @@
 import type { AuthPage, AuthSession, AuthUser } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, test } from "vitest";
 
@@ -34,60 +34,56 @@ const renderPanel = (mock: MockClientHooks): ReactElement => (
 
 describe("usersPanel", () => {
     test("lists users on mount", async () => {
+        expect.assertions(2);
+
         render(renderPanel(createUsersClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("us-table")).toBeDefined();
-        });
+        await screen.findByTestId("us-table");
 
         expect(screen.getByTestId("us-row-u1").textContent).toContain("a@example.com");
         expect(screen.getByTestId("us-row-u2").textContent).toContain("Bob");
     });
 
     test("loads a user's sessions on demand", async () => {
+        expect.assertions(2);
+
         const mock = createUsersClient();
 
         render(renderPanel(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("us-sessions-u1")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("us-sessions-u1"));
 
-        fireEvent.click(screen.getByTestId("us-sessions-u1"));
-
-        await waitFor(() => {
-            expect(screen.getByTestId("us-session-s1")).toBeDefined();
-        });
+        await screen.findByTestId("us-session-s1");
 
         expect(mock.listAuthSessions).toHaveBeenCalledWith({ limit: 50, userId: "u1" });
         expect(screen.getByTestId("us-session-s1").textContent).toContain("curl");
     });
 
     test("shows an empty state for a user with no sessions", async () => {
+        expect.assertions(1);
+
         const mock = createUsersClient();
 
         render(renderPanel(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("us-sessions-u2")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("us-sessions-u2"));
 
-        fireEvent.click(screen.getByTestId("us-sessions-u2"));
+        const empty = await screen.findByTestId("us-sessions-empty");
 
-        await waitFor(() => {
-            expect(screen.getByTestId("us-sessions-empty")).toBeDefined();
-        });
+        expect(empty).toBeDefined();
     });
 
     test("surfaces a users-listing error", async () => {
+        expect.assertions(1);
+
         const mock = createMockClient();
 
         mock.listAuthUsers.mockRejectedValueOnce(new Error("AUTH_NOT_CONFIGURED"));
 
         render(renderPanel(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("us-users-error").textContent).toBe("AUTH_NOT_CONFIGURED");
-        });
+        const error = await screen.findByTestId("us-users-error");
+
+        expect(error.textContent).toBe("AUTH_NOT_CONFIGURED");
     });
 });

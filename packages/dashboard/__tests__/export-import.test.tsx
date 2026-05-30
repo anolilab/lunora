@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { ADMIN_FUNCTIONS, type ExportRow } from "../src/admin.js";
@@ -36,13 +36,13 @@ const renderPanel = (mock: MockClientHooks) => (
 
 describe("exportImportPanel", () => {
     test("exports rows into the NDJSON textarea", async () => {
+        expect.assertions(2);
+
         render(renderPanel(createClient()));
 
         fireEvent.click(screen.getByTestId("ei-export"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("ei-export-result").textContent).toBe("Exported 2 rows.");
-        });
+        await screen.findByText("Exported 2 rows.");
 
         const textarea = screen.getByTestId("ei-ndjson") as HTMLTextAreaElement;
 
@@ -51,6 +51,8 @@ describe("exportImportPanel", () => {
     });
 
     test("rejects malformed NDJSON before calling the server", async () => {
+        expect.assertions(2);
+
         const mock = createClient();
 
         render(renderPanel(mock));
@@ -58,14 +60,15 @@ describe("exportImportPanel", () => {
         fireEvent.change(screen.getByTestId("ei-ndjson"), { target: { value: "{not json}" } });
         fireEvent.click(screen.getByTestId("ei-import"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("ei-error").textContent).toContain("Invalid NDJSON");
-        });
+        const error = await screen.findByTestId("ei-error");
 
+        expect(error.textContent).toContain("Invalid NDJSON");
         expect(mock.query.mock.calls.some((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.importShard)).toBe(false);
     });
 
     test("imports NDJSON and summarises the result", async () => {
+        expect.assertions(1);
+
         render(renderPanel(createClient()));
 
         fireEvent.change(screen.getByTestId("ei-ndjson"), {
@@ -73,8 +76,8 @@ describe("exportImportPanel", () => {
         });
         fireEvent.click(screen.getByTestId("ei-import"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("ei-import-result").textContent).toContain("Inserted 1");
-        });
+        const importResult = await screen.findByTestId("ei-import-result");
+
+        expect(importResult.textContent).toContain("Inserted 1");
     });
 });

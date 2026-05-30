@@ -50,32 +50,28 @@ const renderBrowser = (mock: MockClientHooks, props: DataBrowserProps = {}): Rea
 
 describe("dataBrowser", () => {
     test("lists tables with row counts on mount", async () => {
+        expect.assertions(2);
+
         const mock = createBrowserClient();
 
         render(renderBrowser(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-table-list")).toBeDefined();
-        });
+        await screen.findByTestId("db-table-list");
 
         expect(screen.getByTestId("db-table-messages").textContent).toBe("messages (3)");
         expect(screen.getByTestId("db-table-users").textContent).toBe("users (1)");
     });
 
     test("loads the first page of a table when selected", async () => {
+        expect.assertions(4);
+
         const mock = createBrowserClient();
 
         render(renderBrowser(mock, { pageSize: 2 }));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-table-messages")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
 
-        fireEvent.click(screen.getByTestId("db-table-messages"));
-
-        await waitFor(() => {
-            expect(screen.getByTestId("db-page")).toBeDefined();
-        });
+        await screen.findByTestId("db-page");
 
         expect(screen.getAllByTestId("db-row")).toHaveLength(2);
         expect(screen.getByTestId("db-page-info").textContent).toBe("1-2 of 3");
@@ -84,25 +80,19 @@ describe("dataBrowser", () => {
     });
 
     test("pages forward and back through a table", async () => {
+        expect.assertions(3);
+
         const mock = createBrowserClient();
 
         render(renderBrowser(mock, { pageSize: 2 }));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-table-messages")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
 
-        fireEvent.click(screen.getByTestId("db-table-messages"));
-
-        await waitFor(() => {
-            expect(screen.getByTestId("db-page-info").textContent).toBe("1-2 of 3");
-        });
+        await screen.findByText("1-2 of 3");
 
         fireEvent.click(screen.getByTestId("db-next"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-page-info").textContent).toBe("3-3 of 3");
-        });
+        await screen.findByText("3-3 of 3");
 
         expect(screen.getAllByTestId("db-row")).toHaveLength(1);
         expect((screen.getByTestId("db-next") as HTMLButtonElement).disabled).toBe(true);
@@ -110,25 +100,25 @@ describe("dataBrowser", () => {
 
         fireEvent.click(screen.getByTestId("db-prev"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-page-info").textContent).toBe("1-2 of 3");
-        });
+        await screen.findByText("1-2 of 3");
     });
 
     test("forwards the shard key when reloading tables", async () => {
+        expect.assertions(1);
+
         const mock = createBrowserClient();
 
         render(renderBrowser(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-table-list")).toBeDefined();
-        });
+        await screen.findByTestId("db-table-list");
 
         fireEvent.change(screen.getByTestId("db-shard-input"), { target: { value: "room-9" } });
         fireEvent.click(screen.getByTestId("db-load-tables"));
 
         await waitFor(() => {
-            expect(mock.query.mock.calls.length).toBeGreaterThan(1);
+            if (mock.query.mock.calls.length <= 1) {
+                throw new Error("tables not reloaded yet");
+            }
         });
 
         const listCalls = mock.query.mock.calls.filter((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.listTables);
@@ -138,6 +128,8 @@ describe("dataBrowser", () => {
     });
 
     test("surfaces a table-listing error", async () => {
+        expect.assertions(2);
+
         const mock = createMockClient({
             query: () => {
                 throw new Error("ADMIN_FORBIDDEN");
@@ -146,15 +138,15 @@ describe("dataBrowser", () => {
 
         render(renderBrowser(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-tables-error")).toBeDefined();
-        });
+        await screen.findByTestId("db-tables-error");
 
         expect(screen.getByTestId("db-tables-error").textContent).toBe("ADMIN_FORBIDDEN");
         expect(screen.queryByTestId("db-table-list")).toBeNull();
     });
 
     test("surfaces a page-read error without dropping the table list", async () => {
+        expect.assertions(3);
+
         const mock = createMockClient({
             query: (reference) => {
                 if (reference === ADMIN_FUNCTIONS.listTables) {
@@ -167,15 +159,9 @@ describe("dataBrowser", () => {
 
         render(renderBrowser(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-table-messages")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
 
-        fireEvent.click(screen.getByTestId("db-table-messages"));
-
-        await waitFor(() => {
-            expect(screen.getByTestId("db-page-error")).toBeDefined();
-        });
+        await screen.findByTestId("db-page-error");
 
         expect(screen.getByTestId("db-page-error").textContent).toBe("UNKNOWN_TABLE");
         expect(screen.queryByTestId("db-page")).toBeNull();
@@ -183,19 +169,15 @@ describe("dataBrowser", () => {
     });
 
     test("toggles between the table and JSON views", async () => {
+        expect.assertions(3);
+
         const mock = createBrowserClient();
 
         render(renderBrowser(mock, { pageSize: 2 }));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-table-messages")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
 
-        fireEvent.click(screen.getByTestId("db-table-messages"));
-
-        await waitFor(() => {
-            expect(screen.getByTestId("db-rows")).toBeDefined();
-        });
+        await screen.findByTestId("db-rows");
 
         // Table view is the default; JSON view is opt-in.
         expect(screen.queryByTestId("db-json")).toBeNull();
@@ -239,18 +221,14 @@ describe("dataBrowser — editable", () => {
             </CirrusProvider>,
         );
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-table-messages")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
 
-        fireEvent.click(screen.getByTestId("db-table-messages"));
-
-        await waitFor(() => {
-            expect(screen.getByTestId("db-page")).toBeDefined();
-        });
+        await screen.findByTestId("db-page");
     };
 
     test("hides edit controls unless `editable` is set", async () => {
+        expect.assertions(2);
+
         const mock = createBrowserClient();
 
         render(
@@ -259,21 +237,17 @@ describe("dataBrowser — editable", () => {
             </CirrusProvider>,
         );
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-table-messages")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
 
-        fireEvent.click(screen.getByTestId("db-table-messages"));
-
-        await waitFor(() => {
-            expect(screen.getByTestId("db-page")).toBeDefined();
-        });
+        await screen.findByTestId("db-page");
 
         expect(screen.queryByTestId("db-add-row")).toBeNull();
         expect(screen.queryByTestId("db-edit-m1")).toBeNull();
     });
 
     test("deletes a row via the writeRow op", async () => {
+        expect.assertions(1);
+
         const mock = createEditableClient();
 
         await openMessages(mock);
@@ -281,9 +255,9 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-delete-m1"));
 
         await waitFor(() => {
-            const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
-
-            expect(call).toBeDefined();
+            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+                throw new Error("writeRow not called yet");
+            }
         });
 
         const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
@@ -292,6 +266,8 @@ describe("dataBrowser — editable", () => {
     });
 
     test("inserts a new row from the editor", async () => {
+        expect.assertions(1);
+
         const mock = createEditableClient();
 
         await openMessages(mock);
@@ -301,9 +277,9 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
-            const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
-
-            expect(call).toBeDefined();
+            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+                throw new Error("writeRow not called yet");
+            }
         });
 
         const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
@@ -312,6 +288,8 @@ describe("dataBrowser — editable", () => {
     });
 
     test("reports invalid JSON without calling the server", async () => {
+        expect.assertions(2);
+
         const mock = createEditableClient();
 
         await openMessages(mock);
@@ -320,14 +298,15 @@ describe("dataBrowser — editable", () => {
         fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: "{ not json" } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("db-write-error").textContent).toContain("Invalid JSON");
-        });
+        const writeError = await screen.findByTestId("db-write-error");
 
+        expect(writeError.textContent).toContain("Invalid JSON");
         expect(mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
     });
 
     test("edits an existing row (patch) prefilled from its doc", async () => {
+        expect.assertions(2);
+
         const mock = createEditableClient();
 
         await openMessages(mock);
@@ -343,9 +322,9 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
-            const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
-
-            expect(call).toBeDefined();
+            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+                throw new Error("writeRow not called yet");
+            }
         });
 
         const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];

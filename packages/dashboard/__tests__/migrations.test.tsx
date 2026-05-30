@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { ADMIN_FUNCTIONS, type MigrationStatusRow } from "../src/admin.js";
@@ -35,45 +35,43 @@ const renderPanel = (mock: MockClientHooks) => (
 
 describe("migrationsPanel", () => {
     test("lists migration status rows on mount", async () => {
+        expect.assertions(1);
+
         render(renderPanel(createClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("mg-row-0001_backfill")).toBeDefined();
-        });
+        const row = await screen.findByTestId("mg-row-0001_backfill");
 
-        expect(screen.getByTestId("mg-row-0001_backfill").textContent).toContain("completed");
+        expect(row.textContent).toContain("completed");
     });
 
     test("requires an id before running", async () => {
+        expect.assertions(1);
+
         render(renderPanel(createClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("mg-table")).toBeDefined();
-        });
+        await screen.findByTestId("mg-table");
 
         fireEvent.click(screen.getByTestId("mg-run"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("mg-run-error").textContent).toBe("Enter a migration id");
-        });
+        const runError = await screen.findByTestId("mg-run-error");
+
+        expect(runError.textContent).toBe("Enter a migration id");
     });
 
     test("runs a migration and reports the result", async () => {
+        expect.assertions(1);
+
         const mock = createClient();
 
         render(renderPanel(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("mg-table")).toBeDefined();
-        });
+        await screen.findByTestId("mg-table");
 
         fireEvent.change(screen.getByTestId("mg-id-input"), { target: { value: "0002_rename" } });
         fireEvent.click(screen.getByTestId("mg-dry-run")); // turn dry-run off
         fireEvent.click(screen.getByTestId("mg-run"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("mg-run-result").textContent).toContain("completed");
-        });
+        await screen.findByTestId("mg-run-result");
 
         const runCall = mock.query.mock.calls.find((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.runMigration);
 

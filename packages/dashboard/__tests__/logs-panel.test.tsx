@@ -30,11 +30,11 @@ const renderPanel = (mock: MockClientHooks) => (
 
 describe("logsPanel", () => {
     test("renders a row per captured log on mount", async () => {
+        expect.assertions(3);
+
         render(renderPanel(createClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("lg-table")).toBeDefined();
-        });
+        await screen.findByTestId("lg-table");
 
         const rows = screen.getAllByTestId("lg-row");
 
@@ -44,27 +44,31 @@ describe("logsPanel", () => {
     });
 
     test("shows the empty state when there are no logs", async () => {
+        expect.assertions(1);
+
         render(renderPanel(createClient([])));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("lg-empty").textContent).toBe("No logs.");
-        });
+        const empty = await screen.findByTestId("lg-empty");
+
+        expect(empty.textContent).toBe("No logs.");
     });
 
     test("forwards the shard key on refresh", async () => {
+        expect.assertions(1);
+
         const mock = createClient();
 
         render(renderPanel(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("lg-table")).toBeDefined();
-        });
+        await screen.findByTestId("lg-table");
 
         fireEvent.change(screen.getByTestId("lg-shard-input"), { target: { value: "room-9" } });
         fireEvent.click(screen.getByTestId("lg-refresh"));
 
         await waitFor(() => {
-            expect(mock.query.mock.calls.length).toBeGreaterThan(1);
+            if (mock.query.mock.calls.length <= 1) {
+                throw new Error("not refreshed yet");
+            }
         });
 
         const lastCall = mock.query.mock.calls.at(-1) as [unknown, unknown, { shardKey?: string }];
@@ -73,6 +77,8 @@ describe("logsPanel", () => {
     });
 
     test("surfaces an error", async () => {
+        expect.assertions(1);
+
         const mock = createMockClient({
             query: () => {
                 throw new Error("ADMIN_FORBIDDEN");
@@ -81,8 +87,8 @@ describe("logsPanel", () => {
 
         render(renderPanel(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("lg-error").textContent).toBe("ADMIN_FORBIDDEN");
-        });
+        const error = await screen.findByTestId("lg-error");
+
+        expect(error.textContent).toBe("ADMIN_FORBIDDEN");
     });
 });

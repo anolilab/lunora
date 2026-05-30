@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { ADMIN_FUNCTIONS } from "../src/admin.js";
@@ -29,6 +29,8 @@ const renderDashboard = (mock: MockClientHooks, props = {}) => (
 
 describe("dashboard", () => {
     test("shows every tab by default", () => {
+        expect.assertions(11);
+
         render(renderDashboard(createClient()));
 
         for (const tab of ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics", "logs"]) {
@@ -37,23 +39,25 @@ describe("dashboard", () => {
     });
 
     test("renders the schedule panel via the client when its tab is selected", async () => {
+        expect.assertions(1);
+
         render(renderDashboard(createClient()));
 
         fireEvent.click(screen.getByTestId("dash-tab-schedule"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("cirrus-scheduled-jobs")).toBeDefined();
-        });
+        const scheduledJobs = await screen.findByTestId("cirrus-scheduled-jobs");
+
+        expect(scheduledJobs).toBeDefined();
     });
 
     test("switches the active panel when a tab is clicked", async () => {
+        expect.assertions(1);
+
         render(renderDashboard(createClient()));
 
         fireEvent.click(screen.getByTestId("dash-tab-migrations"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("cirrus-migrations")).toBeDefined();
-        });
+        await screen.findByTestId("cirrus-migrations");
 
         expect(screen.queryByTestId("cirrus-data-browser")).toBeNull();
     });

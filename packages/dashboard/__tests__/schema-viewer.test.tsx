@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { ADMIN_FUNCTIONS } from "../src/admin.js";
@@ -36,29 +36,27 @@ const renderViewer = (mock: MockClientHooks) => (
 
 describe("schemaViewer", () => {
     test("lists tables with counts on mount", async () => {
+        expect.assertions(1);
+
         render(renderViewer(createClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("sc-table-messages")).toBeDefined();
-        });
+        await screen.findByTestId("sc-table-messages");
 
         expect(screen.getByTestId("sc-toggle-messages").textContent).toBe("messages (3)");
     });
 
     test("lazily loads columns when a table is expanded", async () => {
+        expect.assertions(2);
+
         const mock = createClient();
 
         render(renderViewer(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("sc-toggle-messages")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("sc-toggle-messages"));
 
-        fireEvent.click(screen.getByTestId("sc-toggle-messages"));
+        const columns = await screen.findByTestId("sc-columns-messages");
 
-        await waitFor(() => {
-            expect(screen.getByTestId("sc-columns-messages").textContent).toContain("text");
-        });
+        expect(columns.textContent).toContain("text");
 
         // Collapsing then re-expanding must not refetch — columns are memoised.
         fireEvent.click(screen.getByTestId("sc-toggle-messages"));

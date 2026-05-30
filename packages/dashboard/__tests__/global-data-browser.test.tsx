@@ -1,6 +1,6 @@
 import type { GlobalTablePage } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, test } from "vitest";
 
@@ -40,50 +40,50 @@ const renderBrowser = (mock: MockClientHooks): ReactElement => (
 
 describe("globalDataBrowser", () => {
     test("lists global tables with row counts on mount", async () => {
+        expect.assertions(2);
+
         render(renderBrowser(createBrowserClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("gdb-table-list")).toBeDefined();
-        });
+        await screen.findByTestId("gdb-table-list");
 
         expect(screen.getByTestId("gdb-table-organizations").textContent).toBe("organizations (2)");
         expect(screen.getByTestId("gdb-table-plans").textContent).toBe("plans (5)");
     });
 
     test("pages through a selected table's rows", async () => {
+        expect.assertions(2);
+
         render(renderBrowser(createBrowserClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("gdb-table-organizations")).toBeDefined();
-        });
+        fireEvent.click(await screen.findByTestId("gdb-table-organizations"));
 
-        fireEvent.click(screen.getByTestId("gdb-table-organizations"));
-
-        await waitFor(() => {
-            expect(screen.getByTestId("gdb-page")).toBeDefined();
-        });
+        await screen.findByTestId("gdb-page");
 
         expect(screen.getAllByTestId("gdb-row")).toHaveLength(2);
         expect(screen.getByTestId("gdb-page-info").textContent).toBe("1-2 of 2");
     });
 
     test("shows an empty state when there are no global tables", async () => {
+        expect.assertions(1);
+
         render(renderBrowser(createMockClient({ listGlobalTables: () => [] })));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("gdb-empty")).toBeDefined();
-        });
+        const empty = await screen.findByTestId("gdb-empty");
+
+        expect(empty).toBeDefined();
     });
 
     test("surfaces a table-listing error", async () => {
+        expect.assertions(1);
+
         const mock = createMockClient();
 
         mock.listGlobalTables.mockRejectedValueOnce(new Error("GLOBALS_NOT_CONFIGURED"));
 
         render(renderBrowser(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("gdb-tables-error").textContent).toBe("GLOBALS_NOT_CONFIGURED");
-        });
+        const error = await screen.findByTestId("gdb-tables-error");
+
+        expect(error.textContent).toBe("GLOBALS_NOT_CONFIGURED");
     });
 });

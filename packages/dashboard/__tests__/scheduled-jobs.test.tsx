@@ -15,13 +15,13 @@ const withProvider = (mock: MockClientHooks, children: ReactNode): ReactElement 
 
 describe("scheduledJobs", () => {
     test("renders jobs soonest-due first", async () => {
+        expect.assertions(2);
+
         const loadJobs = vi.fn(async () => RECORDS);
 
         render(withProvider(createMockClient(), <ScheduledJobs loadJobs={loadJobs} />));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("sj-table")).toBeDefined();
-        });
+        await screen.findByTestId("sj-table");
 
         const rows = screen.getAllByTestId(/^sj-row-/);
 
@@ -30,57 +30,71 @@ describe("scheduledJobs", () => {
     });
 
     test("shows empty state when there are no jobs", async () => {
+        expect.assertions(1);
+
         render(withProvider(createMockClient(), <ScheduledJobs loadJobs={async () => []} />));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("sj-empty")).toBeDefined();
-        });
+        const empty = await screen.findByTestId("sj-empty");
+
+        expect(empty).toBeDefined();
     });
 
     test("hides cancel controls for a custom read-only loader", async () => {
+        expect.assertions(1);
+
         render(withProvider(createMockClient(), <ScheduledJobs loadJobs={async () => RECORDS} />));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("sj-table")).toBeDefined();
-        });
+        await screen.findByTestId("sj-table");
 
         expect(screen.queryByTestId("sj-cancel-a")).toBeNull();
     });
 
     test("cancels a job and refetches", async () => {
+        expect.assertions(2);
+
         const loadJobs = vi.fn(async () => RECORDS);
         const cancelJob = vi.fn(async () => ({ cancelled: true }));
 
         render(withProvider(createMockClient(), <ScheduledJobs cancelJob={cancelJob} loadJobs={loadJobs} />));
 
+        fireEvent.click(await screen.findByTestId("sj-cancel-a"));
+
         await waitFor(() => {
-            expect(screen.getByTestId("sj-cancel-a")).toBeDefined();
+            if (cancelJob.mock.calls.length === 0) {
+                throw new Error("cancelJob not called yet");
+            }
         });
 
-        fireEvent.click(screen.getByTestId("sj-cancel-a"));
+        expect(cancelJob).toHaveBeenCalledWith("a");
 
         await waitFor(() => {
-            expect(cancelJob).toHaveBeenCalledWith("a");
+            if (loadJobs.mock.calls.length < 2) {
+                throw new Error("jobs not refetched yet");
+            }
         });
 
         expect(loadJobs.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 
     test("falls back to the client's scheduler admin methods", async () => {
+        expect.assertions(2);
+
         const mock = createMockClient({ listScheduledJobs: () => RECORDS });
 
         render(withProvider(mock, <ScheduledJobs />));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("sj-cancel-a")).toBeDefined();
-        });
+        await screen.findByTestId("sj-cancel-a");
 
         expect(mock.listScheduledJobs).toHaveBeenCalledWith();
 
         fireEvent.click(screen.getByTestId("sj-cancel-a"));
 
         await waitFor(() => {
-            expect(mock.cancelScheduledJob).toHaveBeenCalledWith("a");
+            if (mock.cancelScheduledJob.mock.calls.length === 0) {
+                throw new Error("cancelScheduledJob not called yet");
+            }
         });
+
+        expect(mock.cancelScheduledJob).toHaveBeenCalledWith("a");
     });
 });

@@ -35,11 +35,11 @@ const renderPanel = (mock: MockClientHooks) => (
 
 describe("metricsPanel", () => {
     test("renders the health snapshot on mount", async () => {
+        expect.assertions(5);
+
         render(renderPanel(createClient()));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("mt-stats")).toBeDefined();
-        });
+        await screen.findByTestId("mt-stats");
 
         expect(screen.getByTestId("mt-requests").textContent).toBe("10");
         expect(screen.getByTestId("mt-errors").textContent).toBe("1 (10.0%)");
@@ -49,27 +49,31 @@ describe("metricsPanel", () => {
     });
 
     test("notes when no cache is configured", async () => {
+        expect.assertions(1);
+
         render(renderPanel(createClient({ ...METRICS, cache: null })));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("mt-cache").textContent).toBe("no cache configured");
-        });
+        const cache = await screen.findByTestId("mt-cache");
+
+        expect(cache.textContent).toBe("no cache configured");
     });
 
     test("forwards the shard key on refresh", async () => {
+        expect.assertions(1);
+
         const mock = createClient();
 
         render(renderPanel(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("mt-stats")).toBeDefined();
-        });
+        await screen.findByTestId("mt-stats");
 
         fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "room-9" } });
         fireEvent.click(screen.getByTestId("mt-refresh"));
 
         await waitFor(() => {
-            expect(mock.query.mock.calls.length).toBeGreaterThan(1);
+            if (mock.query.mock.calls.length <= 1) {
+                throw new Error("not refreshed yet");
+            }
         });
 
         const lastCall = mock.query.mock.calls.at(-1) as [unknown, unknown, { shardKey?: string }];
@@ -78,6 +82,8 @@ describe("metricsPanel", () => {
     });
 
     test("surfaces an error", async () => {
+        expect.assertions(1);
+
         const mock = createMockClient({
             query: () => {
                 throw new Error("ADMIN_FORBIDDEN");
@@ -86,8 +92,8 @@ describe("metricsPanel", () => {
 
         render(renderPanel(mock));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("mt-error").textContent).toBe("ADMIN_FORBIDDEN");
-        });
+        const error = await screen.findByTestId("mt-error");
+
+        expect(error.textContent).toBe("ADMIN_FORBIDDEN");
     });
 });

@@ -21,6 +21,8 @@ const renderRunner = (mock: MockClientHooks): ReactElement => (
 
 describe("functionRunner", () => {
     test("defaults to the first function and lists all of them", () => {
+        expect.assertions(2);
+
         const mock = createMockClient();
 
         render(renderRunner(mock));
@@ -32,6 +34,8 @@ describe("functionRunner", () => {
     });
 
     test("runs the selected query with parsed JSON args and renders the result", async () => {
+        expect.assertions(6);
+
         const mock = createMockClient({ query: () => ({ rows: [1, 2] }) });
 
         render(renderRunner(mock));
@@ -39,9 +43,7 @@ describe("functionRunner", () => {
         fireEvent.change(screen.getByTestId("args-input"), { target: { value: '{ "limit": 2 }' } });
         fireEvent.click(screen.getByTestId("run-button"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("result")).toBeDefined();
-        });
+        await screen.findByTestId("result");
 
         expect(mock.query).toHaveBeenCalledTimes(1);
 
@@ -55,6 +57,8 @@ describe("functionRunner", () => {
     });
 
     test("routes to client.mutation when the selected function is a mutation", async () => {
+        expect.assertions(2);
+
         const mock = createMockClient({ mutation: () => ({ ok: true }) });
 
         render(renderRunner(mock));
@@ -63,7 +67,9 @@ describe("functionRunner", () => {
         fireEvent.click(screen.getByTestId("run-button"));
 
         await waitFor(() => {
-            expect(mock.mutation).toHaveBeenCalledTimes(1);
+            if (mock.mutation.mock.calls.length === 0) {
+                throw new Error("mutation not called yet");
+            }
         });
 
         const [reference] = mock.mutation.mock.calls[0] as [{ __cirrusRef: string }];
@@ -73,6 +79,8 @@ describe("functionRunner", () => {
     });
 
     test("forwards a non-empty shard key in the call options", async () => {
+        expect.assertions(1);
+
         const mock = createMockClient({ query: () => null });
 
         render(renderRunner(mock));
@@ -81,7 +89,9 @@ describe("functionRunner", () => {
         fireEvent.click(screen.getByTestId("run-button"));
 
         await waitFor(() => {
-            expect(mock.query).toHaveBeenCalledTimes(1);
+            if (mock.query.mock.calls.length === 0) {
+                throw new Error("query not called yet");
+            }
         });
 
         const call = mock.query.mock.calls[0] as [unknown, unknown, { shardKey?: string }];
@@ -90,6 +100,8 @@ describe("functionRunner", () => {
     });
 
     test("reports invalid JSON without calling the client", () => {
+        expect.assertions(2);
+
         const mock = createMockClient();
 
         render(renderRunner(mock));
@@ -102,6 +114,8 @@ describe("functionRunner", () => {
     });
 
     test("surfaces a thrown server error in the error region", async () => {
+        expect.assertions(2);
+
         const mock = createMockClient({
             query: () => {
                 throw new Error("BOOM");
@@ -112,15 +126,15 @@ describe("functionRunner", () => {
 
         fireEvent.click(screen.getByTestId("run-button"));
 
-        await waitFor(() => {
-            expect(screen.getByTestId("error")).toBeDefined();
-        });
+        await screen.findByTestId("error");
 
         expect(screen.getByTestId("error").textContent).toBe("BOOM");
         expect(screen.queryByTestId("result")).toBeNull();
     });
 
     test("auto-discovers functions from the client when none are supplied", async () => {
+        expect.assertions(2);
+
         const mock = createMockClient({ listFunctions: () => functions });
 
         render(
@@ -130,7 +144,9 @@ describe("functionRunner", () => {
         );
 
         await waitFor(() => {
-            expect(screen.getAllByRole("option")).toHaveLength(3);
+            if (screen.queryAllByRole("option").length !== 3) {
+                throw new Error("functions not discovered yet");
+            }
         });
 
         expect(mock.listFunctions).toHaveBeenCalledWith();
@@ -138,6 +154,8 @@ describe("functionRunner", () => {
     });
 
     test("surfaces a discovery error", async () => {
+        expect.assertions(1);
+
         const mock = createMockClient();
 
         mock.listFunctions.mockRejectedValueOnce(new Error("ADMIN_FORBIDDEN"));
@@ -148,8 +166,8 @@ describe("functionRunner", () => {
             </CirrusProvider>,
         );
 
-        await waitFor(() => {
-            expect(screen.getByTestId("function-discover-error").textContent).toBe("ADMIN_FORBIDDEN");
-        });
+        const discoverError = await screen.findByTestId("function-discover-error");
+
+        expect(discoverError.textContent).toBe("ADMIN_FORBIDDEN");
     });
 });

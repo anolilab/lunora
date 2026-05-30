@@ -5,6 +5,8 @@ import { DashboardApp } from "../src/app.js";
 
 describe("dashboardApp", () => {
     test("renders the composed dashboard with every tab", () => {
+        expect.assertions(12);
+
         render(<DashboardApp baseUrl="https://app.example" />);
 
         expect(screen.getByTestId("cirrus-dashboard-app")).toBeDefined();
@@ -16,6 +18,8 @@ describe("dashboardApp", () => {
     });
 
     test("exposes an admin-token field that accepts input", () => {
+        expect.assertions(2);
+
         render(<DashboardApp baseUrl="https://app.example" />);
 
         const input = screen.getByTestId("dash-app-token") as HTMLInputElement;
@@ -28,6 +32,8 @@ describe("dashboardApp", () => {
     });
 
     test("pre-fills the admin token when one is supplied", () => {
+        expect.assertions(1);
+
         render(<DashboardApp adminToken="preset" baseUrl="https://app.example" />);
 
         expect((screen.getByTestId("dash-app-token") as HTMLInputElement).value).toBe("preset");
