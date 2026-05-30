@@ -25,6 +25,8 @@ export type {
     RpcResponseBody,
     ScheduleRecord,
     ServerMessage,
+    StorageListPage,
+    StorageObject,
     Unsubscribe,
     User,
 } from "./types.js";

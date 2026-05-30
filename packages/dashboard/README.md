@@ -19,6 +19,7 @@ panels yourself, or mount the ready-made `<Dashboard>` shell.
 - `MigrationsPanel` — inspect data-migration run-state and kick off a migration
   by id (direction, dry-run).
 - `ExportImportPanel` — snapshot a shard to NDJSON and restore NDJSON back.
+- `FileBrowser` — page through objects in the storage (R2) bucket by prefix.
 - `ScheduledJobs` — view and cancel functions queued via `runAfter` / `runAt`.
 
 ## Admin gate
@@ -83,4 +84,20 @@ loader/canceller:
 <ScheduledJobs
     loadJobs={async () => myRecords} // omit cancelJob for a read-only view
 />
+```
+
+### File browser
+
+`FileBrowser` lists R2 objects through the client's `listStorageObjects()`, which
+hits the admin-gated `GET /_cirrus/admin/storage` endpoint. Pass a `storageList`
+function to the worker (the structural shape matches `createStorage(...).list`):
+
+```ts
+import { createStorage } from "@cirrus/storage";
+
+createWorker({
+    shardDO: env.SHARD,
+    adminToken: env.CIRRUS_ADMIN_TOKEN,
+    storageList: createStorage({ bucket: env.FILES }).list,
+});
 ```

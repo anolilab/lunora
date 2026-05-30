@@ -29,7 +29,9 @@ export const ShardDO = createShardDO({
     storage: (env) => {
         const shardEnv = env as ShardEnv;
 
-        return shardEnv.FILES ? createStorage({ bucket: shardEnv.FILES, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET }) : undefined;
+        return shardEnv.FILES
+            ? createStorage({ bucket: shardEnv.FILES, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET })
+            : undefined;
     },
 });
 
@@ -102,6 +104,9 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // Exposes /_cirrus/admin/scheduled so the dashboard can list/cancel jobs.
         schedulerDO: env.SCHEDULER,
         shardDO: env.SHARD,
+        // Exposes /_cirrus/admin/storage so the dashboard's file browser can
+        // page through R2 objects. Omitted when no bucket is bound.
+        storageList: env.FILES ? createStorage({ bucket: env.FILES }).list : undefined,
     });
 
 const handleTestReset = async (env: Env): Promise<Response> => {

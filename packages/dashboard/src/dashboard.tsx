@@ -2,6 +2,7 @@ import { type ReactElement, useMemo, useState } from "react";
 
 import { DataBrowser } from "./data-browser.js";
 import { ExportImportPanel } from "./export-import.js";
+import { FileBrowser } from "./file-browser.js";
 import { FunctionRunner } from "./function-runner.js";
 import { MigrationsPanel } from "./migrations.js";
 import { ScheduledJobs, type ScheduledJobsProps } from "./scheduled-jobs.js";
@@ -9,7 +10,7 @@ import { SchemaViewer } from "./schema-viewer.js";
 import type { FunctionDescriptor } from "./types.js";
 
 /** Identifier for each built-in dashboard tab. */
-export type DashboardTab = "data" | "export" | "functions" | "migrations" | "schedule" | "schema";
+export type DashboardTab = "data" | "export" | "files" | "functions" | "migrations" | "schedule" | "schema";
 
 export interface DashboardProps {
     /**
@@ -35,6 +36,7 @@ export interface DashboardProps {
 const TAB_LABELS: Record<DashboardTab, string> = {
     data: "Data",
     export: "Export / Import",
+    files: "Files",
     functions: "Functions",
     migrations: "Migrations",
     schedule: "Scheduled",
@@ -60,7 +62,7 @@ export function Dashboard({ functions, initialShardKey, scheduledCancel, schedul
             available.push("functions");
         }
 
-        available.push("migrations", "export", "schedule");
+        available.push("migrations", "export", "files", "schedule");
 
         return available;
     }, [functions]);
@@ -96,6 +98,7 @@ export function Dashboard({ functions, initialShardKey, scheduledCancel, schedul
                 {current === "functions" && functions !== undefined && <FunctionRunner functions={functions} />}
                 {current === "migrations" && <MigrationsPanel initialShardKey={initialShardKey} />}
                 {current === "export" && <ExportImportPanel initialShardKey={initialShardKey} />}
+                {current === "files" && <FileBrowser />}
                 {current === "schedule" && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
             </div>
         </div>

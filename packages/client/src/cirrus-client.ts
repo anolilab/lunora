@@ -14,6 +14,8 @@ import type {
     RpcResponseBody,
     ScheduleRecord,
     ServerMessage,
+    StorageListPage,
+    StorageObject,
     Unsubscribe,
 } from "./types.js";
 
@@ -21,6 +23,7 @@ const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
+const STORAGE_PATH = "/_cirrus/admin/storage";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
 
@@ -264,6 +267,37 @@ export class CirrusClient {
         const body = (await this.adminFetch(SCHEDULED_CANCEL_PATH, "POST", { id })) as { cancelled?: boolean };
 
         return { cancelled: body.cancelled === true };
+    }
+
+    // --- Storage admin ------------------------------------------------------
+
+    /**
+     * List objects in the storage bucket, optionally under a `prefix` and from a
+     * pagination `cursor`. Hits the admin-gated `GET /_cirrus/admin/storage`
+     * endpoint — the worker must be built with a `storageList` function and
+     * `adminToken`, and this client's auth token must match. Powers
+     * `@cirrus/dashboard`'s file browser.
+     */
+    public async listStorageObjects(options: { cursor?: string; limit?: number; prefix?: string } = {}): Promise<StorageListPage> {
+        const params = new URLSearchParams();
+
+        if (options.prefix !== undefined && options.prefix !== "") {
+            params.set("prefix", options.prefix);
+        }
+
+        if (options.cursor !== undefined && options.cursor !== "") {
+            params.set("cursor", options.cursor);
+        }
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        const query = params.toString();
+        const path = query === "" ? STORAGE_PATH : `${STORAGE_PATH}?${query}`;
+        const body = (await this.adminFetch(path, "GET")) as { cursor?: string; objects?: StorageObject[] };
+
+        return { cursor: body.cursor, objects: body.objects ?? [] };
     }
 
     // --- Subscriptions ------------------------------------------------------

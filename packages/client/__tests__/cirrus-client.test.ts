@@ -601,3 +601,57 @@ describe("cirrusClient — scheduler admin", () => {
         await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "ADMIN_FORBIDDEN", message: "nope" });
     });
 });
+
+// --- Storage admin ----------------------------------------------------------
+
+describe("cirrusClient — storage admin", () => {
+    test("listStorageObjects GETs the admin endpoint and unwraps the page", async () => {
+        const page = { cursor: "c1", objects: [{ etag: "e1", key: "a.png", size: 10 }] };
+        const fetchMock = vi.fn(async () => jsonResponse(page));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        const result = await client.listStorageObjects();
+
+        expect(result).toEqual(page);
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/storage");
+        expect(init.method).toBe("GET");
+    });
+
+    test("listStorageObjects encodes prefix / cursor / limit as query params", async () => {
+        const fetchMock = vi.fn(async () => jsonResponse({ objects: [] }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await client.listStorageObjects({ cursor: "z", limit: 25, prefix: "avatars/" });
+
+        const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+        const parsed = new URL(requestUrl);
+
+        expect(parsed.pathname).toBe("/_cirrus/admin/storage");
+        expect(parsed.searchParams.get("prefix")).toBe("avatars/");
+        expect(parsed.searchParams.get("cursor")).toBe("z");
+        expect(parsed.searchParams.get("limit")).toBe("25");
+    });
+
+    test("listStorageObjects defaults objects to an empty array", async () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({})) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listStorageObjects()).resolves.toEqual({ cursor: undefined, objects: [] });
+    });
+});

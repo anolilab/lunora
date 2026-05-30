@@ -1,4 +1,4 @@
-import type { CirrusClient, FunctionReference, ScheduleRecord } from "@cirrus/client";
+import type { CirrusClient, FunctionReference, ScheduleRecord, StorageListPage } from "@cirrus/client";
 import { vi } from "vitest";
 
 export interface MockClientHooks {
@@ -6,6 +6,7 @@ export interface MockClientHooks {
     asClient: CirrusClient;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
     listScheduledJobs: ReturnType<typeof vi.fn>;
+    listStorageObjects: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
 }
@@ -21,6 +22,7 @@ export interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
     listScheduledJobs?: () => ScheduleRecord[];
+    listStorageObjects?: (options: { cursor?: string; limit?: number; prefix?: string }) => StorageListPage;
     mutation?: Impl;
     query?: Impl;
 }
@@ -31,14 +33,18 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const action = makeMethod(impls.action);
     const listScheduledJobs = vi.fn(async () => impls.listScheduledJobs?.() ?? []);
     const cancelScheduledJob = vi.fn(async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true });
+    const listStorageObjects = vi.fn(
+        async (options: { cursor?: string; limit?: number; prefix?: string } = {}) => impls.listStorageObjects?.(options) ?? { objects: [] },
+    );
 
     const asClient = {
         action,
         cancelScheduledJob,
         listScheduledJobs,
+        listStorageObjects,
         mutation,
         query,
     } as unknown as CirrusClient;
 
-    return { action, asClient, cancelScheduledJob, listScheduledJobs, mutation, query };
+    return { action, asClient, cancelScheduledJob, listScheduledJobs, listStorageObjects, mutation, query };
 };

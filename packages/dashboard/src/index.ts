@@ -17,6 +17,8 @@ export type { DataBrowserProps } from "./data-browser.js";
 export { DataBrowser } from "./data-browser.js";
 export type { ExportImportPanelProps } from "./export-import.js";
 export { ExportImportPanel } from "./export-import.js";
+export type { FileBrowserProps, StorageObject } from "./file-browser.js";
+export { FileBrowser } from "./file-browser.js";
 export type { FunctionRunnerProps } from "./function-runner.js";
 export { FunctionRunner } from "./function-runner.js";
 export type { MigrationsPanelProps } from "./migrations.js";

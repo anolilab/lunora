@@ -115,6 +115,22 @@ export type GlobalImportFn = (request: { rows: ReadonlyArray<{ doc: Record<strin
     inserted: Record<string, number>;
 }>;
 
+/** One R2 object as the storage browser surfaces it. Mirrors `@cirrus/storage`'s `R2ObjectLike`. */
+export interface StorageObject {
+    customMetadata?: Record<string, string>;
+    etag: string;
+    httpMetadata?: { contentType?: string };
+    key: string;
+    size: number;
+}
+
+/**
+ * Lists objects in the storage bucket for the admin file browser. Structurally
+ * compatible with `@cirrus/storage`'s `Storage["list"]` — the runtime stays free
+ * of a hard dependency on the storage package.
+ */
+export type StorageListFn = (prefix?: string, opts?: { cursor?: string; limit?: number }) => Promise<{ cursor?: string; objects: StorageObject[] }>;
+
 export interface WorkerOptions {
     /**
      * Admin bearer token expected by the export/import endpoints. When unset,
@@ -205,6 +221,14 @@ export interface WorkerOptions {
     schedulerInstanceName?: string;
     /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
     shardDO: ShardNamespaceLike;
+    /**
+     * Storage lister backing the admin-gated `GET /_cirrus/admin/storage`
+     * endpoint the dashboard's file browser calls. The structural shape matches
+     * `@cirrus/storage`'s `Storage["list"]`, so passing `createStorage(...).list`
+     * (or the raw R2 bucket's `list`) satisfies it. Omit it and the endpoint
+     * responds `STORAGE_NOT_CONFIGURED`.
+     */
+    storageList?: StorageListFn;
 }
 
 export interface RpcContext {
@@ -221,6 +245,7 @@ const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
+const STORAGE_PATH = "/_cirrus/admin/storage";
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -386,6 +411,10 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
         if (url.pathname === SCHEDULED_PATH) {
             return handleScheduledList(request);
+        }
+
+        if (url.pathname === STORAGE_PATH) {
+            return handleStorageList(request);
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the
@@ -597,6 +626,33 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                 method: "POST",
             }),
         );
+    };
+
+    const handleStorageList = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Storage endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin storage endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        if (!options.storageList) {
+            throw new CirrusError("storage endpoint requires a `storageList` function on the worker", { code: "STORAGE_NOT_CONFIGURED", status: 400 });
+        }
+
+        const url = new URL(request.url);
+        const prefix = url.searchParams.get("prefix") ?? undefined;
+        const cursor = url.searchParams.get("cursor") ?? undefined;
+        const limitParam = url.searchParams.get("limit");
+        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
+
+        const result = await options.storageList(prefix, {
+            cursor,
+            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+        });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     const dispatchHttpRoute = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<null | Response> => {

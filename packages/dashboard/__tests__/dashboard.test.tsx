@@ -35,6 +35,7 @@ describe("dashboard", () => {
         expect(screen.getByTestId("dash-tab-schema")).toBeDefined();
         expect(screen.getByTestId("dash-tab-migrations")).toBeDefined();
         expect(screen.getByTestId("dash-tab-export")).toBeDefined();
+        expect(screen.getByTestId("dash-tab-files")).toBeDefined();
         expect(screen.getByTestId("dash-tab-schedule")).toBeDefined();
         expect(screen.queryByTestId("dash-tab-functions")).toBeNull();
     });

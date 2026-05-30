@@ -171,3 +171,22 @@ export interface ScheduleRecord {
     scheduledFor: number;
     shardKey?: string;
 }
+
+/**
+ * One object in the storage bucket, as returned by the worker's
+ * `GET /_cirrus/admin/storage` endpoint. Mirrors `@cirrus/storage`'s
+ * `R2ObjectLike` structurally.
+ */
+export interface StorageObject {
+    customMetadata?: Record<string, string>;
+    etag: string;
+    httpMetadata?: { contentType?: string };
+    key: string;
+    size: number;
+}
+
+/** One page of {@link StorageObject}s plus the cursor to fetch the next, if any. */
+export interface StorageListPage {
+    cursor?: string;
+    objects: StorageObject[];
+}
