@@ -141,8 +141,8 @@ Cirrus has fewer batteries-included features than Convex today. The trade you ma
 
 All packages are published under the [`@cirrus`](https://www.npmjs.com/org/cirrus) npm scope and live under `packages/`.
 
-| Package                                             | What it does                                                                       |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Package                                      | What it does                                                                       |
+| -------------------------------------------- | ---------------------------------------------------------------------------------- |
 | [`@cirrus/server`](./packages/server/)       | `defineSchema`, `query`, `mutation`, `action` — the Convex-style function API.     |
 | [`@cirrus/runtime`](./packages/runtime/)     | Worker entry layer. Parses the RPC envelope, resolves shards, mounts HTTP routes.  |
 | [`@cirrus/do`](./packages/do/)               | `ShardDO` + `SessionDO` base classes (SQLite + WebSocket Hibernation API).         |

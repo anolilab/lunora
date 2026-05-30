@@ -1316,9 +1316,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             const definition = schema.tables[tableName]!;
-            const needsPrevious
-                = hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
-            const previous = needsPrevious ? await writer.get(id) ?? undefined : undefined;
+            const needsPrevious =
+                hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
+            const previous = needsPrevious ? ((await writer.get(id)) ?? undefined) : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 

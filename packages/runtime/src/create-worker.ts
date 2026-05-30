@@ -658,8 +658,8 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                         // `resolveTableSharding`'s keys if the caller passed
                         // none — best effort; a project without the resolver
                         // will simply not fan out automatically.
-                        const probeTables
-                            = exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
+                        const probeTables =
+                            exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
 
                         const result = await coordinator.orchestrateExport(options.shardDO, {
                             args: { tables: exportTables },

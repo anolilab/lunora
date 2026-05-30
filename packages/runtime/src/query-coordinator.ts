@@ -61,14 +61,14 @@ export const createStaticShardRegistry = (table_to_keys: Readonly<Record<string,
  * requires shipping `(sum, count)` per shard, not the post-shard mean.
  * Use two separate fan-outs (`sum` + `count`) and divide in the caller.
  */
-export type MergeStrategy
-    = | { kind: "concat" }
-        | { by: string; direction?: "asc" | "desc"; k: number; kind: "topK" }
-        | { kind: "first" }
-        | { kind: "max" }
-        | { kind: "min" }
-        | { kind: "sum" }
-        | { kind: "groupBy"; op?: "max" | "min" | "sum" };
+export type MergeStrategy =
+    | { kind: "concat" }
+    | { by: string; direction?: "asc" | "desc"; k: number; kind: "topK" }
+    | { kind: "first" }
+    | { kind: "max" }
+    | { kind: "min" }
+    | { kind: "sum" }
+    | { kind: "groupBy"; op?: "max" | "min" | "sum" };
 
 /**
  * Convenience: build the right wire-serializable {@link MergeStrategy} for a
@@ -843,7 +843,7 @@ const mergeShardResults = (values: readonly unknown[], strategy: MergeStrategy):
 
             const direction = strategy.direction ?? "desc";
 
-            collected.sort((a, b) => direction === "asc" ? a.score - b.score : b.score - a.score);
+            collected.sort((a, b) => (direction === "asc" ? a.score - b.score : b.score - a.score));
 
             return collected.slice(0, strategy.k).map((entry) => entry.row);
         }

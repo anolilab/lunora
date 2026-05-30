@@ -92,7 +92,7 @@ describe("runDataMigration — up", () => {
         const flagHighScores: DataMigrationLike = {
             id: "flag-high",
             table: "users",
-            up: (document) => Number(document["score"]) >= 30 ? { ...document, flagged: true } : undefined,
+            up: (document) => (Number(document["score"]) >= 30 ? { ...document, flagged: true } : undefined),
         };
 
         const result = await runDataMigration({ migration: flagHighScores, sql: harness.sql, writer });

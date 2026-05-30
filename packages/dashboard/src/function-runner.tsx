@@ -102,7 +102,7 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
     // The selection defaults to the first function until the user picks one.
     // Derived (not synced via an effect) so there's no extra render and the
     // value is always consistent with the current list.
-    const effectivePath = selectedPath === "" ? functions[0]?.path ?? "" : selectedPath;
+    const effectivePath = selectedPath === "" ? (functions[0]?.path ?? "") : selectedPath;
 
     const selected = useMemo(() => functions.find((descriptor) => descriptor.path === effectivePath), [functions, effectivePath]);
 

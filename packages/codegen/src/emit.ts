@@ -684,8 +684,8 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>, migrations: Rea
     // `callRegistered` (and thus `context`) is only referenced when at least one
     // function exists; otherwise it would be an unused local / parameter.
     const callerParameter = functions.length > 0 ? "context" : "_context";
-    const callRegisteredHelper
-        = functions.length > 0
+    const callRegisteredHelper =
+        functions.length > 0
             ? `const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
@@ -880,12 +880,12 @@ export const emitShard = (schema: SchemaIR): string => {
     const hasTables = schema.tables.length > 0;
 
     const doTypeImports = [
-        ...hasTables ? ["AggregateOptions", "GroupByOptions"] : [],
+        ...(hasTables ? ["AggregateOptions", "GroupByOptions"] : []),
         "DatabaseWriterLike",
         "DataMigrationLike",
         "MigrationRunResult",
         "QueryArgs",
-        ...hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : [],
+        ...(hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : []),
         "RunShardMigrationArgs",
         "RunShardWriteArgs",
         "RunShardWriteResult",
@@ -894,7 +894,7 @@ export const emitShard = (schema: SchemaIR): string => {
         "ShardDOState",
         "SqlExec",
         "WhereInput",
-        ...hasVectors ? ["WriteHook"] : [],
+        ...(hasVectors ? ["WriteHook"] : []),
     ];
 
     const importLines = [

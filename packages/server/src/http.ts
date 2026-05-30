@@ -45,10 +45,10 @@ export type CirrusRouteHandler = (c: Context<CirrusHttpEnv>) => Promise<Response
  * runtime-injected {@link HttpActionCtx} lifted into `c.var.cirrus` by
  * {@link httpRouter}; `request` is the underlying `c.req.raw`.
  */
-export const httpAction
-    = (handler: HttpActionHandler): CirrusRouteHandler =>
-        async (c) =>
-            handler(c.get("cirrus"), c.req.raw);
+export const httpAction =
+    (handler: HttpActionHandler): CirrusRouteHandler =>
+    async (c) =>
+        handler(c.get("cirrus"), c.req.raw);
 
 /**
  * Create the hono app for HTTP actions. Pre-wired with a middleware that lifts
@@ -153,7 +153,7 @@ interface ValidatorWithMeta extends Validator {
 
 /** Peel a single `v.optional()` layer so coercion keys off the underlying kind. */
 const unwrapOptional = (validator: Validator): Validator =>
-    validator.kind === "optional" ? (validator as ValidatorWithMeta)._meta?.inner ?? validator : validator;
+    validator.kind === "optional" ? ((validator as ValidatorWithMeta)._meta?.inner ?? validator) : validator;
 
 /**
  * Query-string values arrive as strings, but `@cirrus/values` validators are
@@ -350,22 +350,22 @@ const errorResponse = (error: unknown): Response => {
  * decode failures (bad query / body / params) surface as 400; a result that
  * violates `.output()` surfaces as 500 (see {@link applyOutput}).
  */
-const buildRouteHandler
-    = (state: RouteState, userHandler: LooseHandler): CirrusRouteHandler =>
-        async (c) => {
-            try {
-                const ctx = c.get("cirrus");
-                const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
-                const params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
-                const body = Object.keys(state.body).length > 0 ? await parseBody(state.body, c) : {};
-                const result = await userHandler({ body, ctx, params, searchParams });
-                const payload = state.output ? applyOutput(state.output, result) : result;
+const buildRouteHandler =
+    (state: RouteState, userHandler: LooseHandler): CirrusRouteHandler =>
+    async (c) => {
+        try {
+            const ctx = c.get("cirrus");
+            const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
+            const params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
+            const body = Object.keys(state.body).length > 0 ? await parseBody(state.body, c) : {};
+            const result = await userHandler({ body, ctx, params, searchParams });
+            const payload = state.output ? applyOutput(state.output, result) : result;
 
-                return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
-            } catch (error: unknown) {
-                return errorResponse(error);
-            }
-        };
+            return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
+        } catch (error: unknown) {
+            return errorResponse(error);
+        }
+    };
 
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => ({
     body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
@@ -375,10 +375,10 @@ const makeRouteBuilder = (state: RouteState): Record<string, unknown> => ({
     searchParams: (validators: ArgsValidator) => makeRouteBuilder({ ...state, searchParams: { ...state.searchParams, ...validators } }),
 });
 
-const makeRouteFactory
-    = (method: HttpMethod): HttpRouteFactory =>
-        (path: string) =>
-            makeRouteBuilder({ body: {}, method, params: {}, path, searchParams: {} }) as unknown as HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
+const makeRouteFactory =
+    (method: HttpMethod): HttpRouteFactory =>
+    (path: string) =>
+        makeRouteBuilder({ body: {}, method, params: {}, path, searchParams: {} }) as unknown as HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
 
 /**
  * Typed REST route builder. Compiles down to a {@link CirrusRouteHandler}, so a

@@ -8,7 +8,7 @@ import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
     cleanup: {
-        purgeStaleDrafts: FunctionReference<"mutation", {}, { deleted: number; }>;
+        purgeStaleDrafts: FunctionReference<"mutation", {}, { deleted: number }>;
     };
     drafts: {
         listMine: FunctionReference<"query", {}, unknown>;
@@ -18,8 +18,8 @@ export interface ApiTypes {
         get: FunctionReference<"query", { id: Id<"posts"> }, unknown>;
         list: FunctionReference<"query", {}, unknown>;
         publish: FunctionReference<"mutation", { title: string; body: string; imageKey?: string }, Id<"posts">>;
-        requestImageUpload: FunctionReference<"mutation", { contentType: string }, { key: string; url: string; }>;
-        search: FunctionReference<"query", { text: string; topK?: number }, { id: Id<"posts">; score: number; title: string; }[]>;
+        requestImageUpload: FunctionReference<"mutation", { contentType: string }, { key: string; url: string }>;
+        search: FunctionReference<"query", { text: string; topK?: number }, { id: Id<"posts">; score: number; title: string }[]>;
     };
 }
 

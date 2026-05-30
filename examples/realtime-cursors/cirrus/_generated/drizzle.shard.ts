@@ -3,16 +3,20 @@
 
 import { integer, real, sqliteTable, text, uniqueIndex } from "@cirrus/server/drizzle";
 
-export const cursors = sqliteTable("cursors", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    roomId: text("roomId").notNull(),
-    sessionId: text("sessionId").notNull(),
-    name: text("name").notNull(),
-    color: text("color").notNull(),
-    x: real("x").notNull(),
-    y: real("y").notNull(),
-    lastSeen: real("lastSeen").notNull(),
-}, (t) => ({
-    by_room_session: uniqueIndex("by_room_session").on(t.roomId, t.sessionId),
-}));
+export const cursors = sqliteTable(
+    "cursors",
+    {
+        _id: text("_id").primaryKey(),
+        _creationTime: integer("_creationTime").notNull(),
+        roomId: text("roomId").notNull(),
+        sessionId: text("sessionId").notNull(),
+        name: text("name").notNull(),
+        color: text("color").notNull(),
+        x: real("x").notNull(),
+        y: real("y").notNull(),
+        lastSeen: real("lastSeen").notNull(),
+    },
+    (t) => ({
+        by_room_session: uniqueIndex("by_room_session").on(t.roomId, t.sessionId),
+    }),
+);

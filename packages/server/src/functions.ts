@@ -82,7 +82,7 @@ const wrap = <A extends ArgsValidator, R, Kind extends "action" | "mutation" | "
     kind,
     // Only attach the key when internal so public registrations keep emitting
     // the bare `{ args, handler, kind }` shape (absence === public).
-    ...visibility ? { visibility } : {},
+    ...(visibility ? { visibility } : {}),
 });
 
 /** Register a query function reachable from clients via the generated `api`. */

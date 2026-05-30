@@ -31,8 +31,8 @@ export const Login = (): ReactElement => {
 
                 void (async () => {
                     try {
-                        const result
-                            = mode === "signin"
+                        const result =
+                            mode === "signin"
                                 ? await authClient.signIn.email({ email, password })
                                 : await authClient.signUp.email({ email, name: name || email, password });
 
@@ -49,8 +49,7 @@ export const Login = (): ReactElement => {
             style={{ display: "grid", gap: 12, margin: "4rem auto", maxWidth: 320 }}
         >
             <h1>{mode === "signin" ? "Sign in" : "Sign up"}</h1>
-            {mode === "signup"
-                ? (
+            {mode === "signup" ? (
                 <label>
                     Name
                     <input
@@ -60,8 +59,7 @@ export const Login = (): ReactElement => {
                         value={name}
                     />
                 </label>
-                )
-                : null}
+            ) : null}
             <label>
                 Email
                 <input

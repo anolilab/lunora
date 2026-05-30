@@ -29,6 +29,7 @@ the wall clock so timers don't actually wait — but the runtime's own
 alarm-registration and dispatch machinery is the genuine article.
 
 **When to add a workerd-based test:** anything that depends on
+
 - the runtime's real alarm scheduler (re-arming after fire, replace vs
   reschedule semantics);
 - real `state.storage.list({ end })` upper-bound semantics that the

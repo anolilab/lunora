@@ -91,14 +91,14 @@ Stable identity — the underlying context value is just the `CirrusClient` you 
 
 ## API
 
-| Export                     | Description                                                       |
-| -------------------------- | ----------------------------------------------------------------- |
-| `<CirrusProvider />`       | Context provider. Required at the root of any tree that uses hooks. |
-| `useCirrus()`              | Read the active `CirrusClient`.                                   |
-| `useQuery(fn, args)`       | Subscribe to a query. `"skip"` short-circuits.                    |
-| `useMutation(fn)`          | Returns `{ mutate, pending }`.                                    |
-| `useSubscription(fn, args)` | Returns `{ data, error }`. WS only.                              |
-| `useAuth()`                | Returns `{ user, token, setToken }`.                              |
+| Export                      | Description                                                         |
+| --------------------------- | ------------------------------------------------------------------- |
+| `<CirrusProvider />`        | Context provider. Required at the root of any tree that uses hooks. |
+| `useCirrus()`               | Read the active `CirrusClient`.                                     |
+| `useQuery(fn, args)`        | Subscribe to a query. `"skip"` short-circuits.                      |
+| `useMutation(fn)`           | Returns `{ mutate, pending }`.                                      |
+| `useSubscription(fn, args)` | Returns `{ data, error }`. WS only.                                 |
+| `useAuth()`                 | Returns `{ user, token, setToken }`.                                |
 
 Types: `CirrusProviderProps`, `MutationHook`, `UseQueryOptions`, `UseMutationCallOptions`, `UseSubscriptionResult`, `UseAuthResult`, `User`, `CirrusClient`, `FunctionReference`, `ArgsOf`, `ReturnOf`.
 

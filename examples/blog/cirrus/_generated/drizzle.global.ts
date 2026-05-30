@@ -3,12 +3,16 @@
 
 import { integer, sqliteTable, text, uniqueIndex } from "@cirrus/server/drizzle";
 
-export const users = sqliteTable("users", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    email: text("email").notNull(),
-    name: text("name").notNull(),
-    passwordHash: text("passwordHash").notNull(),
-}, (t) => ({
-    by_email: uniqueIndex("by_email").on(t.email),
-}));
+export const users = sqliteTable(
+    "users",
+    {
+        _id: text("_id").primaryKey(),
+        _creationTime: integer("_creationTime").notNull(),
+        email: text("email").notNull(),
+        name: text("name").notNull(),
+        passwordHash: text("passwordHash").notNull(),
+    },
+    (t) => ({
+        by_email: uniqueIndex("by_email").on(t.email),
+    }),
+);
