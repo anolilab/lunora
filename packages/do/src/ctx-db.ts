@@ -28,7 +28,7 @@
  */
 
 import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates.js";
-import { CountRlsUnsupportedError, mergeWhere, selectIndexForCount } from "./aggregates.js";
+import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates.js";
 import { SCAN_DEP } from "./dependency-tracker.js";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
@@ -1580,6 +1580,40 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             onRead(tableName, SCAN_DEP);
 
+            // Indexed path: same shape as count(). When no baseWhere is set
+            // and an aggregateIndex with matching (op, field, by) covers the
+            // request, route to the counter table — one row read regardless
+            // of N. baseWhere falls through to scan so the RLS predicate
+            // participates uniformly.
+            if (definition.aggregateIndexes && !aggOptions.baseWhere) {
+                const planned = selectIndexForAggregate(
+                    definition.aggregateIndexes,
+                    aggOptions.op,
+                    aggOptions.field,
+                    aggOptions.where as Record<string, unknown> | undefined,
+                );
+
+                if (planned) {
+                    ensureBackfilled(tableName, planned.index);
+
+                    const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
+                    const aggTable = aggregateTableName(tableName, planned.index.name);
+                    const indexedRow = runSql<{ value: null | number }>(
+                        sql,
+                        `SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
+                        encoded,
+                    ).toArray();
+
+                    if (indexedRow.length === 0) {
+                        return null;
+                    }
+
+                    const indexedValue = indexedRow[0]?.value;
+
+                    return indexedValue === null || indexedValue === undefined ? null : Number(indexedValue);
+                }
+            }
+
             const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
             const aggregateSql = aggOptions.op.toUpperCase();
@@ -1611,6 +1645,73 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             onRead(tableName, SCAN_DEP);
 
             const agg = groupOptions.agg ?? { op: "count" };
+
+            if (agg.op !== "count" && !agg.field) {
+                throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+            }
+
+            // Indexed path: when no baseWhere is set and an aggregateIndex's
+            // `by` exactly matches `groupOptions.by` (op + field too, when
+            // not `count`), every group answer is already in the companion
+            // table — read every row and decode the key. One SELECT, no
+            // SQL `GROUP BY`. baseWhere falls through to scan so RLS
+            // composes uniformly.
+            if (definition.aggregateIndexes && !groupOptions.baseWhere) {
+                const planned = selectIndexForGroupBy(
+                    definition.aggregateIndexes,
+                    agg.op,
+                    agg.field,
+                    groupOptions.by,
+                    groupOptions.where as Record<string, unknown> | undefined,
+                );
+
+                if (planned) {
+                    ensureBackfilled(tableName, planned.index);
+
+                    const aggTable = aggregateTableName(tableName, planned.index.name);
+                    const partialKeys = Object.keys(planned.partial);
+                    const indexedResult: GroupByEntry[] = [];
+
+                    if (partialKeys.length === (planned.index.by ?? []).length && partialKeys.length > 0) {
+                        // Request fully constrains the by-tuple → single counter row lookup.
+                        const encoded = encodeAggregateKey(planned.index.by ?? [], planned.partial);
+                        const rowsIndexed = runSql<{ value: null | number }>(
+                            sql,
+                            `SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
+                            encoded,
+                        ).toArray();
+
+                        if (rowsIndexed.length > 0) {
+                            const value = rowsIndexed[0]?.value;
+
+                            indexedResult.push({
+                                key: { ...planned.partial },
+                                value: value === null || value === undefined ? null : Number(value),
+                            });
+                        }
+
+                        return indexedResult;
+                    }
+
+                    // Unfiltered (or partially-filtered, future work) → walk
+                    // the whole companion. Each row's __key__ is the
+                    // canonical-JSON encoding written by encodeAggregateKey.
+                    const rowsIndexed = runSql<{ key: string; value: null | number }>(
+                        sql,
+                        `SELECT "__key__" AS key, "__value__" AS value FROM ${quoteIdentifier(aggTable)}`,
+                    ).toArray();
+
+                    for (const row of rowsIndexed) {
+                        const decoded = JSON.parse(row.key) as Record<string, unknown>;
+                        const { value } = row;
+
+                        indexedResult.push({ key: decoded, value: value == null ? null : Number(value) });
+                    }
+
+                    return indexedResult;
+                }
+            }
+
             const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
 
@@ -1619,11 +1720,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (agg.op === "count") {
                 select.push(`COUNT(*) AS value`);
             } else {
-                if (!agg.field) {
-                    throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
-                }
-
-                select.push(`${agg.op.toUpperCase()}(${jsonPath(agg.field)}) AS value`);
+                select.push(`${agg.op.toUpperCase()}(${jsonPath(agg.field!)}) AS value`);
             }
 
             let querySql = `SELECT ${select.join(", ")} FROM ${quoteIdentifier(tableName)}`;

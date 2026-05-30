@@ -52,7 +52,9 @@ import {
     resolveRankPartition,
     resolveWith,
     runTriggers,
+    selectIndexForAggregate,
     selectIndexForCount,
+    selectIndexForGroupBy,
     sortColumnName,
 } from "@cirrus/do";
 
@@ -671,6 +673,38 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
             }
 
+            // Indexed path mirrors @cirrus/do: when no baseWhere is set and
+            // an aggregateIndex with matching (op, field, by) covers the
+            // request, route to the counter companion — one row read regardless
+            // of N. Same scan fallback when baseWhere is present so the RLS
+            // predicate participates uniformly.
+            if (definition.aggregateIndexes && !aggOptions.baseWhere) {
+                const planned = selectIndexForAggregate(
+                    definition.aggregateIndexes,
+                    aggOptions.op,
+                    aggOptions.field,
+                    aggOptions.where as Record<string, unknown> | undefined,
+                );
+
+                if (planned) {
+                    const counterReady = await ensureBackfilled(tableName, planned.index);
+
+                    if (counterReady) {
+                        const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
+                        const aggTable = aggregateTableName(tableName, planned.index.name);
+                        const indexedRows = await exec.all(`SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [encoded]);
+
+                        if (indexedRows.length === 0) {
+                            return null;
+                        }
+
+                        const indexedValue = indexedRows[0]?.["value"];
+
+                        return indexedValue === null || indexedValue === undefined ? null : Number(indexedValue);
+                    }
+                }
+            }
+
             const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
 
@@ -694,6 +728,62 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             const agg = groupOptions.agg ?? { op: "count" };
+
+            if (agg.op !== "count" && !agg.field) {
+                throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+            }
+
+            // Indexed path mirrors @cirrus/do: when no baseWhere is set and an
+            // aggregateIndex's `by` exactly matches `groupOptions.by` (op +
+            // field too, when not `count`), every group answer is already in
+            // the companion table. baseWhere falls through to scan.
+            if (definition.aggregateIndexes && !groupOptions.baseWhere) {
+                const planned = selectIndexForGroupBy(
+                    definition.aggregateIndexes,
+                    agg.op,
+                    agg.field,
+                    groupOptions.by,
+                    groupOptions.where as Record<string, unknown> | undefined,
+                );
+
+                if (planned) {
+                    const counterReady = await ensureBackfilled(tableName, planned.index);
+
+                    if (counterReady) {
+                        const aggTable = aggregateTableName(tableName, planned.index.name);
+                        const partialKeys = Object.keys(planned.partial);
+                        const indexedResult: GroupByEntry[] = [];
+
+                        if (partialKeys.length === (planned.index.by ?? []).length && partialKeys.length > 0) {
+                            const encoded = encodeAggregateKey(planned.index.by ?? [], planned.partial);
+                            const rowsIndexed = await exec.all(`SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [encoded]);
+
+                            if (rowsIndexed.length > 0) {
+                                const value = rowsIndexed[0]?.["value"];
+
+                                indexedResult.push({
+                                    key: { ...planned.partial },
+                                    value: value === null || value === undefined ? null : Number(value),
+                                });
+                            }
+
+                            return indexedResult;
+                        }
+
+                        const rowsIndexed = await exec.all(`SELECT "__key__" AS key, "__value__" AS value FROM ${quoteIdentifier(aggTable)}`, []);
+
+                        for (const row of rowsIndexed) {
+                            const decoded = JSON.parse(row["key"] as string) as Record<string, unknown>;
+                            const { value } = row as { value: unknown };
+
+                            indexedResult.push({ key: decoded, value: value == null ? null : Number(value) });
+                        }
+
+                        return indexedResult;
+                    }
+                }
+            }
+
             const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
 
@@ -702,11 +792,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             if (agg.op === "count") {
                 select.push(`COUNT(*) AS value`);
             } else {
-                if (!agg.field) {
-                    throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
-                }
-
-                select.push(`${agg.op.toUpperCase()}(${columnRef(agg.field)}) AS value`);
+                select.push(`${agg.op.toUpperCase()}(${columnRef(agg.field!)}) AS value`);
             }
 
             let querySql = `SELECT ${select.join(", ")} FROM ${quoteIdentifier(tableName)}`;

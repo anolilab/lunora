@@ -25,7 +25,14 @@ export type {
     GroupByOptions,
     RestrictableQueryOptions,
 } from "./aggregates.js";
-export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForCount } from "./aggregates.js";
+export {
+    CountRlsUnsupportedError,
+    mergeWhere,
+    planAggregateLookup,
+    selectIndexForAggregate,
+    selectIndexForCount,
+    selectIndexForGroupBy,
+} from "./aggregates.js";
 export type {
     BroadcastDelta,
     Clock,
