@@ -1,6 +1,6 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ADMIN_FUNCTIONS, type ShardMetrics } from "../src/admin.js";
 import { MetricsPanel } from "../src/metrics-panel.js";
@@ -27,6 +27,28 @@ const createClient = (metrics: ShardMetrics = METRICS): MockClientHooks =>
         },
     });
 
+/**
+ * A client whose `getMetrics` reports a `requests` count that climbs by `step`
+ * on every call, so consecutive samples yield a non-trivial per-interval delta.
+ */
+const createIncrementingClient = (step = 5): MockClientHooks => {
+    let { requests } = METRICS;
+
+    return createMockClient({
+        query: (reference): unknown => {
+            if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                const snapshot: ShardMetrics = { ...METRICS, requests };
+
+                requests += step;
+
+                return snapshot;
+            }
+
+            throw new Error(`unexpected ${reference}`);
+        },
+    });
+};
+
 const renderPanel = (mock: MockClientHooks) => (
     <CirrusProvider client={mock.asClient}>
         <MetricsPanel />
@@ -34,6 +56,10 @@ const renderPanel = (mock: MockClientHooks) => (
 );
 
 describe("metricsPanel", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     test("renders the health snapshot on mount", async () => {
         expect.assertions(5);
 
@@ -95,5 +121,98 @@ describe("metricsPanel", () => {
         const error = await screen.findByTestId("mt-error");
 
         expect(error.textContent).toBe("ADMIN_FORBIDDEN");
+    });
+
+    test("shows a sparkline placeholder before two samples exist", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient()));
+
+        const placeholder = await screen.findByTestId("mt-sparkline-empty");
+
+        expect(placeholder.tagName).toBe("SPAN");
+        expect(screen.queryByTestId("mt-sparkline")).toBeNull();
+    });
+
+    test("toggling auto-refresh starts polling getMetrics", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const mock = createIncrementingClient();
+
+        render(renderPanel(mock));
+
+        // Let the on-mount fetch resolve.
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(0);
+        });
+
+        const callsAfterMount = mock.query.mock.calls.length;
+
+        fireEvent.click(screen.getByTestId("mt-autorefresh"));
+
+        // Two poll intervals fire two further getMetrics calls.
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(4000);
+        });
+
+        expect(mock.query.mock.calls.length).toBeGreaterThan(callsAfterMount);
+        expect(mock.query).toHaveBeenCalledTimes(callsAfterMount + 2);
+    });
+
+    test("renders a sparkline once at least two samples accumulate", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const mock = createIncrementingClient();
+
+        render(renderPanel(mock));
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(0);
+        });
+
+        fireEvent.click(screen.getByTestId("mt-autorefresh"));
+
+        // Mount sample + two polls → two deltas → sparkline appears.
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(4000);
+        });
+
+        expect(screen.getByTestId("mt-sparkline").dataset.testid).toBe("mt-sparkline");
+        expect(screen.queryByTestId("mt-sparkline-empty")).toBeNull();
+    });
+
+    test("cleanup stops polling after auto-refresh is turned off", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const mock = createIncrementingClient();
+
+        render(renderPanel(mock));
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(0);
+        });
+
+        fireEvent.click(screen.getByTestId("mt-autorefresh"));
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(2000);
+        });
+
+        fireEvent.click(screen.getByTestId("mt-autorefresh"));
+
+        const callsAtPause = mock.query.mock.calls.length;
+
+        // No further polls should fire once the interval is cleared.
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(6000);
+        });
+
+        expect(mock.query).toHaveBeenCalledTimes(callsAtPause);
     });
 });
