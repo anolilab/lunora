@@ -13,6 +13,8 @@ export type {
     TablePage,
 } from "./admin.js";
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS } from "./admin.js";
+export type { DashboardAppProps } from "./app.js";
+export { DashboardApp } from "./app.js";
 export type { DashboardProps, DashboardTab } from "./dashboard.js";
 export { Dashboard } from "./dashboard.js";
 export type { DataBrowserProps } from "./data-browser.js";

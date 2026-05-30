@@ -10,9 +10,10 @@ import { MigrationsPanel } from "./migrations.js";
 import { ScheduledJobs, type ScheduledJobsProps } from "./scheduled-jobs.js";
 import { SchemaViewer } from "./schema-viewer.js";
 import type { FunctionDescriptor } from "./types.js";
+import { UsersPanel } from "./users-panel.js";
 
 /** Identifier for each built-in dashboard tab. */
-export type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "metrics" | "migrations" | "schedule" | "schema";
+export type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "metrics" | "migrations" | "schedule" | "schema" | "users";
 
 export interface DashboardProps {
     /**
@@ -45,6 +46,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
     migrations: "Migrations",
     schedule: "Scheduled",
     schema: "Schema",
+    users: "Users",
 };
 
 /**
@@ -61,7 +63,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
 export function Dashboard({ functions, initialShardKey, scheduledCancel, scheduledLoad }: DashboardProps): ReactElement {
     // Every tab is always shown: the function runner auto-discovers its list
     // from the worker when no `functions` prop is passed, so it's never empty.
-    const tabs: DashboardTab[] = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "metrics"];
+    const tabs: DashboardTab[] = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics"];
 
     const [active, setActive] = useState<DashboardTab>("data");
     const current = tabs.includes(active) ? active : "data";
@@ -94,6 +96,7 @@ export function Dashboard({ functions, initialShardKey, scheduledCancel, schedul
                 {current === "export" && <ExportImportPanel initialShardKey={initialShardKey} />}
                 {current === "files" && <FileBrowser />}
                 {current === "schedule" && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
+                {current === "users" && <UsersPanel />}
                 {current === "metrics" && <MetricsPanel initialShardKey={initialShardKey} />}
             </div>
         </div>
