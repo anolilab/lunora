@@ -62,5 +62,12 @@ export interface RpcRequest {
  * messages are derived on-demand from that map plus the runtime payload.
  */
 export interface SocketAttachment {
+    /**
+     * `true` when the upgrade presented a token matching `CIRRUS_ADMIN_TOKEN`,
+     * gating the reserved `__cirrus_admin__:*` introspection subscriptions to
+     * the same credential as the HTTP admin RPCs. Absent/`false` on ordinary
+     * user-subscription sockets, which may never read admin data over the wire.
+     */
+    admin?: boolean;
     subs: Record<string, SubscriptionQuery>;
 }

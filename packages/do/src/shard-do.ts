@@ -164,6 +164,15 @@ export const ROOT_DO_SIZE_WARN_BYTES = 1_073_741_824;
 export const ROOT_SHARD_NAME = "__root__";
 
 /**
+ * Dependency-set sentinel for admin introspection subscriptions that aren't
+ * bound to a single user table (`getMetrics`, `getLogs`, `listTables`,
+ * `migrationStatus`). It is `"*"` — a name no real SQLite table can take, so it
+ * never collides with a tracked write — and {@link refreshSubscriptions} treats
+ * a memo carrying it as "re-run on every write-flush".
+ */
+const ADMIN_WILDCARD = "*";
+
+/**
  * Base class for shard Durable Objects.
  *
  * Concrete subclasses implement {@link handleRpc} and may emit deltas via
@@ -618,35 +627,14 @@ export abstract class ShardDO {
             return jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "admin introspection is disabled or the bearer token is invalid" } }, 403);
         }
 
-        const sql = this.state.storage.sql as unknown as SqlExec;
-
         try {
-            if (functionPath === ADMIN_FUNCTIONS.listTables) {
-                return jsonResponse({ result: listTables(sql) }, 200);
-            }
+            // Read-only introspection ops share their logic with the WS
+            // subscription bridge (see readAdminOp / executeAdminSubscription),
+            // so a live subscriber and a one-shot POST observe the same shape.
+            const read = this.readAdminOp(functionPath, args);
 
-            if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
-                return jsonResponse({ result: this.collectMetrics() }, 200);
-            }
-
-            if (functionPath === ADMIN_FUNCTIONS.getLogs) {
-                return jsonResponse({ result: { entries: this.logs.entries() } }, 200);
-            }
-
-            if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
-                const page = readTablePage(sql, {
-                    limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-                    offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
-                    table: typeof args["table"] === "string" ? args["table"] : "",
-                });
-
-                return jsonResponse({ result: page }, 200);
-            }
-
-            if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
-                const id = typeof args["id"] === "string" ? args["id"] : undefined;
-
-                return jsonResponse({ result: { migrations: readMigrationStatus(sql, id) } }, 200);
+            if (read) {
+                return jsonResponse({ result: read.result }, 200);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.runMigration) {
@@ -699,6 +687,70 @@ export abstract class ShardDO {
         } catch (error: unknown) {
             return this.errorToResponse(error);
         }
+    }
+
+    /**
+     * Run a single read-only admin introspection op, returning its result plus
+     * the table-dependency set the subscription bridge uses to decide when to
+     * re-run it. Write/migration/export ops are NOT handled here — they stay in
+     * {@link handleAdminRpc} because they mutate state and can't be safely
+     * re-executed on every write-flush. Returns `null` for any non-read op.
+     *
+     * `readTablePage` depends on exactly the table it reads, so a write to an
+     * unrelated table never re-runs it. The counter/log ops (`getMetrics`,
+     * `getLogs`, `listTables`, `migrationStatus`) aren't bound to a single
+     * table; they carry the {@link ADMIN_WILDCARD} sentinel so
+     * {@link refreshSubscriptions} re-runs them on every write-flush. The
+     * per-socket JSON memo in {@link pushSubscriptionData} still suppresses
+     * pushes when the recomputed value is byte-identical.
+     */
+    private readAdminOp(functionPath: string, args: Record<string, unknown>): { result: unknown; tables: Set<string> } | null {
+        const sql = this.state.storage.sql as unknown as SqlExec;
+
+        if (functionPath === ADMIN_FUNCTIONS.listTables) {
+            return { result: listTables(sql), tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
+            return { result: this.collectMetrics(), tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getLogs) {
+            return { result: { entries: this.logs.entries() }, tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
+            const table = typeof args["table"] === "string" ? args["table"] : "";
+            const page = readTablePage(sql, {
+                limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+                offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
+                table,
+            });
+
+            // An empty table name can't bind to a real dependency, so fall back
+            // to the wildcard rather than a set that never intersects a write.
+            return { result: page, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
+            const id = typeof args["id"] === "string" ? args["id"] : undefined;
+
+            return { result: { migrations: readMigrationStatus(sql, id) }, tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        return null;
+    }
+
+    /**
+     * Seed/refresh hook for `__cirrus_admin__:*` subscriptions, mirroring
+     * {@link executeSubscription} for user functions. Returns `null` for any
+     * path that isn't a read-only admin op so the caller can fall through.
+     * Synchronous — admin reads hit raw SQLite directly, no async dispatch.
+     */
+    private executeAdminSubscription(functionPath: string, args: Record<string, unknown>): SubscriptionOutcome | null {
+        const read = this.readAdminOp(functionPath, args);
+
+        return read ? { result: read.result, tables: read.tables } : null;
     }
 
     /**
@@ -790,6 +842,20 @@ export abstract class ShardDO {
         }
 
         if (envelope.type === "subscribe" && envelope.query) {
+            const { functionPath } = envelope.query;
+            const isAdmin = functionPath !== undefined && functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
+
+            // Admin introspection subscriptions read shard internals (raw rows,
+            // metrics, logs), so they are gated by the same `CIRRUS_ADMIN_TOKEN`
+            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
+            // socket that only cleared the user-subscription gate must never be
+            // able to read admin data by naming a reserved functionPath.
+            if (isAdmin && this.readAttachment(ws).admin !== true) {
+                ws.send(JSON.stringify({ type: "error", id: envelope.id, message: "admin subscription requires admin authorization" }));
+
+                return;
+            }
+
             this.subscribe(ws, envelope.id, envelope.query);
             ws.send(JSON.stringify({ type: "ack", id: envelope.id }));
 
@@ -797,10 +863,10 @@ export abstract class ShardDO {
             // value arrives over the same channel as later updates. When the
             // subclass doesn't support re-execution (base default), this is a
             // no-op and the subscriber relies on its initial HTTP query.
-            const { functionPath } = envelope.query;
-
             if (functionPath) {
-                const outcome = await this.executeSubscription(functionPath, envelope.query.args ?? {});
+                const outcome = isAdmin
+                    ? this.executeAdminSubscription(functionPath, envelope.query.args ?? {})
+                    : await this.executeSubscription(functionPath, envelope.query.args ?? {});
 
                 if (outcome) {
                     this.pushSubscriptionData(ws, envelope.id, outcome);
@@ -1047,16 +1113,20 @@ export abstract class ShardDO {
                     continue;
                 }
 
+                const isAdmin = functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
                 const memo = this.subMemos.get(ws)?.get(subId);
 
                 // Skip when we already know this subscription's tables and none
                 // of them changed. A missing memo means "unknown deps" — re-run
-                // to be safe.
-                if (memo && !setsIntersect(memo.tables, changed)) {
+                // to be safe. A memo carrying the admin wildcard always re-runs
+                // (its value isn't bound to any single table).
+                if (memo && !memo.tables.has(ADMIN_WILDCARD) && !setsIntersect(memo.tables, changed)) {
                     continue;
                 }
 
-                const outcome = await this.executeSubscription(functionPath, query.args ?? {});
+                const outcome = isAdmin
+                    ? this.executeAdminSubscription(functionPath, query.args ?? {})
+                    : await this.executeSubscription(functionPath, query.args ?? {});
 
                 if (!outcome) {
                     continue;
@@ -1142,15 +1212,52 @@ export abstract class ShardDO {
         const expectedBearer = env.CIRRUS_WS_BEARER;
 
         if (expectedBearer && expectedBearer.length > 0) {
-            const url = new URL(request.url);
-            const supplied = extractBearerToken(request.headers.get("authorization")) ?? url.searchParams.get("token");
+            const supplied = this.suppliedWsToken(request);
 
-            if (!supplied || !constantTimeEqual(supplied, expectedBearer)) {
+            // The admin token is accepted as an alternate credential so a
+            // dashboard can open its socket even when `CIRRUS_WS_BEARER` gates
+            // ordinary subscribers. The socket is flagged admin separately (see
+            // {@link isAdminSocket}); matching the bearer alone never grants it.
+            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !this.isAdminSocket(request))) {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /**
+     * Token presented on a WS upgrade: the `Authorization: Bearer` header when
+     * present, else the `?token=` query parameter (the only channel a browser
+     * `WebSocket` constructor can use). Returns `undefined` when neither is set.
+     */
+    private suppliedWsToken(request: Request): string | undefined {
+        const fromHeader = extractBearerToken(request.headers.get("authorization"));
+
+        if (fromHeader !== undefined) {
+            return fromHeader;
+        }
+
+        return new URL(request.url).searchParams.get("token") ?? undefined;
+    }
+
+    /**
+     * Whether the upgrade presented a token matching `CIRRUS_ADMIN_TOKEN`,
+     * constant-time compared. Closed (returns `false`) when the admin token is
+     * unset, mirroring {@link isAdminAuthorized} for the HTTP path so admin
+     * streaming is opt-in rather than exposed by default.
+     */
+    private isAdminSocket(request: Request): boolean {
+        const env = (this.env ?? {}) as { CIRRUS_ADMIN_TOKEN?: string };
+        const adminToken = env.CIRRUS_ADMIN_TOKEN;
+
+        if (!adminToken || adminToken.length === 0) {
+            return false;
+        }
+
+        const supplied = this.suppliedWsToken(request);
+
+        return supplied !== undefined && constantTimeEqual(supplied, adminToken);
     }
 
     private handleWebSocketUpgrade(request: Request): Response {
@@ -1163,7 +1270,10 @@ export abstract class ShardDO {
         const server = pair[1];
 
         this.state.acceptWebSocket(server);
-        (server as HibernatableWebSocket).serializeAttachment?.({ subs: {} } satisfies SocketAttachment);
+        // Stamp admin authorization onto the socket at upgrade so later
+        // `__cirrus_admin__:*` subscribe envelopes (which carry no credential of
+        // their own) can be gated without re-checking a token per message.
+        (server as HibernatableWebSocket).serializeAttachment?.({ admin: this.isAdminSocket(request), subs: {} } satisfies SocketAttachment);
 
         return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
     }
