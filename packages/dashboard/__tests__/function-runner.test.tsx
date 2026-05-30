@@ -170,4 +170,111 @@ describe("functionRunner", () => {
 
         expect(discoverError.textContent).toBe("ADMIN_FORBIDDEN");
     });
+
+    test("hides the history list until a run has happened", () => {
+        expect.assertions(1);
+
+        const mock = createMockClient();
+
+        render(renderRunner(mock));
+
+        expect(screen.queryByTestId("fn-history")).toBeNull();
+    });
+
+    test("appends a history entry after a successful run", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({ query: () => ({ rows: [1] }) });
+
+        render(renderRunner(mock));
+
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        const rows = screen.getAllByTestId("fn-history-row");
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.textContent).toContain("messages:list (query)");
+        expect(screen.getByTestId("fn-history-status-0").textContent).toBe("✓");
+    });
+
+    test("marks a failed run with an error indicator in history", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: () => {
+                throw new Error("BOOM");
+            },
+        });
+
+        render(renderRunner(mock));
+
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        const indicator = await screen.findByTestId("fn-history-status-0");
+
+        expect(indicator.textContent).toBe("✗");
+    });
+
+    test("prepends newest runs and caps the history at ten entries", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({ mutation: () => ({ ok: true }), query: () => null });
+
+        render(renderRunner(mock));
+
+        // Eleven runs total: ten queries then one mutation, so the newest entry
+        // is the mutation and the oldest query has been dropped. The run button
+        // disables while a run is in flight, so each run is awaited (via the
+        // growing history) before the next click.
+        for (let index = 0; index < 10; index += 1) {
+            fireEvent.click(screen.getByTestId("run-button"));
+
+            // eslint-disable-next-line no-await-in-loop
+            await waitFor(() => {
+                if (screen.getAllByTestId("fn-history-row").length !== index + 1) {
+                    throw new Error("query run not recorded yet");
+                }
+            });
+        }
+
+        fireEvent.change(screen.getByTestId("function-select"), { target: { value: "messages:send" } });
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByText("messages:send (mutation)");
+
+        const rows = screen.getAllByTestId("fn-history-row");
+
+        expect(rows).toHaveLength(10);
+        expect(rows[0]?.textContent).toContain("messages:send (mutation)");
+    });
+
+    test("loading a history entry restores its path, args and shard key", async () => {
+        expect.assertions(4);
+
+        const mock = createMockClient({ mutation: () => ({ ok: true }), query: () => null });
+
+        render(renderRunner(mock));
+
+        // Record a mutation run with custom args + shard, then switch the form
+        // away so the load has something to restore.
+        fireEvent.change(screen.getByTestId("function-select"), { target: { value: "messages:send" } });
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: '{ "body": "hi" }' } });
+        fireEvent.change(screen.getByTestId("shard-input"), { target: { value: "room-7" } });
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        fireEvent.change(screen.getByTestId("function-select"), { target: { value: "messages:list" } });
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: "{}" } });
+        fireEvent.change(screen.getByTestId("shard-input"), { target: { value: "" } });
+
+        fireEvent.click(screen.getByTestId("fn-history-load-0"));
+
+        expect((screen.getByTestId("function-select") as HTMLSelectElement).value).toBe("messages:send");
+        expect((screen.getByTestId("args-input") as HTMLTextAreaElement).value).toBe('{ "body": "hi" }');
+        expect((screen.getByTestId("shard-input") as HTMLInputElement).value).toBe("room-7");
+        expect(screen.getByTestId("fn-history-status-0").textContent).toBe("✓");
+    });
 });

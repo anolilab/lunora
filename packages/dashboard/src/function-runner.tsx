@@ -2,8 +2,26 @@ import type { FunctionReference } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import { type ChangeEvent, type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
-import { errorMessage } from "./internal.js";
-import type { FunctionDescriptor, RunStatus } from "./types.js";
+import { errorMessage, formatTimestamp } from "./internal.js";
+import type { FunctionDescriptor, FunctionKind, RunStatus } from "./types.js";
+
+/** A single recorded invocation, kept purely in component state. */
+interface RunHistoryEntry {
+    /** The raw JSON args text used for the run. */
+    argsText: string;
+    /** Epoch-ms the run resolved. */
+    at: number;
+    /** Monotonic identifier, unique per mounted runner (stable React key). */
+    id: number;
+    kind: FunctionKind;
+    path: string;
+    /** Free-text shard key (empty for the root shard). */
+    shardKey: string;
+    status: "error" | "success";
+}
+
+/** How many recent runs to retain in the in-memory history. */
+const MAX_HISTORY = 10;
 
 export interface FunctionRunnerProps {
     /**
@@ -51,6 +69,7 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
     const [status, setStatus] = useState<RunStatus>("idle");
     const [result, setResult] = useState<unknown>(undefined);
     const [error, setError] = useState<null | string>(null);
+    const [runs, setRuns] = useState<RunHistoryEntry[]>([]);
 
     useEffect(() => {
         // The host supplied the list — nothing to discover, no cleanup needed.
@@ -107,6 +126,23 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
         const reference: FunctionReference = { __cirrusRef: selected.path };
         const options = shardKey.trim() === "" ? {} : { shardKey: shardKey.trim() };
 
+        // Snapshot the inputs so a re-run from history replays exactly what ran.
+        const record = (runStatus: "error" | "success"): void => {
+            setRuns((previous) => {
+                const entry: RunHistoryEntry = {
+                    argsText,
+                    at: Date.now(),
+                    id: (previous[0]?.id ?? 0) + 1,
+                    kind: selected.kind,
+                    path: selected.path,
+                    shardKey,
+                    status: runStatus,
+                };
+
+                return [entry, ...previous].slice(0, MAX_HISTORY);
+            });
+        };
+
         setStatus("running");
         setError(null);
 
@@ -131,12 +167,21 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
 
             setResult(value);
             setStatus("success");
+            record("success");
         } catch (runError) {
             setResult(undefined);
             setError((runError as Error).message);
             setStatus("error");
+            record("error");
         }
     }, [argsText, client, selected, shardKey]);
+
+    // Reload a recorded run's path + inputs into the form so it can be re-run.
+    const loadRun = useCallback((entry: RunHistoryEntry): void => {
+        setSelectedPath(entry.path);
+        setArgsText(entry.argsText);
+        setShardKey(entry.shardKey);
+    }, []);
 
     return (
         <div data-testid="cirrus-function-runner">
@@ -198,6 +243,29 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
             )}
 
             {status === "success" && <pre data-testid="result">{formatResult(result)}</pre>}
+
+            {runs.length > 0 && (
+                <ul data-testid="fn-history">
+                    {runs.map((entry, index) => (
+                        <li data-testid="fn-history-row" key={entry.id}>
+                            <span data-testid={`fn-history-status-${index}`}>{entry.status === "success" ? "✓" : "✗"}</span>{" "}
+                            <span>
+                                {entry.path} ({entry.kind})
+                            </span>{" "}
+                            <time>{formatTimestamp(entry.at)}</time>{" "}
+                            <button
+                                data-testid={`fn-history-load-${index}`}
+                                onClick={() => {
+                                    loadRun(entry);
+                                }}
+                                type="button"
+                            >
+                                Load
+                            </button>
+                        </li>
+                    ))}
+                </ul>
+            )}
         </div>
     );
 }
