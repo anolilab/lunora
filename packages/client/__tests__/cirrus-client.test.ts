@@ -534,3 +534,70 @@ describe("cirrusClient — optimistic updates", () => {
         expect(received).toEqual([0, 9]);
     });
 });
+
+// --- Scheduler admin --------------------------------------------------------
+
+describe("cirrusClient — scheduler admin", () => {
+    test("listScheduledJobs GETs the admin endpoint with the bearer and unwraps records", async () => {
+        const records = [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "j1", scheduledFor: 2000 }];
+        const fetchMock = vi.fn(async () => jsonResponse({ records }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.setAuthToken("tkn");
+
+        const result = await client.listScheduledJobs();
+
+        expect(result).toEqual(records);
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/scheduled");
+        expect(init.method).toBe("GET");
+        expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer tkn");
+    });
+
+    test("listScheduledJobs defaults to an empty array when records are absent", async () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({})) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listScheduledJobs()).resolves.toEqual([]);
+    });
+
+    test("cancelScheduledJob POSTs the id and normalises the result", async () => {
+        const fetchMock = vi.fn(async () => jsonResponse({ cancelled: true }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        const result = await client.cancelScheduledJob("j1");
+
+        expect(result).toEqual({ cancelled: true });
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/scheduled/cancel");
+        expect(init.method).toBe("POST");
+        expect(JSON.parse(init.body as string)).toEqual({ id: "j1" });
+    });
+
+    test("scheduler admin surfaces the worker error envelope as a coded Error", async () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "nope" } }, { status: 403 })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "ADMIN_FORBIDDEN", message: "nope" });
+    });
+});

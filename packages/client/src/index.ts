@@ -23,6 +23,7 @@ export type {
     ReturnOf,
     RpcEnvelope,
     RpcResponseBody,
+    ScheduleRecord,
     ServerMessage,
     Unsubscribe,
     User,

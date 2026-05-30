@@ -12,12 +12,15 @@ import type {
     ReconnectOptions,
     ReturnOf,
     RpcResponseBody,
+    ScheduleRecord,
     ServerMessage,
     Unsubscribe,
 } from "./types.js";
 
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
+const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
+const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
 
@@ -241,6 +244,28 @@ export class CirrusClient {
         return (await this.rpc(fn.__cirrusRef, args as Record<string, unknown>, opts.shardKey)) as ReturnOf<F>;
     }
 
+    // --- Scheduler admin ----------------------------------------------------
+
+    /**
+     * List the functions queued via `runAfter` / `runAt`, soonest-due last
+     * (the worker returns them in storage order). Hits the admin-gated
+     * `/_cirrus/admin/scheduled` endpoint, so the worker must be built with a
+     * `schedulerDO` namespace and `adminToken`, and this client's auth token
+     * must match. Powers `@cirrus/dashboard`'s scheduled-jobs panel.
+     */
+    public async listScheduledJobs(): Promise<ScheduleRecord[]> {
+        const body = (await this.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
+
+        return body.records ?? [];
+    }
+
+    /** Cancel a pending scheduled job by id. Returns whether a job was removed. */
+    public async cancelScheduledJob(id: string): Promise<{ cancelled: boolean }> {
+        const body = (await this.adminFetch(SCHEDULED_CANCEL_PATH, "POST", { id })) as { cancelled?: boolean };
+
+        return { cancelled: body.cancelled === true };
+    }
+
     // --- Subscriptions ------------------------------------------------------
 
     public subscribe<F extends FunctionReference>(
@@ -425,6 +450,52 @@ export class CirrusClient {
         }
 
         return body.result;
+    }
+
+    /**
+     * Authenticated request to a non-RPC admin endpoint (the scheduler list /
+     * cancel routes). Attaches the bearer token, parses JSON, and surfaces the
+     * worker's `{ error: { code, message } }` envelope as a coded `Error` —
+     * mirroring {@link rpc} so callers see the same failure shape.
+     */
+    private async adminFetch(path: string, method: "GET" | "POST", payload?: Record<string, unknown>): Promise<unknown> {
+        if (!this.fetchImpl) {
+            throw new Error("CirrusClient: no `fetch` implementation available");
+        }
+
+        const headers: Record<string, string> = {};
+
+        if (this.authToken) {
+            headers["authorization"] = `Bearer ${this.authToken}`;
+        }
+
+        if (payload !== undefined) {
+            headers["content-type"] = "application/json";
+        }
+
+        const response = await this.fetchImpl(joinUrl(this.url, path), {
+            body: payload === undefined ? undefined : JSON.stringify(payload),
+            headers,
+            method,
+        });
+
+        let body: Record<string, unknown>;
+
+        try {
+            body = (await response.json()) as Record<string, unknown>;
+        } catch {
+            throw new Error(`CirrusClient: response was not JSON (status ${response.status})`);
+        }
+
+        if (body && typeof body === "object" && "error" in body) {
+            const envelope = body.error as { code?: string; message?: string };
+            const error = new Error(envelope.message ?? "admin request failed");
+
+            (error as Error & { code?: string }).code = envelope.code;
+            throw error;
+        }
+
+        return body;
     }
 
     private ensureSocket(shardKey: string | undefined): void {

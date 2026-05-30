@@ -21,13 +21,13 @@ export interface DashboardProps {
     /** Shard key every shard-scoped panel targets on first load. */
     readonly initialShardKey?: string;
     /**
-     * Cancel a scheduled job. Wired through to {@link ScheduledJobs}; the
-     * schedule tab is interactive only when this is supplied.
+     * Override how the schedule tab cancels a job. Defaults to the client's
+     * scheduler admin endpoint; see {@link ScheduledJobs}.
      */
     readonly scheduledCancel?: ScheduledJobsProps["cancelJob"];
     /**
-     * Load pending scheduled jobs. The schedule tab only appears when this is
-     * supplied, since the scheduler isn't reachable over the admin-RPC path.
+     * Override how the schedule tab loads jobs. Defaults to the client's
+     * scheduler admin endpoint, so the tab works without extra wiring.
      */
     readonly scheduledLoad?: ScheduledJobsProps["loadJobs"];
 }
@@ -60,14 +60,10 @@ export function Dashboard({ functions, initialShardKey, scheduledCancel, schedul
             available.push("functions");
         }
 
-        available.push("migrations", "export");
-
-        if (scheduledLoad !== undefined) {
-            available.push("schedule");
-        }
+        available.push("migrations", "export", "schedule");
 
         return available;
-    }, [functions, scheduledLoad]);
+    }, [functions]);
 
     const [active, setActive] = useState<DashboardTab>(() => tabs[0] ?? "data");
 
@@ -100,7 +96,7 @@ export function Dashboard({ functions, initialShardKey, scheduledCancel, schedul
                 {current === "functions" && functions !== undefined && <FunctionRunner functions={functions} />}
                 {current === "migrations" && <MigrationsPanel initialShardKey={initialShardKey} />}
                 {current === "export" && <ExportImportPanel initialShardKey={initialShardKey} />}
-                {current === "schedule" && scheduledLoad !== undefined && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
+                {current === "schedule" && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
             </div>
         </div>
     );

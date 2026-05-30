@@ -157,3 +157,17 @@ export interface User {
     readonly id: string;
     readonly [key: string]: unknown;
 }
+
+/**
+ * One pending scheduled function, as returned by the worker's
+ * `GET /_cirrus/admin/scheduled` endpoint. Mirrors `@cirrus/scheduler`'s
+ * `ScheduleRecord` structurally so the client carries no dependency on it.
+ */
+export interface ScheduleRecord {
+    args: Record<string, unknown>;
+    enqueuedAt: number;
+    functionPath: string;
+    id: string;
+    scheduledFor: number;
+    shardKey?: string;
+}

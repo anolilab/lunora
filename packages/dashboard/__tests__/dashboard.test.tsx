@@ -28,15 +28,15 @@ const renderDashboard = (mock: MockClientHooks, props = {}) => (
 );
 
 describe("dashboard", () => {
-    test("shows data + schema tabs by default and hides function/schedule tabs", () => {
+    test("shows the admin tabs (incl. schedule) by default and hides the function tab", () => {
         render(renderDashboard(createClient()));
 
         expect(screen.getByTestId("dash-tab-data")).toBeDefined();
         expect(screen.getByTestId("dash-tab-schema")).toBeDefined();
         expect(screen.getByTestId("dash-tab-migrations")).toBeDefined();
         expect(screen.getByTestId("dash-tab-export")).toBeDefined();
+        expect(screen.getByTestId("dash-tab-schedule")).toBeDefined();
         expect(screen.queryByTestId("dash-tab-functions")).toBeNull();
-        expect(screen.queryByTestId("dash-tab-schedule")).toBeNull();
     });
 
     test("reveals the function tab when functions are supplied", () => {
@@ -45,10 +45,14 @@ describe("dashboard", () => {
         expect(screen.getByTestId("dash-tab-functions")).toBeDefined();
     });
 
-    test("reveals the schedule tab when a loader is supplied", () => {
-        render(renderDashboard(createClient(), { scheduledLoad: async () => [] }));
+    test("renders the schedule panel via the client when its tab is selected", async () => {
+        render(renderDashboard(createClient()));
 
-        expect(screen.getByTestId("dash-tab-schedule")).toBeDefined();
+        fireEvent.click(screen.getByTestId("dash-tab-schedule"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("cirrus-scheduled-jobs")).toBeDefined();
+        });
     });
 
     test("switches the active panel when a tab is clicked", async () => {

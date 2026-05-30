@@ -19,8 +19,7 @@ panels yourself, or mount the ready-made `<Dashboard>` shell.
 - `MigrationsPanel` — inspect data-migration run-state and kick off a migration
   by id (direction, dry-run).
 - `ExportImportPanel` — snapshot a shard to NDJSON and restore NDJSON back.
-- `ScheduledJobs` — view (and optionally cancel) functions queued via
-  `runAfter` / `runAt`.
+- `ScheduledJobs` — view and cancel functions queued via `runAfter` / `runAt`.
 
 ## Admin gate
 
@@ -60,28 +59,28 @@ import { DataBrowser, FunctionRunner } from "@cirrus/dashboard";
 ### Scheduled jobs
 
 The scheduler is a distinct Durable Object from the shards, so it isn't reachable
-over the admin-RPC path. Wire `ScheduledJobs` (or `Dashboard`'s `scheduledLoad` /
-`scheduledCancel`) to your admin-gated `SchedulerDO` endpoints — `GET /list`
-returns `{ records: ScheduleRecord[] }`, `POST /cancel` takes `{ id }`:
+over the per-shard admin-RPC path. Instead, the worker exposes admin-gated
+`/_cirrus/admin/scheduled` endpoints, and the client's `listScheduledJobs()` /
+`cancelScheduledJob(id)` methods call them — so `ScheduledJobs` (and the
+`Dashboard` schedule tab) work out of the box under `<CirrusProvider>` with no
+extra wiring.
+
+Two things must be configured server-side for the endpoints to answer:
+
+```ts
+// worker entry
+createWorker({
+    shardDO: env.SHARD,
+    schedulerDO: env.SCHEDULER, // same namespace you pass to createScheduler
+    adminToken: env.CIRRUS_ADMIN_TOKEN, // gates every admin endpoint
+});
+```
+
+To source jobs from somewhere else (or render a read-only list), override the
+loader/canceller:
 
 ```tsx
-import { Dashboard } from "@cirrus/dashboard";
-
-<Dashboard
-    functions={functions}
-    scheduledLoad={async () => {
-        const response = await fetch("/admin/scheduler/list", { headers: { authorization: `Bearer ${token}` } });
-
-        return (await response.json()).records;
-    }}
-    scheduledCancel={async (id) => {
-        const response = await fetch("/admin/scheduler/cancel", {
-            body: JSON.stringify({ id }),
-            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-            method: "POST",
-        });
-
-        return response.json();
-    }}
-/>;
+<ScheduledJobs
+    loadJobs={async () => myRecords} // omit cancelJob for a read-only view
+/>
 ```

@@ -1,36 +1,27 @@
-import { type ReactElement, useCallback, useEffect, useState } from "react";
+import type { ScheduleRecord } from "@cirrus/client";
+import { useCirrus } from "@cirrus/react";
+import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
 import { errorMessage } from "./internal.js";
 
-/**
- * One pending scheduled function, mirroring `@cirrus/scheduler`'s
- * `ScheduleRecord`. Duplicated structurally so the dashboard never imports the
- * scheduler runtime into the browser bundle.
- */
-export interface ScheduleRecord {
-    args: Record<string, unknown>;
-    enqueuedAt: number;
-    functionPath: string;
-    id: string;
-    scheduledFor: number;
-    shardKey?: string;
-}
+export type { ScheduleRecord } from "@cirrus/client";
 
 export interface ScheduledJobsProps {
     /**
-     * Cancel a pending job by id. When omitted, the cancel control is hidden —
-     * useful for a read-only view. Wire this to the `SchedulerDO`'s
-     * `POST /cancel` endpoint behind your admin gate.
+     * Cancel a pending job by id. Defaults to `client.cancelScheduledJob` when
+     * {@link ScheduledJobsProps.loadJobs} is also left to the client. When a
+     * custom `loadJobs` is supplied without a `cancelJob`, the cancel control is
+     * hidden — useful for a read-only view.
      */
     readonly cancelJob?: (id: string) => Promise<{ cancelled: boolean }>;
     /**
-     * Load the pending scheduled jobs. Wire this to the `SchedulerDO`'s
-     * `GET /list` endpoint (which returns `{ records: ScheduleRecord[] }`)
-     * behind your admin gate. The scheduler is a distinct Durable Object from
-     * the shards, so unlike the other panels it isn't reachable over the
-     * `useCirrus` admin-RPC path — the host supplies the transport.
+     * Load the pending scheduled jobs. Defaults to `client.listScheduledJobs`,
+     * which hits the worker's admin-gated `/_cirrus/admin/scheduled` endpoint —
+     * so the panel works out of the box under `<CirrusProvider>`, provided the
+     * worker is built with a `schedulerDO` namespace and `adminToken`. Override
+     * it to source jobs from elsewhere.
      */
-    readonly loadJobs: () => Promise<ScheduleRecord[]>;
+    readonly loadJobs?: () => Promise<ScheduleRecord[]>;
 }
 
 const formatTimestamp = (value: number): string => {
@@ -38,25 +29,40 @@ const formatTimestamp = (value: number): string => {
 };
 
 /**
- * View — and optionally cancel — the functions queued via `runAfter` / `runAt`
- * on the scheduler. Cron *triggers* are static wrangler config and don't appear
- * here; this lists the dynamic, in-flight schedule only.
+ * View — and cancel — the functions queued via `runAfter` / `runAt` on the
+ * scheduler. Cron *triggers* are static wrangler config and don't appear here;
+ * this lists the dynamic, in-flight schedule only.
  *
- * Transport-agnostic by design: pass {@link ScheduledJobsProps.loadJobs} (and
- * optionally {@link ScheduledJobsProps.cancelJob}) bound to your admin-gated
- * `SchedulerDO` endpoints.
+ * Works out of the box under `<CirrusProvider>` via the client's scheduler
+ * admin methods; pass {@link ScheduledJobsProps.loadJobs} /
+ * {@link ScheduledJobsProps.cancelJob} to override the transport.
  */
-export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps): ReactElement {
+export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}): ReactElement {
+    const client = useCirrus();
+
     const [jobs, setJobs] = useState<ScheduleRecord[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [busy, setBusy] = useState<boolean>(false);
+
+    const load = useMemo(() => loadJobs ?? (() => client.listScheduledJobs()), [client, loadJobs]);
+
+    // Cancelling is available when the host supplies a canceller, or when the
+    // panel is sourcing jobs from the client (then the client can cancel too).
+    // A custom `loadJobs` without a `cancelJob` stays read-only.
+    const cancelImpl = useMemo<((id: string) => Promise<{ cancelled: boolean }>) | undefined>(() => {
+        if (cancelJob !== undefined) {
+            return cancelJob;
+        }
+
+        return loadJobs === undefined ? (id: string) => client.cancelScheduledJob(id) : undefined;
+    }, [cancelJob, client, loadJobs]);
 
     const refresh = useCallback(async (): Promise<void> => {
         setError(null);
         setBusy(true);
 
         try {
-            const records = await loadJobs();
+            const records = await load();
 
             // Soonest-due first so the next thing to fire is at the top.
             setJobs([...records].sort((a, b) => a.scheduledFor - b.scheduledFor));
@@ -66,7 +72,7 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps): Reac
         } finally {
             setBusy(false);
         }
-    }, [loadJobs]);
+    }, [load]);
 
     useEffect(() => {
         void refresh();
@@ -74,20 +80,20 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps): Reac
 
     const cancel = useCallback(
         async (id: string): Promise<void> => {
-            if (cancelJob === undefined) {
+            if (cancelImpl === undefined) {
                 return;
             }
 
             setError(null);
 
             try {
-                await cancelJob(id);
+                await cancelImpl(id);
                 await refresh();
             } catch (error_) {
                 setError(errorMessage(error_));
             }
         },
-        [cancelJob, refresh],
+        [cancelImpl, refresh],
     );
 
     return (
@@ -119,7 +125,7 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps): Reac
                             <th>scheduled for</th>
                             <th>shard</th>
                             <th>id</th>
-                            {cancelJob !== undefined && <th />}
+                            {cancelImpl !== undefined && <th />}
                         </tr>
                     </thead>
                     <tbody>
@@ -129,7 +135,7 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps): Reac
                                 <td>{formatTimestamp(job.scheduledFor)}</td>
                                 <td>{job.shardKey ?? ""}</td>
                                 <td>{job.id}</td>
-                                {cancelJob !== undefined && (
+                                {cancelImpl !== undefined && (
                                     <td>
                                         <button
                                             data-testid={`sj-cancel-${job.id}`}

@@ -2,7 +2,7 @@ import { CirrusError, toErrorResponse } from "./errors.js";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
 import { emitRpcEvent } from "./observability.js";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator.js";
-import type { ShardNamespaceLike } from "./resolve-shard.js";
+import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard.js";
 import { resolveShard } from "./resolve-shard.js";
 
 /**
@@ -191,6 +191,18 @@ export interface WorkerOptions {
      * first.
      */
     routes?: Record<string, Route>;
+    /**
+     * Namespace binding for the `SchedulerDO` (typically `env.SCHEDULER`). When
+     * set, the worker exposes the admin-gated `/_cirrus/admin/scheduled`
+     * endpoints used by the dashboard to list and cancel `runAfter` / `runAt`
+     * jobs. Omit it and those endpoints respond `SCHEDULER_NOT_CONFIGURED`.
+     */
+    schedulerDO?: ShardNamespaceLike;
+    /**
+     * Named `SchedulerDO` instance the admin endpoints target. Must match the
+     * `instanceName` passed to `createScheduler` (both default to `default`).
+     */
+    schedulerInstanceName?: string;
     /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
     shardDO: ShardNamespaceLike;
 }
@@ -207,6 +219,8 @@ const WS_PATH = "/_cirrus/ws";
 const MIGRATE_PATH = "/_cirrus/migrate";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
+const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
+const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -364,6 +378,14 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
         if (url.pathname === IMPORT_PATH) {
             return handleImport(request, env);
+        }
+
+        if (url.pathname === SCHEDULED_CANCEL_PATH) {
+            return handleScheduledCancel(request);
+        }
+
+        if (url.pathname === SCHEDULED_PATH) {
+            return handleScheduledList(request);
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the
@@ -527,6 +549,54 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             headers: { "content-type": "application/json" },
             status: 200,
         });
+    };
+
+    /**
+     * Resolve the configured `SchedulerDO` stub, asserting the binding is
+     * present and the caller is an admin. Shared by the list/cancel handlers so
+     * both enforce the same gate before touching the scheduler.
+     */
+    const resolveSchedulerStub = (request: Request): ResolvedShard => {
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin scheduled endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        if (!options.schedulerDO) {
+            throw new CirrusError("scheduled endpoints require a `schedulerDO` namespace on the worker", { code: "SCHEDULER_NOT_CONFIGURED", status: 400 });
+        }
+
+        return resolveShard(options.schedulerDO, options.schedulerInstanceName ?? "default");
+    };
+
+    const handleScheduledList = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Scheduled-list endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const stub = resolveSchedulerStub(request);
+
+        return stub.fetch(new Request("https://scheduler.internal/list", { method: "GET" }));
+    };
+
+    const handleScheduledCancel = async (request: Request): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Scheduled-cancel endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const stub = resolveSchedulerStub(request);
+        const body = (await request.json().catch(() => null)) as { id?: unknown } | null;
+
+        if (typeof body?.id !== "string" || body.id === "") {
+            throw new CirrusError("Scheduled-cancel requires a string `id`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return stub.fetch(
+            new Request("https://scheduler.internal/cancel", {
+                body: JSON.stringify({ id: body.id }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
     };
 
     const dispatchHttpRoute = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<null | Response> => {

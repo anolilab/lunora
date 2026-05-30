@@ -37,6 +37,8 @@ interface Env {
     AUTH_SECRET?: string;
     /** Base URL the auth handler resolves callback URLs against. */
     AUTH_URL?: string;
+    /** Bearer token gating the admin export/import and scheduled-job endpoints. */
+    CIRRUS_ADMIN_TOKEN?: string;
 
     /**
      * When set to the literal string `"true"`, the worker exposes a small
@@ -81,6 +83,9 @@ const buildAuth = (env: Env): CirrusAuth => {
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
+        // When set, enables the admin-gated export/import and scheduled-job
+        // endpoints the @cirrus/dashboard panels call.
+        adminToken: env.CIRRUS_ADMIN_TOKEN,
         d1: env.DB,
         resolveIdentity: async (request) => {
             if (!auth) {
@@ -94,6 +99,8 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // The runtime's route map can stay empty: better-auth routes are
         // dispatched ahead of the worker by the `handleAuthRequest` hook.
         routes: {} as Record<string, Route>,
+        // Exposes /_cirrus/admin/scheduled so the dashboard can list/cancel jobs.
+        schedulerDO: env.SCHEDULER,
         shardDO: env.SHARD,
     });
 
