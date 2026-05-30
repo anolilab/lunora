@@ -255,6 +255,23 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
         setLiveError,
     );
 
+    // Live channel for the table list itself, so a migration that creates a
+    // table (or changes a row count) reflects without a manual "Load tables".
+    // `listTables` is shard-scoped; key it on the loaded shard so it follows the
+    // same shard as the page rather than the shard-input box as it's typed.
+    useLiveAdmin<TableInfo[]>(
+        ADMIN_FUNCTIONS.listTables,
+        {},
+        loaded?.shard ?? "",
+        (result) => {
+            setTablesError(null);
+            setLiveError(null);
+            setTables(result);
+        },
+        live && loaded !== null,
+        setLiveError,
+    );
+
     const selectTable = useCallback(
         (table: string): void => {
             // A fresh table means the previous page-local sort/filter no longer apply.

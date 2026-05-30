@@ -563,4 +563,28 @@ describe("dataBrowser — editable", () => {
 
         expect(mock.subscribe.mock.calls.length).toBe(callsAfterToggle);
     });
+
+    test("Live pushes a refreshed table list (new tables appear without a reload)", async () => {
+        expect.assertions(2);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 2 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.click(screen.getByTestId("db-live"));
+
+        // A live listTables push adds a table the initial load didn't include.
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.listTables, [
+                { name: "messages", rowCount: 3 },
+                { name: "users", rowCount: 1 },
+                { name: "invoices", rowCount: 7 },
+            ]);
+        });
+
+        expect(screen.getByTestId("db-table-invoices")).toBeDefined();
+        expect(screen.getByTestId("db-table-invoices").textContent).toContain("invoices");
+    });
 });

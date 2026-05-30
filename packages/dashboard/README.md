@@ -62,9 +62,23 @@ token at the host — these components issue no credentials of their own.
 The **Metrics**, **Logs**, **Data browser**, and **Migrations** panels each
 expose a **Live** toggle. When on, the panel opens a `__cirrus_admin__:*`
 WebSocket subscription that re-pushes whenever the shard changes — the data
-browser is scoped to the selected table, the others refresh on any write-flush
-(e.g. a long migration's processed/changed counts climb mid-run). With Live off,
-the panels stay one-shot (load + manual **Refresh**).
+browser is scoped to the loaded table (and also re-pushes its table list, so a
+migration that creates a table shows up without a manual reload), the others
+refresh on any write-flush (e.g. a long migration's processed/changed counts
+climb mid-run). With Live off, the panels stay one-shot (load + manual
+**Refresh**).
+
+The other panels (Globals, Users, Scheduled jobs, Files, Schema) remain
+one-shot: they read through HTTP admin endpoints backed by D1, the SessionDO,
+the SchedulerDO and R2 rather than the ShardDO subscription channel, so live
+updates there require dedicated server-side subscription endpoints.
+
+A **connection badge** in the header reflects the client's aggregate live-socket
+health (idle / connecting / connected / offline) via `useConnectionStatus`, so
+"Live: on" with a dropped socket is distinguishable from a genuinely idle panel.
+The shell also wraps each tab in an error boundary (one panel throwing won't
+blank the others) and persists the admin token in `sessionStorage` (cleared via
+the header's **Clear** button) so a reload doesn't force a re-paste.
 
 Live updates ride the **same `CIRRUS_ADMIN_TOKEN`** as the HTTP admin RPCs. A
 browser `WebSocket` can't send an `Authorization` header, so the dashboard sends
