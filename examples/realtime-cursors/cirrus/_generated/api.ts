@@ -13,3 +13,8 @@ export interface ApiTypes {
 }
 
 export const api = anyApi as unknown as ApiTypes;
+
+/** Internal functions — callable only server-side via `ctx.run*`, never from a client. */
+export interface InternalApiTypes {}
+
+export const internal = anyApi as unknown as InternalApiTypes;

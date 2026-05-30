@@ -150,7 +150,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     cleanup: {
-        purgeStaleDrafts: (args?: {}) => Promise<{ deleted: number }>;
+        purgeStaleDrafts: (args?: {}) => Promise<{ deleted: number; }>;
     };
     drafts: {
         listMine: (args?: {}) => Promise<unknown>;
@@ -160,8 +160,8 @@ export interface Caller {
         get: (args: { id: Id<"posts"> }) => Promise<unknown>;
         list: (args?: {}) => Promise<unknown>;
         publish: (args: { title: string; body: string; imageKey?: string }) => Promise<Id<"posts">>;
-        requestImageUpload: (args: { contentType: string }) => Promise<{ key: string; url: string }>;
-        search: (args: { text: string; topK?: number }) => Promise<{ id: Id<"posts">; score: number; title: string }[]>;
+        requestImageUpload: (args: { contentType: string }) => Promise<{ key: string; url: string; }>;
+        search: (args: { text: string; topK?: number }) => Promise<{ id: Id<"posts">; score: number; title: string; }[]>;
     };
 }
 
