@@ -318,6 +318,9 @@ importers:
       '@cirrus/d1':
         specifier: workspace:*
         version: link:../../packages/d1
+      '@cirrus/dashboard':
+        specifier: workspace:*
+        version: link:../../packages/dashboard
       '@cirrus/do':
         specifier: workspace:*
         version: link:../../packages/do
@@ -1121,6 +1124,9 @@ importers:
       '@cirrus/config':
         specifier: workspace:*
         version: link:../config
+      '@cirrus/dashboard':
+        specifier: workspace:*
+        version: link:../dashboard
       '@cloudflare/vite-plugin':
         specifier: catalog:vite
         version: 1.39.0(vite@8.0.14(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.3)(yaml@2.8.3))(workerd@1.20260526.1)(wrangler@4.95.0(@cloudflare/workers-types@4.20260528.1))

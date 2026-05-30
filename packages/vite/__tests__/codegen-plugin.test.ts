@@ -53,6 +53,7 @@ const writeFixture = (root: string): void => {
 
 const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => ({
     cloudflare: false,
+    dashboard: false,
     generatedDir: "cirrus/_generated",
     overlay: false,
     projectRoot,

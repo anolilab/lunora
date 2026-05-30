@@ -6,6 +6,8 @@ export type CloudflarePluginOptions = Record<string, unknown>;
 export interface CirrusPluginOptions {
     /** Pass through to `@cloudflare/vite-plugin`. Pass `false` to opt out. Defaults to `true`. */
     cloudflare?: boolean | CloudflarePluginOptions;
+    /** Serve the Cirrus dashboard at `/__cirrus` during dev. Pass `false` to opt out. Defaults to `true`. */
+    dashboard?: boolean;
     /** Directory name (relative to `projectRoot`) where generated files are written. Defaults to `"cirrus/_generated"`. */
     generatedDir?: string;
     /** Inject `@visulima/vite-overlay` for runtime errors (dev only). Defaults to `true`. */
@@ -21,6 +23,7 @@ export interface CirrusPluginOptions {
 /** Resolved options after merging defaults. */
 export interface ResolvedCirrusPluginOptions {
     cloudflare: false | CloudflarePluginOptions;
+    dashboard: boolean;
     generatedDir: string;
     overlay: boolean;
     projectRoot: string;

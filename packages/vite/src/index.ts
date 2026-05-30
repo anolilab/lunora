@@ -1,11 +1,13 @@
 import type { Plugin } from "vite";
 
 import { codegenPlugin } from "./codegen-plugin.js";
+import { dashboardPlugin } from "./dashboard-plugin.js";
 import { overlayPlugin } from "./overlay-plugin.js";
 import type { CirrusPluginOptions, CloudflarePluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
 import { wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";
 
 export { codegenPlugin } from "./codegen-plugin.js";
+export { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin } from "./dashboard-plugin.js";
 export { overlayPlugin } from "./overlay-plugin.js";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
 export { wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";
@@ -25,6 +27,7 @@ const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirru
 
     return {
         cloudflare,
+        dashboard: opts.dashboard ?? true,
         generatedDir: opts.generatedDir ?? `${schemaDir}/_generated`,
         overlay: opts.overlay ?? true,
         projectRoot: opts.projectRoot ?? process.cwd(),
@@ -46,6 +49,10 @@ export const cirrus = async (options?: CirrusPluginOptions): Promise<ReadonlyArr
     const plugins: Plugin[] = [];
 
     plugins.push(codegenPlugin(resolved));
+
+    if (resolved.dashboard) {
+        plugins.push(dashboardPlugin());
+    }
 
     if (resolved.validateWrangler) {
         plugins.push(wranglerValidatorPlugin(resolved));

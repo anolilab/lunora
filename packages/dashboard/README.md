@@ -2,9 +2,31 @@
 
 Embeddable React components for inspecting and operating a Cirrus backend.
 
-The package is a component library — drop the pieces into your own admin route
-behind a `<CirrusProvider>`; there is no standalone server or app. Compose the
-panels yourself, or mount the ready-made `<Dashboard>` shell.
+The package is a component library — compose the panels yourself behind a
+`<CirrusProvider>`, mount the ready-made `<Dashboard>` shell, or use the
+batteries-included `<DashboardApp>` / `mountDashboard` entry.
+
+## Running the dashboard
+
+Three ways, smallest setup first:
+
+1. **`cirrus dev` (zero config).** The `@cirrus/vite` plugin serves the
+   dashboard at **`/__cirrus`** during dev and prints the URL on startup. Add
+   `@cirrus/dashboard` to your project's deps and it just works; opt out with
+   `cirrus({ dashboard: false })`.
+2. **Standalone app.** `apps/dashboard` (`@cirrus/dashboard-app`) is a deployable
+   Vite SPA that points at any worker via `VITE_CIRRUS_URL` — for hosting the
+   dashboard separately from dev.
+3. **Embed.** Mount `<DashboardApp baseUrl="…" />` (self-contained: builds the
+   client, manages the admin token) or compose individual panels under your own
+   `<CirrusProvider>`.
+
+```ts
+// mount the whole app into a <div id="root">
+import { mountDashboard } from "@cirrus/dashboard/mount";
+
+mountDashboard({ baseUrl: "https://my-app.workers.dev" });
+```
 
 ## Components
 
