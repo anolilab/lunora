@@ -2,10 +2,15 @@
 // Run `cirrus codegen` to regenerate.
 
 import type {
+    AggregateOptions,
+    GroupByOptions,
     DatabaseWriterLike,
     DataMigrationLike,
     MigrationRunResult,
     QueryArgs,
+    RankOptions,
+    RankPageOptions,
+    RestrictableQueryOptions,
     RunShardMigrationArgs,
     SchedulerLike,
     SchemaLike,
@@ -68,6 +73,9 @@ const storageStub = {
 };
 
 const globalDbStub: DatabaseWriterLike = {
+    aggregate: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+    },
     count: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
     },
@@ -86,6 +94,9 @@ const globalDbStub: DatabaseWriterLike = {
     get: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
     },
+    groupBy: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+    },
     insert: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
     },
@@ -93,6 +104,12 @@ const globalDbStub: DatabaseWriterLike = {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
     },
     query: () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+    },
+    rank: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+    },
+    rankPage: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
     },
     replace: async () => {
@@ -119,24 +136,40 @@ const vectorsStub: VectorSearchLike = {
 };
 
 const bindTable = (writer: DatabaseWriterLike, tableName: string) => ({
-    count: (where?: WhereInput) => writer.count(tableName, where),
+    aggregate: (options: AggregateOptions) => writer.aggregate(tableName, options),
+    count: (where?: RestrictableQueryOptions | WhereInput) => writer.count(tableName, where),
     delete: (id: string) => writer.delete(id),
     findFirst: (args?: QueryArgs) => writer.findFirst(tableName, args),
     findFirstOrThrow: (args?: QueryArgs) => writer.findFirstOrThrow(tableName, args),
     findMany: (args?: QueryArgs) => writer.findMany(tableName, args),
     get: (id: string) => writer.get(id),
+    groupBy: (options: GroupByOptions) => writer.groupBy(tableName, options),
     insert: (values: Record<string, unknown>) => writer.insert(tableName, values),
     patch: (id: string, values: Record<string, unknown>) => writer.patch(id, values),
+    rank: (indexName: string, options: RankOptions) => writer.rank(tableName, indexName, options),
+    rankPage: (indexName: string, options?: RankPageOptions) => writer.rankPage(tableName, indexName, options),
     replace: (id: string, values: Record<string, unknown>) => writer.replace(id, values),
 });
 
-const bindOrm = (facade: Record<string, ReturnType<typeof bindTable>>) => ({
-    delete: (table: string, id: string) => facade[table].delete(id),
-    insert: (table: string) => ({ values: (values: Record<string, unknown>) => facade[table].insert(values) }),
-    query: facade,
-    replace: (table: string, id: string) => ({ with: (values: Record<string, unknown>) => facade[table].replace(id, values) }),
-    update: (table: string, id: string) => ({ set: (values: Record<string, unknown>) => facade[table].patch(id, values) }),
-});
+const bindOrm = (facade: Record<string, ReturnType<typeof bindTable>>) => {
+    const resolve = (table: string): ReturnType<typeof bindTable> => {
+        const bound = facade[table];
+
+        if (!bound) {
+            throw new Error(`unknown table: ${table}`);
+        }
+
+        return bound;
+    };
+
+    return {
+        delete: (table: string, id: string) => resolve(table).delete(id),
+        insert: (table: string) => ({ values: (values: Record<string, unknown>) => resolve(table).insert(values) }),
+        query: facade,
+        replace: (table: string, id: string) => ({ with: (values: Record<string, unknown>) => resolve(table).replace(id, values) }),
+        update: (table: string, id: string) => ({ set: (values: Record<string, unknown>) => resolve(table).patch(id, values) }),
+    };
+};
 
 const dispatchRun = (expected: FunctionKind, functionPath: string, args: Record<string, unknown>, ctx: unknown): Promise<unknown> | unknown => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
