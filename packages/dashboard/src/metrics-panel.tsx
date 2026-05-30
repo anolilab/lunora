@@ -91,6 +91,7 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [live, setLive] = useState<boolean>(false);
+    const [liveError, setLiveError] = useState<null | string>(null);
     const [history, setHistory] = useState<readonly number[]>([]);
 
     // Avoid setState after unmount and overlapping in-flight one-shot loads.
@@ -165,6 +166,11 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
             }
         },
         live,
+        (message) => {
+            if (mountedRef.current) {
+                setLiveError(message);
+            }
+        },
     );
 
     const errorRate = metrics === null || metrics.requests === 0 ? "—" : `${((metrics.errors / metrics.requests) * 100).toFixed(1)}%`;
@@ -195,12 +201,18 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                     aria-pressed={live}
                     data-testid="mt-live"
                     onClick={() => {
+                        setLiveError(null);
                         setLive((on) => !on);
                     }}
                     type="button"
                 >
                     {live ? "Live: on" : "Live: off"}
                 </button>
+                {live && liveError !== null && (
+                    <span data-testid="mt-live-error" role="status">
+                        Live unavailable: {liveError}
+                    </span>
+                )}
             </div>
 
             <div data-testid="mt-trend">

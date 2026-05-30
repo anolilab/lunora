@@ -18,6 +18,8 @@ export interface MockClientHooks {
     cancelScheduledJob: ReturnType<typeof vi.fn>;
     /** Push a value to every live subscriber registered for `reference`. */
     emit: (reference: string, value: unknown) => void;
+    /** Push a subscription error to every live subscriber registered for `reference`. */
+    emitError: (reference: string, message: string) => void;
     listAuthSessions: ReturnType<typeof vi.fn>;
     listAuthUsers: ReturnType<typeof vi.fn>;
     listFunctions: ReturnType<typeof vi.fn>;
@@ -70,23 +72,35 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         async (options: { limit?: number; offset?: number; userId?: string } = {}) => impls.listAuthSessions?.(options) ?? { rows: [], total: 0 },
     );
 
-    // Live-subscription registry: `subscribe` records each callback by
-    // functionPath; `emit` fans a value out to those callbacks so panel tests
-    // can simulate a server push without a real socket.
-    const subscribers = new Map<string, Set<(value: unknown) => void>>();
-    const subscribe = vi.fn((fn: FunctionReference, _args: unknown, callback: (value: unknown) => void) => {
-        const set = subscribers.get(fn.__cirrusRef) ?? new Set();
+    // Live-subscription registry: `subscribe` records each value + error
+    // callback by functionPath; `emit` / `emitError` fan out to those callbacks
+    // so panel tests can simulate a server push or rejection without a socket.
+    interface Sub {
+        onError?: (error: { message: string }) => void;
+        onValue: (value: unknown) => void;
+    }
+    const subscribers = new Map<string, Set<Sub>>();
+    const subscribe = vi.fn(
+        (fn: FunctionReference, _args: unknown, callback: (value: unknown) => void, opts?: { onError?: (error: { message: string }) => void }) => {
+            const set = subscribers.get(fn.__cirrusRef) ?? new Set<Sub>();
+            const sub: Sub = { onError: opts?.onError, onValue: callback };
 
-        set.add(callback);
-        subscribers.set(fn.__cirrusRef, set);
+            set.add(sub);
+            subscribers.set(fn.__cirrusRef, set);
 
-        return () => {
-            set.delete(callback);
-        };
-    });
+            return () => {
+                set.delete(sub);
+            };
+        },
+    );
     const emit = (reference: string, value: unknown): void => {
-        for (const callback of subscribers.get(reference) ?? []) {
-            callback(value);
+        for (const sub of subscribers.get(reference) ?? []) {
+            sub.onValue(value);
+        }
+    };
+    const emitError = (reference: string, message: string): void => {
+        for (const sub of subscribers.get(reference) ?? []) {
+            sub.onError?.({ message });
         }
     };
 
@@ -110,6 +124,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         asClient,
         cancelScheduledJob,
         emit,
+        emitError,
         listAuthSessions,
         listAuthUsers,
         listFunctions,

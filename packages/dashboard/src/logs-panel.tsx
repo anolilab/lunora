@@ -92,6 +92,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
     const [search, setSearch] = useState<string>("");
     const [levelFilter, setLevelFilter] = useState<string>("all");
     const [live, setLive] = useState<boolean>(false);
+    const [liveError, setLiveError] = useState<null | string>(null);
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
@@ -124,6 +125,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
             setEntries(result.entries);
         },
         live,
+        setLiveError,
     );
 
     // Distinct levels present in the fetched buffer, in a stable severity order,
@@ -200,12 +202,18 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
                     aria-pressed={live}
                     data-testid="lg-live"
                     onClick={() => {
+                        setLiveError(null);
                         setLive((on) => !on);
                     }}
                     type="button"
                 >
                     {live ? "Live: on" : "Live: off"}
                 </button>
+                {live && liveError !== null && (
+                    <span data-testid="lg-live-error" role="status">
+                        Live unavailable: {liveError}
+                    </span>
+                )}
                 <input
                     aria-label="Search messages"
                     data-testid="lg-search"

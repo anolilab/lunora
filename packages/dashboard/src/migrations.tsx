@@ -30,6 +30,7 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
     const [rows, setRows] = useState<MigrationStatusRow[] | null>(null);
     const [statusError, setStatusError] = useState<null | string>(null);
     const [live, setLive] = useState<boolean>(false);
+    const [liveError, setLiveError] = useState<null | string>(null);
 
     const [migrationId, setMigrationId] = useState<string>("");
     const [direction, setDirection] = useState<MigrationDirection>("up");
@@ -69,6 +70,7 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
             setRows(result.migrations);
         },
         live,
+        setLiveError,
     );
 
     const run = useCallback(async (): Promise<void> => {
@@ -122,12 +124,18 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
                     aria-pressed={live}
                     data-testid="mg-live"
                     onClick={() => {
+                        setLiveError(null);
                         setLive((on) => !on);
                     }}
                     type="button"
                 >
                     {live ? "Live: on" : "Live: off"}
                 </button>
+                {live && liveError !== null && (
+                    <span data-testid="mg-live-error" role="status">
+                        Live unavailable: {liveError}
+                    </span>
+                )}
             </div>
 
             {statusError !== null && (

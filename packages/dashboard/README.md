@@ -57,6 +57,25 @@ reserved `__cirrus_admin__:*` RPCs that `ShardDO` intercepts. Those are
 present a matching `Authorization: Bearer` token. Configure the client's auth
 token at the host — these components issue no credentials of their own.
 
+## Live updates
+
+The **Metrics**, **Logs**, **Data browser**, and **Migrations** panels each
+expose a **Live** toggle. When on, the panel opens a `__cirrus_admin__:*`
+WebSocket subscription that re-pushes whenever the shard changes — the data
+browser is scoped to the selected table, the others refresh on any write-flush
+(e.g. a long migration's processed/changed counts climb mid-run). With Live off,
+the panels stay one-shot (load + manual **Refresh**).
+
+Live updates ride the **same `CIRRUS_ADMIN_TOKEN`** as the HTTP admin RPCs. A
+browser `WebSocket` can't send an `Authorization` header, so the dashboard sends
+the admin token as the client's [`wsToken`](../client/README.md), which the
+server matches on the upgrade to authorize the admin socket. The standalone
+`DashboardApp` wires this for you; if you compose panels under your own
+provider, construct the client with `wsToken: env.CIRRUS_ADMIN_TOKEN`. Because
+the token lands in the WS URL (and thus server logs), prefer a short-lived
+rotating token in production. Without it, the subscription is rejected and the
+panel shows a "Live unavailable" notice while the one-shot view keeps working.
+
 ## Usage
 
 ```tsx

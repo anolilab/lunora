@@ -150,6 +150,25 @@ describe("metricsPanel", () => {
         expect(screen.queryByTestId("mt-sparkline-empty")).toBeNull();
     });
 
+    test("surfaces a rejected admin subscription as a live-unavailable notice", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("mt-stats");
+        fireEvent.click(screen.getByTestId("mt-live"));
+
+        expect(screen.queryByTestId("mt-live-error")).toBeNull();
+
+        act(() => {
+            mock.emitError(ADMIN_FUNCTIONS.getMetrics, "admin subscription requires admin authorization");
+        });
+
+        expect(screen.getByTestId("mt-live-error").textContent).toContain("admin subscription requires admin authorization");
+    });
+
     test("live pushes update the snapshot and stop once Live is turned off", async () => {
         expect.assertions(2);
 

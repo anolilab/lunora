@@ -188,6 +188,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     const [writeError, setWriteError] = useState<null | string>(null);
 
     const [live, setLive] = useState<boolean>(false);
+    const [liveError, setLiveError] = useState<null | string>(null);
 
     const fetchTables = useCallback(
         async (shard: string): Promise<void> => {
@@ -241,6 +242,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
             setPage(result);
         },
         live && selectedTable !== null,
+        setLiveError,
     );
 
     const selectTable = useCallback(
@@ -523,12 +525,18 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                             aria-pressed={live}
                             data-testid="db-live"
                             onClick={() => {
+                                setLiveError(null);
                                 setLive((on) => !on);
                             }}
                             type="button"
                         >
                             {live ? "Live: on" : "Live: off"}
                         </button>
+                        {live && liveError !== null && (
+                            <span data-testid="db-live-error" role="status">
+                                Live unavailable: {liveError}
+                            </span>
+                        )}
                         <input
                             aria-label="Filter rows"
                             data-testid="db-filter"
