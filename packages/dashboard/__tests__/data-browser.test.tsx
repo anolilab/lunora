@@ -189,6 +189,112 @@ describe("dataBrowser", () => {
         expect(JSON.parse(json.textContent ?? "")).toHaveLength(2);
         expect(screen.queryByTestId("db-rows")).toBeNull();
     });
+
+    /** The first cell of every `db-row` in document order. */
+    const rowTexts = (): string[] => screen.getAllByTestId("db-row").map((row) => row.querySelectorAll("td")[1]?.textContent ?? "");
+
+    test("sorts a column ascending then descending on repeated clicks", async () => {
+        expect.assertions(3);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        // Unsorted: rows arrive in page (document) order.
+        expect(rowTexts()).toEqual(["hello", "world", "again"]);
+
+        // First click sorts ascending by the `text` column.
+        fireEvent.click(screen.getByTestId("db-sort-text"));
+
+        expect(rowTexts()).toEqual(["again", "hello", "world"]);
+
+        // Second click flips to descending.
+        fireEvent.click(screen.getByTestId("db-sort-text"));
+
+        expect(rowTexts()).toEqual(["world", "hello", "again"]);
+    });
+
+    test("clears the sort on the third click", async () => {
+        expect.assertions(2);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        fireEvent.click(screen.getByTestId("db-sort-text"));
+
+        expect(rowTexts()).toEqual(["again", "hello", "world"]);
+
+        // asc -> desc -> unsorted restores document order.
+        fireEvent.click(screen.getByTestId("db-sort-text"));
+        fireEvent.click(screen.getByTestId("db-sort-text"));
+
+        expect(rowTexts()).toEqual(["hello", "world", "again"]);
+    });
+
+    test("filters rows case-insensitively across all cells", async () => {
+        expect.assertions(2);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "WOR" } });
+
+        expect(screen.getAllByTestId("db-row")).toHaveLength(1);
+        expect(rowTexts()).toEqual(["world"]);
+    });
+
+    test("composes filter and sort on the loaded page", async () => {
+        expect.assertions(1);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        // Keep rows whose any cell contains "o" (hello, world) then sort ascending.
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "o" } });
+        fireEvent.click(screen.getByTestId("db-sort-text"));
+
+        expect(rowTexts()).toEqual(["hello", "world"]);
+    });
+
+    test("does not refetch the page when sorting or filtering", async () => {
+        expect.assertions(1);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        const pageCallsBefore = mock.query.mock.calls.filter((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage).length;
+
+        fireEvent.click(screen.getByTestId("db-sort-text"));
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "or" } });
+
+        const pageCallsAfter = mock.query.mock.calls.filter((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage).length;
+
+        expect(pageCallsAfter).toBe(pageCallsBefore);
+    });
 });
 
 describe("dataBrowser — editable", () => {
@@ -330,5 +436,46 @@ describe("dataBrowser — editable", () => {
         const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ doc: { text: "edited" }, id: "m1", op: "patch", table: "messages" });
+    });
+
+    test("edits the right row while a filter and sort are active", async () => {
+        expect.assertions(2);
+
+        const mock = createEditableClient();
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <DataBrowser editable pageSize={10} />
+            </CirrusProvider>,
+        );
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        // Sort descending and filter to a single row — `world` is m2 in the fixture.
+        fireEvent.click(screen.getByTestId("db-sort-text"));
+        fireEvent.click(screen.getByTestId("db-sort-text"));
+        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "world" } });
+
+        // The editor prefills from the ORIGINAL row, not a sorted/filtered copy.
+        fireEvent.click(screen.getByTestId("db-edit-m2"));
+
+        const editor = screen.getByTestId("db-editor-doc") as HTMLTextAreaElement;
+
+        expect(JSON.parse(editor.value)).toEqual({ text: "world" });
+
+        fireEvent.change(editor, { target: { value: '{ "text": "patched" }' } });
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        await waitFor(() => {
+            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+                throw new Error("writeRow not called yet");
+            }
+        });
+
+        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+
+        expect(call[1]).toMatchObject({ doc: { text: "patched" }, id: "m2", op: "patch", table: "messages" });
     });
 });

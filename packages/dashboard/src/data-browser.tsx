@@ -1,5 +1,5 @@
 import { useCirrus } from "@cirrus/react";
-import { type ReactElement, useCallback, useEffect, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type TableInfo, type TablePage, type WriteRowResult } from "./admin.js";
 import { adminRef, callOptions } from "./internal.js";
@@ -93,6 +93,38 @@ const formatCell = (value: unknown): string => {
     return String(value);
 };
 
+/** The direction of the active column sort, or `null` when unsorted. */
+type SortDirection = "asc" | "desc";
+
+interface SortState {
+    column: string;
+    direction: SortDirection;
+}
+
+/**
+ * Compare two cell values for sorting. Numbers compare numerically; everything
+ * else compares as case-insensitive `formatCell` text. Null/undefined sort last.
+ */
+const compareCells = (a: unknown, b: unknown): number => {
+    if (typeof a === "number" && typeof b === "number") {
+        return a - b;
+    }
+
+    const textA = formatCell(a).toLowerCase();
+    const textB = formatCell(b).toLowerCase();
+
+    return textA.localeCompare(textB);
+};
+
+/** The header glyph for a column given the active sort: ` ▲`, ` ▼`, or empty. */
+const sortIndicator = (sort: null | SortState, column: string): string => {
+    if (sort?.column !== column) {
+        return "";
+    }
+
+    return sort.direction === "asc" ? " ▲" : " ▼";
+};
+
 /**
  * Read-only data browser for a single shard's SQLite database. Lists the user
  * tables (via the `__cirrus_admin__:listTables` RPC), then pages through the
@@ -115,6 +147,12 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     const [page, setPage] = useState<TablePage | null>(null);
     const [pageError, setPageError] = useState<null | string>(null);
     const [viewMode, setViewMode] = useState<"json" | "table">("table");
+
+    // Page-local sort + filter. These operate ONLY on the rows of the currently
+    // loaded page — they are NOT a server query and never refetch. Reset whenever
+    // a new table/page is loaded so stale state can't leak across selections.
+    const [sort, setSort] = useState<null | SortState>(null);
+    const [filter, setFilter] = useState<string>("");
 
     // Edit state: the row being edited (its id, or `""` for a new insert) and
     // the JSON-doc draft. `null` when no editor is open. `writeError` surfaces a
@@ -163,11 +201,29 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
 
     const selectTable = useCallback(
         (table: string): void => {
+            // A fresh table means the previous page-local sort/filter no longer apply.
+            setSort(null);
+            setFilter("");
             setSelectedTable(table);
             void fetchPage(shardKey, table, 0);
         },
         [fetchPage, shardKey],
     );
+
+    // Cycle a column through unsorted -> asc -> desc -> unsorted on each click.
+    const toggleSort = useCallback((column: string): void => {
+        setSort((current) => {
+            if (current?.column !== column) {
+                return { column, direction: "asc" };
+            }
+
+            if (current.direction === "asc") {
+                return { column, direction: "desc" };
+            }
+
+            return null;
+        });
+    }, []);
 
     const goToPage = useCallback(
         (nextOffset: number): void => {
@@ -212,6 +268,37 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
         },
         [client, fetchPage, offset, selectedTable, shardKey],
     );
+
+    // Rows shown in the table view: the loaded page's rows with the page-local
+    // filter and sort applied. Derived (not refetched) so changing sort/filter is
+    // instant and never touches the server. We keep the ORIGINAL row objects so
+    // edit/delete still resolve the real `rowId`.
+    const visibleRows = useMemo<Record<string, unknown>[]>(() => {
+        if (page === null) {
+            return [];
+        }
+
+        const query = filter.trim().toLowerCase();
+
+        const { rows: pageRows } = page;
+        let rows = pageRows;
+
+        if (query !== "") {
+            rows = rows.filter((row) => page.columns.some((column) => formatCell(row[column]).toLowerCase().includes(query)));
+        }
+
+        if (sort !== null) {
+            const { column, direction } = sort;
+
+            rows = [...rows].sort((a, b) => {
+                const result = compareCells(a[column], b[column]);
+
+                return direction === "asc" ? result : -result;
+            });
+        }
+
+        return rows;
+    }, [page, filter, sort]);
 
     const total = page?.total ?? 0;
     const hasPrevious = offset > 0;
@@ -305,6 +392,15 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                         >
                             Refresh
                         </button>
+                        <input
+                            aria-label="Filter rows"
+                            data-testid="db-filter"
+                            onChange={(event) => {
+                                setFilter(event.target.value);
+                            }}
+                            placeholder="filter rows"
+                            value={filter}
+                        />
                         {editable && (
                             <button
                                 data-testid="db-add-row"
@@ -362,13 +458,24 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                             <thead>
                                 <tr>
                                     {page.columns.map((column) => (
-                                        <th key={column}>{column}</th>
+                                        <th key={column}>
+                                            <button
+                                                data-testid={`db-sort-${column}`}
+                                                onClick={() => {
+                                                    toggleSort(column);
+                                                }}
+                                                type="button"
+                                            >
+                                                {column}
+                                                {sortIndicator(sort, column)}
+                                            </button>
+                                        </th>
                                     ))}
                                     {editable && <th aria-label="Row actions" />}
                                 </tr>
                             </thead>
                             <tbody>
-                                {page.rows.map((row, rowIndex) => (
+                                {visibleRows.map((row, rowIndex) => (
                                     <tr data-testid="db-row" key={rowKey(row, rowIndex)}>
                                         {page.columns.map((column) => (
                                             <td key={column}>{formatCell(row[column])}</td>
