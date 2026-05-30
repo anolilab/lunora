@@ -1074,6 +1074,25 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
     let triggerDepth = 0;
 
+    /**
+     * Precomputed `(table → timing → op)` matcher: whether at least one
+     * trigger is declared for that combination. The trigger-overhead bench
+     * surfaced that every write awaits `fireTriggers` for both `before` and
+     * `after` timings — even when the table has zero handlers for that
+     * timing — and each `await` costs a microtask tick. The writer methods
+     * gate the call on this set so a noop fireTriggers becomes a single
+     * synchronous lookup instead of an awaited async function call.
+     */
+    const triggerMatchers = new Set<string>();
+
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        for (const trigger of Object.values(definition.triggerMap ?? {})) {
+            triggerMatchers.add(`${tableName} ${trigger.timing} ${trigger.op}`);
+        }
+    }
+
+    const hasMatchingTrigger = (tableName: string, timing: TriggerTimingLike, op: TriggerOpLike): boolean => triggerMatchers.has(`${tableName} ${timing} ${op}`);
+
     /** Fire matching triggers with a depth guard against runaway self-triggering. */
     const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
         triggerDepth += 1;
@@ -2052,7 +2071,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // the row's top-level fields before they persist. Nested values are
             // still shared by reference — before-handlers are abort/side-effect
             // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
-            await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
+            if (hasMatchingTrigger(tableName, "before", "insert")) {
+                await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
+            }
 
             // Backfill counters BEFORE the physical write so the rebuild
             // scans a pre-insert snapshot — otherwise the row we're about to
@@ -2082,7 +2103,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             cache?.invalidate(tableName, id);
 
             broadcast({ table: tableName, op: "insert", key: id, row: docWithMeta });
-            await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "insert")) {
+                await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
+            }
+
             await onWrite({ op: "insert", table: tableName, id, doc: docWithMeta });
 
             return id;
@@ -2106,7 +2131,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             applyOnUpdate(schema.tables[tableName]!, patch, merged);
 
-            await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+            if (hasMatchingTrigger(tableName, "before", "update")) {
+                await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+            }
 
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
@@ -2123,7 +2150,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             cache?.invalidate(tableName, id);
 
             broadcast({ table: tableName, op: "update", key: id, row: merged });
-            await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "update")) {
+                await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
+            }
+
             await onWrite({ op: "update", table: tableName, id, doc: merged });
         },
 
@@ -2153,7 +2184,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             applyOnUpdate(schema.tables[tableName]!, document, replaced);
 
-            await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
+            if (hasMatchingTrigger(tableName, "before", "update")) {
+                await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
+            }
 
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
@@ -2174,7 +2207,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             cache?.invalidate(tableName, id);
 
             broadcast({ table: tableName, op: "update", key: id, row: replaced });
-            await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "update")) {
+                await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
+            }
+
             await onWrite({ op: "update", table: tableName, id, doc: replaced });
         },
 
@@ -2191,7 +2228,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             // `before` fires ahead of cascade resolution so a throwing guard
             // aborts the delete before any holder rows are touched.
-            await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+            if (hasMatchingTrigger(tableName, "before", "delete")) {
+                await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+            }
 
             // Resolve declared `onDelete` actions on holder rows *before* the
             // physical delete, so `restrict` can abort and cascaded child
@@ -2221,7 +2260,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             cache?.invalidate(tableName, id);
 
             broadcast({ table: tableName, op: "delete", key: id });
-            await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "delete")) {
+                await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+            }
+
             await onWrite({ op: "delete", table: tableName, id });
         },
     };

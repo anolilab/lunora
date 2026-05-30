@@ -562,6 +562,22 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         }
     };
 
+    /**
+     * Precomputed `(table → timing → op)` matcher: matches the DO ctx-db
+     * fast-path so writer methods can skip the `await fireTriggers(...)`
+     * microtask when no trigger is declared for the (timing, op).
+     */
+    const triggerMatchers = new Set<string>();
+
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        for (const trigger of Object.values(definition.triggerMap ?? {})) {
+            triggerMatchers.add(`${tableName} ${trigger.timing} ${trigger.op}`);
+        }
+    }
+
+    const hasMatchingTrigger = (tableName: string, timing: TriggerTimingLike, op: TriggerOpLike): boolean =>
+        triggerMatchers.has(`${tableName} ${timing} ${op}`);
+
     /** Fire matching triggers with a depth guard against runaway self-triggering. */
     const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
         triggerDepth += 1;
@@ -1083,7 +1099,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             // `before` fires ahead of cascade resolution so a throwing guard
             // aborts the delete before any holder rows are touched.
-            await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+            if (hasMatchingTrigger(tableName, "before", "delete")) {
+                await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+            }
 
             await applyOnDelete({
                 deletedId: id,
@@ -1105,7 +1123,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, existing ?? undefined, undefined);
             await syncRanks(tableName, id, existing ?? undefined, undefined);
-            await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "delete")) {
+                await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+            }
         },
 
         async findFirst(tableName, args = {}) {
@@ -1222,7 +1243,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             // the row's top-level fields before they persist. Nested values are
             // still shared by reference — before-handlers are abort/side-effect
             // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
-            await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
+            if (hasMatchingTrigger(tableName, "before", "insert")) {
+                await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
+            }
 
             await ensureBackfilledForTable(tableName);
             await ensureRankBackfilledForTable(tableName);
@@ -1234,7 +1257,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, undefined, docWithMeta);
             await syncRanks(tableName, id, undefined, docWithMeta);
-            await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "insert")) {
+                await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
+            }
 
             return id;
         },
@@ -1257,7 +1283,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             applyOnUpdate(definition, patch, merged);
 
-            await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+            if (hasMatchingTrigger(tableName, "before", "update")) {
+                await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+            }
 
             await ensureBackfilledForTable(tableName);
             await ensureRankBackfilledForTable(tableName);
@@ -1270,7 +1298,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, existing, merged);
             await syncRanks(tableName, id, existing, merged);
-            await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "update")) {
+                await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
+            }
         },
 
         query() {
@@ -1293,7 +1324,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             applyOnUpdate(definition, document, replaced);
 
-            await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
+            if (hasMatchingTrigger(tableName, "before", "update")) {
+                await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
+            }
 
             await ensureBackfilledForTable(tableName);
             await ensureRankBackfilledForTable(tableName);
@@ -1306,7 +1339,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, previous, replaced);
             await syncRanks(tableName, id, previous, replaced);
-            await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "update")) {
+                await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
+            }
         },
     };
 

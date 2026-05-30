@@ -128,6 +128,21 @@ designing schemas + handlers:
   rank-key diff. Routing through the shared `lookupById` helper
   collapses the table probe + row fetch into one SQL round-trip — the
   prior code did three.
+- **Trigger fixed-cost is zero on the no-trigger path.** Writers
+  precompute a `(table, timing, op)` matcher set at ctx-db construction
+  and skip the `await fireTriggers(...)` microtask entirely when no
+  handler is declared for that combination. Result: a write on a bare
+  table pays no trigger cost (~13% faster than the prior code that
+  always awaited the noop dispatcher). Attaching one or four triggers
+  adds the expected per-handler cost on top.
+- **Cross-shard `fanOut` is `stub.fetch` + `JSON.parse` bound.** At
+  N = 64 each shard pays a fresh `Request` construction (body string +
+  headers are now hoisted once per fan-out — the bench gain is small
+  because that wasn't the dominant cost) + the in-stub round-trip + a
+  `Response.json()` decode. For very wide fan-outs, prefer fewer +
+  larger shards over many tiny ones; or batch multiple `query()` calls
+  inside a single fan-out via a coordinator function that returns a
+  composite result.
 
 ## Not yet wired
 

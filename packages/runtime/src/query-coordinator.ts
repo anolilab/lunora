@@ -425,11 +425,11 @@ export const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryC
                     outcomes[index] = await callOneShard(
                         namespace,
                         batch.shardKey,
-                        {
+                        prepareShardRpc({
                             args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
                             functionPath: "__cirrus_admin__:importShard",
                             headers: request.headers,
-                        },
+                        }),
                         perShardTimeoutMs,
                     );
                 }
@@ -603,6 +603,24 @@ interface ShardRpcErr {
 
 type ShardRpcOutcome = ShardRpcErr | ShardRpcOk;
 
+/**
+ * Per-shard RPC inputs that are identical across an entire fan-out — body,
+ * headers, URL. The cross-shard-fanout bench surfaced that callOneShard was
+ * paying `JSON.stringify(body)` and `{...headers}` once per shard, even
+ * though every shard in a fan-out receives the same payload. Precomputing
+ * them once in `runBoundedFanOut` and threading them through saves N-1
+ * stringifications + spreads at N = 64.
+ */
+interface PreparedShardRpc {
+    readonly body: string;
+    readonly headers: Record<string, string>;
+}
+
+const prepareShardRpc = (request: ShardRpcRequest): PreparedShardRpc => ({
+    body: JSON.stringify({ args: request.args ?? {}, functionPath: request.functionPath }),
+    headers: { "content-type": "application/json", ...request.headers },
+});
+
 const runBoundedFanOut = async (
     namespace: ShardNamespaceLike,
     keys: readonly string[],
@@ -614,6 +632,7 @@ const runBoundedFanOut = async (
         return [];
     }
 
+    const prepared = prepareShardRpc(request);
     const outcomes: ShardRpcOutcome[] = Array.from({ length: keys.length });
     let cursor = 0;
 
@@ -627,7 +646,7 @@ const runBoundedFanOut = async (
                 return;
             }
 
-            outcomes[index] = await callOneShard(namespace, keys[index]!, request, timeoutMs);
+            outcomes[index] = await callOneShard(namespace, keys[index]!, prepared, timeoutMs);
         }
     };
 
@@ -638,14 +657,12 @@ const runBoundedFanOut = async (
     return outcomes;
 };
 
-const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, request: ShardRpcRequest, timeoutMs: number): Promise<ShardRpcOutcome> => {
+const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
     const stub = resolveShard(namespace, shardKey);
 
-    const headers: Record<string, string> = { "content-type": "application/json", ...request.headers };
-
     const forwarded = new Request("https://shard.internal/rpc", {
-        body: JSON.stringify({ args: request.args ?? {}, functionPath: request.functionPath }),
-        headers,
+        body: prepared.body,
+        headers: prepared.headers,
         method: "POST",
     });
 
