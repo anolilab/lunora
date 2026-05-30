@@ -33,21 +33,32 @@ need stable cross-machine comparisons.
 
 ## What's covered
 
-| Package             | File                             | Measures                                                               |
-| ------------------- | -------------------------------- | ---------------------------------------------------------------------- |
-| `@cirrus/do`        | `count-indexed-vs-scan.bench.ts` | `count()` via `aggregateIndex` counter vs SQL `SELECT COUNT(*)` scan   |
-| `@cirrus/do`        | `keyset-vs-offset.bench.ts`      | `findMany()` cursor seek vs offset-style at depth 5 000                |
-| `@cirrus/do`        | `reactive-cache.bench.ts`        | `ReactiveCache.run` hit vs miss vs no-wrapper baseline                 |
-| `@cirrus/do`        | `rank-position.bench.ts`         | `rank()` via companion-table seek vs emulated `findMany + indexOf`     |
-| `@cirrus/do`        | `trigger-overhead.bench.ts`      | Per-write cost at 0 / 1 / 4 attached triggers                          |
-| `@cirrus/do`        | `broadcast-delta.bench.ts`       | WS broadcast fan-out (existing)                                        |
-| `@cirrus/server`    | `dispatch.bench.ts`              | `query()`/`mutation()` dispatch + validator (existing)                 |
-| `@cirrus/server`    | `rls-overhead.bench.ts`          | `.use(rls(policies))` overhead — baseline / `true` / `WhereInput`      |
-| `@cirrus/runtime`   | `cross-shard-fanout.bench.ts`    | `QueryCoordinator.fanOut` `sum`/`topK`/`groupBy` merge at N=4 and N=64 |
-| `@cirrus/runtime`   | `import-throughput.bench.ts`     | `orchestrateImport` over 1 / 4 / 16 shards (1 000 rows total)          |
-| `@cirrus/ratelimit` | `sharded-getvalue.bench.ts`      | `getValue()` unsharded vs `shards=8` vs `shards=32`                    |
-| `@cirrus/codegen`   | `run-codegen.bench.ts`           | Full codegen run on a fixture project (existing)                       |
-| `@cirrus/values`    | `validators.bench.ts`            | `v.*` validator parse (existing)                                       |
+| Package             | File                                    | Measures                                                                           |
+| ------------------- | --------------------------------------- | ---------------------------------------------------------------------------------- |
+| `@cirrus/do`        | `count-indexed-vs-scan.bench.ts`        | `count()` via `aggregateIndex` counter vs SQL `SELECT COUNT(*)` scan               |
+| `@cirrus/do`        | `aggregate-groupby.bench.ts`            | `aggregate()` and `groupBy()` indexed vs scan                                      |
+| `@cirrus/do`        | `keyset-vs-offset.bench.ts`             | `findMany()` cursor seek vs offset-style at depth 5 000                            |
+| `@cirrus/do`        | `reactive-cache.bench.ts`               | `ReactiveCache.run` hit vs miss vs no-wrapper baseline                             |
+| `@cirrus/do`        | `rank-position.bench.ts`                | `rank()` via companion-table seek vs emulated `findMany + indexOf`                 |
+| `@cirrus/do`        | `relations-with.bench.ts`               | `findMany({with})` no-relation / one / many / two relations                        |
+| `@cirrus/do`        | `trigger-overhead.bench.ts`             | Per-write cost at 0 / 1 / 4 attached triggers                                      |
+| `@cirrus/do`        | `write-throughput.bench.ts`             | `insert`/`patch`/`replace` against bare, aggregateIndex, rankIndex schemas         |
+| `@cirrus/do`        | `broadcast-delta.bench.ts`              | WS broadcast fan-out                                                               |
+| `@cirrus/d1`        | `count-indexed-vs-scan.bench.ts`        | D1 column-dialect mirror of the DO `count()` bench                                 |
+| `@cirrus/d1`        | `keyset-vs-offset.bench.ts`             | D1 column-dialect mirror of the keyset bench                                       |
+| `@cirrus/d1`        | `rank-position.bench.ts`                | D1 column-dialect mirror of the `rank()` bench                                     |
+| `@cirrus/server`    | `dispatch.bench.ts`                     | `query()`/`mutation()` dispatch + validator                                        |
+| `@cirrus/server`    | `http-dispatch.bench.ts`                | hono `httpRouter`: httpAction vs httpRoute plain / +searchParams / +body / +output |
+| `@cirrus/server`    | `middleware-chain.bench.ts`             | `.use(mw)` chain dispatch cost at N = 0 / 1 / 4 / 8                                |
+| `@cirrus/server`    | `rls-overhead.bench.ts`                 | `.use(rls(policies))` overhead — baseline / `true` / `WhereInput`                  |
+| `@cirrus/runtime`   | `cross-shard-fanout.bench.ts`           | `QueryCoordinator.fanOut` `sum`/`topK`/`groupBy` merge at N = 4 and N = 64         |
+| `@cirrus/runtime`   | `import-throughput.bench.ts`            | `orchestrateImport` over 1 / 4 / 16 shards (1 000 rows total)                      |
+| `@cirrus/runtime`   | `orchestrate-migration-export.bench.ts` | `orchestrateMigration` + `orchestrateExport` at N = 4 / 16 shards                  |
+| `@cirrus/runtime`   | `rpc-dispatch.bench.ts`                 | `worker.fetch /_cirrus/rpc` — bare / + resolveIdentity / + claims / shardKey       |
+| `@cirrus/ratelimit` | `sharded-getvalue.bench.ts`             | `getValue()` unsharded vs `shards = 8` vs `shards = 32`                            |
+| `@cirrus/ratelimit` | `limit-throughput.bench.ts`             | `limit()` consumer side — token bucket / window / sharded / deny-list hit          |
+| `@cirrus/codegen`   | `run-codegen.bench.ts`                  | Full codegen run on a fixture project                                              |
+| `@cirrus/values`    | `validators.bench.ts`                   | `v.*` validator parse                                                              |
 
 ## Interpreting output
 
