@@ -40,6 +40,8 @@ export type { GlobalDataBrowserProps } from "./global-data-browser.js";
 export { GlobalDataBrowser } from "./global-data-browser.js";
 export type { LogsPanelProps } from "./logs-panel.js";
 export { LogsPanel } from "./logs-panel.js";
+export { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate.js";
+export type { AggregateMetrics, ShardMetricsResult } from "./metrics-aggregate.js";
 export type { MetricsPanelProps } from "./metrics-panel.js";
 export { MetricsPanel } from "./metrics-panel.js";
 export type { MigrationsPanelProps } from "./migrations.js";

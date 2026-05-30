@@ -4,7 +4,8 @@ import { type ReactElement, useCallback, useEffect, useRef, useState } from "rea
 import { ADMIN_FUNCTIONS, type ShardMetrics } from "./admin.js";
 import { adminRef, callOptions, errorMessage, formatBytes } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
-import { recordShard } from "./shard-history.js";
+import { aggregateMetrics, type ShardMetricsResult, shardsToAggregate } from "./metrics-aggregate.js";
+import { loadRecentShards, recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
@@ -196,6 +197,41 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
         },
     );
 
+    // Cross-shard aggregate: per-shard results for the shards we know about
+    // (root + current + recently-visited). `null` = aggregate view not loaded.
+    const [shardResults, setShardResults] = useState<null | ShardMetricsResult[]>(null);
+    const [aggregating, setAggregating] = useState<boolean>(false);
+
+    const aggregateAll = useCallback(async (): Promise<void> => {
+        setAggregating(true);
+
+        const shards = shardsToAggregate(shardKey, loadRecentShards());
+
+        try {
+            const results = await Promise.all(
+                shards.map(async (shard): Promise<ShardMetricsResult> => {
+                    try {
+                        const snapshot = (await client.query(GET_METRICS, {}, callOptions(shard))) as ShardMetrics;
+
+                        return { error: null, metrics: snapshot, shard: shard === "" ? snapshot.shard : shard };
+                    } catch (error_) {
+                        return { error: errorMessage(error_), metrics: null, shard: shard === "" ? "__root__" : shard };
+                    }
+                }),
+            );
+
+            if (mountedRef.current) {
+                setShardResults(results);
+            }
+        } finally {
+            if (mountedRef.current) {
+                setAggregating(false);
+            }
+        }
+    }, [client, shardKey]);
+
+    const aggregate = shardResults === null ? null : aggregateMetrics(shardResults);
+
     const errorRate = metrics === null || metrics.requests === 0 ? "—" : `${((metrics.errors / metrics.requests) * 100).toFixed(1)}%`;
     const currentDelta = history.length > 0 ? (history.at(-1) as number) : 0;
 
@@ -213,6 +249,27 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                     Refresh
                 </button>
                 <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="mt" />
+                <button
+                    data-testid="mt-aggregate"
+                    disabled={aggregating}
+                    onClick={() => {
+                        void aggregateAll();
+                    }}
+                    type="button"
+                >
+                    {aggregating ? "Aggregating…" : "All shards"}
+                </button>
+                {shardResults !== null && (
+                    <button
+                        data-testid="mt-aggregate-clear"
+                        onClick={() => {
+                            setShardResults(null);
+                        }}
+                        type="button"
+                    >
+                        Hide
+                    </button>
+                )}
             </div>
 
             <div data-testid="mt-trend">
@@ -268,6 +325,56 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                             : `${hitRate(metrics.cache.hits, metrics.cache.misses)} (${metrics.cache.entries} entries)`}
                     </dd>
                 </dl>
+            )}
+
+            {aggregate !== null && shardResults !== null && (
+                <div data-testid="mt-aggregate-view">
+                    <dl data-testid="mt-aggregate-stats">
+                        <dt>Shards</dt>
+                        <dd data-testid="mt-agg-shards">
+                            {aggregate.reachable} reachable{aggregate.failed > 0 ? `, ${aggregate.failed} unreachable` : ""}
+                        </dd>
+
+                        <dt>Total requests</dt>
+                        <dd data-testid="mt-agg-requests">{aggregate.totalRequests}</dd>
+
+                        <dt>Total errors</dt>
+                        <dd data-testid="mt-agg-errors">{aggregate.totalErrors}</dd>
+
+                        <dt>Total database size</dt>
+                        <dd data-testid="mt-agg-db-size">{formatBytes(aggregate.totalDatabaseSize)}</dd>
+
+                        <dt>Combined cache hit rate</dt>
+                        <dd data-testid="mt-agg-cache">{aggregate.hitRate === null ? "no cache configured" : `${(aggregate.hitRate * 100).toFixed(1)}%`}</dd>
+                    </dl>
+
+                    <table data-testid="mt-agg-table">
+                        <thead>
+                            <tr>
+                                <th>shard</th>
+                                <th>requests</th>
+                                <th>errors</th>
+                                <th>db size</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {shardResults.map((result) => (
+                                <tr data-testid={`mt-agg-row-${result.shard}`} key={result.shard}>
+                                    <td>{result.shard}</td>
+                                    {result.metrics === null ? (
+                                        <td colSpan={3}>{result.error ?? "unreachable"}</td>
+                                    ) : (
+                                        <>
+                                            <td>{result.metrics.requests}</td>
+                                            <td>{result.metrics.errors}</td>
+                                            <td>{formatBytes(result.metrics.databaseSize)}</td>
+                                        </>
+                                    )}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
             )}
         </div>
     );

@@ -46,7 +46,10 @@ mountDashboard({ baseUrl: "https://my-app.workers.dev" });
   function list from the worker; pass an explicit `FunctionDescriptor[]` to skip
   discovery.
 - `MetricsPanel` — per-shard health: request/error counts, uptime, DB size, and
-  reactive-cache hit rate.
+  reactive-cache hit rate. An **All shards** button rolls these up across the
+  shards the dashboard knows about (root + current + recently-visited — Durable
+  Objects aren't enumerable, so it's a best-effort union, not every shard) with
+  totals plus a per-shard breakdown.
 - `MigrationsPanel` — inspect data-migration run-state and kick off a migration
   by id (direction, dry-run).
 - `ExportImportPanel` — snapshot a shard to NDJSON and restore NDJSON back.

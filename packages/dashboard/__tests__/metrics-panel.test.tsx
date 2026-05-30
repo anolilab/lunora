@@ -218,4 +218,41 @@ describe("metricsPanel", () => {
 
         expect(screen.getByTestId("mt-requests").textContent).toBe("42");
     });
+
+    test("All shards aggregates getMetrics across the known shards", async () => {
+        expect.assertions(3);
+
+        // Seed a recently-visited shard so the aggregate covers more than root.
+        sessionStorage.setItem("cirrus-dashboard-recent-shards", JSON.stringify(["room-1"]));
+
+        const mock = createMockClient({
+            query: (reference, _args, options): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.getMetrics) {
+                    throw new Error(`unexpected ${reference}`);
+                }
+
+                const shardKey = (options as { shardKey?: string }).shardKey ?? "";
+
+                // Root shard reports 10 requests; room-1 reports 30.
+                return shardKey === "room-1"
+                    ? { ...METRICS, databaseSize: 1000, errors: 2, requests: 30, shard: "room-1" }
+                    : { ...METRICS, databaseSize: 2000, errors: 1, requests: 10, shard: "__root__" };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("mt-stats");
+        fireEvent.click(screen.getByTestId("mt-aggregate"));
+
+        await screen.findByTestId("mt-aggregate-view");
+
+        // 10 (root) + 30 (room-1) = 40 requests; 1 + 2 = 3 errors.
+        expect(screen.getByTestId("mt-agg-requests").textContent).toBe("40");
+        expect(screen.getByTestId("mt-agg-errors").textContent).toBe("3");
+        // Both shards reachable.
+        expect(screen.getByTestId("mt-agg-shards").textContent).toContain("2 reachable");
+
+        sessionStorage.clear();
+    });
 });
