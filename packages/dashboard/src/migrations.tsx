@@ -3,6 +3,7 @@ import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState }
 
 import { ADMIN_FUNCTIONS, type MigrationDirection, type MigrationRunResult, type MigrationStatusRow } from "./admin.js";
 import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal.js";
+import { useLiveAdmin } from "./use-live-admin.js";
 
 export interface MigrationsPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
@@ -28,6 +29,7 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [rows, setRows] = useState<MigrationStatusRow[] | null>(null);
     const [statusError, setStatusError] = useState<null | string>(null);
+    const [live, setLive] = useState<boolean>(false);
 
     const [migrationId, setMigrationId] = useState<string>("");
     const [direction, setDirection] = useState<MigrationDirection>("up");
@@ -55,6 +57,19 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
     useEffect(() => {
         void refresh(initialShardKey ?? "");
     }, [refresh, initialShardKey]);
+
+    // Live channel: while toggled on, each server push refreshes the run-state
+    // table so an in-progress migration's processed/changed counts update live.
+    useLiveAdmin<{ migrations: MigrationStatusRow[] }>(
+        ADMIN_FUNCTIONS.migrationStatus,
+        {},
+        shardKey,
+        (result) => {
+            setStatusError(null);
+            setRows(result.migrations);
+        },
+        live,
+    );
 
     const run = useCallback(async (): Promise<void> => {
         const id = migrationId.trim();
@@ -102,6 +117,16 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
                     type="button"
                 >
                     Refresh
+                </button>
+                <button
+                    aria-pressed={live}
+                    data-testid="mg-live"
+                    onClick={() => {
+                        setLive((on) => !on);
+                    }}
+                    type="button"
+                >
+                    {live ? "Live: on" : "Live: off"}
                 </button>
             </div>
 

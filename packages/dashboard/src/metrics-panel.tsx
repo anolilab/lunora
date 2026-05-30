@@ -3,6 +3,7 @@ import { type ChangeEvent, type ReactElement, useCallback, useEffect, useRef, us
 
 import { ADMIN_FUNCTIONS, type ShardMetrics } from "./admin.js";
 import { adminRef, callOptions, errorMessage, formatBytes } from "./internal.js";
+import { useLiveAdmin } from "./use-live-admin.js";
 
 export interface MetricsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -10,9 +11,6 @@ export interface MetricsPanelProps {
 }
 
 const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
-
-/** Auto-refresh polling cadence, in milliseconds. */
-const POLL_INTERVAL_MS = 2000;
 
 /** Maximum number of samples retained in the rolling history window. */
 const MAX_HISTORY = 30;
@@ -80,10 +78,10 @@ const hitRate = (hits: number, misses: number): string => {
  * Counters are per-DO-instance and reset on hibernation/restart — this is a
  * "since this instance woke" readout, not a durable time series.
  *
- * An opt-in auto-refresh toggle polls {@link GET_METRICS} every
- * {@link POLL_INTERVAL_MS} ms and accumulates a client-side, in-memory series of
- * requests-per-interval (the delta of `requests` between consecutive samples),
- * rendered as an inline-SVG sparkline. The series is capped at
+ * An opt-in **Live** toggle opens a `getMetrics` WebSocket subscription that
+ * re-pushes on every server write-flush, accumulating a client-side, in-memory
+ * series of requests-per-sample (the delta of `requests` between consecutive
+ * samples), rendered as an inline-SVG sparkline. The series is capped at
  * {@link MAX_HISTORY} points and is lost on remount.
  */
 export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactElement {
@@ -92,13 +90,13 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
     const [error, setError] = useState<null | string>(null);
-    const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
+    const [live, setLive] = useState<boolean>(false);
     const [history, setHistory] = useState<readonly number[]>([]);
 
-    // Avoid setState after unmount and overlapping in-flight polls.
+    // Avoid setState after unmount and overlapping in-flight one-shot loads.
     const mountedRef = useRef(true);
     const inFlightRef = useRef(false);
-    // Latest cumulative `requests` count, used to derive the per-interval delta.
+    // Latest cumulative `requests` count, used to derive the per-sample delta.
     const lastRequestsRef = useRef<null | number>(null);
 
     useEffect(() => {
@@ -109,6 +107,23 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
         };
     }, []);
 
+    // Fold a fresh metrics snapshot (one-shot or live push) into panel state,
+    // extending the requests-per-sample sparkline series.
+    const applySample = useCallback((next: ShardMetrics): void => {
+        setError(null);
+        setMetrics(next);
+
+        const previous = lastRequestsRef.current;
+
+        lastRequestsRef.current = next.requests;
+
+        // Skip the first sample (no prior point to diff against) and any counter
+        // reset (DO hibernation), which would yield a bogus delta.
+        if (previous !== null && next.requests >= previous) {
+            setHistory((prior) => [...prior, next.requests - previous].slice(-MAX_HISTORY));
+        }
+    }, []);
+
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
             if (inFlightRef.current) {
@@ -116,57 +131,41 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
             }
 
             inFlightRef.current = true;
-            setError(null);
 
             try {
                 const next = (await client.query(GET_METRICS, {}, callOptions(shard))) as ShardMetrics;
 
-                if (!mountedRef.current) {
-                    return;
-                }
-
-                setMetrics(next);
-
-                const previous = lastRequestsRef.current;
-
-                lastRequestsRef.current = next.requests;
-
-                // Skip the first sample (no prior point to diff against) and any
-                // counter reset (DO hibernation), which would yield a bogus delta.
-                if (previous !== null && next.requests >= previous) {
-                    setHistory((prior) => [...prior, next.requests - previous].slice(-MAX_HISTORY));
+                if (mountedRef.current) {
+                    applySample(next);
                 }
             } catch (error_) {
-                if (!mountedRef.current) {
-                    return;
+                if (mountedRef.current) {
+                    setMetrics(null);
+                    setError(errorMessage(error_));
                 }
-
-                setMetrics(null);
-                setError(errorMessage(error_));
             } finally {
                 inFlightRef.current = false;
             }
         },
-        [client],
+        [client, applySample],
     );
 
     useEffect(() => {
         void refresh(initialShardKey ?? "");
     }, [refresh, initialShardKey]);
 
-    useEffect(() => {
-        if (!autoRefresh) {
-            return undefined;
-        }
-
-        const id = setInterval(() => {
-            void refresh(shardKey);
-        }, POLL_INTERVAL_MS);
-
-        return () => {
-            clearInterval(id);
-        };
-    }, [autoRefresh, refresh, shardKey]);
+    // Live channel: while toggled on, each server push folds in like a refresh.
+    useLiveAdmin<ShardMetrics>(
+        ADMIN_FUNCTIONS.getMetrics,
+        {},
+        shardKey,
+        (next) => {
+            if (mountedRef.current) {
+                applySample(next);
+            }
+        },
+        live,
+    );
 
     const errorRate = metrics === null || metrics.requests === 0 ? "—" : `${((metrics.errors / metrics.requests) * 100).toFixed(1)}%`;
     const currentDelta = history.length > 0 ? (history.at(-1) as number) : 0;
@@ -193,14 +192,14 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                     Refresh
                 </button>
                 <button
-                    aria-pressed={autoRefresh}
-                    data-testid="mt-autorefresh"
+                    aria-pressed={live}
+                    data-testid="mt-live"
                     onClick={() => {
-                        setAutoRefresh((on) => !on);
+                        setLive((on) => !on);
                     }}
                     type="button"
                 >
-                    {autoRefresh ? "Auto-refresh: on" : "Auto-refresh: off"}
+                    {live ? "Live: on" : "Live: off"}
                 </button>
             </div>
 

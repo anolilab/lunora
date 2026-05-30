@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { ADMIN_FUNCTIONS, type LogEntry } from "../src/admin.js";
@@ -185,5 +185,30 @@ describe("logsPanel", () => {
         // Every mounted row is a real windowed entry from the buffer (which index
         // window jsdom lands on is irrelevant — that it is a small slice is).
         expect(rows.every((row) => /entry-\d+/.test(row.textContent ?? ""))).toBe(true);
+    });
+
+    test("toggling Live subscribes to getLogs and renders pushed entries", async () => {
+        expect.assertions(2);
+
+        const mock = createClient([]);
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("lg-empty");
+        fireEvent.click(screen.getByTestId("lg-live"));
+
+        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+
+        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.getLogs);
+
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.getLogs, {
+                entries: [{ functionPath: "messages:send", level: "error" as const, message: "live boom", timestamp: 1_700_000_002_000 }],
+            });
+        });
+
+        const rows = await screen.findAllByTestId("lg-row");
+
+        expect(rows[0]?.textContent).toContain("live boom");
     });
 });

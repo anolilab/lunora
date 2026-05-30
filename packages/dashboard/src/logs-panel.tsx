@@ -4,6 +4,7 @@ import { type ChangeEvent, type CSSProperties, type ReactElement, useCallback, u
 
 import { ADMIN_FUNCTIONS, type LogEntry, type LogLevel, type LogsResult } from "./admin.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
+import { useLiveAdmin } from "./use-live-admin.js";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;
@@ -32,10 +33,7 @@ const ROW_BASE_STYLE: CSSProperties = {
  * virtualizer a real viewport to compute a visible range from, so a bounded,
  * deterministic set of rows mounts in tests instead of zero.
  */
-const observeViewportRect = (
-    instance: Virtualizer<HTMLDivElement, Element>,
-    callback: (rect: Rect) => void,
-): (() => void) | undefined =>
+const observeViewportRect = (instance: Virtualizer<HTMLDivElement, Element>, callback: (rect: Rect) => void): (() => void) | undefined =>
     observeElementRect(instance, (rect) => {
         callback(rect.height > 0 ? rect : { height: SCROLL_HEIGHT, width: rect.width });
     });
@@ -93,6 +91,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
     const [error, setError] = useState<null | string>(null);
     const [search, setSearch] = useState<string>("");
     const [levelFilter, setLevelFilter] = useState<string>("all");
+    const [live, setLive] = useState<boolean>(false);
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
@@ -113,6 +112,19 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
     useEffect(() => {
         void refresh(initialShardKey ?? "");
     }, [refresh, initialShardKey]);
+
+    // Live channel: while toggled on, each server push replaces the buffer so
+    // new log lines appear without a manual refresh.
+    useLiveAdmin<LogsResult>(
+        ADMIN_FUNCTIONS.getLogs,
+        {},
+        shardKey,
+        (result) => {
+            setError(null);
+            setEntries(result.entries);
+        },
+        live,
+    );
 
     // Distinct levels present in the fetched buffer, in a stable severity order,
     // so the dropdown only offers levels that can actually match something.
@@ -183,6 +195,16 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
                     type="button"
                 >
                     Refresh
+                </button>
+                <button
+                    aria-pressed={live}
+                    data-testid="lg-live"
+                    onClick={() => {
+                        setLive((on) => !on);
+                    }}
+                    type="button"
+                >
+                    {live ? "Live: on" : "Live: off"}
                 </button>
                 <input
                     aria-label="Search messages"

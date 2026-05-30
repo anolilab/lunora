@@ -15,6 +15,7 @@ import { type CSSProperties, type ReactElement, useCallback, useEffect, useMemo,
 
 import { ADMIN_FUNCTIONS, type TableInfo, type TablePage, type WriteRowResult } from "./admin.js";
 import { adminRef, callOptions } from "./internal.js";
+import { useLiveAdmin } from "./use-live-admin.js";
 
 export interface DataBrowserProps {
     /**
@@ -186,6 +187,8 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     const [editing, setEditing] = useState<null | { docText: string; id: null | string }>(null);
     const [writeError, setWriteError] = useState<null | string>(null);
 
+    const [live, setLive] = useState<boolean>(false);
+
     const fetchTables = useCallback(
         async (shard: string): Promise<void> => {
             setTablesError(null);
@@ -224,6 +227,21 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     useEffect(() => {
         void fetchTables(initialShardKey ?? "");
     }, [fetchTables, initialShardKey]);
+
+    // Live channel: while toggled on (and a table is selected), the server
+    // re-pushes the current window whenever that table is written. The
+    // subscription is dependency-scoped to `selectedTable`, so writes to other
+    // tables never re-run it. Pagination changes the args and re-seeds.
+    useLiveAdmin<TablePage>(
+        ADMIN_FUNCTIONS.readTablePage,
+        { limit: pageSize, offset, table: selectedTable ?? "" },
+        shardKey,
+        (result) => {
+            setPageError(null);
+            setPage(result);
+        },
+        live && selectedTable !== null,
+    );
 
     const selectTable = useCallback(
         (table: string): void => {
@@ -501,6 +519,16 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                         >
                             Refresh
                         </button>
+                        <button
+                            aria-pressed={live}
+                            data-testid="db-live"
+                            onClick={() => {
+                                setLive((on) => !on);
+                            }}
+                            type="button"
+                        >
+                            {live ? "Live: on" : "Live: off"}
+                        </button>
                         <input
                             aria-label="Filter rows"
                             data-testid="db-filter"
@@ -582,9 +610,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                                         {editable && <th aria-label="Row actions" />}
                                     </tr>
                                 </thead>
-                                <tbody style={tbodyStyle}>
-                                    {virtualRows.map((virtualRow) => renderRow(virtualRow))}
-                                </tbody>
+                                <tbody style={tbodyStyle}>{virtualRows.map((virtualRow) => renderRow(virtualRow))}</tbody>
                             </table>
                         </div>
                     )}

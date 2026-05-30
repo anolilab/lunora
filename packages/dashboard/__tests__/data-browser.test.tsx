@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, test } from "vitest";
 
@@ -286,12 +286,16 @@ describe("dataBrowser", () => {
 
         await screen.findByTestId("db-rows");
 
-        const pageCallsBefore = mock.query.mock.calls.filter((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage).length;
+        const pageCallsBefore = mock.query.mock.calls.filter(
+            (call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage,
+        ).length;
 
         fireEvent.click(screen.getByTestId("db-sort-text"));
         fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "or" } });
 
-        const pageCallsAfter = mock.query.mock.calls.filter((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage).length;
+        const pageCallsAfter = mock.query.mock.calls.filter(
+            (call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage,
+        ).length;
 
         expect(pageCallsAfter).toBe(pageCallsBefore);
     });
@@ -346,7 +350,7 @@ describe("dataBrowser — editable", () => {
                 if (reference === ADMIN_FUNCTIONS.writeRow) {
                     const { id, op } = args as { id?: string; op: string };
 
-                    const resultId = op === "insert" ? "m4" : id ?? null;
+                    const resultId = op === "insert" ? "m4" : (id ?? null);
 
                     return { id: resultId, op };
                 }
@@ -514,5 +518,28 @@ describe("dataBrowser — editable", () => {
         const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ doc: { text: "patched" }, id: "m2", op: "patch", table: "messages" });
+    });
+
+    test("toggling Live subscribes to readTablePage and renders pushed rows", async () => {
+        expect.assertions(2);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 2 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-live"));
+
+        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+
+        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.readTablePage);
+
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.readTablePage, { columns: ["__id__", "text"], rows: [{ __id__: "m9", text: "LIVE ROW" }], total: 1 });
+        });
+
+        expect(screen.getByTestId("db-page").textContent).toContain("LIVE ROW");
     });
 });

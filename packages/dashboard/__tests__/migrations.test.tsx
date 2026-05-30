@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { ADMIN_FUNCTIONS, type MigrationStatusRow } from "../src/admin.js";
@@ -76,5 +76,40 @@ describe("migrationsPanel", () => {
         const runCall = mock.query.mock.calls.find((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.runMigration);
 
         expect(runCall?.[1]).toMatchObject({ dryRun: false, id: "0002_rename" });
+    });
+
+    test("toggling Live subscribes to migrationStatus and folds in pushed progress", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("mg-table");
+        fireEvent.click(screen.getByTestId("mg-live"));
+
+        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+
+        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.migrationStatus);
+
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.migrationStatus, {
+                migrations: [
+                    {
+                        changed: 7,
+                        cursor: "c1",
+                        direction: "up",
+                        error: null,
+                        id: "0001_backfill",
+                        processed: 42,
+                        startedAt: 1,
+                        status: "in_progress",
+                        updatedAt: 9,
+                    },
+                ],
+            });
+        });
+
+        expect(screen.getByTestId("mg-row-0001_backfill").textContent).toContain("in_progress");
     });
 });

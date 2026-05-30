@@ -49,7 +49,10 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
     const [token, setToken] = useState<string>(adminToken ?? "");
 
     const client = useMemo(() => {
-        const created = new CirrusClient({ url: resolveBaseUrl(baseUrl) });
+        // The token doubles as the WS credential (`wsToken`) so live admin
+        // subscriptions clear the upgrade's admin gate, mirroring the bearer the
+        // HTTP admin RPCs already send.
+        const created = new CirrusClient({ url: resolveBaseUrl(baseUrl), ...(token === "" ? {} : { wsToken: token }) });
 
         if (token !== "") {
             created.setAuthToken(token);

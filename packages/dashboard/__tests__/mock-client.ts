@@ -16,6 +16,8 @@ export interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
     asClient: CirrusClient;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
+    /** Push a value to every live subscriber registered for `reference`. */
+    emit: (reference: string, value: unknown) => void;
     listAuthSessions: ReturnType<typeof vi.fn>;
     listAuthUsers: ReturnType<typeof vi.fn>;
     listFunctions: ReturnType<typeof vi.fn>;
@@ -25,6 +27,7 @@ export interface MockClientHooks {
     mutation: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
     readGlobalTablePage: ReturnType<typeof vi.fn>;
+    subscribe: ReturnType<typeof vi.fn>;
 }
 
 type Impl = (reference: string, args: unknown, options: unknown) => unknown;
@@ -67,6 +70,26 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         async (options: { limit?: number; offset?: number; userId?: string } = {}) => impls.listAuthSessions?.(options) ?? { rows: [], total: 0 },
     );
 
+    // Live-subscription registry: `subscribe` records each callback by
+    // functionPath; `emit` fans a value out to those callbacks so panel tests
+    // can simulate a server push without a real socket.
+    const subscribers = new Map<string, Set<(value: unknown) => void>>();
+    const subscribe = vi.fn((fn: FunctionReference, _args: unknown, callback: (value: unknown) => void) => {
+        const set = subscribers.get(fn.__cirrusRef) ?? new Set();
+
+        set.add(callback);
+        subscribers.set(fn.__cirrusRef, set);
+
+        return () => {
+            set.delete(callback);
+        };
+    });
+    const emit = (reference: string, value: unknown): void => {
+        for (const callback of subscribers.get(reference) ?? []) {
+            callback(value);
+        }
+    };
+
     const asClient = {
         action,
         cancelScheduledJob,
@@ -79,12 +102,14 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         mutation,
         query,
         readGlobalTablePage,
+        subscribe,
     } as unknown as CirrusClient;
 
     return {
         action,
         asClient,
         cancelScheduledJob,
+        emit,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
@@ -94,5 +119,6 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         mutation,
         query,
         readGlobalTablePage,
+        subscribe,
     };
 };

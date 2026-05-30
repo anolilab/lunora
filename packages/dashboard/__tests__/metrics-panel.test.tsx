@@ -27,28 +27,6 @@ const createClient = (metrics: ShardMetrics = METRICS): MockClientHooks =>
         },
     });
 
-/**
- * A client whose `getMetrics` reports a `requests` count that climbs by `step`
- * on every call, so consecutive samples yield a non-trivial per-interval delta.
- */
-const createIncrementingClient = (step = 5): MockClientHooks => {
-    let { requests } = METRICS;
-
-    return createMockClient({
-        query: (reference): unknown => {
-            if (reference === ADMIN_FUNCTIONS.getMetrics) {
-                const snapshot: ShardMetrics = { ...METRICS, requests };
-
-                requests += step;
-
-                return snapshot;
-            }
-
-            throw new Error(`unexpected ${reference}`);
-        },
-    });
-};
-
 const renderPanel = (mock: MockClientHooks) => (
     <CirrusProvider client={mock.asClient}>
         <MetricsPanel />
@@ -134,85 +112,67 @@ describe("metricsPanel", () => {
         expect(screen.queryByTestId("mt-sparkline")).toBeNull();
     });
 
-    test("toggling auto-refresh starts polling getMetrics", async () => {
+    test("toggling Live opens a getMetrics subscription", async () => {
         expect.assertions(2);
 
-        vi.useFakeTimers();
-
-        const mock = createIncrementingClient();
+        const mock = createClient();
 
         render(renderPanel(mock));
 
-        // Let the on-mount fetch resolve.
-        await act(async () => {
-            await vi.advanceTimersByTimeAsync(0);
-        });
+        await screen.findByTestId("mt-stats");
 
-        const callsAfterMount = mock.query.mock.calls.length;
+        expect(mock.subscribe).not.toHaveBeenCalled();
 
-        fireEvent.click(screen.getByTestId("mt-autorefresh"));
+        fireEvent.click(screen.getByTestId("mt-live"));
 
-        // Two poll intervals fire two further getMetrics calls.
-        await act(async () => {
-            await vi.advanceTimersByTimeAsync(4000);
-        });
+        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
 
-        expect(mock.query.mock.calls.length).toBeGreaterThan(callsAfterMount);
-        expect(mock.query).toHaveBeenCalledTimes(callsAfterMount + 2);
+        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.getMetrics);
     });
 
-    test("renders a sparkline once at least two samples accumulate", async () => {
+    test("renders a sparkline once at least two live samples accumulate", async () => {
         expect.assertions(2);
 
-        vi.useFakeTimers();
-
-        const mock = createIncrementingClient();
+        const mock = createClient();
 
         render(renderPanel(mock));
 
-        await act(async () => {
-            await vi.advanceTimersByTimeAsync(0);
-        });
+        await screen.findByTestId("mt-stats");
+        fireEvent.click(screen.getByTestId("mt-live"));
 
-        fireEvent.click(screen.getByTestId("mt-autorefresh"));
-
-        // Mount sample + two polls → two deltas → sparkline appears.
-        await act(async () => {
-            await vi.advanceTimersByTimeAsync(4000);
+        // Mount seeded `requests: 10`; two climbing pushes → two deltas → spark.
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 15 });
+            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 20 });
         });
 
         expect(screen.getByTestId("mt-sparkline").dataset.testid).toBe("mt-sparkline");
         expect(screen.queryByTestId("mt-sparkline-empty")).toBeNull();
     });
 
-    test("cleanup stops polling after auto-refresh is turned off", async () => {
-        expect.assertions(1);
+    test("live pushes update the snapshot and stop once Live is turned off", async () => {
+        expect.assertions(2);
 
-        vi.useFakeTimers();
-
-        const mock = createIncrementingClient();
+        const mock = createClient();
 
         render(renderPanel(mock));
 
-        await act(async () => {
-            await vi.advanceTimersByTimeAsync(0);
+        await screen.findByTestId("mt-stats");
+        fireEvent.click(screen.getByTestId("mt-live"));
+
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 42 });
         });
 
-        fireEvent.click(screen.getByTestId("mt-autorefresh"));
+        expect(screen.getByTestId("mt-requests").textContent).toBe("42");
 
-        await act(async () => {
-            await vi.advanceTimersByTimeAsync(2000);
+        // Turning Live off unsubscribes, so later pushes are ignored.
+        fireEvent.click(screen.getByTestId("mt-live"));
+
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 99 });
         });
 
-        fireEvent.click(screen.getByTestId("mt-autorefresh"));
-
-        const callsAtPause = mock.query.mock.calls.length;
-
-        // No further polls should fire once the interval is cleared.
-        await act(async () => {
-            await vi.advanceTimersByTimeAsync(6000);
-        });
-
-        expect(mock.query).toHaveBeenCalledTimes(callsAtPause);
+        expect(screen.getByTestId("mt-requests").textContent).toBe("42");
     });
 });
