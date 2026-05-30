@@ -213,3 +213,31 @@ export interface GlobalTablePage {
     rows: Record<string, unknown>[];
     total: number;
 }
+
+/** One authenticated user, from `GET /_cirrus/admin/auth/users`. Mirrors better-auth's `user` row. */
+export interface AuthUser {
+    [key: string]: unknown;
+    createdAt?: null | number | string;
+    email?: null | string;
+    emailVerified?: boolean | null;
+    id: string;
+    image?: null | string;
+    name?: null | string;
+}
+
+/** One auth session, from `GET /_cirrus/admin/auth/sessions`. Mirrors better-auth's `session` row. */
+export interface AuthSession {
+    [key: string]: unknown;
+    createdAt?: null | number | string;
+    expiresAt?: null | number | string;
+    id: string;
+    ipAddress?: null | string;
+    userAgent?: null | string;
+    userId: string;
+}
+
+/** A page of users or sessions plus the total count. */
+export interface AuthPage<T> {
+    rows: T[];
+    total: number;
+}

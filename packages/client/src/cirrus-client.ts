@@ -4,6 +4,9 @@ import { createReconnect, type ReconnectCalculator } from "./reconnect.js";
 import { type SubscriptionCallback, SubscriptionRegistry, type SubscriptionState } from "./subscription.js";
 import type {
     ArgsOf,
+    AuthPage,
+    AuthSession,
+    AuthUser,
     BookmarkStorage,
     CirrusClientOptions,
     ClientMessage,
@@ -30,6 +33,8 @@ const STORAGE_PATH = "/_cirrus/admin/storage";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
+const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
+const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
 
@@ -346,6 +351,50 @@ export class CirrusClient {
         }
 
         return (await this.adminFetch(`${GLOBAL_TABLE_PATH}?${params.toString()}`, "GET")) as GlobalTablePage;
+    }
+
+    // --- Auth admin ---------------------------------------------------------
+
+    /**
+     * List authenticated users, paged. Hits the admin-gated
+     * `GET /_cirrus/admin/auth/users` endpoint — the worker must be built with an
+     * `authIntrospector` and `adminToken`. Powers the dashboard's users panel.
+     */
+    public async listAuthUsers(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<AuthUser>> {
+        const params = new URLSearchParams();
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        if (options.offset !== undefined) {
+            params.set("offset", String(options.offset));
+        }
+
+        const query = params.toString();
+
+        return (await this.adminFetch(query === "" ? AUTH_USERS_PATH : `${AUTH_USERS_PATH}?${query}`, "GET")) as AuthPage<AuthUser>;
+    }
+
+    /** List auth sessions, paged and optionally filtered to one user. */
+    public async listAuthSessions(options: { limit?: number; offset?: number; userId?: string } = {}): Promise<AuthPage<AuthSession>> {
+        const params = new URLSearchParams();
+
+        if (options.userId !== undefined && options.userId !== "") {
+            params.set("userId", options.userId);
+        }
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        if (options.offset !== undefined) {
+            params.set("offset", String(options.offset));
+        }
+
+        const query = params.toString();
+
+        return (await this.adminFetch(query === "" ? AUTH_SESSIONS_PATH : `${AUTH_SESSIONS_PATH}?${query}`, "GET")) as AuthPage<AuthSession>;
     }
 
     // --- Subscriptions ------------------------------------------------------
