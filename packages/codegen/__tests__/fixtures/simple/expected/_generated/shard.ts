@@ -86,6 +86,12 @@ const globalDbStub: DatabaseWriterLike = {
     query: () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
     },
+    rank: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+    },
+    rankPage: async () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+    },
     replace: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
     },
