@@ -3,6 +3,7 @@ import { useCirrus } from "@cirrus/react";
 import { type ReactElement, useCallback, useEffect, useState } from "react";
 
 import { errorMessage, formatTimestamp } from "./internal.js";
+import { useAutoRefresh } from "./use-auto-refresh.js";
 
 export interface UsersPanelProps {
     /** Users (and sessions) requested per page. */
@@ -23,6 +24,7 @@ export function UsersPanel({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
 
     const [users, setUsers] = useState<AuthUser[] | null>(null);
     const [usersError, setUsersError] = useState<null | string>(null);
+    const [auto, setAuto] = useState<boolean>(false);
 
     const [selectedUser, setSelectedUser] = useState<null | string>(null);
     const [sessions, setSessions] = useState<AuthSession[] | null>(null);
@@ -62,6 +64,17 @@ export function UsersPanel({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
         void fetchUsers();
     }, [fetchUsers]);
 
+    // Auto-refresh: the auth store is HTTP-only (no subscription channel), so
+    // polling is the honest "live" — re-list users to catch new sign-ups /
+    // revoked sessions without a manual reload.
+    useAutoRefresh(() => {
+        void fetchUsers();
+
+        if (selectedUser !== null) {
+            void fetchSessions(selectedUser);
+        }
+    }, auto);
+
     return (
         <div data-testid="cirrus-users">
             <button
@@ -72,6 +85,16 @@ export function UsersPanel({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                 type="button"
             >
                 Reload users
+            </button>
+            <button
+                aria-pressed={auto}
+                data-testid="us-auto"
+                onClick={() => {
+                    setAuto((on) => !on);
+                }}
+                type="button"
+            >
+                {auto ? "Auto: on" : "Auto: off"}
             </button>
 
             {usersError !== null && (

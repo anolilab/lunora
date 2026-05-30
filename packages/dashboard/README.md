@@ -68,10 +68,15 @@ refresh on any write-flush (e.g. a long migration's processed/changed counts
 climb mid-run). With Live off, the panels stay one-shot (load + manual
 **Refresh**).
 
-The other panels (Globals, Users, Scheduled jobs, Files, Schema) remain
-one-shot: they read through HTTP admin endpoints backed by D1, the SessionDO,
-the SchedulerDO and R2 rather than the ShardDO subscription channel, so live
-updates there require dedicated server-side subscription endpoints.
+The HTTP-backed panels read through admin endpoints over D1, the SessionDO, the
+SchedulerDO and R2 — backends with no subscription channel — so they can't use
+the WebSocket push above. **Scheduled jobs** and **Users** instead offer an
+**Auto** toggle that polls on an interval (`useAutoRefresh`, paused while the
+tab is hidden). For the scheduler this is the right model, not a compromise:
+jobs fire on wall-clock time, so polling lets you watch them count down and
+disappear as their alarms fire — there's no write event for a server to push.
+True server-pushed updates for these would require replicating the ShardDO
+subscription infrastructure into each backend DO.
 
 A **connection badge** in the header reflects the client's aggregate live-socket
 health (idle / connecting / connected / offline) via `useConnectionStatus`, so

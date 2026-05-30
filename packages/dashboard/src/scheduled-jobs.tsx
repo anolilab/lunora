@@ -4,6 +4,7 @@ import { type ReactElement, useCallback, useEffect, useMemo, useState } from "re
 
 import { ConfirmButton } from "./confirm-button.js";
 import { errorMessage, formatTimestamp } from "./internal.js";
+import { useAutoRefresh } from "./use-auto-refresh.js";
 
 export type { ScheduleRecord } from "@cirrus/client";
 
@@ -45,6 +46,7 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
     const [jobs, setJobs] = useState<ScheduleRecord[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [busy, setBusy] = useState<boolean>(false);
+    const [auto, setAuto] = useState<boolean>(false);
 
     const load = useMemo(() => loadJobs ?? (() => client.listScheduledJobs()), [client, loadJobs]);
 
@@ -80,6 +82,14 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
         void refresh();
     }, [refresh]);
 
+    // Auto-refresh: the scheduler fires on wall-clock time, so polling lets the
+    // operator watch jobs count down and disappear as their alarms fire. The
+    // SchedulerDO is HTTP-only (no subscription channel), so this is the honest
+    // "live" — not a WS push.
+    useAutoRefresh(() => {
+        void refresh();
+    }, auto);
+
     const cancel = useCallback(
         async (id: string): Promise<void> => {
             if (cancelImpl === undefined) {
@@ -109,6 +119,16 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                 type="button"
             >
                 Refresh
+            </button>
+            <button
+                aria-pressed={auto}
+                data-testid="sj-auto"
+                onClick={() => {
+                    setAuto((on) => !on);
+                }}
+                type="button"
+            >
+                {auto ? "Auto: on" : "Auto: off"}
             </button>
 
             {error !== null && (

@@ -51,4 +51,5 @@ export { SchemaViewer } from "./schema-viewer.js";
 export type { ShardInputProps } from "./shard-input.js";
 export { ShardInput } from "./shard-input.js";
 export { DASHBOARD_ROOT_CLASS, DashboardStyles } from "./theme.js";
+export { DEFAULT_AUTO_REFRESH_MS, useAutoRefresh } from "./use-auto-refresh.js";
 export type { FunctionDescriptor, FunctionKind, RunStatus } from "./types.js";

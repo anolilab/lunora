@@ -99,4 +99,35 @@ describe("scheduledJobs", () => {
 
         expect(mock.cancelScheduledJob).toHaveBeenCalledWith("a");
     });
+
+    test("toggling Auto polls the loader on an interval and stops when turned off", async () => {
+        vi.useFakeTimers();
+
+        try {
+            const loadJobs = vi.fn(async () => RECORDS);
+
+            render(withProvider(createMockClient(), <ScheduledJobs loadJobs={loadJobs} />));
+
+            // Initial mount load resolves.
+            await vi.advanceTimersByTimeAsync(0);
+
+            const callsAfterMount = loadJobs.mock.calls.length;
+
+            fireEvent.click(screen.getByTestId("sj-auto"));
+
+            // Two 5s intervals → two more loads.
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            expect(loadJobs.mock.calls.length).toBe(callsAfterMount + 2);
+
+            fireEvent.click(screen.getByTestId("sj-auto"));
+            const callsAtPause = loadJobs.mock.calls.length;
+
+            await vi.advanceTimersByTimeAsync(15_000);
+
+            expect(loadJobs.mock.calls.length).toBe(callsAtPause);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });

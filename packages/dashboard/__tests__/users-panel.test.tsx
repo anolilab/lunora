@@ -2,7 +2,7 @@ import type { AuthPage, AuthSession, AuthUser } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { UsersPanel } from "../src/users-panel.js";
 import { createMockClient, type MockClientHooks } from "./mock-client.js";
@@ -85,5 +85,27 @@ describe("usersPanel", () => {
         const error = await screen.findByTestId("us-users-error");
 
         expect(error.textContent).toBe("AUTH_NOT_CONFIGURED");
+    });
+
+    test("toggling Auto re-lists users on an interval", async () => {
+        vi.useFakeTimers();
+
+        try {
+            const mock = createUsersClient();
+
+            render(renderPanel(mock));
+
+            await vi.advanceTimersByTimeAsync(0);
+
+            const callsAfterMount = mock.listAuthUsers.mock.calls.length;
+
+            fireEvent.click(screen.getByTestId("us-auto"));
+
+            await vi.advanceTimersByTimeAsync(10_000);
+
+            expect(mock.listAuthUsers.mock.calls.length).toBe(callsAfterMount + 2);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
