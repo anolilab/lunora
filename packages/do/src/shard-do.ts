@@ -724,6 +724,7 @@ export abstract class ShardDO {
             const page = readTablePage(sql, {
                 limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
                 offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
+                search: typeof args["search"] === "string" ? args["search"] : undefined,
                 table,
             });
 

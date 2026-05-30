@@ -33,7 +33,9 @@ mountDashboard({ baseUrl: "https://my-app.workers.dev" });
 - `Dashboard` — a tabbed shell that composes every panel below behind one
   provider. Tabs whose data source isn't configured are omitted.
 - `DataBrowser` — list a shard's tables and page through their rows, with a
-  table/JSON view toggle and refresh.
+  table/JSON view toggle, refresh, and a whole-table search box (a debounced
+  server-side substring filter across every column, paginated over the matched
+  set — not just the loaded page). Column sorting stays page-local.
 - `GlobalDataBrowser` — the same, for `.global()` (D1-backed) tables.
 - `SchemaViewer` — every table with its row count, expandable to its columns.
 - `FunctionRunner` — pick a registered function, edit its JSON args, and invoke

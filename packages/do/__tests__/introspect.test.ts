@@ -79,5 +79,49 @@ describe("introspect", () => {
         test("refuses to read an FTS shadow table", () => {
             expect(() => readTablePage(db.sql, { table: "messages__fts_body" })).toThrow(/unknown table/u);
         });
+
+        test("search filters across every column, with total reflecting the matched set", () => {
+            const page = readTablePage(db.sql, { search: "hello", table: "messages" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows).toEqual([{ __id__: "m1", text: "hello", votes: 3 }]);
+        });
+
+        test("search matches non-text columns via CAST (numeric votes)", () => {
+            db.raw(`INSERT INTO "messages" VALUES ('z', 'zeta', 42)`);
+
+            // 42 lives only in a numeric column; matching it proves the CAST path.
+            const page = readTablePage(db.sql, { search: "42", table: "messages" });
+
+            expect(page.rows).toEqual([{ __id__: "z", text: "zeta", votes: 42 }]);
+        });
+
+        test("search is case-insensitive", () => {
+            expect(readTablePage(db.sql, { search: "WORLD", table: "messages" }).total).toBe(1);
+        });
+
+        test("search paginates over the filtered set", () => {
+            // All three messages contain the letter that appears in their text;
+            // narrow to the two with an 'o' (hello, world) and page through them.
+            const first = readTablePage(db.sql, { limit: 1, offset: 0, search: "o", table: "messages" });
+            const second = readTablePage(db.sql, { limit: 1, offset: 1, search: "o", table: "messages" });
+
+            expect(first.total).toBe(2);
+            expect(second.total).toBe(2);
+            expect(first.rows[0]).not.toEqual(second.rows[0]);
+        });
+
+        test("a LIKE wildcard in the search is matched literally, not as a pattern", () => {
+            db.raw(`INSERT INTO "messages" VALUES ('m4', '100%', 0)`);
+
+            const page = readTablePage(db.sql, { search: "100%", table: "messages" });
+
+            // Escaped: only the literal "100%" row matches, not every row.
+            expect(page.rows).toEqual([{ __id__: "m4", text: "100%", votes: 0 }]);
+        });
+
+        test("blank search is treated as no filter", () => {
+            expect(readTablePage(db.sql, { search: "   ", table: "messages" }).total).toBe(3);
+        });
     });
 });

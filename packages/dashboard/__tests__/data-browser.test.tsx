@@ -21,10 +21,11 @@ const MESSAGE_ROWS = [
 interface PageArgs {
     limit?: number;
     offset?: number;
+    search?: string;
     table: string;
 }
 
-/** A client whose admin queries serve a fixed in-memory `messages` table. */
+/** A client whose admin queries serve a fixed in-memory `messages` table, honoring server-side `search`. */
 const createBrowserClient = (): MockClientHooks =>
     createMockClient({
         query: (reference, args): unknown => {
@@ -32,13 +33,18 @@ const createBrowserClient = (): MockClientHooks =>
                 return TABLES;
             }
 
-            const { limit = 50, offset = 0, table } = args as PageArgs;
+            const { limit = 50, offset = 0, search = "", table } = args as PageArgs;
 
             if (table !== "messages") {
                 throw new Error(`unknown table: ${table}`);
             }
 
-            return { columns: ["__id__", "text"], rows: MESSAGE_ROWS.slice(offset, offset + limit), total: MESSAGE_ROWS.length };
+            // Mirror the server's whole-table substring filter across all cells.
+            const needle = search.trim().toLowerCase();
+            const matched =
+                needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle)));
+
+            return { columns: ["__id__", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
         },
     });
 
@@ -240,8 +246,8 @@ describe("dataBrowser", () => {
         expect(rowTexts()).toEqual(["hello", "world", "again"]);
     });
 
-    test("filters rows case-insensitively across all cells", async () => {
-        expect.assertions(2);
+    test("searches the whole table server-side, case-insensitively", async () => {
+        expect.assertions(3);
 
         const mock = createBrowserClient();
 
@@ -253,11 +259,27 @@ describe("dataBrowser", () => {
 
         fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "WOR" } });
 
-        expect(screen.getAllByTestId("db-row")).toHaveLength(1);
+        // Debounced → re-fetched from the server with the search arg.
+        await waitFor(() => {
+            if (rowTexts().length !== 1) {
+                throw new Error("search not applied yet");
+            }
+        });
+
         expect(rowTexts()).toEqual(["world"]);
+
+        const searchCall = mock.query.mock.calls.findLast((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage) as [
+            unknown,
+            { offset: number; search: string },
+            unknown,
+        ];
+
+        // The search is sent to the server (lowercased trim applied client-side) and resets to page 0.
+        expect(searchCall[1].search).toBe("WOR");
+        expect(searchCall[1].offset).toBe(0);
     });
 
-    test("composes filter and sort on the loaded page", async () => {
+    test("composes server search with page-local sort", async () => {
         expect.assertions(1);
 
         const mock = createBrowserClient();
@@ -268,15 +290,22 @@ describe("dataBrowser", () => {
 
         await screen.findByTestId("db-rows");
 
-        // Keep rows whose any cell contains "o" (hello, world) then sort ascending.
+        // Server keeps the rows containing "o" (hello, world); sort them ascending locally.
         fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "o" } });
+
+        await waitFor(() => {
+            if (rowTexts().length !== 2) {
+                throw new Error("search not applied yet");
+            }
+        });
+
         fireEvent.click(screen.getByTestId("db-sort-text"));
 
         expect(rowTexts()).toEqual(["hello", "world"]);
     });
 
-    test("does not refetch the page when sorting or filtering", async () => {
-        expect.assertions(1);
+    test("re-fetches from the server when searching, but not when sorting", async () => {
+        expect.assertions(2);
 
         const mock = createBrowserClient();
 
@@ -286,18 +315,26 @@ describe("dataBrowser", () => {
 
         await screen.findByTestId("db-rows");
 
-        const pageCallsBefore = mock.query.mock.calls.filter(
-            (call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage,
-        ).length;
+        const pageCalls = (): number =>
+            mock.query.mock.calls.filter((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage).length;
+
+        // Sorting is page-local — no server round-trip.
+        const beforeSort = pageCalls();
 
         fireEvent.click(screen.getByTestId("db-sort-text"));
+
+        expect(pageCalls()).toBe(beforeSort);
+
+        // Searching IS server-side — it re-fetches (whole-table filter).
         fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "or" } });
 
-        const pageCallsAfter = mock.query.mock.calls.filter(
-            (call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage,
-        ).length;
+        await waitFor(() => {
+            if (pageCalls() <= beforeSort) {
+                throw new Error("search did not refetch yet");
+            }
+        });
 
-        expect(pageCallsAfter).toBe(pageCallsBefore);
+        expect(pageCalls()).toBeGreaterThan(beforeSort);
     });
 
     test("virtualizes a large page so the DOM row count stays bounded", async () => {
@@ -355,9 +392,14 @@ describe("dataBrowser — editable", () => {
                     return { id: resultId, op };
                 }
 
-                const { limit = 50, offset = 0 } = args as PageArgs;
+                const { limit = 50, offset = 0, search = "" } = args as PageArgs;
+                const needle = search.trim().toLowerCase();
+                const matched =
+                    needle === ""
+                        ? MESSAGE_ROWS
+                        : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle)));
 
-                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS.slice(offset, offset + limit), total: MESSAGE_ROWS.length };
+                return { columns: ["__id__", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
             },
         });
 
@@ -495,10 +537,17 @@ describe("dataBrowser — editable", () => {
 
         await screen.findByTestId("db-rows");
 
-        // Sort descending and filter to a single row — `world` is m2 in the fixture.
+        // Sort descending and search to a single row — `world` is m2 in the fixture.
         fireEvent.click(screen.getByTestId("db-sort-text"));
         fireEvent.click(screen.getByTestId("db-sort-text"));
         fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "world" } });
+
+        // Wait for the debounced server search to narrow the page to just m2.
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 1) {
+                throw new Error("search not applied yet");
+            }
+        });
 
         // The editor prefills from the ORIGINAL row, not a sorted/filtered copy.
         fireEvent.click(screen.getByTestId("db-edit-m2"));

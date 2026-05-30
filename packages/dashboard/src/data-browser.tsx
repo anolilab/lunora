@@ -1,15 +1,5 @@
 import { useCirrus } from "@cirrus/react";
-import {
-    type ColumnDef,
-    type FilterFn,
-    flexRender,
-    getCoreRowModel,
-    getFilteredRowModel,
-    getSortedRowModel,
-    type Row,
-    type SortingState,
-    useReactTable,
-} from "@tanstack/react-table";
+import { type ColumnDef, flexRender, getCoreRowModel, getSortedRowModel, type Row, type SortingState, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type CSSProperties, type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -19,6 +9,7 @@ import { adminRef, callOptions } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
+import { useDebounced } from "./use-debounced.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 
@@ -124,20 +115,6 @@ const formatCell = (value: unknown): string => {
     return String(value);
 };
 
-/**
- * Global filter: case-insensitive substring match across every cell of a row.
- * Reuses {@link formatCell} so objects/null match the text the table renders.
- */
-const globalFilter: FilterFn<TableRow> = (row, _columnId, value: string): boolean => {
-    const query = value.trim().toLowerCase();
-
-    if (query === "") {
-        return true;
-    }
-
-    return row.getAllCells().some((cell) => formatCell(cell.getValue()).toLowerCase().includes(query));
-};
-
 /** The header glyph for a column given react-table's sort state: ` ▲`, ` ▼`, or empty. */
 const sortIndicator = (sorted: "asc" | "desc" | false): string => {
     if (sorted === "asc") {
@@ -180,11 +157,15 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     const [pageError, setPageError] = useState<null | string>(null);
     const [viewMode, setViewMode] = useState<"json" | "table">("table");
 
-    // Page-local sort + filter. These operate ONLY on the rows of the currently
-    // loaded page — they are NOT a server query and never refetch. Reset whenever
-    // a new table is selected so stale state can't leak across selections.
+    // Page-local sort: operates ONLY on the rows of the currently loaded page.
+    // Reset whenever a new table is selected so stale state can't leak across
+    // selections.
     const [sorting, setSorting] = useState<SortingState>([]);
+
+    // Search box value. Debounced into a server-side `search` (filters across the
+    // WHOLE table, not just the loaded page), which re-fetches from offset 0.
     const [filter, setFilter] = useState<string>("");
+    const search = useDebounced(filter.trim(), 300);
 
     // Edit state: the row being edited (its id, or `""` for a new insert) and
     // the JSON-doc draft. `null` when no editor is open. `writeError` surfaces a
@@ -198,7 +179,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     // loads (in fetchPage), so the live subscription follows what's displayed —
     // not the shard-key input as it's typed, nor a table selection whose offset
     // reset hasn't landed yet. Keyed independently of `shardKey`/`offset` state.
-    const [loaded, setLoaded] = useState<null | { offset: number; shard: string; table: string }>(null);
+    const [loaded, setLoaded] = useState<null | { offset: number; search: string; shard: string; table: string }>(null);
 
     const fetchTables = useCallback(
         async (shard: string): Promise<void> => {
@@ -218,15 +199,15 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     );
 
     const fetchPage = useCallback(
-        async (shard: string, table: string, nextOffset: number): Promise<void> => {
+        async (shard: string, table: string, nextOffset: number, search: string): Promise<void> => {
             setPageError(null);
 
             try {
-                const result = (await client.query(READ_TABLE_PAGE, { limit: pageSize, offset: nextOffset, table }, callOptions(shard))) as TablePage;
+                const result = (await client.query(READ_TABLE_PAGE, { limit: pageSize, offset: nextOffset, search, table }, callOptions(shard))) as TablePage;
 
                 setPage(result);
                 setOffset(nextOffset);
-                setLoaded({ offset: nextOffset, shard, table });
+                setLoaded({ offset: nextOffset, search, shard, table });
             } catch (error) {
                 setPage(null);
                 setPageError((error as Error).message);
@@ -248,7 +229,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     // still pending — and only runs once a page has actually loaded.
     useLiveAdmin<TablePage>(
         ADMIN_FUNCTIONS.readTablePage,
-        { limit: pageSize, offset: loaded?.offset ?? 0, table: loaded?.table ?? "" },
+        { limit: pageSize, offset: loaded?.offset ?? 0, search: loaded?.search ?? "", table: loaded?.table ?? "" },
         loaded?.shard ?? "",
         (result) => {
             setPageError(null);
@@ -278,11 +259,11 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
 
     const selectTable = useCallback(
         (table: string): void => {
-            // A fresh table means the previous page-local sort/filter no longer apply.
+            // A fresh table means the previous sort/search no longer apply.
             setSorting([]);
             setFilter("");
             setSelectedTable(table);
-            void fetchPage(shardKey, table, 0);
+            void fetchPage(shardKey, table, 0, "");
         },
         [fetchPage, shardKey],
     );
@@ -293,10 +274,22 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                 return;
             }
 
-            void fetchPage(shardKey, selectedTable, Math.max(0, nextOffset));
+            void fetchPage(shardKey, selectedTable, Math.max(0, nextOffset), search);
         },
-        [fetchPage, selectedTable, shardKey],
+        [fetchPage, search, selectedTable, shardKey],
     );
+
+    // Re-run the server-side search (from offset 0) when the debounced query
+    // changes for the loaded table. Skipped until a table is selected, and when
+    // the debounced value already matches what's loaded (e.g. right after a
+    // table switch cleared it) so it doesn't double-fetch.
+    useEffect(() => {
+        if (selectedTable === null || loaded === null || loaded.search === search) {
+            return;
+        }
+
+        void fetchPage(shardKey, selectedTable, 0, search);
+    }, [search, selectedTable, shardKey, loaded, fetchPage]);
 
     // Issue a writeRow op then reload the current page so the change shows. A
     // delete passes no doc; insert (id === "") / patch carry the JSON draft.
@@ -323,12 +316,12 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
             try {
                 (await client.query(WRITE_ROW, { doc, id: id ?? undefined, op, table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
                 setEditing(null);
-                await fetchPage(shardKey, selectedTable, offset);
+                await fetchPage(shardKey, selectedTable, offset, search);
             } catch (error) {
                 setWriteError((error as Error).message);
             }
         },
-        [client, fetchPage, offset, selectedTable, shardKey],
+        [client, fetchPage, offset, search, selectedTable, shardKey],
     );
 
     const columns = page?.columns;
@@ -352,16 +345,15 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
 
     const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 
+    // Search is server-side now (see the debounced `search` effect); the table
+    // model only owns page-local sorting over the already-filtered page.
     const table = useReactTable<TableRow>({
         columns: columnDefs,
         data,
         getCoreRowModel: getCoreRowModel(),
-        getFilteredRowModel: getFilteredRowModel(),
         getSortedRowModel: getSortedRowModel(),
-        globalFilterFn: globalFilter,
-        onGlobalFilterChange: setFilter,
         onSortingChange: setSorting,
-        state: { globalFilter: filter, sorting },
+        state: { sorting },
     });
 
     // The post-sort/filter rows for this page. We keep react-table's `Row`
@@ -546,12 +538,12 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                         </button>
                         <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="db" />
                         <input
-                            aria-label="Filter rows"
+                            aria-label="Search rows"
                             data-testid="db-filter"
                             onChange={(event) => {
                                 setFilter(event.target.value);
                             }}
-                            placeholder="filter rows"
+                            placeholder="search table…"
                             value={filter}
                         />
                         {editable && (

@@ -42,11 +42,21 @@ export interface TablePage {
 export interface ReadTablePageOptions {
     limit?: number;
     offset?: number;
+    /**
+     * Case-insensitive substring filter applied across every column server-side
+     * (each column `CAST … AS TEXT LIKE`). When set, `total` reflects the
+     * matching-row count so pagination stays correct over the filtered set.
+     * Empty/whitespace is treated as no filter.
+     */
+    search?: string;
     table: string;
 }
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 500;
+
+/** Escape LIKE wildcards so a user's literal `%`/`_`/`\` match themselves (paired with `ESCAPE '\'`). */
+const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/g, (character) => `\\${character}`);
 
 /**
  * Tables the data browser must never surface: SQLite's own bookkeeping
@@ -107,12 +117,31 @@ export const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): Tabl
     const offset = Math.max(0, Math.trunc(options.offset ?? 0));
     const quoted = quoteIdentifier(table);
 
-    const total = countRows(sql, quoted);
-    const rows = sql.exec(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`, limit, offset).toArray();
     const columns = sql
         .exec<{ name: string }>(`PRAGMA table_info(${quoted})`)
         .toArray()
         .map((column) => column.name);
+
+    const needle = options.search?.trim() ?? "";
+
+    // No filter: a plain windowed read against the full row count.
+    if (needle === "" || columns.length === 0) {
+        const total = countRows(sql, quoted);
+        const rows = sql.exec(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`, limit, offset).toArray();
+
+        return { columns, rows, total };
+    }
+
+    // Server-side search: OR a case-insensitive LIKE across every column. Column
+    // names come from PRAGMA (the real schema, already validated), and the
+    // pattern is bound as a parameter — so neither can inject SQL. `total` is the
+    // filtered count, keeping the client's pager honest over the matched set.
+    const pattern = `%${escapeLike(needle)}%`;
+    const where = columns.map((name) => String.raw`CAST(${quoteIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\'`).join(" OR ");
+    const matchParams = columns.map(() => pattern);
+
+    const total = Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted} WHERE ${where}`, ...matchParams).one().c);
+    const rows = sql.exec(`SELECT * FROM ${quoted} WHERE ${where} LIMIT ? OFFSET ?`, ...matchParams, limit, offset).toArray();
 
     return { columns, rows, total };
 };
