@@ -100,6 +100,35 @@ ratio change between two runs** — that's the regression signal.
 5. Each `bench(...)` body should be tight — one operation under measure,
    no setup work inside the timed function. Use module-level fixtures.
 
+## Performance gotchas (surfaced by the bench suite)
+
+A few costs the benches reveal that are worth being aware of when
+designing schemas + handlers:
+
+- **D1 column-dialect scan is much more expensive than DO JSON-blob
+  scan.** An indexed `count()` on D1 is ~65× faster than its scan;
+  the same on `@cirrus/do` is only ~7× faster (SQLite has a fast path
+  for unfiltered `COUNT(*)` over JSON blobs). The takeaway: **declare
+  `aggregateIndex` aggressively on `.global()` tables**, where the
+  scan baseline really hurts.
+- **`httpRoute + body` (POST JSON) is roughly half the throughput of
+  the plain `httpRoute` path.** The dominator is hono's
+  `c.req.json()` — V8's `JSON.parse` on the body. For large bodies
+  (>100KB) consider a streaming-validated path; for typical small
+  bodies the cost is fine but worth knowing the budget split.
+- **`+ rankIndex` insert is ~60% slower than bare.** Maintaining the
+  sort-key SQLite index per write is inherent; for tables where you
+  only need rank occasionally, prefer materialising the rank via an
+  `aggregateIndex` of `count(rows-before)` if the partition is small.
+  `syncRanks` now short-circuits on patches that don't touch
+  partition / sort / static-where fields, so a patch on an unrelated
+  field on a `rankIndex` table pays the floor cost.
+- **`bare patch` floor is ~1.8× slower than `bare insert`.** Patch has
+  to read+decode the prior row to feed triggers, aggregate diff, and
+  rank-key diff. Routing through the shared `lookupById` helper
+  collapses the table probe + row fetch into one SQL round-trip — the
+  prior code did three.
+
 ## Not yet wired
 
 - **CI integration.** Benches don't run on PRs today; regressions will

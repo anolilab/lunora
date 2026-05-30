@@ -1061,30 +1061,6 @@ const runWrite = (sql: SqlExec, table: string, query: string, ...params: unknown
     }
 };
 
-const tableNameFromId = (sql: SqlExec, schema: SchemaLike, id: string): string | undefined => {
-    // The adapter stores `id` as TEXT in every table; we don't tag the
-    // table name onto the id, so we have to probe each known table. In
-    // practice schemas hold a small number of tables; SQLite returns the
-    // first hit fast since `id` is the primary key.
-    //
-    // `.global()` tables live in D1, not the DO — no SQLite table exists for
-    // them here, so probing one would raise `no such table`. Skip them the
-    // same way `runShardMigrations` does.
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind === "global") {
-            continue;
-        }
-
-        const row = runSql(sql, `SELECT 1 FROM ${quoteIdentifier(tableName)} WHERE id = ? LIMIT 1`, id).toArray();
-
-        if (row.length > 0) {
-            return tableName;
-        }
-    }
-
-    return undefined;
-};
-
 export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
@@ -1308,6 +1284,31 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         for (const index of indexes) {
+            // Fast path: if both sides exist and no field this index reads
+            // (partition / sort / static-where) actually changed, the
+            // companion entry is already correct — skip the DELETE+INSERT
+            // pair. Catches the common patch-of-unrelated-field case for
+            // rankIndex tables, which would otherwise pay full maintenance
+            // cost on every write.
+            if (previous && next) {
+                const partitionFields = index.partitionBy ?? [];
+                const sortFields = index.sortBy.map((key) => key.field);
+                const whereFields = index.where ? Object.keys(index.where) : [];
+                let unchanged = true;
+
+                for (const field of [...partitionFields, ...sortFields, ...whereFields]) {
+                    if (previous[field] !== next[field]) {
+                        unchanged = false;
+
+                        break;
+                    }
+                }
+
+                if (unchanged) {
+                    continue;
+                }
+            }
+
             const rankTable = rankTableName(tableName, index.name);
 
             // The previous row had a companion entry only if it matched the
@@ -1365,20 +1366,69 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
     };
 
+    /**
+     * Locate a row by id and return both the owning table and the decoded
+     * document in a single pass. The previous code base did this in two
+     * steps — `tableNameFromId` (which probes every table with a SELECT
+     * 1) followed by another `tableNameFromId` lookup inside each write
+     * method, plus a separate SELECT for the row — so a single `patch`/
+     * `delete` made 3–4 SQL round-trips even on a one-table schema.
+     * Routing every writer through this helper collapses the lookup to a
+     * single probe loop that returns the row when it hits.
+     */
+    const lookupById = (id: string): { row: Record<string, unknown>; tableName: string } | undefined => {
+        for (const [tableName, definition] of Object.entries(schema.tables)) {
+            if (definition.shardMode?.kind === "global") {
+                continue;
+            }
+
+            const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id).toArray();
+
+            if (rows.length > 0) {
+                const row = rowToDoc(rows[0]);
+
+                if (row) {
+                    return { row, tableName };
+                }
+            }
+        }
+
+        return undefined;
+    };
+
+    /**
+     * Lighter variant: returns just the owning table without decoding the
+     * row's JSON blob. Used by `replace` when no trigger or aggregate/rank
+     * index needs the previous row — skipping the JSON parse there saves
+     * the ~30% per-op cost the full-row fetch would otherwise add.
+     */
+    const lookupTableForId = (id: string): string | undefined => {
+        for (const [tableName, definition] of Object.entries(schema.tables)) {
+            if (definition.shardMode?.kind === "global") {
+                continue;
+            }
+
+            const rows = runSql(sql, `SELECT 1 FROM ${quoteIdentifier(tableName)} WHERE id = ? LIMIT 1`, id).toArray();
+
+            if (rows.length > 0) {
+                return tableName;
+            }
+        }
+
+        return undefined;
+    };
+
     const writer: DatabaseWriterLike = {
         async get(id) {
-            const tableName = tableNameFromId(sql, schema, id);
+            const located = lookupById(id);
 
-            if (!tableName) {
+            if (!located) {
                 return null;
             }
 
-            onRead(tableName, id);
+            onRead(located.tableName, id);
 
-            const cursor = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
-            const rows = cursor.toArray();
-
-            return rowToDoc(rows[0]);
+            return located.row;
         },
 
         query(tableName) {
@@ -2039,17 +2089,18 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async patch(id, patch) {
-            const existing = await writer.get(id);
+            // Single probe — eliminates the redundant `tableNameFromId` +
+            // `writer.get` chain that doubled the SQL round-trips per patch
+            // on the prior code path.
+            const located = lookupById(id);
 
-            if (!existing) {
+            if (!located) {
                 throw new Error(`document not found: ${id}`);
             }
 
-            const tableName = tableNameFromId(sql, schema, id);
+            const { row: existing, tableName } = located;
 
-            if (!tableName) {
-                throw new Error(`document not found: ${id}`);
-            }
+            onRead(tableName, id);
 
             const merged = { ...existing, ...patch, _id: id };
 
@@ -2077,20 +2128,26 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async replace(id, document) {
-            const tableName = tableNameFromId(sql, schema, id);
+            // Read the previous row only when an update trigger needs it OR
+            // the table declares aggregate / rank indexes that need a -1/+1
+            // step on the prior `by`-tuple. When neither applies — the
+            // common bare-table case — skip the JSON-decode and just probe
+            // for the owning table (cheaper than `lookupById`'s full fetch).
+            //
+            // To pick the right probe we need the table name first, but
+            // `needsPrevious` is keyed by table — so probe-cheap-then-fetch
+            // ordered so we never pay the full fetch when it wasn't needed.
+            const tableName = lookupTableForId(id);
 
             if (!tableName) {
                 throw new Error(`document not found: ${id}`);
             }
 
-            // Read the previous row when either an update trigger needs it OR
-            // the table declares aggregate / rank indexes that need a -1/+1
-            // step on the prior `by`-tuple.
             const needsPrevious
                 = hasTrigger(schema, tableName, "update")
                     || (schema.tables[tableName]?.aggregateIndexes ?? []).length > 0
                     || (schema.tables[tableName]?.rankIndexes ?? []).length > 0;
-            const previous = needsPrevious ? await writer.get(id) ?? undefined : undefined;
+            const previous = needsPrevious ? lookupById(id)?.row : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
@@ -2122,13 +2179,15 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async delete(id) {
-            const tableName = tableNameFromId(sql, schema, id);
+            // Single probe — get the table + row in one pass instead of
+            // probing twice (`tableNameFromId` + `writer.get`).
+            const located = lookupById(id);
 
-            if (!tableName) {
+            if (!located) {
                 return;
             }
 
-            const existing = await writer.get(id);
+            const { tableName, row: existing } = located;
 
             // `before` fires ahead of cascade resolution so a throwing guard
             // aborts the delete before any holder rows are touched.
