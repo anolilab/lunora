@@ -59,9 +59,11 @@ export default createConfig(
         rules: {
             "@stylistic/max-statements-per-line": "off",
             // Formatting these is Prettier's job; the @stylistic preferences here
-            // (`=` line position, ternary line breaks) conflict with Prettier's
-            // output, so disable them rather than ping-pong the two formatters.
+            // (`=` line position, ternary line breaks, parens around a
+            // spread-ternary) conflict with Prettier's output, so disable them
+            // rather than ping-pong the two formatters.
             "@stylistic/multiline-ternary": "off",
+            "@stylistic/no-extra-parens": "off",
             "@stylistic/operator-linebreak": "off",
             "@stylistic/quotes": "off",
             "@typescript-eslint/array-type": "off",

@@ -23,6 +23,7 @@
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
-        "typescript": "catalog:tsc"
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
     }
 }
