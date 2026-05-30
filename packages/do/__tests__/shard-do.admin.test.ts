@@ -5,7 +5,7 @@ import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration.js";
 import { runDataMigration } from "../src/data-migration.js";
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
-import type { RunShardMigrationArgs, ShardDOState } from "../src/shard-do.js";
+import type { RunShardMigrationArgs, RunShardWriteArgs, RunShardWriteResult, ShardDOState } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
@@ -307,5 +307,149 @@ describe("shardDO admin data migrations", () => {
         expect(body.result.cache).toBeNull();
 
         expectTypeOf(body.result.shard).toBeString();
+    });
+});
+
+/**
+ * Drives the `__cirrus_admin__:writeRow` op through a real schema-aware writer,
+ * mirroring what the codegen-generated subclass emits. Proves single-row
+ * insert/patch/replace/delete land in SQLite via the admin path.
+ */
+class EditableShard extends ShardDO {
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        const writer = createShardCtxDb({
+            broadcast: (delta) => {
+                this.recordChangedTable(delta.table);
+            },
+            schema: usersSchema,
+            sql: this.sql as SqlExec,
+        });
+
+        if (args.op === "insert") {
+            return { id: await writer.insert(args.table, args.doc ?? {}), op: "insert" };
+        }
+
+        if (args.op === "delete") {
+            await writer.delete(args.id ?? "");
+
+            return { id: args.id ?? null, op: "delete" };
+        }
+
+        if (args.op === "replace") {
+            await writer.replace(args.id ?? "", args.doc ?? {});
+
+            return { id: args.id ?? null, op: "replace" };
+        }
+
+        await writer.patch(args.id ?? "", args.doc ?? {});
+
+        return { id: args.id ?? null, op: "patch" };
+    }
+}
+
+describe("shardDO admin row writes", () => {
+    let db: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(() => {
+        db = createSqliteExec();
+        runShardMigrations(db.sql, usersSchema);
+
+        state = {
+            storage: { sql: db.sql as unknown as ShardDOState["storage"]["sql"] },
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+        };
+    });
+
+    afterEach(() => {
+        db.close();
+    });
+
+    const writeRequest = (args: Record<string, unknown>): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: ADMIN_FUNCTIONS.writeRow }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    const rowCount = (): number => Number(db.raw(`SELECT COUNT(*) AS c FROM "users"`)[0]?.["c"] ?? 0);
+
+    test("inserts a row and returns its assigned id", async () => {
+        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(writeRequest({ doc: { name: "Ada", version: 1 }, op: "insert", table: "users" }));
+
+        expect(response.status).toBe(200);
+
+        const body = (await response.json()) as { result: RunShardWriteResult };
+
+        expect(body.result.op).toBe("insert");
+        expect(typeof body.result.id).toBe("string");
+        expect(rowCount()).toBe(1);
+    });
+
+    test("patches an existing row", async () => {
+        const seed = createShardCtxDb({ schema: usersSchema, sql: db.sql });
+        const id = await seed.insert("users", { name: "old", version: 1 });
+
+        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(writeRequest({ doc: { name: "new" }, id, op: "patch", table: "users" }));
+
+        expect(response.status).toBe(200);
+
+        const name = db.raw(`SELECT json_extract("__doc__", '$.name') AS name FROM "users" WHERE id = ?`, id)[0]?.["name"];
+
+        expect(name).toBe("new");
+    });
+
+    test("deletes a row", async () => {
+        const seed = createShardCtxDb({ schema: usersSchema, sql: db.sql });
+        const id = await seed.insert("users", { name: "doomed", version: 1 });
+
+        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(writeRequest({ id, op: "delete", table: "users" }));
+
+        expect(response.status).toBe(200);
+        expect(rowCount()).toBe(0);
+    });
+
+    test("rejects an unknown op (400)", async () => {
+        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(writeRequest({ doc: {}, op: "bogus", table: "users" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    test("requires an id for patch (400)", async () => {
+        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(writeRequest({ doc: { name: "x" }, op: "patch", table: "users" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    test("base ShardDO rejects writeRow as an unknown table (no override)", async () => {
+        class BareShard extends ShardDO {
+            public override async handleRpc(): Promise<unknown> {
+                return null;
+            }
+        }
+
+        const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(writeRequest({ doc: { name: "x" }, op: "insert", table: "users" }));
+
+        expect(response.status).toBe(404);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "UNKNOWN_TABLE" } });
     });
 });

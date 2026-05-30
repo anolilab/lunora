@@ -117,6 +117,32 @@ export interface RunShardImportArgs {
     startLine?: number;
 }
 
+/**
+ * The single-row mutation the data browser's edit actions issue. `op` selects
+ * the writer method:
+ *
+ * - `insert` — create a row from `doc` (the writer assigns `_id`/`_creationTime`).
+ * - `patch` — shallow-merge `doc` into the row `id`.
+ * - `replace` — overwrite the row `id`'s fields with `doc` (keeping `_id`).
+ * - `delete` — remove the row `id`.
+ *
+ * Routing through the schema-aware writer (not raw SQL) is deliberate: it keeps
+ * the FTS / aggregate / rank shadow tables in sync and runs validators, exactly
+ * like a user mutation would.
+ */
+export interface RunShardWriteArgs {
+    doc?: Record<string, unknown>;
+    id?: string;
+    op: "delete" | "insert" | "patch" | "replace";
+    table: string;
+}
+
+/** Outcome of a {@link RunShardWriteArgs} operation. `id` is the affected row's primary key. */
+export interface RunShardWriteResult {
+    id: null | string;
+    op: "delete" | "insert" | "patch" | "replace";
+}
+
 /** Per-subscription memo used to suppress no-op pushes. */
 interface SubscriptionMemo {
     lastJson: string;
@@ -638,6 +664,16 @@ export abstract class ShardDO {
                 return jsonResponse({ result }, 200);
             }
 
+            if (functionPath === ADMIN_FUNCTIONS.writeRow) {
+                const result = await this.runShardWrite(parseWriteRowArgs(args));
+
+                // The write went through the writer, which records the touched
+                // table; flush so live subscribers re-run against the new value.
+                await this.flushChangedTables();
+
+                return jsonResponse({ result }, 200);
+            }
+
             return jsonResponse({ error: { code: "UNKNOWN_ADMIN_OP", message: `unknown admin op: ${functionPath}` } }, 404);
         } catch (error: unknown) {
             return this.errorToResponse(error);
@@ -684,6 +720,17 @@ export abstract class ShardDO {
         void args;
 
         return Promise.resolve({ conflicts: 0, errors: [], inserted: {} });
+    }
+
+    /**
+     * Apply a single-row insert/patch/replace/delete through the schema-aware
+     * writer. The base class can't build a writer without the user's `schema.ts`,
+     * so it reports the table as unknown; the codegen-generated subclass overrides
+     * this to run the op against a live `createShardCtxDb(...)` writer (which
+     * maintains the FTS/aggregate/rank shadow tables and runs validators).
+     */
+    protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { name: "CirrusError", code: "UNKNOWN_TABLE", status: 404 }));
     }
 
     /**
@@ -1144,6 +1191,38 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
         id,
         maxBatches: typeof args["maxBatches"] === "number" ? args["maxBatches"] : undefined,
     };
+};
+
+/**
+ * Validate the `__cirrus_admin__:writeRow` payload. Enforces that `id` is
+ * present for ops that target an existing row and that `doc` is present for ops
+ * that carry one, throwing a 400 `CirrusError` otherwise — the writer would
+ * reject these too, but failing here keeps the error shape uniform.
+ */
+const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => {
+    const { op } = args;
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+
+    if (op !== "insert" && op !== "patch" && op !== "replace" && op !== "delete") {
+        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (table.trim() === "") {
+        throw Object.assign(new Error("writeRow: `table` is required"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    const id = typeof args["id"] === "string" ? args["id"] : undefined;
+    const doc = typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
+
+    if (op !== "insert" && (id === undefined || id === "")) {
+        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (op !== "delete" && doc === undefined) {
+        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    return { doc, id, op, table };
 };
 
 const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {

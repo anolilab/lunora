@@ -17,6 +17,11 @@ export type DashboardTab = "data" | "export" | "files" | "functions" | "globals"
 
 export interface DashboardProps {
     /**
+     * Make the data tab editable (insert/edit/delete rows). Off by default so
+     * the dashboard is read-only unless the host opts in; see {@link DataBrowser}.
+     */
+    readonly dataEditable?: boolean;
+    /**
      * Functions exposed in the runner tab. The runner tab only appears when at
      * least one descriptor is supplied (a query/mutation/action's `kind` is
      * compile-time-only, so it must be named here).
@@ -60,7 +65,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
  * gated server-side by `CIRRUS_ADMIN_TOKEN`; this shell adds no credentials of
  * its own.
  */
-export function Dashboard({ functions, initialShardKey, scheduledCancel, scheduledLoad }: DashboardProps): ReactElement {
+export function Dashboard({ dataEditable = false, functions, initialShardKey, scheduledCancel, scheduledLoad }: DashboardProps): ReactElement {
     // Every tab is always shown: the function runner auto-discovers its list
     // from the worker when no `functions` prop is passed, so it's never empty.
     const tabs: DashboardTab[] = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics"];
@@ -88,7 +93,7 @@ export function Dashboard({ functions, initialShardKey, scheduledCancel, schedul
             </nav>
 
             <div data-testid="dash-panel" role="tabpanel">
-                {current === "data" && <DataBrowser initialShardKey={initialShardKey} />}
+                {current === "data" && <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />}
                 {current === "globals" && <GlobalDataBrowser />}
                 {current === "schema" && <SchemaViewer initialShardKey={initialShardKey} />}
                 {current === "functions" && <FunctionRunner functions={functions} />}

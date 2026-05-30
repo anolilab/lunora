@@ -208,3 +208,148 @@ describe("dataBrowser", () => {
         expect(screen.queryByTestId("db-rows")).toBeNull();
     });
 });
+
+describe("dataBrowser — editable", () => {
+    /** Records writeRow calls and serves the messages table for everything else. */
+    const createEditableClient = (): MockClientHooks =>
+        createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.writeRow) {
+                    const { id, op } = args as { id?: string; op: string };
+
+                    const resultId = op === "insert" ? "m4" : id ?? null;
+
+                    return { id: resultId, op };
+                }
+
+                const { limit = 50, offset = 0 } = args as PageArgs;
+
+                return { columns: ["__id__", "text"], rows: MESSAGE_ROWS.slice(offset, offset + limit), total: MESSAGE_ROWS.length };
+            },
+        });
+
+    const openMessages = async (mock: MockClientHooks): Promise<void> => {
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <DataBrowser editable pageSize={2} />
+            </CirrusProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("db-table-messages")).toBeDefined();
+        });
+
+        fireEvent.click(screen.getByTestId("db-table-messages"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("db-page")).toBeDefined();
+        });
+    };
+
+    test("hides edit controls unless `editable` is set", async () => {
+        const mock = createBrowserClient();
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <DataBrowser pageSize={2} />
+            </CirrusProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("db-table-messages")).toBeDefined();
+        });
+
+        fireEvent.click(screen.getByTestId("db-table-messages"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("db-page")).toBeDefined();
+        });
+
+        expect(screen.queryByTestId("db-add-row")).toBeNull();
+        expect(screen.queryByTestId("db-edit-m1")).toBeNull();
+    });
+
+    test("deletes a row via the writeRow op", async () => {
+        const mock = createEditableClient();
+
+        await openMessages(mock);
+
+        fireEvent.click(screen.getByTestId("db-delete-m1"));
+
+        await waitFor(() => {
+            const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
+
+            expect(call).toBeDefined();
+        });
+
+        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+
+        expect(call[1]).toMatchObject({ id: "m1", op: "delete", table: "messages" });
+    });
+
+    test("inserts a new row from the editor", async () => {
+        const mock = createEditableClient();
+
+        await openMessages(mock);
+
+        fireEvent.click(screen.getByTestId("db-add-row"));
+        fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: '{ "text": "fresh" }' } });
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        await waitFor(() => {
+            const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
+
+            expect(call).toBeDefined();
+        });
+
+        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+
+        expect(call[1]).toMatchObject({ doc: { text: "fresh" }, op: "insert", table: "messages" });
+    });
+
+    test("reports invalid JSON without calling the server", async () => {
+        const mock = createEditableClient();
+
+        await openMessages(mock);
+
+        fireEvent.click(screen.getByTestId("db-add-row"));
+        fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: "{ not json" } });
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("db-write-error").textContent).toContain("Invalid JSON");
+        });
+
+        expect(mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
+    });
+
+    test("edits an existing row (patch) prefilled from its doc", async () => {
+        const mock = createEditableClient();
+
+        await openMessages(mock);
+
+        fireEvent.click(screen.getByTestId("db-edit-m1"));
+
+        // The editor prefills the row's editable fields (id/meta stripped).
+        const editor = screen.getByTestId("db-editor-doc") as HTMLTextAreaElement;
+
+        expect(JSON.parse(editor.value)).toEqual({ text: "hello" });
+
+        fireEvent.change(editor, { target: { value: '{ "text": "edited" }' } });
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        await waitFor(() => {
+            const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
+
+            expect(call).toBeDefined();
+        });
+
+        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+
+        expect(call[1]).toMatchObject({ doc: { text: "edited" }, id: "m1", op: "patch", table: "messages" });
+    });
+});

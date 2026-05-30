@@ -2,9 +2,15 @@ import type { FunctionReference } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import { type ReactElement, useCallback, useEffect, useState } from "react";
 
-import { ADMIN_FUNCTIONS, type TableInfo, type TablePage } from "./admin.js";
+import { ADMIN_FUNCTIONS, type TableInfo, type TablePage, type WriteRowResult } from "./admin.js";
 
 export interface DataBrowserProps {
+    /**
+     * Allow editing: surfaces insert/edit/delete actions that issue
+     * `__cirrus_admin__:writeRow` ops through the schema-aware writer. Off by
+     * default — the browser is read-only unless the host opts in.
+     */
+    readonly editable?: boolean;
     /** Shard key the browser targets on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
     /** Rows requested per page. Clamped server-side to `[1, 500]`. */
@@ -15,6 +21,7 @@ const DEFAULT_PAGE_SIZE = 50;
 
 const LIST_TABLES: FunctionReference = { __cirrusRef: ADMIN_FUNCTIONS.listTables };
 const READ_TABLE_PAGE: FunctionReference = { __cirrusRef: ADMIN_FUNCTIONS.readTablePage };
+const WRITE_ROW: FunctionReference = { __cirrusRef: ADMIN_FUNCTIONS.writeRow };
 
 const callOptions = (shardKey: string): { shardKey?: string } => {
     const trimmed = shardKey.trim();
@@ -23,14 +30,60 @@ const callOptions = (shardKey: string): { shardKey?: string } => {
 };
 
 /**
- * A stable React key for a row. Cirrus tables always carry an `__id__` primary
- * key, so prefer it; the positional fallback only applies to the rare idless
- * page and is hidden behind this helper so it isn't an inline array-index key.
+ * The primary key of a row. Shard tables store it in the `id` column; the
+ * `__id__` / `_id` fallbacks cover the column aliases other layers expose.
+ * Returns `null` when no id-like column is present (an uneditable row).
+ */
+const rowId = (row: Record<string, unknown>): null | string => {
+    for (const key of ["id", "__id__", "_id"]) {
+        const value = row[key];
+
+        if (typeof value === "string" || typeof value === "number") {
+            return String(value);
+        }
+    }
+
+    return null;
+};
+
+/**
+ * The editable document for a row. Shard rows keep their fields in a `__doc__`
+ * JSON column; when present we parse it, otherwise we fall back to the row's own
+ * non-meta columns. Used to prefill the edit form.
+ */
+const rowDoc = (row: Record<string, unknown>): Record<string, unknown> => {
+    const raw = row["__doc__"];
+
+    if (typeof raw === "string") {
+        try {
+            const parsed = JSON.parse(raw) as unknown;
+
+            if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+                return parsed as Record<string, unknown>;
+            }
+        } catch {
+            // fall through to the column-strip path
+        }
+    }
+
+    const doc: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(row)) {
+        if (key !== "id" && key !== "__id__" && key !== "_id" && key !== "_creationTime" && key !== "__doc__") {
+            doc[key] = value;
+        }
+    }
+
+    return doc;
+};
+
+/**
+ * A stable React key for a row. Cirrus tables always carry a primary key, so
+ * prefer it; the positional fallback only applies to the rare idless page and is
+ * hidden behind this helper so it isn't an inline array-index key.
  */
 const rowKey = (row: Record<string, unknown>, index: number): string => {
-    const id = row["__id__"];
-
-    return typeof id === "string" || typeof id === "number" ? String(id) : `row-${index}`;
+    return rowId(row) ?? `row-${index}`;
 };
 
 /** Render a single cell value as text without throwing on objects or null. */
@@ -56,7 +109,7 @@ const formatCell = (value: unknown): string => {
  * server's `CIRRUS_ADMIN_TOKEN`. The host is responsible for configuring the
  * client's auth token — this component issues no credentials of its own.
  */
-export function DataBrowser({ initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement {
+export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement {
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -68,6 +121,12 @@ export function DataBrowser({ initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: D
     const [page, setPage] = useState<TablePage | null>(null);
     const [pageError, setPageError] = useState<null | string>(null);
     const [viewMode, setViewMode] = useState<"json" | "table">("table");
+
+    // Edit state: the row being edited (its id, or `""` for a new insert) and
+    // the JSON-doc draft. `null` when no editor is open. `writeError` surfaces a
+    // rejected write without disturbing the page-read error.
+    const [editing, setEditing] = useState<null | { docText: string; id: null | string }>(null);
+    const [writeError, setWriteError] = useState<null | string>(null);
 
     const fetchTables = useCallback(
         async (shard: string): Promise<void> => {
@@ -125,6 +184,39 @@ export function DataBrowser({ initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: D
             void fetchPage(shardKey, selectedTable, Math.max(0, nextOffset));
         },
         [fetchPage, selectedTable, shardKey],
+    );
+
+    // Issue a writeRow op then reload the current page so the change shows. A
+    // delete passes no doc; insert (id === "") / patch carry the JSON draft.
+    const writeRow = useCallback(
+        async (op: "delete" | "insert" | "patch", id: null | string, docText?: string): Promise<void> => {
+            if (selectedTable === null) {
+                return;
+            }
+
+            setWriteError(null);
+
+            let doc: Record<string, unknown> | undefined;
+
+            if (op !== "delete") {
+                try {
+                    doc = docText === undefined || docText.trim() === "" ? {} : (JSON.parse(docText) as Record<string, unknown>);
+                } catch (error) {
+                    setWriteError(`Invalid JSON: ${(error as Error).message}`);
+
+                    return;
+                }
+            }
+
+            try {
+                (await client.query(WRITE_ROW, { doc, id: id ?? undefined, op, table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
+                setEditing(null);
+                await fetchPage(shardKey, selectedTable, offset);
+            } catch (error) {
+                setWriteError((error as Error).message);
+            }
+        },
+        [client, fetchPage, offset, selectedTable, shardKey],
     );
 
     const total = page?.total ?? 0;
@@ -219,7 +311,57 @@ export function DataBrowser({ initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: D
                         >
                             Refresh
                         </button>
+                        {editable && (
+                            <button
+                                data-testid="db-add-row"
+                                onClick={() => {
+                                    setWriteError(null);
+                                    setEditing({ docText: "{}", id: "" });
+                                }}
+                                type="button"
+                            >
+                                Add row
+                            </button>
+                        )}
                     </div>
+
+                    {editable && editing !== null && (
+                        <div data-testid="db-editor">
+                            <textarea
+                                aria-label="Row document JSON"
+                                data-testid="db-editor-doc"
+                                onChange={(event) => {
+                                    setEditing({ docText: event.target.value, id: editing.id });
+                                }}
+                                value={editing.docText}
+                            />
+                            <button
+                                data-testid="db-editor-save"
+                                onClick={() => {
+                                    void writeRow(editing.id === "" ? "insert" : "patch", editing.id === "" ? null : editing.id, editing.docText);
+                                }}
+                                type="button"
+                            >
+                                Save
+                            </button>
+                            <button
+                                data-testid="db-editor-cancel"
+                                onClick={() => {
+                                    setEditing(null);
+                                    setWriteError(null);
+                                }}
+                                type="button"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    )}
+
+                    {writeError !== null && (
+                        <p data-testid="db-write-error" role="alert">
+                            {writeError}
+                        </p>
+                    )}
 
                     {viewMode === "table" && (
                         <table data-testid="db-rows">
@@ -228,6 +370,7 @@ export function DataBrowser({ initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: D
                                     {page.columns.map((column) => (
                                         <th key={column}>{column}</th>
                                     ))}
+                                    {editable && <th />}
                                 </tr>
                             </thead>
                             <tbody>
@@ -236,6 +379,31 @@ export function DataBrowser({ initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: D
                                         {page.columns.map((column) => (
                                             <td key={column}>{formatCell(row[column])}</td>
                                         ))}
+                                        {editable && (
+                                            <td>
+                                                <button
+                                                    data-testid={`db-edit-${rowKey(row, rowIndex)}`}
+                                                    disabled={rowId(row) === null}
+                                                    onClick={() => {
+                                                        setWriteError(null);
+                                                        setEditing({ docText: JSON.stringify(rowDoc(row), null, 2), id: rowId(row) });
+                                                    }}
+                                                    type="button"
+                                                >
+                                                    Edit
+                                                </button>
+                                                <button
+                                                    data-testid={`db-delete-${rowKey(row, rowIndex)}`}
+                                                    disabled={rowId(row) === null}
+                                                    onClick={() => {
+                                                        void writeRow("delete", rowId(row));
+                                                    }}
+                                                    type="button"
+                                                >
+                                                    Delete
+                                                </button>
+                                            </td>
+                                        )}
                                     </tr>
                                 ))}
                             </tbody>

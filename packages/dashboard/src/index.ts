@@ -11,6 +11,9 @@ export type {
     ShardMetrics,
     TableInfo,
     TablePage,
+    WriteRowArgs,
+    WriteRowOp,
+    WriteRowResult,
 } from "./admin.js";
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS } from "./admin.js";
 export type { DashboardAppProps } from "./app.js";

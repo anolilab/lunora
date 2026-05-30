@@ -22,6 +22,7 @@ export const ADMIN_FUNCTIONS = {
     migrationStatus: "__cirrus_admin__:migrationStatus",
     readTablePage: "__cirrus_admin__:readTablePage",
     runMigration: "__cirrus_admin__:runMigration",
+    writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
 /** A user table plus its current row count. */

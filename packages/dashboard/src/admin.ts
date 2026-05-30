@@ -25,7 +25,27 @@ export const ADMIN_FUNCTIONS = {
     migrationStatus: "__cirrus_admin__:migrationStatus",
     readTablePage: "__cirrus_admin__:readTablePage",
     runMigration: "__cirrus_admin__:runMigration",
+    writeRow: "__cirrus_admin__:writeRow",
 } as const;
+
+/** Which single-row mutation a {@link WriteRowArgs} performs. */
+export type WriteRowOp = "delete" | "insert" | "patch" | "replace";
+
+/** Arguments for the `__cirrus_admin__:writeRow` admin op. */
+export interface WriteRowArgs {
+    /** The row's fields. Required for insert/patch/replace; omitted for delete. */
+    doc?: Record<string, unknown>;
+    /** Primary key of the target row. Required for patch/replace/delete. */
+    id?: string;
+    op: WriteRowOp;
+    table: string;
+}
+
+/** Result of a {@link WriteRowArgs} op — the affected row's primary key. */
+export interface WriteRowResult {
+    id: null | string;
+    op: WriteRowOp;
+}
 
 /** Reactive-cache hit/miss/eviction stats, present when a cache is configured. */
 export interface CacheStats {
