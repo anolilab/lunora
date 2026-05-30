@@ -91,6 +91,13 @@ externally enumerable, so the dashboard can't list shards server-side; instead i
 remembers the shards you actually open and offers them as a `<datalist>` — the
 practical substitute for a shard picker.
 
+`DashboardApp` ships a scoped stylesheet (`<DashboardStyles>`, every rule under
+`.cirrus-dashboard-root`) with a light/dark theme via `prefers-color-scheme` and
+a responsive header/table layout — so it never leaks styles into a host page. If
+you compose panels by hand, render `<DashboardStyles>` under a
+`.cirrus-dashboard-root` wrapper (both are exported) to opt in, or bring your own
+CSS.
+
 Live updates ride the **same `CIRRUS_ADMIN_TOKEN`** as the HTTP admin RPCs. A
 browser `WebSocket` can't send an `Authorization` header, so the dashboard sends
 the admin token as the client's [`wsToken`](../client/README.md), which the

@@ -5,6 +5,7 @@ import { type ReactElement, useEffect, useMemo, useState } from "react";
 import { ConnectionBadge } from "./connection-badge.js";
 import { Dashboard, type DashboardProps } from "./dashboard.js";
 import { ErrorBoundary } from "./error-boundary.js";
+import { DASHBOARD_ROOT_CLASS, DashboardStyles } from "./theme.js";
 import { loadToken, saveToken } from "./token-storage.js";
 
 export interface DashboardAppProps {
@@ -72,7 +73,8 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
     }, [baseUrl, token]);
 
     return (
-        <div data-testid="cirrus-dashboard-app">
+        <div className={DASHBOARD_ROOT_CLASS} data-testid="cirrus-dashboard-app">
+            <DashboardStyles />
             <CirrusProvider client={client}>
                 <header data-testid="dash-app-header">
                     <strong>Cirrus Dashboard</strong>
