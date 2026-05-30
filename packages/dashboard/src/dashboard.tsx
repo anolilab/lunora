@@ -96,17 +96,21 @@ export function Dashboard({ dataEditable = false, functions, initialShardKey, sc
             </div>
 
             <div data-testid="dash-panel" role="tabpanel">
-                {current === "data" && <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />}
-                {current === "globals" && <GlobalDataBrowser />}
-                {current === "schema" && <SchemaViewer initialShardKey={initialShardKey} />}
-                {current === "functions" && <FunctionRunner functions={functions} />}
-                {current === "migrations" && <MigrationsPanel initialShardKey={initialShardKey} />}
-                {current === "export" && <ExportImportPanel initialShardKey={initialShardKey} />}
-                {current === "files" && <FileBrowser />}
-                {current === "schedule" && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
-                {current === "users" && <UsersPanel />}
-                {current === "metrics" && <MetricsPanel initialShardKey={initialShardKey} />}
-                {current === "logs" && <LogsPanel initialShardKey={initialShardKey} />}
+                {/* Key the boundary by tab so one panel throwing doesn't blank the
+                    shell, and switching tabs clears a prior panel's error. */}
+                <ErrorBoundary key={current} label={TAB_LABELS[current]}>
+                    {current === "data" && <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />}
+                    {current === "globals" && <GlobalDataBrowser />}
+                    {current === "schema" && <SchemaViewer initialShardKey={initialShardKey} />}
+                    {current === "functions" && <FunctionRunner functions={functions} />}
+                    {current === "migrations" && <MigrationsPanel initialShardKey={initialShardKey} />}
+                    {current === "export" && <ExportImportPanel initialShardKey={initialShardKey} />}
+                    {current === "files" && <FileBrowser />}
+                    {current === "schedule" && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
+                    {current === "users" && <UsersPanel />}
+                    {current === "metrics" && <MetricsPanel initialShardKey={initialShardKey} />}
+                    {current === "logs" && <LogsPanel initialShardKey={initialShardKey} />}
+                </ErrorBoundary>
             </div>
         </div>
     );

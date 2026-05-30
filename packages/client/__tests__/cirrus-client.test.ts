@@ -870,15 +870,18 @@ describe("cirrusClient — connection status", () => {
 
         // Opening a subscription creates a socket → connecting.
         client.subscribe(fn("a:b"), {}, () => undefined);
+
         expect(client.connectionStatus()).toBe("connecting");
 
         const socket = latestSocket();
 
-        socket.triggerOpen();
+        socket.open();
+
         expect(client.connectionStatus()).toBe("connected");
 
         // Drop drops to offline (between reconnect attempts).
         socket.triggerClose();
+
         expect(client.connectionStatus()).toBe("offline");
 
         expect(seen).toEqual(["idle", "connecting", "connected", "offline"]);

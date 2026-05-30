@@ -532,9 +532,11 @@ describe("dataBrowser — editable", () => {
 
         fireEvent.click(screen.getByTestId("db-live"));
 
-        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+        // Live opens both a readTablePage and a listTables subscription; assert
+        // the page one is among them (order isn't contractual).
+        const refs = mock.subscribe.mock.calls.map((call) => (call[0] as { __cirrusRef: string }).__cirrusRef);
 
-        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.readTablePage);
+        expect(refs).toContain(ADMIN_FUNCTIONS.readTablePage);
 
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.readTablePage, { columns: ["__id__", "text"], rows: [{ __id__: "m9", text: "LIVE ROW" }], total: 1 });

@@ -19,6 +19,7 @@ export type {
     UseSubscriptionResult,
 } from "./types.js";
 export { useAuth } from "./use-auth.js";
+export { useConnectionStatus } from "./use-connection-status.js";
 export { useInfiniteQuery } from "./use-infinite-query.js";
 export type { MutationHook } from "./use-mutation.js";
 export { useMutation } from "./use-mutation.js";

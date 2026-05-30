@@ -25,7 +25,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         return { error };
     }
 
-    public componentDidCatch(error: Error, info: ErrorInfo): void {
+    public override componentDidCatch(error: Error, info: ErrorInfo): void {
         // Surface to the console so the stack isn't lost; the UI shows the message.
         console.error("[cirrus-dashboard] panel error", error, info.componentStack);
     }
