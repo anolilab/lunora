@@ -1,8 +1,10 @@
 import { useCirrus } from "@cirrus/react";
-import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type TableInfo, type TablePage } from "./admin.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
+import { recordShard } from "./shard-history.js";
+import { ShardInput } from "./shard-input.js";
 
 export interface SchemaViewerProps {
     /** Shard key the viewer targets. Defaults to the root shard. */
@@ -37,6 +39,7 @@ export function SchemaViewer({ initialShardKey }: SchemaViewerProps): ReactEleme
             try {
                 const result = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
 
+                recordShard(shard);
                 setTables(result);
                 setColumns({});
                 setExpanded(null);
@@ -80,15 +83,7 @@ export function SchemaViewer({ initialShardKey }: SchemaViewerProps): ReactEleme
     return (
         <div data-testid="cirrus-schema">
             <div>
-                <input
-                    aria-label="Shard key"
-                    data-testid="sc-shard-input"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                        setShardKey(event.target.value);
-                    }}
-                    placeholder="shard key (optional)"
-                    value={shardKey}
-                />
+                <ShardInput onChange={setShardKey} testId="sc-shard-input" value={shardKey} />
                 <button
                     data-testid="sc-refresh"
                     onClick={() => {

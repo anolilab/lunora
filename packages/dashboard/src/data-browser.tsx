@@ -17,6 +17,8 @@ import { ADMIN_FUNCTIONS, type TableInfo, type TablePage, type WriteRowResult } 
 import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
+import { recordShard } from "./shard-history.js";
+import { ShardInput } from "./shard-input.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 
@@ -205,6 +207,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
             try {
                 const result = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
 
+                recordShard(shard);
                 setTables(result);
             } catch (error) {
                 setTables(null);
@@ -466,15 +469,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     return (
         <div data-testid="cirrus-data-browser">
             <div>
-                <input
-                    aria-label="Shard key"
-                    data-testid="db-shard-input"
-                    onChange={(event) => {
-                        setShardKey(event.target.value);
-                    }}
-                    placeholder="shard key (optional)"
-                    value={shardKey}
-                />
+                <ShardInput onChange={setShardKey} testId="db-shard-input" value={shardKey} />
                 <button
                     data-testid="db-load-tables"
                     onClick={() => {

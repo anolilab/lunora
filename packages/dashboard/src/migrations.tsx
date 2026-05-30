@@ -5,6 +5,8 @@ import { ADMIN_FUNCTIONS, type MigrationDirection, type MigrationRunResult, type
 import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
+import { recordShard } from "./shard-history.js";
+import { ShardInput } from "./shard-input.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 
@@ -48,6 +50,7 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
             try {
                 const result = (await client.query(MIGRATION_STATUS, {}, callOptions(shard))) as { migrations: MigrationStatusRow[] };
 
+                recordShard(shard);
                 setRows(result.migrations);
             } catch (error) {
                 setRows(null);
@@ -105,15 +108,7 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
     return (
         <div data-testid="cirrus-migrations">
             <div>
-                <input
-                    aria-label="Shard key"
-                    data-testid="mg-shard-input"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                        setShardKey(event.target.value);
-                    }}
-                    placeholder="shard key (optional)"
-                    value={shardKey}
-                />
+                <ShardInput onChange={setShardKey} testId="mg-shard-input" value={shardKey} />
                 <button
                     data-testid="mg-refresh"
                     onClick={() => {

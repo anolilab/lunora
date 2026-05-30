@@ -48,4 +48,6 @@ export type { ScheduledJobsProps, ScheduleRecord } from "./scheduled-jobs.js";
 export { ScheduledJobs } from "./scheduled-jobs.js";
 export type { SchemaViewerProps } from "./schema-viewer.js";
 export { SchemaViewer } from "./schema-viewer.js";
+export type { ShardInputProps } from "./shard-input.js";
+export { ShardInput } from "./shard-input.js";
 export type { FunctionDescriptor, FunctionKind, RunStatus } from "./types.js";

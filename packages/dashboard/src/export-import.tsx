@@ -4,6 +4,8 @@ import { type ChangeEvent, type ReactElement, useCallback, useState } from "reac
 import { ADMIN_FUNCTIONS, type ExportRow, type ImportShardResult } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
+import { recordShard } from "./shard-history.js";
+import { ShardInput } from "./shard-input.js";
 
 export interface ExportImportPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
@@ -75,6 +77,7 @@ export function ExportImportPanel({ initialShardKey }: ExportImportPanelProps): 
         try {
             const result = (await client.query(EXPORT_SHARD, {}, callOptions(shardKey))) as { rows: ExportRow[] };
 
+            recordShard(shardKey);
             setNdjson(toNdjson(result.rows));
             setExportCount(result.rows.length);
         } catch (error_) {
@@ -104,6 +107,7 @@ export function ExportImportPanel({ initialShardKey }: ExportImportPanelProps): 
         try {
             const result = (await client.query(IMPORT_SHARD, { rows }, callOptions(shardKey))) as ImportShardResult;
 
+            recordShard(shardKey);
             setImportResult(result);
         } catch (error_) {
             setError(errorMessage(error_));
@@ -117,15 +121,7 @@ export function ExportImportPanel({ initialShardKey }: ExportImportPanelProps): 
     return (
         <div data-testid="cirrus-export-import">
             <div>
-                <input
-                    aria-label="Shard key"
-                    data-testid="ei-shard-input"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                        setShardKey(event.target.value);
-                    }}
-                    placeholder="shard key (optional)"
-                    value={shardKey}
-                />
+                <ShardInput onChange={setShardKey} testId="ei-shard-input" value={shardKey} />
                 <button
                     data-testid="ei-export"
                     disabled={busy}

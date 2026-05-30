@@ -1,9 +1,11 @@
 import { useCirrus } from "@cirrus/react";
-import { type ChangeEvent, type ReactElement, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useRef, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type ShardMetrics } from "./admin.js";
 import { adminRef, callOptions, errorMessage, formatBytes } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
+import { recordShard } from "./shard-history.js";
+import { ShardInput } from "./shard-input.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 
@@ -155,6 +157,8 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
             try {
                 const next = (await client.query(GET_METRICS, {}, callOptions(shard))) as ShardMetrics;
 
+                recordShard(shard);
+
                 if (mountedRef.current) {
                     applySample(next);
                 }
@@ -198,15 +202,7 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
     return (
         <div data-testid="cirrus-metrics">
             <div>
-                <input
-                    aria-label="Shard key"
-                    data-testid="mt-shard-input"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                        setShardKey(event.target.value);
-                    }}
-                    placeholder="shard key (optional)"
-                    value={shardKey}
-                />
+                <ShardInput onChange={setShardKey} testId="mt-shard-input" value={shardKey} />
                 <button
                     data-testid="mt-refresh"
                     onClick={() => {

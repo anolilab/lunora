@@ -85,6 +85,12 @@ cancelling a scheduled job, and importing rows — require a second confirming
 click (an inline `Confirm` / `Cancel` step, not a blocking dialog) via the
 exported `<ConfirmButton>`.
 
+Every shard-scoped panel's shard-key field is a shared `<ShardInput>` backed by
+a recently-used-shards autocomplete (`sessionStorage`). Durable Objects aren't
+externally enumerable, so the dashboard can't list shards server-side; instead it
+remembers the shards you actually open and offers them as a `<datalist>` — the
+practical substitute for a shard picker.
+
 Live updates ride the **same `CIRRUS_ADMIN_TOKEN`** as the HTTP admin RPCs. A
 browser `WebSocket` can't send an `Authorization` header, so the dashboard sends
 the admin token as the client's [`wsToken`](../client/README.md), which the

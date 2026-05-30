@@ -5,6 +5,8 @@ import { type ChangeEvent, type CSSProperties, type ReactElement, useCallback, u
 import { ADMIN_FUNCTIONS, type LogEntry, type LogLevel, type LogsResult } from "./admin.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
+import { recordShard } from "./shard-history.js";
+import { ShardInput } from "./shard-input.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 
@@ -102,6 +104,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
             try {
                 const result = (await client.query(GET_LOGS, {}, callOptions(shard))) as LogsResult;
 
+                recordShard(shard);
                 setEntries(result.entries);
             } catch (error_) {
                 setEntries([]);
@@ -182,15 +185,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
     return (
         <div data-testid="cirrus-logs">
             <div>
-                <input
-                    aria-label="Shard key"
-                    data-testid="lg-shard-input"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                        setShardKey(event.target.value);
-                    }}
-                    placeholder="shard key (optional)"
-                    value={shardKey}
-                />
+                <ShardInput onChange={setShardKey} testId="lg-shard-input" value={shardKey} />
                 <button
                     data-testid="lg-refresh"
                     onClick={() => {

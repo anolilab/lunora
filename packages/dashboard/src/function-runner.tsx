@@ -3,6 +3,8 @@ import { useCirrus } from "@cirrus/react";
 import { type ChangeEvent, type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
 import { errorMessage, formatTimestamp } from "./internal.js";
+import { recordShard } from "./shard-history.js";
+import { ShardInput } from "./shard-input.js";
 import type { FunctionDescriptor, FunctionKind, RunStatus } from "./types.js";
 
 /** A single recorded invocation, kept purely in component state. */
@@ -165,6 +167,7 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
                 }
             }
 
+            recordShard(shardKey);
             setResult(value);
             setStatus("success");
             record("success");
@@ -215,15 +218,7 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
                 value={argsText}
             />
 
-            <input
-                aria-label="Shard key"
-                data-testid="shard-input"
-                onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    setShardKey(event.target.value);
-                }}
-                placeholder="shard key (optional)"
-                value={shardKey}
-            />
+            <ShardInput onChange={setShardKey} testId="shard-input" value={shardKey} />
 
             <button
                 data-testid="run-button"
