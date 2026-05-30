@@ -2,6 +2,7 @@ import type { ScheduleRecord } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
+import { ConfirmButton } from "./confirm-button.js";
 import { errorMessage, formatTimestamp } from "./internal.js";
 
 export type { ScheduleRecord } from "@cirrus/client";
@@ -138,15 +139,15 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                                 <td>{job.id}</td>
                                 {cancelImpl !== undefined && (
                                     <td>
-                                        <button
-                                            data-testid={`sj-cancel-${job.id}`}
-                                            onClick={() => {
+                                        <ConfirmButton
+                                            confirmLabel="Cancel job?"
+                                            onConfirm={() => {
                                                 void cancel(job.id);
                                             }}
-                                            type="button"
+                                            testId={`sj-cancel-${job.id}`}
                                         >
                                             Cancel
-                                        </button>
+                                        </ConfirmButton>
                                     </td>
                                 )}
                             </tr>

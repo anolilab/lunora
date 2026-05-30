@@ -80,6 +80,11 @@ The shell also wraps each tab in an error boundary (one panel throwing won't
 blank the others) and persists the admin token in `sessionStorage` (cleared via
 the header's **Clear** button) so a reload doesn't force a re-paste.
 
+Destructive actions — deleting a row, running a non-dry-run migration,
+cancelling a scheduled job, and importing rows — require a second confirming
+click (an inline `Confirm` / `Cancel` step, not a blocking dialog) via the
+exported `<ConfirmButton>`.
+
 Live updates ride the **same `CIRRUS_ADMIN_TOKEN`** as the HTTP admin RPCs. A
 browser `WebSocket` can't send an `Authorization` header, so the dashboard sends
 the admin token as the client's [`wsToken`](../client/README.md), which the

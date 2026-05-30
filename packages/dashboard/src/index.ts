@@ -21,10 +21,15 @@ export type {
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS } from "./admin.js";
 export type { DashboardAppProps } from "./app.js";
 export { DashboardApp } from "./app.js";
+export type { ConfirmButtonProps } from "./confirm-button.js";
+export { ConfirmButton } from "./confirm-button.js";
+export { ConnectionBadge } from "./connection-badge.js";
 export type { DashboardProps, DashboardTab } from "./dashboard.js";
 export { Dashboard } from "./dashboard.js";
 export type { DataBrowserProps } from "./data-browser.js";
 export { DataBrowser } from "./data-browser.js";
+export type { ErrorBoundaryProps } from "./error-boundary.js";
+export { ErrorBoundary } from "./error-boundary.js";
 export type { ExportImportPanelProps } from "./export-import.js";
 export { ExportImportPanel } from "./export-import.js";
 export type { FileBrowserProps, StorageObject } from "./file-browser.js";

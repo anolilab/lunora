@@ -58,6 +58,7 @@ describe("scheduledJobs", () => {
         render(withProvider(createMockClient(), <ScheduledJobs cancelJob={cancelJob} loadJobs={loadJobs} />));
 
         fireEvent.click(await screen.findByTestId("sj-cancel-a"));
+        fireEvent.click(screen.getByTestId("sj-cancel-a-confirm"));
 
         await waitFor(() => {
             if (cancelJob.mock.calls.length === 0) {
@@ -88,6 +89,7 @@ describe("scheduledJobs", () => {
         expect(mock.listScheduledJobs).toHaveBeenCalledWith();
 
         fireEvent.click(screen.getByTestId("sj-cancel-a"));
+        fireEvent.click(screen.getByTestId("sj-cancel-a-confirm"));
 
         await waitFor(() => {
             if (mock.cancelScheduledJob.mock.calls.length === 0) {

@@ -69,7 +69,8 @@ describe("migrationsPanel", () => {
 
         fireEvent.change(screen.getByTestId("mg-id-input"), { target: { value: "0002_rename" } });
         fireEvent.click(screen.getByTestId("mg-dry-run")); // turn dry-run off
-        fireEvent.click(screen.getByTestId("mg-run"));
+        fireEvent.click(screen.getByTestId("mg-run")); // a real run is guarded
+        fireEvent.click(screen.getByTestId("mg-run-confirm"));
 
         await screen.findByTestId("mg-run-result");
 

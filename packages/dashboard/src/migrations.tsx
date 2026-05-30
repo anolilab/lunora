@@ -2,6 +2,7 @@ import { useCirrus } from "@cirrus/react";
 import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type MigrationDirection, type MigrationRunResult, type MigrationStatusRow } from "./admin.js";
+import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { useLiveToggle } from "./use-live-toggle.js";
@@ -196,16 +197,30 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
                     />
                     Dry run
                 </label>
-                <button
-                    data-testid="mg-run"
-                    disabled={running}
-                    onClick={() => {
-                        void run();
-                    }}
-                    type="button"
-                >
-                    {running ? "Running…" : "Run"}
-                </button>
+                {dryRun ? (
+                    <button
+                        data-testid="mg-run"
+                        disabled={running}
+                        onClick={() => {
+                            void run();
+                        }}
+                        type="button"
+                    >
+                        {running ? "Running…" : "Run"}
+                    </button>
+                ) : (
+                    // A real (non-dry-run) migration mutates rows — guard it.
+                    <ConfirmButton
+                        confirmLabel={running ? "Running…" : "Run migration?"}
+                        disabled={running}
+                        onConfirm={() => {
+                            void run();
+                        }}
+                        testId="mg-run"
+                    >
+                        Run
+                    </ConfirmButton>
+                )}
             </fieldset>
 
             {runError !== null && (

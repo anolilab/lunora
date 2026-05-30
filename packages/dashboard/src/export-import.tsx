@@ -2,6 +2,7 @@ import { useCirrus } from "@cirrus/react";
 import { type ChangeEvent, type ReactElement, useCallback, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type ExportRow, type ImportShardResult } from "./admin.js";
+import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
 
 export interface ExportImportPanelProps {
@@ -135,16 +136,16 @@ export function ExportImportPanel({ initialShardKey }: ExportImportPanelProps): 
                 >
                     Export
                 </button>
-                <button
-                    data-testid="ei-import"
+                <ConfirmButton
+                    confirmLabel="Import (writes rows)?"
                     disabled={busy || ndjson.trim() === ""}
-                    onClick={() => {
+                    onConfirm={() => {
                         void importShard();
                     }}
-                    type="button"
+                    testId="ei-import"
                 >
                     Import
-                </button>
+                </ConfirmButton>
             </div>
 
             <textarea

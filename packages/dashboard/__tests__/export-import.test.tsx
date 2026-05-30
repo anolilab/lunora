@@ -59,6 +59,7 @@ describe("exportImportPanel", () => {
 
         fireEvent.change(screen.getByTestId("ei-ndjson"), { target: { value: "{not json}" } });
         fireEvent.click(screen.getByTestId("ei-import"));
+        fireEvent.click(screen.getByTestId("ei-import-confirm"));
 
         const error = await screen.findByTestId("ei-error");
 
@@ -75,6 +76,7 @@ describe("exportImportPanel", () => {
             target: { value: '{"table":"messages","doc":{"__id__":"m3","text":"again"}}' },
         });
         fireEvent.click(screen.getByTestId("ei-import"));
+        fireEvent.click(screen.getByTestId("ei-import-confirm"));
 
         const importResult = await screen.findByTestId("ei-import-result");
 

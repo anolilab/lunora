@@ -14,6 +14,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { type CSSProperties, type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type TableInfo, type TablePage, type WriteRowResult } from "./admin.js";
+import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { useLiveToggle } from "./use-live-toggle.js";
@@ -446,16 +447,16 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                         >
                             Edit
                         </button>
-                        <button
-                            data-testid={`db-delete-${key}`}
+                        <ConfirmButton
+                            confirmLabel="Delete?"
                             disabled={id === null}
-                            onClick={() => {
+                            onConfirm={() => {
                                 void writeRow("delete", id);
                             }}
-                            type="button"
+                            testId={`db-delete-${key}`}
                         >
                             Delete
-                        </button>
+                        </ConfirmButton>
                     </td>
                 )}
             </tr>

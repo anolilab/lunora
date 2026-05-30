@@ -400,6 +400,7 @@ describe("dataBrowser — editable", () => {
         await openMessages(mock);
 
         fireEvent.click(screen.getByTestId("db-delete-m1"));
+        fireEvent.click(screen.getByTestId("db-delete-m1-confirm"));
 
         await waitFor(() => {
             if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
