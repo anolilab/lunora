@@ -159,4 +159,31 @@ describe("logsPanel", () => {
         expect(rows).toHaveLength(1);
         expect(rows[0]?.textContent).toContain("BOOM recovered");
     });
+
+    test("virtualizes a large buffer to a bounded number of DOM rows", async () => {
+        // The buffer is a bounded 500-entry ring; un-windowed that is 500 <div>s.
+        // With a ~400px viewport and ~36px rows the virtualizer should mount only
+        // the visible slice (+ overscan) — a small, bounded count well under 500 —
+        // which is what proves virtualization is actually windowing the list.
+        expect.assertions(3);
+
+        const big: LogEntry[] = Array.from({ length: 500 }, (_, index) => ({
+            functionPath: `fn:${String(index)}`,
+            level: "error" as const,
+            message: `entry-${String(index)}`,
+            timestamp: 1_700_000_000_000 + index,
+        }));
+
+        render(renderPanel(createClient(big)));
+
+        await screen.findByTestId("lg-table");
+
+        const rows = await screen.findAllByTestId("lg-row");
+
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.length).toBeLessThan(big.length);
+        // Every mounted row is a real windowed entry from the buffer (which index
+        // window jsdom lands on is irrelevant — that it is a small slice is).
+        expect(rows.every((row) => /entry-\d+/.test(row.textContent ?? ""))).toBe(true);
+    });
 });

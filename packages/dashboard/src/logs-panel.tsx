@@ -1,8 +1,72 @@
 import { useCirrus } from "@cirrus/react";
-import { type ChangeEvent, type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
+import { observeElementRect, type Rect, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
+import { type ChangeEvent, type CSSProperties, type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type LogEntry, type LogLevel, type LogsResult } from "./admin.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
+
+/** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
+const SCROLL_HEIGHT = 400;
+
+/** Estimated height of a single virtualized log row. */
+const ROW_HEIGHT = 36;
+
+/** Static style for the scrollable viewport (bounded height + overflow). */
+const SCROLL_STYLE: CSSProperties = { height: SCROLL_HEIGHT, overflow: "auto" };
+
+/** Static base style for an absolutely-positioned virtualized row. */
+const ROW_BASE_STYLE: CSSProperties = {
+    display: "flex",
+    gap: 12,
+    left: 0,
+    position: "absolute",
+    top: 0,
+    width: "100%",
+};
+
+/**
+ * Viewport-rect observer that floors the measured height to {@link SCROLL_HEIGHT}
+ * whenever layout reports a zero-height box. In a real browser the scroll
+ * container always has its CSS height, so this is a no-op there; under jsdom
+ * (which reports every `getBoundingClientRect()` as a 0x0 box) it gives the
+ * virtualizer a real viewport to compute a visible range from, so a bounded,
+ * deterministic set of rows mounts in tests instead of zero.
+ */
+const observeViewportRect = (
+    instance: Virtualizer<HTMLDivElement, Element>,
+    callback: (rect: Rect) => void,
+): (() => void) | undefined =>
+    observeElementRect(instance, (rect) => {
+        callback(rect.height > 0 ? rect : { height: SCROLL_HEIGHT, width: rect.width });
+    });
+
+interface LogRowProps {
+    readonly entry: LogEntry;
+    readonly index: number;
+    /** react-virtual's ref-callback that measures the rendered row. */
+    readonly measureRef: (node: HTMLDivElement | null) => void;
+    /** Pixel offset of this row from the top of the virtualized list. */
+    readonly start: number;
+}
+
+/**
+ * One absolutely-positioned virtualized log row. Extracted into its own
+ * component so its per-row `style` (which carries the dynamic `translateY`
+ * offset) is a `useMemo`-stable reference — keeping the hot map body free of
+ * fresh inline objects.
+ */
+function LogRow({ entry, index, measureRef, start }: LogRowProps): ReactElement {
+    const style = useMemo<CSSProperties>(() => ({ ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` }), [start]);
+
+    return (
+        <div data-index={index} data-testid="lg-row" ref={measureRef} role="row" style={style}>
+            <span role="gridcell">{new Date(entry.timestamp).toLocaleString()}</span>
+            <span role="gridcell">{entry.level}</span>
+            <span role="gridcell">{entry.functionPath ?? "—"}</span>
+            <span role="gridcell">{entry.message}</span>
+        </div>
+    );
+}
 
 export interface LogsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -72,6 +136,33 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
         });
     }, [entries, search, levelFilter]);
 
+    // Row virtualization over the FILTERED list: only the rows intersecting the
+    // 400px viewport (+ overscan) are mounted, so a full 500-entry buffer never
+    // renders 500 <div>s.
+    //
+    // jsdom note: jsdom reports every element's `getBoundingClientRect()` as a
+    // zero-sized box, which would make the virtualizer believe the viewport has
+    // no height and render zero rows. `initialRect` seeds the first paint, and
+    // `observeViewportRect` floors every subsequent measurement (e.g. after a
+    // filter change re-runs the rect observer) to SCROLL_HEIGHT when layout
+    // reports 0 — so the visible range stays deterministic and non-empty in
+    // tests. In a real browser the container has its CSS height, so both are
+    // no-ops and the live measured rect drives the window.
+    const scrollRef = useRef<HTMLDivElement>(null);
+
+    const virtualizer = useVirtualizer({
+        count: filtered.length,
+        estimateSize: () => ROW_HEIGHT,
+        getScrollElement: () => scrollRef.current,
+        initialRect: { height: SCROLL_HEIGHT, width: 800 },
+        observeElementRect: observeViewportRect,
+        overscan: 8,
+    });
+
+    const virtualRows = virtualizer.getVirtualItems();
+    const totalSize = virtualizer.getTotalSize();
+    const gridStyle = useMemo<CSSProperties>(() => ({ height: totalSize, position: "relative", width: "100%" }), [totalSize]);
+
     return (
         <div data-testid="cirrus-logs">
             <div>
@@ -128,26 +219,19 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
             {error === null && filtered.length === 0 && <p data-testid="lg-empty">No logs.</p>}
 
             {filtered.length > 0 && (
-                <table data-testid="lg-table">
-                    <thead>
-                        <tr>
-                            <th>Time</th>
-                            <th>Level</th>
-                            <th>Function</th>
-                            <th>Message</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {filtered.map((entry, index) => (
-                            <tr data-testid="lg-row" key={`${String(entry.timestamp)}-${String(index)}`}>
-                                <td>{new Date(entry.timestamp).toLocaleString()}</td>
-                                <td>{entry.level}</td>
-                                <td>{entry.functionPath ?? "—"}</td>
-                                <td>{entry.message}</td>
-                            </tr>
+                <div data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
+                    <div aria-label="Recent logs" data-testid="lg-table" role="grid" style={gridStyle}>
+                        {virtualRows.map((virtualRow) => (
+                            <LogRow
+                                entry={filtered[virtualRow.index] as LogEntry}
+                                index={virtualRow.index}
+                                key={virtualRow.key}
+                                measureRef={virtualizer.measureElement}
+                                start={virtualRow.start}
+                            />
                         ))}
-                    </tbody>
-                </table>
+                    </div>
+                </div>
             )}
         </div>
     );
