@@ -97,6 +97,8 @@ export interface TableInfo {
 /** A window of rows from one table, plus the column list and total size. */
 export interface TablePage {
     columns: string[];
+    /** Foreign-key columns (column → target table) for `v.id("target")` fields, so the UI can link those cells. */
+    refs?: Record<string, string>;
     rows: Record<string, unknown>[];
     total: number;
 }

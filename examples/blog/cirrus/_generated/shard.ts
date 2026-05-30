@@ -34,6 +34,16 @@ interface FunctionReference {
     __cirrusRef: string;
 }
 
+/** Foreign-key columns per table (`v.id("target")` fields) for the data browser. */
+const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = {
+    posts: {
+        authorId: "users",
+    },
+    drafts: {
+        authorId: "users",
+    },
+};
+
 export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
@@ -231,6 +241,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const result = await registered.handler(ctx, args);
 
             return { result, tables };
+        }
+
+        protected override tableRefs(table: string): Record<string, string> | undefined {
+            return CIRRUS_TABLE_REFS[table];
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {

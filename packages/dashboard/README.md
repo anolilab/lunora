@@ -35,7 +35,10 @@ mountDashboard({ baseUrl: "https://my-app.workers.dev" });
 - `DataBrowser` — list a shard's tables and page through their rows, with a
   table/JSON view toggle, refresh, and a whole-table search box (a debounced
   server-side substring filter across every column, paginated over the matched
-  set — not just the loaded page). Column sorting stays page-local.
+  set — not just the loaded page). Column sorting stays page-local. The blob
+  storage is expanded so each `__doc__` field shows as its own column, and
+  foreign-key columns (`v.id("target")`) render as links that jump to the
+  referenced row in the target table.
 - `GlobalDataBrowser` — the same, for `.global()` (D1-backed) tables.
 - `SchemaViewer` — every table with its row count, expandable to its columns.
 - `FunctionRunner` — pick a registered function, edit its JSON args, and invoke

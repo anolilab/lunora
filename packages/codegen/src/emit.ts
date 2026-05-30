@@ -874,10 +874,39 @@ export const CIRRUS_MIGRATIONS: Record<string, RegisteredDataMigration> = {${mig
  * file never hard-imports `@cirrus/scheduler` / `@cirrus/storage`); when a
  * thunk is omitted an error stub is wired in its place.
  */
+/**
+ * Foreign-key map per table for the data browser: `{ table: { field: target } }`
+ * for every field declared `v.id("target")` (unwrapping `v.optional(...)`). The
+ * generated shard hands this to the base `tableRefs` hook so the admin
+ * `readTablePage` can mark those cells as links.
+ */
+const buildTableRefs = (schema: SchemaIR): Record<string, Record<string, string>> => {
+    const refs: Record<string, Record<string, string>> = {};
+
+    for (const table of schema.tables) {
+        const fields: Record<string, string> = {};
+
+        for (const [field, validator] of Object.entries(table.shape)) {
+            const resolved = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+
+            if (resolved.kind === "id" && resolved.tableName !== undefined) {
+                fields[field] = resolved.tableName;
+            }
+        }
+
+        if (Object.keys(fields).length > 0) {
+            refs[table.name] = fields;
+        }
+    }
+
+    return refs;
+};
+
 export const emitShard = (schema: SchemaIR): string => {
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     const hasTables = schema.tables.length > 0;
+    const tableRefs = buildTableRefs(schema);
 
     const doTypeImports = [
         ...(hasTables ? ["AggregateOptions", "GroupByOptions"] : []),
@@ -1101,6 +1130,9 @@ interface FunctionReference {
     __cirrusRef: string;
 }
 
+/** Foreign-key columns per table (\`v.id("target")\` fields) for the data browser. */
+const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringify(tableRefs, null, 4)};
+
 export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${d1ConfigField}
@@ -1194,6 +1226,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const result = await registered.handler(ctx, args);
 
             return { result, tables };
+        }
+
+        protected override tableRefs(table: string): Record<string, string> | undefined {
+            return CIRRUS_TABLE_REFS[table];
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {

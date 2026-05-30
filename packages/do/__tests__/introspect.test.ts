@@ -124,4 +124,44 @@ describe("introspect", () => {
             expect(readTablePage(db.sql, { search: "   ", table: "messages" }).total).toBe(3);
         });
     });
+
+    describe("readTablePage — doc-blob expansion and refs", () => {
+        // A canonical Cirrus shard table: id / _creationTime / __doc__ JSON blob.
+        beforeEach(() => {
+            db.raw(`CREATE TABLE "posts" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            db.raw(`INSERT INTO "posts" VALUES ('p1', 1, '{"title":"Hi","authorId":"u1"}'), ('p2', 2, '{"title":"Yo","authorId":"u2"}')`);
+        });
+
+        test("expands __doc__ into per-field columns, dropping the blob column", () => {
+            const page = readTablePage(db.sql, { table: "posts" });
+
+            expect(page.columns).toEqual(["id", "_creationTime", "title", "authorId"]);
+            expect(page.rows[0]).toEqual({ _creationTime: 1, authorId: "u1", id: "p1", title: "Hi" });
+            expect(page.total).toBe(2);
+        });
+
+        test("server search matches values inside the doc blob", () => {
+            const page = readTablePage(db.sql, { search: "u2", table: "posts" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows).toEqual([{ _creationTime: 2, authorId: "u2", id: "p2", title: "Yo" }]);
+        });
+
+        test("echoes only the refs whose column surfaces in the page", () => {
+            const page = readTablePage(db.sql, { refs: { authorId: "users", missing: "nope" }, table: "posts" });
+
+            expect(page.refs).toEqual({ authorId: "users" });
+        });
+
+        test("omits refs entirely when none are supplied", () => {
+            expect(readTablePage(db.sql, { table: "posts" }).refs).toBeUndefined();
+        });
+
+        test("leaves a non-doc (column-per-field) table untouched", () => {
+            // The `messages` fixture has no __doc__; expansion must be a no-op.
+            const page = readTablePage(db.sql, { table: "messages" });
+
+            expect(page.columns).toEqual(["__id__", "text", "votes"]);
+        });
+    });
 });

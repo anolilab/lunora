@@ -639,4 +639,84 @@ describe("dataBrowser — editable", () => {
         expect(screen.getByTestId("db-table-invoices")).toBeDefined();
         expect(screen.getByTestId("db-table-invoices").textContent).toContain("invoices");
     });
+
+    /**
+     * A two-table client: `posts` has an `authorId` foreign key into `users`,
+     * surfaced via the page's `refs` map (as the server's readTablePage emits).
+     */
+    const createRelationalClient = (): MockClientHooks => {
+        const POSTS = [{ authorId: "u1", id: "p1", title: "Hello" }];
+        const USERS = [
+            { id: "u1", name: "Ada" },
+            { id: "u2", name: "Bob" },
+        ];
+
+        return createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [
+                        { name: "posts", rowCount: 1 },
+                        { name: "users", rowCount: 2 },
+                    ];
+                }
+
+                const { search = "", table } = args as { search?: string; table: string };
+                const needle = search.trim().toLowerCase();
+                const match = <T extends Record<string, unknown>>(source: T[]): T[] =>
+                    needle === "" ? source : source.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle)));
+
+                if (table === "posts") {
+                    return { columns: ["id", "title", "authorId"], refs: { authorId: "users" }, rows: match(POSTS), total: match(POSTS).length };
+                }
+
+                return { columns: ["id", "name"], rows: match(USERS), total: match(USERS).length };
+            },
+        });
+    };
+
+    test("renders a foreign-key cell as a link and clicking it navigates to the target row", async () => {
+        expect.assertions(3);
+
+        const mock = createRelationalClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-rows");
+
+        // The authorId cell is a link showing the referenced id.
+        const refLink = screen.getByTestId("db-ref-authorId");
+
+        expect(refLink.textContent).toContain("u1");
+
+        // Clicking it switches to `users` and searches for that id.
+        fireEvent.click(refLink);
+
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length !== 1) {
+                throw new Error("did not navigate to the users row yet");
+            }
+        });
+
+        // Only the referenced user (u1 / Ada) is shown after navigation.
+        const rowText = screen.getAllByTestId("db-row")[0]?.textContent ?? "";
+
+        expect(rowText).toContain("u1");
+        expect(rowText).toContain("Ada");
+    });
+
+    test("non-foreign-key columns render plain text, not links", async () => {
+        expect.assertions(2);
+
+        const mock = createRelationalClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-rows");
+
+        // `title` has no ref → no link button for it.
+        expect(screen.queryByTestId("db-ref-title")).toBeNull();
+        expect(screen.getByTestId("db-ref-authorId")).toBeDefined();
+    });
 });

@@ -268,6 +268,21 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
         [fetchPage, shardKey],
     );
 
+    // Follow a foreign-key cell: switch to the target table and search for the
+    // referenced id (the row's primary key shows in the `id` column), so an
+    // operator can traverse relations by clicking instead of copy-pasting ids.
+    const navigateToRef = useCallback(
+        (targetTable: string, id: string): void => {
+            setSorting([]);
+            setSelectedTable(targetTable);
+            setFilter(id);
+            // Seed the page immediately with the search applied; the debounced
+            // effect would otherwise fire a second time with the same value.
+            void fetchPage(shardKey, targetTable, 0, id);
+        },
+        [fetchPage, shardKey],
+    );
+
     const goToPage = useCallback(
         (nextOffset: number): void => {
             if (selectedTable === null) {
@@ -326,22 +341,49 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
 
     const columns = page?.columns;
     const rows = page?.rows;
+    const refs = page?.refs;
 
     // Column defs are derived from the loaded page. Each accessor reads the
     // column by name off the ORIGINAL row object; the cell renderer reuses
-    // `formatCell` so the markup matches the JSON view's text.
+    // `formatCell` so the markup matches the JSON view's text. Foreign-key
+    // columns (in `refs`) render their value as a link to the target table.
     const columnDefs = useMemo<ColumnDef<TableRow>[]>(() => {
         if (columns === undefined) {
             return [];
         }
 
-        return columns.map((column) => ({
-            accessorFn: (row: TableRow) => row[column],
-            cell: (info) => formatCell(info.getValue()),
-            header: column,
-            id: column,
-        }));
-    }, [columns]);
+        return columns.map((column) => {
+            const target = refs?.[column];
+
+            return {
+                accessorFn: (row: TableRow) => row[column],
+                cell: (info) => {
+                    const value = info.getValue();
+
+                    if (target !== undefined && (typeof value === "string" || typeof value === "number") && String(value) !== "") {
+                        const id = String(value);
+
+                        return (
+                            <button
+                                data-testid={`db-ref-${column}`}
+                                onClick={() => {
+                                    navigateToRef(target, id);
+                                }}
+                                title={`Open ${target} ${id}`}
+                                type="button"
+                            >
+                                {id} ↗
+                            </button>
+                        );
+                    }
+
+                    return formatCell(value);
+                },
+                header: refs?.[column] === undefined ? column : `${column} →`,
+                id: column,
+            };
+        });
+    }, [columns, refs, navigateToRef]);
 
     const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 

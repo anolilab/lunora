@@ -724,6 +724,7 @@ export abstract class ShardDO {
             const page = readTablePage(sql, {
                 limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
                 offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
+                refs: this.tableRefs(table),
                 search: typeof args["search"] === "string" ? args["search"] : undefined,
                 table,
             });
@@ -765,6 +766,19 @@ export abstract class ShardDO {
         return Promise.reject(
             Object.assign(new Error(`data migration "${args.id}" is not registered`), { name: "CirrusError", code: "MIGRATION_NOT_FOUND", status: 404 }),
         );
+    }
+
+    /**
+     * Foreign-key map for `table`: doc field → target table, for every field
+     * declared `v.id("target")` in the schema, so the data browser can render
+     * those cells as links. The base class can't see the user's `schema.ts`, so
+     * it returns `undefined` (no links); the codegen subclass overrides this with
+     * the schema-derived map.
+     */
+    protected tableRefs(table: string): Record<string, string> | undefined {
+        void table;
+
+        return undefined;
     }
 
     /**
