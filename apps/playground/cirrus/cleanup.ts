@@ -22,6 +22,7 @@ export const cleanupOldMessages = mutation({
             .collect()) as { _id: Id<"messages"> }[];
 
         for (const row of stale) {
+            // eslint-disable-next-line no-await-in-loop -- deletes share one DB handle; parallelizing would interleave statements on a single connection.
             await context.db.delete(row._id);
         }
 

@@ -58,6 +58,11 @@ export default createConfig(
         files: ["packages/**/*.{ts,tsx}", "apps/**/*.{ts,tsx}", "examples/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
         rules: {
             "@stylistic/max-statements-per-line": "off",
+            // Formatting these is Prettier's job; the @stylistic preferences here
+            // (`=` line position, ternary line breaks) conflict with Prettier's
+            // output, so disable them rather than ping-pong the two formatters.
+            "@stylistic/multiline-ternary": "off",
+            "@stylistic/operator-linebreak": "off",
             "@stylistic/quotes": "off",
             "@typescript-eslint/array-type": "off",
             "@typescript-eslint/explicit-member-accessibility": "off",

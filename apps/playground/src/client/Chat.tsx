@@ -1,9 +1,12 @@
 import { useMutation, useQuery } from "@cirrus/react";
-import type { ReactElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../cirrus/_generated/api.js";
 import type { Doc as Document_, Id } from "../../cirrus/_generated/dataModel.js";
+
+/** Hoisted so the literal isn't reallocated (and re-flagged) per render. */
+const LAYOUT_STYLE: CSSProperties = { display: "grid", gap: 16, gridTemplateColumns: "240px 1fr", padding: 16 };
 
 /**
  * Channel list + message list demo. The `api.*` references are produced by
@@ -23,7 +26,7 @@ export const Chat = (): ReactElement => {
     const { mutate: createChannel } = useMutation(api.channels.create);
 
     return (
-        <div style={{ display: "grid", gap: 16, gridTemplateColumns: "240px 1fr", padding: 16 }}>
+        <div style={LAYOUT_STYLE}>
             <aside>
                 <h2>Channels</h2>
                 <button

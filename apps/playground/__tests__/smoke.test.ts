@@ -23,6 +23,8 @@ const projectRoot = join(testDirectory, "..");
 
 describe("playground compose smoke (Phase 7)", () => {
     test("runCodegen parses schema + functions and emits the _generated triad", () => {
+        expect.assertions(7);
+
         const result = runCodegen({ projectRoot });
 
         expect(existsSync(join(result.outputDirectory, "dataModel.ts"))).toBe(true);
@@ -36,6 +38,8 @@ describe("playground compose smoke (Phase 7)", () => {
     });
 
     test("validateWranglerProject finds no problems for the shipped wrangler.jsonc", () => {
+        expect.assertions(3);
+
         const result = validateWranglerProject({ projectRoot });
 
         expect(result.wranglerPath).toBeDefined();
@@ -44,6 +48,8 @@ describe("playground compose smoke (Phase 7)", () => {
     });
 
     test("wrangler.jsonc declares the bindings the schema requires", () => {
+        expect.assertions(7);
+
         const wranglerPath = join(projectRoot, "wrangler.jsonc");
         const text = readFileSync(wranglerPath, "utf8");
 
