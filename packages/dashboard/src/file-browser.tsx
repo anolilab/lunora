@@ -2,7 +2,7 @@ import type { StorageObject } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState } from "react";
 
-import { errorMessage } from "./internal.js";
+import { errorMessage, formatBytes } from "./internal.js";
 
 export type { StorageObject } from "@cirrus/client";
 
@@ -14,24 +14,6 @@ export interface FileBrowserProps {
 }
 
 const DEFAULT_PAGE_SIZE = 100;
-
-/** Render a byte count compactly (e.g. `1.4 KB`). */
-const formatSize = (bytes: number): string => {
-    if (bytes < 1024) {
-        return `${bytes} B`;
-    }
-
-    const units = ["KB", "MB", "GB", "TB"];
-    let value = bytes / 1024;
-    let unit = 0;
-
-    while (value >= 1024 && unit < units.length - 1) {
-        value /= 1024;
-        unit += 1;
-    }
-
-    return `${value.toFixed(1)} ${units[unit]}`;
-};
 
 /**
  * Browse objects in the storage (R2) bucket. Lists keys under an optional prefix
@@ -126,7 +108,7 @@ export function FileBrowser({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                         {objects.map((object) => (
                             <tr data-testid="fb-row" key={object.key}>
                                 <td>{object.key}</td>
-                                <td>{formatSize(object.size)}</td>
+                                <td>{formatBytes(object.size)}</td>
                                 <td>{object.httpMetadata?.contentType ?? ""}</td>
                             </tr>
                         ))}

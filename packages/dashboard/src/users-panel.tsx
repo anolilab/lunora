@@ -2,7 +2,7 @@ import type { AuthSession, AuthUser } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import { type ReactElement, useCallback, useEffect, useState } from "react";
 
-import { errorMessage } from "./internal.js";
+import { errorMessage, formatTimestamp } from "./internal.js";
 
 export interface UsersPanelProps {
     /** Users (and sessions) requested per page. */
@@ -10,17 +10,6 @@ export interface UsersPanelProps {
 }
 
 const DEFAULT_PAGE_SIZE = 50;
-
-/** Format an epoch-ms or ISO timestamp as a locale string; blank when absent. */
-const formatTimestamp = (value: null | number | string | undefined): string => {
-    if (value === null || value === undefined || value === "") {
-        return "";
-    }
-
-    const date = new Date(value);
-
-    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
-};
 
 /**
  * Read-only browser for the auth store's users and sessions. Lists users via the

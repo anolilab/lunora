@@ -2,7 +2,7 @@ import { useCirrus } from "@cirrus/react";
 import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type MigrationDirection, type MigrationRunResult, type MigrationStatusRow } from "./admin.js";
-import { adminRef, callOptions, errorMessage } from "./internal.js";
+import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal.js";
 
 export interface MigrationsPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
@@ -11,10 +11,6 @@ export interface MigrationsPanelProps {
 
 const MIGRATION_STATUS = adminRef(ADMIN_FUNCTIONS.migrationStatus);
 const RUN_MIGRATION = adminRef(ADMIN_FUNCTIONS.runMigration);
-
-const formatTimestamp = (value: null | number): string => {
-    return value === null ? "—" : new Date(value).toLocaleString();
-};
 
 /**
  * Inspect and drive data migrations on a single shard.

@@ -1,8 +1,8 @@
-import type { FunctionReference } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import { type ReactElement, useCallback, useEffect, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type TableInfo, type TablePage, type WriteRowResult } from "./admin.js";
+import { adminRef, callOptions } from "./internal.js";
 
 export interface DataBrowserProps {
     /**
@@ -19,15 +19,9 @@ export interface DataBrowserProps {
 
 const DEFAULT_PAGE_SIZE = 50;
 
-const LIST_TABLES: FunctionReference = { __cirrusRef: ADMIN_FUNCTIONS.listTables };
-const READ_TABLE_PAGE: FunctionReference = { __cirrusRef: ADMIN_FUNCTIONS.readTablePage };
-const WRITE_ROW: FunctionReference = { __cirrusRef: ADMIN_FUNCTIONS.writeRow };
-
-const callOptions = (shardKey: string): { shardKey?: string } => {
-    const trimmed = shardKey.trim();
-
-    return trimmed === "" ? {} : { shardKey: trimmed };
-};
+const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
+const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
+const WRITE_ROW = adminRef(ADMIN_FUNCTIONS.writeRow);
 
 /**
  * The primary key of a row. Shard tables store it in the `id` column; the

@@ -181,10 +181,13 @@ export interface GlobalIntrospector {
     readTablePage: (options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>;
 }
 
+/** A timestamp as better-auth stores it: epoch-ms, an ISO string, or absent. */
+export type AuthTimestamp = null | number | string;
+
 /** One authenticated user, as the auth browser surfaces it. Mirrors better-auth's `user` row. */
 export interface AuthUser {
     [key: string]: unknown;
-    createdAt?: null | number | string;
+    createdAt?: AuthTimestamp;
     email?: null | string;
     emailVerified?: boolean | null;
     id: string;
@@ -195,8 +198,8 @@ export interface AuthUser {
 /** One auth session, as the auth browser surfaces it. Mirrors better-auth's `session` row. */
 export interface AuthSession {
     [key: string]: unknown;
-    createdAt?: null | number | string;
-    expiresAt?: null | number | string;
+    createdAt?: AuthTimestamp;
+    expiresAt?: AuthTimestamp;
     id: string;
     ipAddress?: null | string;
     userAgent?: null | string;
@@ -723,16 +726,63 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
      * present and the caller is an admin. Shared by the list/cancel handlers so
      * both enforce the same gate before touching the scheduler.
      */
-    const resolveSchedulerStub = (request: Request): ResolvedShard => {
+    /** The `<CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
+    interface NotConfiguredError {
+        code: string;
+        message: string;
+    }
+
+    // --- Shared admin-endpoint helpers --------------------------------------
+    // Every admin route shares the same "valid bearer, else 403; required option
+    // configured, else <CODE>_NOT_CONFIGURED 400" preamble. Centralizing it keeps
+    // the gate uniform — a change to the auth posture touches one place.
+
+    /** Throw 403 unless the request carries a valid admin bearer. */
+    const assertAdminAuthorized = (request: Request): void => {
         if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin scheduled endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+            throw new CirrusError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+    };
+
+    /** Assert admin auth, then assert a worker option is configured; return it (narrowed non-undefined). */
+    const requireAdminOption = <T>(request: Request, value: T | undefined, notConfigured: NotConfiguredError): T => {
+        assertAdminAuthorized(request);
+
+        if (value === undefined) {
+            throw new CirrusError(notConfigured.message, { code: notConfigured.code, status: 400 });
         }
 
-        if (!options.schedulerDO) {
-            throw new CirrusError("scheduled endpoints require a `schedulerDO` namespace on the worker", { code: "SCHEDULER_NOT_CONFIGURED", status: 400 });
-        }
+        return value;
+    };
 
-        return resolveShard(options.schedulerDO, options.schedulerInstanceName ?? "default");
+    /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
+    const queryParam = (url: URL, name: string): string | undefined => {
+        const value = url.searchParams.get(name);
+
+        return value === null || value === "" ? undefined : value;
+    };
+
+    /** Parse the shared `limit` / `offset` paging params off an admin GET request. */
+    const parsePaging = (request: Request): { limit?: number; offset?: number } => {
+        const url = new URL(request.url);
+        const limitParam = url.searchParams.get("limit");
+        const offsetParam = url.searchParams.get("offset");
+        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
+        const offset = offsetParam === null ? undefined : Number.parseInt(offsetParam, 10);
+
+        return {
+            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
+        };
+    };
+
+    const resolveSchedulerStub = (request: Request): ResolvedShard => {
+        const namespace = requireAdminOption(request, options.schedulerDO, {
+            code: "SCHEDULER_NOT_CONFIGURED",
+            message: "scheduled endpoints require a `schedulerDO` namespace on the worker",
+        });
+
+        return resolveShard(namespace, options.schedulerInstanceName ?? "default");
     };
 
     const handleScheduledList = async (request: Request): Promise<Response> => {
@@ -771,23 +821,15 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             throw new CirrusError("Storage endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin storage endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        if (!options.storageList) {
-            throw new CirrusError("storage endpoint requires a `storageList` function on the worker", { code: "STORAGE_NOT_CONFIGURED", status: 400 });
-        }
+        const storageList = requireAdminOption(request, options.storageList, {
+            code: "STORAGE_NOT_CONFIGURED",
+            message: "storage endpoint requires a `storageList` function on the worker",
+        });
 
         const url = new URL(request.url);
-        const prefix = url.searchParams.get("prefix") ?? undefined;
-        const cursor = url.searchParams.get("cursor") ?? undefined;
-        const limitParam = url.searchParams.get("limit");
-        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
-
-        const result = await options.storageList(prefix, {
-            cursor,
-            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+        const result = await storageList(queryParam(url, "prefix"), {
+            cursor: queryParam(url, "cursor"),
+            ...parsePaging(request),
         });
 
         return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
@@ -798,17 +840,14 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             throw new CirrusError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin functions endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        if (!options.functions) {
-            throw new CirrusError("functions endpoint requires a `functions` registry on the worker", { code: "FUNCTIONS_NOT_CONFIGURED", status: 400 });
-        }
+        const registry = requireAdminOption(request, options.functions, {
+            code: "FUNCTIONS_NOT_CONFIGURED",
+            message: "functions endpoint requires a `functions` registry on the worker",
+        });
 
         // Internal functions are never exposed — they're unreachable from the
         // client RPC path, so surfacing them in the runner would only mislead.
-        const functions: FunctionDescriptor[] = Object.entries(options.functions)
+        const functions: FunctionDescriptor[] = Object.entries(registry)
             .filter(([, entry]) => entry.visibility !== "internal")
             .map(([path, entry]) => ({ kind: entry.kind, path }))
             .sort((a, b) => a.path.localeCompare(b.path));
@@ -816,28 +855,17 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
         return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
-    /** Shared gate for the global-introspection endpoints: admin auth + a configured introspector. */
-    const requireGlobalIntrospector = (request: Request): GlobalIntrospector => {
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin global endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        if (!options.globalIntrospector) {
-            throw new CirrusError("global endpoints require a `globalIntrospector` on the worker", { code: "GLOBALS_NOT_CONFIGURED", status: 400 });
-        }
-
-        return options.globalIntrospector;
-    };
-
     const handleGlobalTables = async (request: Request): Promise<Response> => {
         if (request.method !== "GET") {
             throw new CirrusError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
-        const introspector = requireGlobalIntrospector(request);
-        const tables = await introspector.listTables();
+        const introspector = requireAdminOption(request, options.globalIntrospector, {
+            code: "GLOBALS_NOT_CONFIGURED",
+            message: "global endpoints require a `globalIntrospector` on the worker",
+        });
 
-        return Response.json(tables, { headers: { "content-type": "application/json" }, status: 200 });
+        return Response.json(await introspector.listTables(), { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     const handleGlobalTablePage = async (request: Request): Promise<Response> => {
@@ -845,52 +873,20 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             throw new CirrusError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
-        const introspector = requireGlobalIntrospector(request);
-        const url = new URL(request.url);
-        const table = url.searchParams.get("table");
+        const introspector = requireAdminOption(request, options.globalIntrospector, {
+            code: "GLOBALS_NOT_CONFIGURED",
+            message: "global endpoints require a `globalIntrospector` on the worker",
+        });
 
-        if (table === null || table === "") {
+        const table = queryParam(new URL(request.url), "table");
+
+        if (table === undefined) {
             throw new CirrusError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const limitParam = url.searchParams.get("limit");
-        const offsetParam = url.searchParams.get("offset");
-        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
-        const offset = offsetParam === null ? undefined : Number.parseInt(offsetParam, 10);
-
-        const page = await introspector.readTablePage({
-            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
-            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
-            table,
-        });
+        const page = await introspector.readTablePage({ ...parsePaging(request), table });
 
         return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    /** Shared gate for the auth-introspection endpoints: admin auth + a configured introspector. */
-    const requireAuthIntrospector = (request: Request): AuthIntrospector => {
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin auth endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        if (!options.authIntrospector) {
-            throw new CirrusError("auth endpoints require an `authIntrospector` on the worker", { code: "AUTH_NOT_CONFIGURED", status: 400 });
-        }
-
-        return options.authIntrospector;
-    };
-
-    /** Parse the shared `limit` / `offset` paging params off an admin GET request. */
-    const parsePaging = (url: URL): { limit?: number; offset?: number } => {
-        const limitParam = url.searchParams.get("limit");
-        const offsetParam = url.searchParams.get("offset");
-        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
-        const offset = offsetParam === null ? undefined : Number.parseInt(offsetParam, 10);
-
-        return {
-            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
-            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
-        };
     };
 
     const handleAuthUsers = async (request: Request): Promise<Response> => {
@@ -898,10 +894,12 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             throw new CirrusError("Auth-users endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
-        const introspector = requireAuthIntrospector(request);
-        const page = await introspector.listUsers(parsePaging(new URL(request.url)));
+        const introspector = requireAdminOption(request, options.authIntrospector, {
+            code: "AUTH_NOT_CONFIGURED",
+            message: "auth endpoints require an `authIntrospector` on the worker",
+        });
 
-        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
+        return Response.json(await introspector.listUsers(parsePaging(request)), { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     const handleAuthSessions = async (request: Request): Promise<Response> => {
@@ -909,10 +907,13 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             throw new CirrusError("Auth-sessions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
-        const introspector = requireAuthIntrospector(request);
-        const url = new URL(request.url);
-        const userId = url.searchParams.get("userId") ?? undefined;
-        const page = await introspector.listSessions({ ...parsePaging(url), userId: userId === "" ? undefined : userId });
+        const introspector = requireAdminOption(request, options.authIntrospector, {
+            code: "AUTH_NOT_CONFIGURED",
+            message: "auth endpoints require an `authIntrospector` on the worker",
+        });
+
+        const userId = queryParam(new URL(request.url), "userId");
+        const page = await introspector.listSessions({ ...parsePaging(request), userId });
 
         return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
     };

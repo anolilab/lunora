@@ -2,7 +2,7 @@ import type { ScheduleRecord } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
-import { errorMessage } from "./internal.js";
+import { errorMessage, formatTimestamp } from "./internal.js";
 
 export type { ScheduleRecord } from "@cirrus/client";
 
@@ -24,8 +24,9 @@ export interface ScheduledJobsProps {
     readonly loadJobs?: () => Promise<ScheduleRecord[]>;
 }
 
-const formatTimestamp = (value: number): string => {
-    return Number.isFinite(value) ? new Date(value).toLocaleString() : "—";
+/** A scheduled timestamp is always a finite epoch-ms; guard non-finite to an em dash. */
+const formatScheduledFor = (value: number): string => {
+    return Number.isFinite(value) ? formatTimestamp(value, "—") : "—";
 };
 
 /**
@@ -132,7 +133,7 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                         {jobs.map((job) => (
                             <tr data-testid={`sj-row-${job.id}`} key={job.id}>
                                 <td>{job.functionPath}</td>
-                                <td>{formatTimestamp(job.scheduledFor)}</td>
+                                <td>{formatScheduledFor(job.scheduledFor)}</td>
                                 <td>{job.shardKey ?? ""}</td>
                                 <td>{job.id}</td>
                                 {cancelImpl !== undefined && (

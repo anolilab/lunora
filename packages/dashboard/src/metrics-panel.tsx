@@ -2,7 +2,7 @@ import { useCirrus } from "@cirrus/react";
 import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type ShardMetrics } from "./admin.js";
-import { adminRef, callOptions, errorMessage } from "./internal.js";
+import { adminRef, callOptions, errorMessage, formatBytes } from "./internal.js";
 
 export interface MetricsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -10,28 +10,6 @@ export interface MetricsPanelProps {
 }
 
 const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
-
-/** Render a byte count compactly (e.g. `1.4 MB`). */
-const formatBytes = (bytes: null | number): string => {
-    if (bytes === null) {
-        return "—";
-    }
-
-    if (bytes < 1024) {
-        return `${bytes} B`;
-    }
-
-    const units = ["KB", "MB", "GB"];
-    let value = bytes / 1024;
-    let unit = 0;
-
-    while (value >= 1024 && unit < units.length - 1) {
-        value /= 1024;
-        unit += 1;
-    }
-
-    return `${value.toFixed(1)} ${units[unit]}`;
-};
 
 /** Render an elapsed-millisecond duration as `1h 2m`, `3m 4s`, or `5s`. */
 const formatDuration = (ms: number): string => {
