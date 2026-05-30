@@ -5,7 +5,7 @@ import type { ExportRow, ImportShardResult } from "./admin-export-import.js";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import.js";
 import type { SqlExec } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
-import { readMigrationStatus } from "./data-migration.js";
+import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
 import { createDependencyTracker } from "./dependency-tracker.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
@@ -1073,13 +1073,25 @@ export abstract class ShardDO {
     }
 
     /**
+     * Per-batch progress hook for the codegen subclass's data-migration runner
+     * (wired via `runDataMigration`'s `onBatch`). The runner persists progress to
+     * the reserved {@link DATA_MIGRATION_STATE_TABLE} through raw SQL the
+     * change-tracker can't observe, so record that table here and flush — that's
+     * what re-runs live `migrationStatus` subscribers mid-run. Centralised in the
+     * base class so subclasses don't have to remember the record-then-flush dance.
+     */
+    protected async flushMigrationProgress(): Promise<void> {
+        this.recordChangedTable(DATA_MIGRATION_STATE_TABLE);
+        await this.flushChangedTables();
+    }
+
+    /**
      * Drain the tables written during the in-flight RPC and re-run every
      * subscription that depends on one of them. Called after `handleRpc`
-     * resolves, and per-batch by the codegen subclass's data-migration runner
-     * (via `onBatch`) so live `migrationStatus` subscribers see progress
-     * mid-run. No-op when nothing was written.
+     * resolves, and per-batch during a data migration via
+     * {@link flushMigrationProgress}. No-op when nothing was written.
      */
-    protected async flushChangedTables(): Promise<void> {
+    private async flushChangedTables(): Promise<void> {
         const changed = this.pendingChangedTables;
 
         this.pendingChangedTables = null;

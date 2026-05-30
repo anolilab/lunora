@@ -15,6 +15,8 @@ import { type CSSProperties, type ReactElement, useCallback, useEffect, useMemo,
 
 import { ADMIN_FUNCTIONS, type TableInfo, type TablePage, type WriteRowResult } from "./admin.js";
 import { adminRef, callOptions } from "./internal.js";
+import { LiveToggle } from "./live-toggle.js";
+import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 
 export interface DataBrowserProps {
@@ -187,8 +189,13 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     const [editing, setEditing] = useState<null | { docText: string; id: null | string }>(null);
     const [writeError, setWriteError] = useState<null | string>(null);
 
-    const [live, setLive] = useState<boolean>(false);
-    const [liveError, setLiveError] = useState<null | string>(null);
+    const { live, liveError, setLiveError, toggle } = useLiveToggle();
+
+    // The page descriptor the live channel tracks. Set only when a page actually
+    // loads (in fetchPage), so the live subscription follows what's displayed —
+    // not the shard-key input as it's typed, nor a table selection whose offset
+    // reset hasn't landed yet. Keyed independently of `shardKey`/`offset` state.
+    const [loaded, setLoaded] = useState<null | { offset: number; shard: string; table: string }>(null);
 
     const fetchTables = useCallback(
         async (shard: string): Promise<void> => {
@@ -215,6 +222,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
 
                 setPage(result);
                 setOffset(nextOffset);
+                setLoaded({ offset: nextOffset, shard, table });
             } catch (error) {
                 setPage(null);
                 setPageError((error as Error).message);
@@ -229,19 +237,21 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
         void fetchTables(initialShardKey ?? "");
     }, [fetchTables, initialShardKey]);
 
-    // Live channel: while toggled on (and a table is selected), the server
-    // re-pushes the current window whenever that table is written. The
-    // subscription is dependency-scoped to `selectedTable`, so writes to other
-    // tables never re-run it. Pagination changes the args and re-seeds.
+    // Live channel: while toggled on, the server re-pushes the loaded window
+    // whenever its table is written (dependency-scoped to that table). Keyed on
+    // the `loaded` descriptor so it tracks exactly the displayed shard/table/page
+    // — never a half-typed shard key or a table switch whose offset reset is
+    // still pending — and only runs once a page has actually loaded.
     useLiveAdmin<TablePage>(
         ADMIN_FUNCTIONS.readTablePage,
-        { limit: pageSize, offset, table: selectedTable ?? "" },
-        shardKey,
+        { limit: pageSize, offset: loaded?.offset ?? 0, table: loaded?.table ?? "" },
+        loaded?.shard ?? "",
         (result) => {
             setPageError(null);
+            setLiveError(null);
             setPage(result);
         },
-        live && selectedTable !== null,
+        live && loaded !== null,
         setLiveError,
     );
 
@@ -521,22 +531,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                         >
                             Refresh
                         </button>
-                        <button
-                            aria-pressed={live}
-                            data-testid="db-live"
-                            onClick={() => {
-                                setLiveError(null);
-                                setLive((on) => !on);
-                            }}
-                            type="button"
-                        >
-                            {live ? "Live: on" : "Live: off"}
-                        </button>
-                        {live && liveError !== null && (
-                            <span data-testid="db-live-error" role="status">
-                                Live unavailable: {liveError}
-                            </span>
-                        )}
+                        <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="db" />
                         <input
                             aria-label="Filter rows"
                             data-testid="db-filter"

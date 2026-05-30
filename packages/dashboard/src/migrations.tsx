@@ -3,6 +3,8 @@ import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState }
 
 import { ADMIN_FUNCTIONS, type MigrationDirection, type MigrationRunResult, type MigrationStatusRow } from "./admin.js";
 import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal.js";
+import { LiveToggle } from "./live-toggle.js";
+import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 
 export interface MigrationsPanelProps {
@@ -29,8 +31,7 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [rows, setRows] = useState<MigrationStatusRow[] | null>(null);
     const [statusError, setStatusError] = useState<null | string>(null);
-    const [live, setLive] = useState<boolean>(false);
-    const [liveError, setLiveError] = useState<null | string>(null);
+    const { live, liveError, setLiveError, toggle } = useLiveToggle();
 
     const [migrationId, setMigrationId] = useState<string>("");
     const [direction, setDirection] = useState<MigrationDirection>("up");
@@ -67,6 +68,7 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
         shardKey,
         (result) => {
             setStatusError(null);
+            setLiveError(null);
             setRows(result.migrations);
         },
         live,
@@ -120,22 +122,7 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
                 >
                     Refresh
                 </button>
-                <button
-                    aria-pressed={live}
-                    data-testid="mg-live"
-                    onClick={() => {
-                        setLiveError(null);
-                        setLive((on) => !on);
-                    }}
-                    type="button"
-                >
-                    {live ? "Live: on" : "Live: off"}
-                </button>
-                {live && liveError !== null && (
-                    <span data-testid="mg-live-error" role="status">
-                        Live unavailable: {liveError}
-                    </span>
-                )}
+                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="mg" />
             </div>
 
             {statusError !== null && (

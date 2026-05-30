@@ -3,6 +3,8 @@ import { type ChangeEvent, type ReactElement, useCallback, useEffect, useRef, us
 
 import { ADMIN_FUNCTIONS, type ShardMetrics } from "./admin.js";
 import { adminRef, callOptions, errorMessage, formatBytes } from "./internal.js";
+import { LiveToggle } from "./live-toggle.js";
+import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 
 export interface MetricsPanelProps {
@@ -90,15 +92,17 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
     const [error, setError] = useState<null | string>(null);
-    const [live, setLive] = useState<boolean>(false);
-    const [liveError, setLiveError] = useState<null | string>(null);
+    const { live, liveError, setLiveError, toggle } = useLiveToggle();
     const [history, setHistory] = useState<readonly number[]>([]);
 
     // Avoid setState after unmount and overlapping in-flight one-shot loads.
     const mountedRef = useRef(true);
     const inFlightRef = useRef(false);
-    // Latest cumulative `requests` count, used to derive the per-sample delta.
+    // Latest cumulative `requests` count, used to derive the per-sample delta,
+    // plus the shard it belongs to so a shard switch resets the series instead
+    // of diffing against the previous shard's counters.
     const lastRequestsRef = useRef<null | number>(null);
+    const lastShardRef = useRef<null | string>(null);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -109,21 +113,36 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
     }, []);
 
     // Fold a fresh metrics snapshot (one-shot or live push) into panel state,
-    // extending the requests-per-sample sparkline series.
-    const applySample = useCallback((next: ShardMetrics): void => {
-        setError(null);
-        setMetrics(next);
+    // extending the requests-per-sample sparkline series. A fresh sample means
+    // the channel is healthy, so clear any stale live-unavailable notice.
+    const applySample = useCallback(
+        (next: ShardMetrics): void => {
+            setError(null);
+            setLiveError(null);
+            setMetrics(next);
 
-        const previous = lastRequestsRef.current;
+            const previous = lastRequestsRef.current;
+            // A new shard's counters are unrelated to the previous shard's, so
+            // reset the series rather than emit a spurious cross-shard delta.
+            const shardChanged = lastShardRef.current !== null && lastShardRef.current !== next.shard;
 
-        lastRequestsRef.current = next.requests;
+            lastShardRef.current = next.shard;
+            lastRequestsRef.current = next.requests;
 
-        // Skip the first sample (no prior point to diff against) and any counter
-        // reset (DO hibernation), which would yield a bogus delta.
-        if (previous !== null && next.requests >= previous) {
-            setHistory((prior) => [...prior, next.requests - previous].slice(-MAX_HISTORY));
-        }
-    }, []);
+            if (shardChanged) {
+                setHistory([]);
+
+                return;
+            }
+
+            // Skip the first sample (no prior point to diff against) and any counter
+            // reset (DO hibernation), which would yield a bogus delta.
+            if (previous !== null && next.requests >= previous) {
+                setHistory((prior) => [...prior, next.requests - previous].slice(-MAX_HISTORY));
+            }
+        },
+        [setLiveError],
+    );
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
@@ -197,22 +216,7 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                 >
                     Refresh
                 </button>
-                <button
-                    aria-pressed={live}
-                    data-testid="mt-live"
-                    onClick={() => {
-                        setLiveError(null);
-                        setLive((on) => !on);
-                    }}
-                    type="button"
-                >
-                    {live ? "Live: on" : "Live: off"}
-                </button>
-                {live && liveError !== null && (
-                    <span data-testid="mt-live-error" role="status">
-                        Live unavailable: {liveError}
-                    </span>
-                )}
+                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="mt" />
             </div>
 
             <div data-testid="mt-trend">

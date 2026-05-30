@@ -343,8 +343,16 @@ export const runDataMigration = async (options: RunDataMigrationOptions): Promis
                     updatedAt: clock(),
                 });
 
-                // eslint-disable-next-line no-await-in-loop -- progress is reported in batch order; the callback flushes the DO between sequential batches.
-                await options.onBatch?.({ batches, changed, processed });
+                // Progress notification is best-effort: the batch's rows are
+                // already persisted, so a flush/push failure must neither abort
+                // the run nor (on the final batch) flip a completed migration to
+                // failed via the catch below. Swallow it.
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- progress is reported in batch order; the callback flushes the DO between sequential batches.
+                    await options.onBatch?.({ batches, changed, processed });
+                } catch {
+                    /* progress flush failed — ignore, the run itself is unaffected */
+                }
             }
         }
     } catch (error) {

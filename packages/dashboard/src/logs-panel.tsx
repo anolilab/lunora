@@ -4,6 +4,8 @@ import { type ChangeEvent, type CSSProperties, type ReactElement, useCallback, u
 
 import { ADMIN_FUNCTIONS, type LogEntry, type LogLevel, type LogsResult } from "./admin.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
+import { LiveToggle } from "./live-toggle.js";
+import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
@@ -91,8 +93,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
     const [error, setError] = useState<null | string>(null);
     const [search, setSearch] = useState<string>("");
     const [levelFilter, setLevelFilter] = useState<string>("all");
-    const [live, setLive] = useState<boolean>(false);
-    const [liveError, setLiveError] = useState<null | string>(null);
+    const { live, liveError, setLiveError, toggle } = useLiveToggle();
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
@@ -122,6 +123,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
         shardKey,
         (result) => {
             setError(null);
+            setLiveError(null);
             setEntries(result.entries);
         },
         live,
@@ -198,22 +200,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
                 >
                     Refresh
                 </button>
-                <button
-                    aria-pressed={live}
-                    data-testid="lg-live"
-                    onClick={() => {
-                        setLiveError(null);
-                        setLive((on) => !on);
-                    }}
-                    type="button"
-                >
-                    {live ? "Live: on" : "Live: off"}
-                </button>
-                {live && liveError !== null && (
-                    <span data-testid="lg-live-error" role="status">
-                        Live unavailable: {liveError}
-                    </span>
-                )}
+                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="lg" />
                 <input
                     aria-label="Search messages"
                     data-testid="lg-search"

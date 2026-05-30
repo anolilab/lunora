@@ -30,12 +30,16 @@ export function useLiveAdmin<T>(
     const client = useCirrus();
     const callbackRef = useRef(onValue);
     const errorRef = useRef(onError);
+    const argsRef = useRef(args);
 
     callbackRef.current = onValue;
     errorRef.current = onError;
+    argsRef.current = args;
 
-    // Stable-stringify args so a re-render with an equal-but-new object doesn't
-    // tear down and re-open the subscription.
+    // Stable-stringify args for the dependency only, so a re-render with an
+    // equal-but-new object doesn't tear down and re-open the subscription. The
+    // subscribe call uses the live `argsRef` (not a JSON round-trip), preserving
+    // any non-JSON-serializable arg values.
     const argsKey = JSON.stringify(args);
 
     useEffect(() => {
@@ -43,9 +47,7 @@ export function useLiveAdmin<T>(
             return undefined;
         }
 
-        const parsedArgs = JSON.parse(argsKey) as Record<string, unknown>;
-
-        return client.subscribe(adminRef(functionPath), parsedArgs, (value) => callbackRef.current(value as T), {
+        return client.subscribe(adminRef(functionPath), argsRef.current, (value) => callbackRef.current(value as T), {
             ...callOptions(shardKey),
             onError: (error) => errorRef.current?.(error.message),
         });

@@ -899,7 +899,7 @@ export const emitShard = (schema: SchemaIR): string => {
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`,
-        `import { createShardCtxDb, DATA_MIGRATION_STATE_TABLE, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`,
+        `import { createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`,
     ];
 
     if (hasVectors) {
@@ -1226,13 +1226,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 dryRun: args.dryRun,
                 maxBatches: args.maxBatches,
                 migration: migration as unknown as DataMigrationLike,
-                onBatch: async () => {
-                    // persistState wrote the reserved state table via raw SQL,
-                    // which the writer can't see; record it so the flush re-runs
-                    // live migrationStatus subscribers with the new progress.
-                    this.recordChangedTable(DATA_MIGRATION_STATE_TABLE);
-                    await this.flushChangedTables();
-                },
+                // Flush after each batch so live migrationStatus subscribers see
+                // progress mid-run (the base method records the reserved state
+                // table the raw-SQL progress write is invisible to the tracker).
+                onBatch: () => this.flushMigrationProgress(),
                 sql: this.sql as SqlExec,
                 writer,
             });

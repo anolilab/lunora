@@ -161,6 +161,28 @@ describe("runDataMigration — up", () => {
 
         expect(calls).toBe(0);
     });
+
+    test("a throwing onBatch is swallowed: the run completes and is not marked failed", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        // The flush/push that onBatch performs is best-effort; its failure must
+        // not abort the run nor flip the final (completed) batch to failed.
+        const result = await runDataMigration({
+            batchSize: 2,
+            migration: bumpVersion,
+            onBatch: () => {
+                throw new Error("flush boom");
+            },
+            sql: harness.sql,
+            writer,
+        });
+
+        expect(result.status).toBe("completed");
+        expect(result.processed).toBe(5);
+        expect(stateRow("bump-version")).toMatchObject({ cursor: null, status: "completed" });
+    });
 });
 
 describe("runDataMigration — resume", () => {

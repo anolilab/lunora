@@ -542,4 +542,25 @@ describe("dataBrowser — editable", () => {
 
         expect(screen.getByTestId("db-page").textContent).toContain("LIVE ROW");
     });
+
+    test("keeps the live subscription bound to the loaded page, ignoring shard-input keystrokes", async () => {
+        expect.assertions(1);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 2 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+        fireEvent.click(screen.getByTestId("db-live"));
+
+        const callsAfterToggle = mock.subscribe.mock.calls.length;
+
+        // Typing into the shard-key input changes `shardKey` state but not the
+        // loaded page descriptor, so the live channel must NOT tear down and
+        // re-subscribe per keystroke to shards that were never loaded.
+        fireEvent.change(screen.getByTestId("db-shard-input"), { target: { value: "tenant-7" } });
+
+        expect(mock.subscribe.mock.calls.length).toBe(callsAfterToggle);
+    });
 });
