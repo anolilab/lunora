@@ -1,8 +1,11 @@
 import { CirrusClient } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
-import { type ReactElement, useMemo, useState } from "react";
+import { type ReactElement, useEffect, useMemo, useState } from "react";
 
+import { ConnectionBadge } from "./connection-badge.js";
 import { Dashboard, type DashboardProps } from "./dashboard.js";
+import { ErrorBoundary } from "./error-boundary.js";
+import { loadToken, saveToken } from "./token-storage.js";
 
 export interface DashboardAppProps {
     /**
@@ -46,7 +49,14 @@ const resolveBaseUrl = (explicit: string | undefined): string => {
  * or `<Dashboard>` under your own provider instead.
  */
 export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppProps = {}): ReactElement {
-    const [token, setToken] = useState<string>(adminToken ?? "");
+    // Seed from the prop, else a token persisted in a prior session (so a reload
+    // doesn't force a re-paste). The prop wins when explicitly provided.
+    const [token, setToken] = useState<string>(() => adminToken ?? loadToken());
+
+    // Mirror the token into sessionStorage so it survives reloads.
+    useEffect(() => {
+        saveToken(token);
+    }, [token]);
 
     const client = useMemo(() => {
         // The token doubles as the WS credential (`wsToken`) so live admin
@@ -63,25 +73,39 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
 
     return (
         <div data-testid="cirrus-dashboard-app">
-            <header data-testid="dash-app-header">
-                <strong>Cirrus Dashboard</strong>
-                <label htmlFor="dash-app-token">
-                    {" admin token "}
-                    <input
-                        data-testid="dash-app-token"
-                        id="dash-app-token"
-                        onChange={(event) => {
-                            setToken(event.target.value);
-                        }}
-                        placeholder="CIRRUS_ADMIN_TOKEN"
-                        type="password"
-                        value={token}
-                    />
-                </label>
-            </header>
-
             <CirrusProvider client={client}>
-                <Dashboard {...dashboard} />
+                <header data-testid="dash-app-header">
+                    <strong>Cirrus Dashboard</strong>
+                    <label htmlFor="dash-app-token">
+                        {" admin token "}
+                        <input
+                            data-testid="dash-app-token"
+                            id="dash-app-token"
+                            onChange={(event) => {
+                                setToken(event.target.value);
+                            }}
+                            placeholder="CIRRUS_ADMIN_TOKEN"
+                            type="password"
+                            value={token}
+                        />
+                    </label>
+                    {token !== "" && (
+                        <button
+                            data-testid="dash-app-clear-token"
+                            onClick={() => {
+                                setToken("");
+                            }}
+                            type="button"
+                        >
+                            Clear
+                        </button>
+                    )}
+                    <ConnectionBadge />
+                </header>
+
+                <ErrorBoundary label="Dashboard">
+                    <Dashboard {...dashboard} />
+                </ErrorBoundary>
             </CirrusProvider>
         </div>
     );

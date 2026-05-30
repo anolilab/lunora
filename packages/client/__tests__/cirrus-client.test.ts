@@ -851,3 +851,55 @@ describe("cirrusClient — auth admin", () => {
         expect(parsed.searchParams.get("limit")).toBe("20");
     });
 });
+
+describe("cirrusClient — connection status", () => {
+    test("reports idle before any socket, then connecting/connected/offline across the socket lifecycle", () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
+        });
+
+        const seen: string[] = [];
+        const unsubscribe = client.onConnectionStatus((status) => seen.push(status));
+
+        // Fires immediately with the current (idle) status.
+        expect(seen).toEqual(["idle"]);
+        expect(client.connectionStatus()).toBe("idle");
+
+        // Opening a subscription creates a socket → connecting.
+        client.subscribe(fn("a:b"), {}, () => undefined);
+        expect(client.connectionStatus()).toBe("connecting");
+
+        const socket = latestSocket();
+
+        socket.triggerOpen();
+        expect(client.connectionStatus()).toBe("connected");
+
+        // Drop drops to offline (between reconnect attempts).
+        socket.triggerClose();
+        expect(client.connectionStatus()).toBe("offline");
+
+        expect(seen).toEqual(["idle", "connecting", "connected", "offline"]);
+
+        unsubscribe();
+    });
+
+    test("stops notifying after unsubscribe", () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        const seen: string[] = [];
+        const unsubscribe = client.onConnectionStatus((status) => seen.push(status));
+
+        unsubscribe();
+        client.subscribe(fn("a:b"), {}, () => undefined);
+
+        // Only the immediate idle callback landed before unsubscribe.
+        expect(seen).toEqual(["idle"]);
+    });
+});

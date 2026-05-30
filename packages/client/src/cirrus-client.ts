@@ -38,6 +38,14 @@ const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
 
+/**
+ * Aggregate live-socket health across every shard connection, for a UI status
+ * indicator. `idle` = no socket opened yet; `connecting` = at least one socket
+ * is (re)connecting and none is open; `connected` = at least one socket is open;
+ * `offline` = sockets exist but all are down (between reconnect attempts).
+ */
+export type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
+
 interface MutationCallOptions<TCurrent, TValue> {
     optimistic?: (current: TCurrent | undefined) => TValue;
     shardKey?: string;
@@ -114,6 +122,12 @@ export class CirrusClient {
 
     private closed = false;
 
+    /** Subscribers to aggregate connection-status changes (see {@link onConnectionStatus}). */
+    private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
+
+    /** Last status broadcast, so we only notify listeners on an actual change. */
+    private lastStatus: ConnectionStatus = "idle";
+
     private nextSubId = 0;
 
     public constructor(opts: CirrusClientOptions) {
@@ -162,6 +176,70 @@ export class CirrusClient {
 
     public getAuthToken(): string | null {
         return this.authToken;
+    }
+
+    // --- Connection status --------------------------------------------------
+
+    /**
+     * Current aggregate live-socket status across all shard connections. See
+     * {@link ConnectionStatus}.
+     */
+    public connectionStatus(): ConnectionStatus {
+        return this.computeStatus();
+    }
+
+    /**
+     * Subscribe to aggregate connection-status changes. Invokes `listener`
+     * immediately with the current status, then on every transition. Returns an
+     * unsubscribe function.
+     */
+    public onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe {
+        this.statusListeners.add(listener);
+        listener(this.computeStatus());
+
+        return () => {
+            this.statusListeners.delete(listener);
+        };
+    }
+
+    /** Derive the aggregate status from the per-shard socket states. */
+    private computeStatus(): ConnectionStatus {
+        const conns = [...this.connections.values()];
+
+        if (conns.length === 0) {
+            return "idle";
+        }
+
+        if (conns.some((conn) => conn.wsState === "open")) {
+            return "connected";
+        }
+
+        if (conns.some((conn) => conn.wsState === "connecting")) {
+            return "connecting";
+        }
+
+        // Sockets exist but none is open or actively connecting — i.e. all are
+        // down between reconnect attempts.
+        return "offline";
+    }
+
+    /** Recompute the aggregate status and notify listeners if it changed. */
+    private emitConnectionStatus(): void {
+        const next = this.computeStatus();
+
+        if (next === this.lastStatus) {
+            return;
+        }
+
+        this.lastStatus = next;
+
+        for (const listener of this.statusListeners) {
+            try {
+                listener(next);
+            } catch {
+                /* listener threw — ignore */
+            }
+        }
     }
 
     // --- RPC ---------------------------------------------------------------
@@ -664,6 +742,7 @@ export class CirrusClient {
         }
 
         conn.wsState = "connecting";
+        this.emitConnectionStatus();
 
         const socket = new this.WebSocketImpl(this.wsUrlFor(shardKey));
 
@@ -673,6 +752,7 @@ export class CirrusClient {
             conn.wsState = "open";
             conn.wasEverConnected = true;
             conn.reconnect.reset();
+            this.emitConnectionStatus();
 
             // Resubscribe everyone bound to this shard.
             this.markShardPendingAck(shardKey);
@@ -717,6 +797,7 @@ export class CirrusClient {
 
         conn.socket = null;
         conn.wsState = "idle";
+        this.emitConnectionStatus();
         this.markShardPendingAck(conn.shardKey);
 
         if (this.WebSocketImpl === undefined) {

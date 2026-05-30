@@ -1,6 +1,7 @@
 import { type ReactElement, useState } from "react";
 
 import { DataBrowser } from "./data-browser.js";
+import { ErrorBoundary } from "./error-boundary.js";
 import { ExportImportPanel } from "./export-import.js";
 import { FileBrowser } from "./file-browser.js";
 import { FunctionRunner } from "./function-runner.js";
