@@ -295,6 +295,43 @@ describe("dataBrowser", () => {
 
         expect(pageCallsAfter).toBe(pageCallsBefore);
     });
+
+    test("virtualizes a large page so the DOM row count stays bounded", async () => {
+        expect.assertions(3);
+
+        // A 250-row page far exceeds the ~400px viewport (rows are ~36px), so the
+        // virtualizer must mount only the visible window plus overscan — never all
+        // 250 rows. The fixed viewport height is reported to the virtualizer via a
+        // custom `observeElementRect`, so this is deterministic under jsdom.
+        const bigRows = Array.from({ length: 250 }, (_, index) => ({ __id__: `m${index}`, text: `row-${index}` }));
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: bigRows.length }];
+                }
+
+                const { limit = 50, offset = 0 } = args as PageArgs;
+
+                return { columns: ["__id__", "text"], rows: bigRows.slice(offset, offset + limit), total: bigRows.length };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 250 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+
+        await screen.findByTestId("db-rows");
+
+        const rendered = screen.getAllByTestId("db-row");
+
+        // The whole page is loaded (total reflects all 250 rows) ...
+        expect(screen.getByTestId("db-page-info").textContent).toBe("1-250 of 250");
+        // ... but only a small bounded window is actually in the DOM ...
+        expect(rendered.length).toBeLessThan(60);
+        // ... and the window is non-empty (the first row is mounted).
+        expect(rendered.length).toBeGreaterThan(0);
+    });
 });
 
 describe("dataBrowser — editable", () => {

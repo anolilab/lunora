@@ -1,5 +1,17 @@
 import { useCirrus } from "@cirrus/react";
-import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
+import {
+    type ColumnDef,
+    type FilterFn,
+    flexRender,
+    getCoreRowModel,
+    getFilteredRowModel,
+    getSortedRowModel,
+    type Row,
+    type SortingState,
+    useReactTable,
+} from "@tanstack/react-table";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { type CSSProperties, type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ADMIN_FUNCTIONS, type TableInfo, type TablePage, type WriteRowResult } from "./admin.js";
 import { adminRef, callOptions } from "./internal.js";
@@ -19,16 +31,29 @@ export interface DataBrowserProps {
 
 const DEFAULT_PAGE_SIZE = 50;
 
+/** Height of the virtualized scroll viewport, in px. */
+const SCROLL_HEIGHT = 400;
+/** Estimated height of a single row, in px — used to size the virtual list. */
+const ROW_HEIGHT = 36;
+
+/** Static styles, hoisted so they aren't reallocated (and re-flagged) per render. */
+const SCROLL_STYLE: CSSProperties = { height: `${SCROLL_HEIGHT}px`, overflow: "auto", position: "relative" };
+const ROWS_STYLE: CSSProperties = { width: "100%" };
+const ROW_BASE_STYLE: CSSProperties = { left: 0, position: "absolute", top: 0, width: "100%" };
+
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 const WRITE_ROW = adminRef(ADMIN_FUNCTIONS.writeRow);
+
+/** A loaded row keyed by column name. */
+type TableRow = Record<string, unknown>;
 
 /**
  * The primary key of a row. Shard tables store it in the `id` column; the
  * `__id__` / `_id` fallbacks cover the column aliases other layers expose.
  * Returns `null` when no id-like column is present (an uneditable row).
  */
-const rowId = (row: Record<string, unknown>): null | string => {
+const rowId = (row: TableRow): null | string => {
     for (const key of ["id", "__id__", "_id"]) {
         const value = row[key];
 
@@ -45,7 +70,7 @@ const rowId = (row: Record<string, unknown>): null | string => {
  * JSON column; when present we parse it, otherwise we fall back to the row's own
  * non-meta columns. Used to prefill the edit form.
  */
-const rowDoc = (row: Record<string, unknown>): Record<string, unknown> => {
+const rowDoc = (row: TableRow): Record<string, unknown> => {
     const raw = row["__doc__"];
 
     if (typeof raw === "string") {
@@ -76,7 +101,7 @@ const rowDoc = (row: Record<string, unknown>): Record<string, unknown> => {
  * prefer it; the positional fallback only applies to the rare idless page and is
  * hidden behind this helper so it isn't an inline array-index key.
  */
-const rowKey = (row: Record<string, unknown>, index: number): string => {
+const rowKey = (row: TableRow, index: number): string => {
     return rowId(row) ?? `row-${index}`;
 };
 
@@ -93,36 +118,31 @@ const formatCell = (value: unknown): string => {
     return String(value);
 };
 
-/** The direction of the active column sort, or `null` when unsorted. */
-type SortDirection = "asc" | "desc";
-
-interface SortState {
-    column: string;
-    direction: SortDirection;
-}
-
 /**
- * Compare two cell values for sorting. Numbers compare numerically; everything
- * else compares as case-insensitive `formatCell` text. Null/undefined sort last.
+ * Global filter: case-insensitive substring match across every cell of a row.
+ * Reuses {@link formatCell} so objects/null match the text the table renders.
  */
-const compareCells = (a: unknown, b: unknown): number => {
-    if (typeof a === "number" && typeof b === "number") {
-        return a - b;
+const globalFilter: FilterFn<TableRow> = (row, _columnId, value: string): boolean => {
+    const query = value.trim().toLowerCase();
+
+    if (query === "") {
+        return true;
     }
 
-    const textA = formatCell(a).toLowerCase();
-    const textB = formatCell(b).toLowerCase();
-
-    return textA.localeCompare(textB);
+    return row.getAllCells().some((cell) => formatCell(cell.getValue()).toLowerCase().includes(query));
 };
 
-/** The header glyph for a column given the active sort: ` ▲`, ` ▼`, or empty. */
-const sortIndicator = (sort: null | SortState, column: string): string => {
-    if (sort?.column !== column) {
-        return "";
+/** The header glyph for a column given react-table's sort state: ` ▲`, ` ▼`, or empty. */
+const sortIndicator = (sorted: "asc" | "desc" | false): string => {
+    if (sorted === "asc") {
+        return " ▲";
     }
 
-    return sort.direction === "asc" ? " ▲" : " ▼";
+    if (sorted === "desc") {
+        return " ▼";
+    }
+
+    return "";
 };
 
 /**
@@ -134,6 +154,12 @@ const sortIndicator = (sort: null | SortState, column: string): string => {
  * admin RPCs are intercepted inside the Durable Object and are gated by the
  * server's `CIRRUS_ADMIN_TOKEN`. The host is responsible for configuring the
  * client's auth token — this component issues no credentials of its own.
+ *
+ * The table view is built on a headless `@tanstack/react-table` model: column
+ * defs derive from `page.columns`, sorting and (global) filtering run
+ * page-locally over the loaded rows, and the rendered rows are virtualized with
+ * `@tanstack/react-virtual` so a large page never inflates the DOM. None of this
+ * touches the server — pagination still flows through `readTablePage`.
  */
 export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement {
     const client = useCirrus();
@@ -150,8 +176,8 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
 
     // Page-local sort + filter. These operate ONLY on the rows of the currently
     // loaded page — they are NOT a server query and never refetch. Reset whenever
-    // a new table/page is loaded so stale state can't leak across selections.
-    const [sort, setSort] = useState<null | SortState>(null);
+    // a new table is selected so stale state can't leak across selections.
+    const [sorting, setSorting] = useState<SortingState>([]);
     const [filter, setFilter] = useState<string>("");
 
     // Edit state: the row being edited (its id, or `""` for a new insert) and
@@ -202,28 +228,13 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     const selectTable = useCallback(
         (table: string): void => {
             // A fresh table means the previous page-local sort/filter no longer apply.
-            setSort(null);
+            setSorting([]);
             setFilter("");
             setSelectedTable(table);
             void fetchPage(shardKey, table, 0);
         },
         [fetchPage, shardKey],
     );
-
-    // Cycle a column through unsorted -> asc -> desc -> unsorted on each click.
-    const toggleSort = useCallback((column: string): void => {
-        setSort((current) => {
-            if (current?.column !== column) {
-                return { column, direction: "asc" };
-            }
-
-            if (current.direction === "asc") {
-                return { column, direction: "desc" };
-            }
-
-            return null;
-        });
-    }, []);
 
     const goToPage = useCallback(
         (nextOffset: number): void => {
@@ -269,42 +280,140 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
         [client, fetchPage, offset, selectedTable, shardKey],
     );
 
-    // Rows shown in the table view: the loaded page's rows with the page-local
-    // filter and sort applied. Derived (not refetched) so changing sort/filter is
-    // instant and never touches the server. We keep the ORIGINAL row objects so
-    // edit/delete still resolve the real `rowId`.
-    const visibleRows = useMemo<Record<string, unknown>[]>(() => {
-        if (page === null) {
+    const columns = page?.columns;
+    const rows = page?.rows;
+
+    // Column defs are derived from the loaded page. Each accessor reads the
+    // column by name off the ORIGINAL row object; the cell renderer reuses
+    // `formatCell` so the markup matches the JSON view's text.
+    const columnDefs = useMemo<ColumnDef<TableRow>[]>(() => {
+        if (columns === undefined) {
             return [];
         }
 
-        const query = filter.trim().toLowerCase();
+        return columns.map((column) => ({
+            accessorFn: (row: TableRow) => row[column],
+            cell: (info) => formatCell(info.getValue()),
+            header: column,
+            id: column,
+        }));
+    }, [columns]);
 
-        const { rows: pageRows } = page;
-        let rows = pageRows;
+    const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 
-        if (query !== "") {
-            rows = rows.filter((row) => page.columns.some((column) => formatCell(row[column]).toLowerCase().includes(query)));
-        }
+    const table = useReactTable<TableRow>({
+        columns: columnDefs,
+        data,
+        getCoreRowModel: getCoreRowModel(),
+        getFilteredRowModel: getFilteredRowModel(),
+        getSortedRowModel: getSortedRowModel(),
+        globalFilterFn: globalFilter,
+        onGlobalFilterChange: setFilter,
+        onSortingChange: setSorting,
+        state: { globalFilter: filter, sorting },
+    });
 
-        if (sort !== null) {
-            const { column, direction } = sort;
+    // The post-sort/filter rows for this page. We keep react-table's `Row`
+    // wrappers so edit/delete can resolve the ORIGINAL row via `row.original`,
+    // never a sorted/filtered copy.
+    const tableRows = table.getRowModel().rows;
 
-            rows = [...rows].sort((a, b) => {
-                const result = compareCells(a[column], b[column]);
+    const scrollRef = useRef<HTMLDivElement | null>(null);
 
-                return direction === "asc" ? result : -result;
-            });
-        }
+    // Virtualize the rendered rows. The viewport is a fixed `SCROLL_HEIGHT` tall,
+    // so we report that height to the virtualizer directly instead of measuring
+    // the DOM. This keeps the window deterministic and, crucially, works under
+    // jsdom — which reports every `getBoundingClientRect` as 0×0, so the default
+    // `observeElementRect` would size the viewport to 0 and render no rows.
+    // We still observe width changes (height is pinned) and seed the same rect
+    // on first paint via `initialRect`. overscan keeps a few off-screen rows.
+    const virtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>({
+        count: tableRows.length,
+        estimateSize: () => ROW_HEIGHT,
+        getScrollElement: () => scrollRef.current,
+        initialRect: { height: SCROLL_HEIGHT, width: 0 },
+        observeElementRect: (instance, callback) => {
+            const element = instance.scrollElement;
 
-        return rows;
-    }, [page, filter, sort]);
+            const report = (): void => {
+                callback({ height: SCROLL_HEIGHT, width: element?.clientWidth ?? 0 });
+            };
+
+            report();
+
+            if (element === null || typeof ResizeObserver === "undefined") {
+                return undefined;
+            }
+
+            const observer = new ResizeObserver(report);
+
+            observer.observe(element);
+
+            return () => {
+                observer.disconnect();
+            };
+        },
+        overscan: 8,
+    });
+
+    const virtualRows = virtualizer.getVirtualItems();
+    const totalSize = virtualizer.getTotalSize();
+    // The tbody spans the full virtual height so the scrollbar reflects all rows
+    // while only the windowed rows are absolutely positioned inside it. The
+    // height is intrinsically dynamic (it tracks the virtualizer), so the style
+    // object is rebuilt each render — react-virtual's canonical pattern.
+    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- dynamic virtualizer height
+    const tbodyStyle: CSSProperties = { display: "block", height: `${totalSize}px`, position: "relative" };
 
     const total = page?.total ?? 0;
     const hasPrevious = offset > 0;
     const hasNext = page !== null && offset + page.rows.length < total;
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
+
+    const renderRow = (virtualRow: { index: number; size: number; start: number }): ReactElement => {
+        const tableRow = tableRows[virtualRow.index] as Row<TableRow>;
+        const { original } = tableRow;
+        const id = rowId(original);
+        const key = rowKey(original, virtualRow.index);
+        // Per-row absolute offset from the virtualizer; necessarily a fresh object
+        // each render since `start`/`size` change as the window scrolls.
+        // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- dynamic virtualizer offset
+        const rowStyle: CSSProperties = { ...ROW_BASE_STYLE, height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` };
+
+        return (
+            <tr data-testid="db-row" key={tableRow.id} style={rowStyle}>
+                {tableRow.getVisibleCells().map((cell) => (
+                    <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                ))}
+                {editable && (
+                    <td>
+                        <button
+                            data-testid={`db-edit-${key}`}
+                            disabled={id === null}
+                            onClick={() => {
+                                setWriteError(null);
+                                setEditing({ docText: JSON.stringify(rowDoc(original), null, 2), id });
+                            }}
+                            type="button"
+                        >
+                            Edit
+                        </button>
+                        <button
+                            data-testid={`db-delete-${key}`}
+                            disabled={id === null}
+                            onClick={() => {
+                                void writeRow("delete", id);
+                            }}
+                            type="button"
+                        >
+                            Delete
+                        </button>
+                    </td>
+                )}
+            </tr>
+        );
+    };
 
     return (
         <div data-testid="cirrus-data-browser">
@@ -337,17 +446,17 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
 
             {tables !== null && (
                 <ul data-testid="db-table-list">
-                    {tables.map((table) => (
-                        <li key={table.name}>
+                    {tables.map((tableInfo) => (
+                        <li key={tableInfo.name}>
                             <button
-                                aria-pressed={selectedTable === table.name}
-                                data-testid={`db-table-${table.name}`}
+                                aria-pressed={selectedTable === tableInfo.name}
+                                data-testid={`db-table-${tableInfo.name}`}
                                 onClick={() => {
-                                    selectTable(table.name);
+                                    selectTable(tableInfo.name);
                                 }}
                                 type="button"
                             >
-                                {table.name} ({table.rowCount})
+                                {tableInfo.name} ({tableInfo.rowCount})
                             </button>
                         </li>
                     ))}
@@ -454,61 +563,30 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                     )}
 
                     {viewMode === "table" && (
-                        <table data-testid="db-rows">
-                            <thead>
-                                <tr>
-                                    {page.columns.map((column) => (
-                                        <th key={column}>
-                                            <button
-                                                data-testid={`db-sort-${column}`}
-                                                onClick={() => {
-                                                    toggleSort(column);
-                                                }}
-                                                type="button"
-                                            >
-                                                {column}
-                                                {sortIndicator(sort, column)}
-                                            </button>
-                                        </th>
-                                    ))}
-                                    {editable && <th aria-label="Row actions" />}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {visibleRows.map((row, rowIndex) => (
-                                    <tr data-testid="db-row" key={rowKey(row, rowIndex)}>
-                                        {page.columns.map((column) => (
-                                            <td key={column}>{formatCell(row[column])}</td>
+                        <div data-testid="db-scroll" ref={scrollRef} style={SCROLL_STYLE}>
+                            <table data-testid="db-rows" style={ROWS_STYLE}>
+                                <thead>
+                                    <tr>
+                                        {table.getFlatHeaders().map((header) => (
+                                            <th key={header.id}>
+                                                <button
+                                                    data-testid={`db-sort-${header.column.id}`}
+                                                    onClick={header.column.getToggleSortingHandler()}
+                                                    type="button"
+                                                >
+                                                    {flexRender(header.column.columnDef.header, header.getContext())}
+                                                    {sortIndicator(header.column.getIsSorted())}
+                                                </button>
+                                            </th>
                                         ))}
-                                        {editable && (
-                                            <td>
-                                                <button
-                                                    data-testid={`db-edit-${rowKey(row, rowIndex)}`}
-                                                    disabled={rowId(row) === null}
-                                                    onClick={() => {
-                                                        setWriteError(null);
-                                                        setEditing({ docText: JSON.stringify(rowDoc(row), null, 2), id: rowId(row) });
-                                                    }}
-                                                    type="button"
-                                                >
-                                                    Edit
-                                                </button>
-                                                <button
-                                                    data-testid={`db-delete-${rowKey(row, rowIndex)}`}
-                                                    disabled={rowId(row) === null}
-                                                    onClick={() => {
-                                                        void writeRow("delete", rowId(row));
-                                                    }}
-                                                    type="button"
-                                                >
-                                                    Delete
-                                                </button>
-                                            </td>
-                                        )}
+                                        {editable && <th aria-label="Row actions" />}
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody style={tbodyStyle}>
+                                    {virtualRows.map((virtualRow) => renderRow(virtualRow))}
+                                </tbody>
+                            </table>
+                        </div>
                     )}
 
                     {viewMode === "json" && <pre data-testid="db-json">{JSON.stringify(page.rows, null, 2)}</pre>}
@@ -524,9 +602,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                         >
                             Previous
                         </button>
-                        <span data-testid="db-page-info">
-                            {rangeStart}-{rangeEnd} of {total}
-                        </span>
+                        <span data-testid="db-page-info">{`${rangeStart}-${rangeEnd} of ${total}`}</span>
                         <button
                             data-testid="db-next"
                             disabled={!hasNext}
