@@ -280,6 +280,64 @@ describe("cirrusClient — subscriptions", () => {
         expect(url).toContain("/_cirrus/ws");
     });
 
+    test("surfaces a server subscription error to the onError callback", () => {
+        expect.assertions(2);
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: vi.fn() as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        const errors: { message: string }[] = [];
+        const data: unknown[] = [];
+
+        client.subscribe(fn("__cirrus_admin__:getMetrics"), {}, (d) => data.push(d), { onError: (error) => errors.push(error) });
+
+        const socket = latestSocket();
+
+        socket.open();
+        socket.receive({ type: "error", id: JSON.parse(socket.sent[0]!).id, message: "admin subscription requires admin authorization" });
+
+        expect(errors).toEqual([{ message: "admin subscription requires admin authorization" }]);
+        expect(data).toHaveLength(0);
+    });
+
+    test("re-sends an admin subscription with its token on reconnect", () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            wsToken: "adm1n",
+            reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
+        });
+
+        client.subscribe(fn("__cirrus_admin__:getMetrics"), {}, () => undefined);
+
+        const first = latestSocket();
+
+        first.open();
+        first.triggerClose();
+
+        vi.advanceTimersByTime(15);
+
+        const second = latestSocket();
+
+        second.open();
+
+        // The fresh socket carries the token again, so the server re-stamps the
+        // admin flag and the re-sent subscribe clears the admin gate.
+        expect(second).not.toBe(first);
+        expect(second.url).toContain("token=adm1n");
+        expect(JSON.parse(second.sent[0]!).query.functionPath).toBe("__cirrus_admin__:getMetrics");
+
+        vi.useRealTimers();
+    });
+
     test("on reconnect, all active subscriptions are re-sent", async () => {
         vi.useFakeTimers();
         const client = new CirrusClient({

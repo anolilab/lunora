@@ -7,7 +7,7 @@ export { createIndexedDbPersistence, createInMemoryPersistence } from "./persist
 export { preloadedQueryResult, preloadQuery } from "./preload.js";
 export type { ReconnectCalculator } from "./reconnect.js";
 export { createReconnect } from "./reconnect.js";
-export type { SubscriptionCallback, SubscriptionState } from "./subscription.js";
+export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription.js";
 export { SubscriptionRegistry } from "./subscription.js";
 export type {
     ArgsOf,

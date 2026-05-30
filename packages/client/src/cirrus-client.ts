@@ -1,7 +1,7 @@
 import { createInMemoryBookmarkStorage } from "./bookmark.js";
 import { OfflineQueue } from "./offline-queue.js";
 import { createReconnect, type ReconnectCalculator } from "./reconnect.js";
-import { type SubscriptionCallback, SubscriptionRegistry, type SubscriptionState } from "./subscription.js";
+import { type SubscriptionCallback, type SubscriptionErrorCallback, SubscriptionRegistry, type SubscriptionState } from "./subscription.js";
 import type {
     ArgsOf,
     AuthPage,
@@ -406,13 +406,14 @@ export class CirrusClient {
         fn: F,
         args: ArgsOf<F>,
         callback: (data: ReturnOf<F>) => void,
-        opts: { shardKey?: string } = {},
+        opts: { onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         const argsRecord = (args ?? {}) as Record<string, unknown>;
         const key = this.subscriptions.key(fn.__cirrusRef, argsRecord, opts.shardKey);
 
         let state = this.subscriptions.get(key);
         const cb = callback as SubscriptionCallback;
+        const errorCb = opts.onError;
 
         if (!state) {
             this.nextSubId += 1;
@@ -424,6 +425,7 @@ export class CirrusClient {
                 args: argsRecord,
                 shardKey: opts.shardKey,
                 callbacks: new Set<SubscriptionCallback>(),
+                errorCallbacks: new Set<SubscriptionErrorCallback>(),
                 lastValue: undefined,
                 acked: false,
                 serverVersion: 0,
@@ -432,6 +434,10 @@ export class CirrusClient {
         }
 
         state.callbacks.add(cb);
+
+        if (errorCb) {
+            state.errorCallbacks.add(errorCb);
+        }
 
         // Replay last value to new subscriber synchronously if available.
         if (state.lastValue !== undefined) {
@@ -451,6 +457,10 @@ export class CirrusClient {
             }
 
             state.callbacks.delete(cb);
+
+            if (errorCb) {
+                state.errorCallbacks.delete(errorCb);
+            }
 
             if (state.callbacks.size === 0) {
                 const conn = this.getConnection(state.shardKey);
@@ -771,6 +781,30 @@ export class CirrusClient {
 
             if (state) {
                 state.acked = true;
+            }
+
+            return;
+        }
+
+        if (message.type === "error") {
+            // A subscription-scoped rejection (e.g. an admin subscription on a
+            // socket that didn't clear the admin gate). Surface it to the
+            // subscriber's onError so the UI can react instead of silently
+            // never receiving data; the registration is left in place so a
+            // later reconnect with proper credentials can still succeed.
+            const { id } = message;
+            const state = id === undefined ? undefined : this.subscriptions.getById(id);
+
+            if (state) {
+                const error = { message: typeof message.message === "string" ? message.message : "subscription error" };
+
+                for (const errorCallback of state.errorCallbacks) {
+                    try {
+                        errorCallback(error);
+                    } catch {
+                        /* user callback threw — ignore */
+                    }
+                }
             }
 
             return;

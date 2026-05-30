@@ -48,19 +48,19 @@ client.close();
 
 ## API
 
-| Export                                  | Description                                                                  |
-| --------------------------------------- | ---------------------------------------------------------------------------- |
-| `new CirrusClient(opts)`                | Construct a client. `opts.url` is required; the WS URL is derived from it.   |
-| `client.query(fn, args, opts?)`         | RPC. Attaches the saved D1 bookmark.                                         |
+| Export                                  | Description                                                                   |
+| --------------------------------------- | ----------------------------------------------------------------------------- |
+| `new CirrusClient(opts)`                | Construct a client. `opts.url` is required; the WS URL is derived from it.    |
+| `client.query(fn, args, opts?)`         | RPC. Attaches the saved D1 bookmark.                                          |
 | `client.mutation(fn, args, opts?)`      | RPC with optional `optimistic` + offline queueing. Captures the new bookmark. |
-| `client.action(fn, args, opts?)`        | RPC for actions (no bookmark, no optimism).                                  |
-| `client.subscribe(fn, args, cb, opts?)` | Open a live subscription. Returns an `unsubscribe` function.                 |
-| `client.setAuthToken(token)`            | Set the bearer token sent on every RPC.                                      |
-| `client.close()`                        | Tear down the socket and clear the offline queue.                            |
-| `createInMemoryBookmarkStorage()`       | Default `BookmarkStorage` implementation.                                    |
-| `createReconnect(opts?)`                | Standalone reconnect calculator with decorrelated jitter.                    |
-| `OfflineQueue`                          | Underlying mutation queue (exposed for tests/custom transports).             |
-| `SubscriptionRegistry`                  | Internal registry — exported for adapter authors.                            |
+| `client.action(fn, args, opts?)`        | RPC for actions (no bookmark, no optimism).                                   |
+| `client.subscribe(fn, args, cb, opts?)` | Open a live subscription. Returns an `unsubscribe` function.                  |
+| `client.setAuthToken(token)`            | Set the bearer token sent on every RPC.                                       |
+| `client.close()`                        | Tear down the socket and clear the offline queue.                             |
+| `createInMemoryBookmarkStorage()`       | Default `BookmarkStorage` implementation.                                     |
+| `createReconnect(opts?)`                | Standalone reconnect calculator with decorrelated jitter.                     |
+| `OfflineQueue`                          | Underlying mutation queue (exposed for tests/custom transports).              |
+| `SubscriptionRegistry`                  | Internal registry — exported for adapter authors.                             |
 
 Types: `CirrusClientOptions`, `FunctionReference`, `ArgsOf`, `ReturnOf`, `RpcEnvelope`, `RpcResponseBody`, `ClientMessage`, `ServerMessage`, `Unsubscribe`, `User`, `BookmarkStorage`, `ReconnectOptions`, `OfflineQueueOptions`.
 
@@ -70,6 +70,7 @@ Types: `CirrusClientOptions`, `FunctionReference`, `ArgsOf`, `ReturnOf`, `RpcEnv
 new CirrusClient({
     url: "https://app.acme.test",
     wsUrl: "wss://app.acme.test/_cirrus/ws", // optional override
+    wsToken: env.CIRRUS_ADMIN_TOKEN, // optional — appended to the WS URL as ?token=
     fetch: customFetch, // optional — defaults to globalThis.fetch
     WebSocket: ws, // optional — defaults to globalThis.WebSocket
     bookmarkStorage: createInMemoryBookmarkStorage(),
@@ -77,6 +78,18 @@ new CirrusClient({
     offlineQueue: { maxSize: 100 },
 });
 ```
+
+`wsToken` is appended to the WebSocket URL as `?token=…` — the only channel a
+browser `WebSocket` has, since its constructor can't set headers. The server
+matches it against `CIRRUS_WS_BEARER` (to clear the upgrade gate) and/or
+`CIRRUS_ADMIN_TOKEN` (to authorize reserved `__cirrus_admin__:*` subscriptions,
+which is how `@cirrus/dashboard` streams admin data). It ends up in server logs
+and history, so prefer a short-lived rotating token in production.
+
+A `subscribe()` call may pass `onError` in its options to be notified when the
+server rejects that subscription (e.g. an admin subscription on a socket that
+didn't clear the admin gate); the registration is kept so a later reconnect with
+proper credentials can still succeed.
 
 ## Docs
 
