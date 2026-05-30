@@ -24,7 +24,8 @@
         "build": "pnpm exec packem build",
         "build:prod": "pnpm exec packem build",
         "lint:types": "pnpm exec tsc --noEmit",
-        "test": "pnpm exec vitest run"
+        "test": "pnpm exec vitest run",
+        "bench": "pnpm exec vitest bench --run"
     },
     "devDependencies": {
         "@cirrus/server": "workspace:*",
