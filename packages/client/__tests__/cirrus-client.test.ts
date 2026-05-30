@@ -261,6 +261,25 @@ describe("cirrusClient — subscriptions", () => {
         expect(last).toEqual({ type: "unsubscribe", id: sub.id });
     });
 
+    test("appends wsToken to the WebSocket URL so the upgrade can authorize it", () => {
+        expect.assertions(2);
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: vi.fn() as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            wsToken: "admin tok/en",
+        });
+
+        client.subscribe(fn("__cirrus_admin__:getMetrics"), {}, () => undefined);
+
+        const { url } = latestSocket();
+
+        expect(url).toContain("token=admin%20tok%2Fen");
+        // The default WS path is still present alongside the token parameter.
+        expect(url).toContain("/_cirrus/ws");
+    });
+
     test("on reconnect, all active subscriptions are re-sent", async () => {
         vi.useFakeTimers();
         const client = new CirrusClient({

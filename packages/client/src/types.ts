@@ -1,3 +1,6 @@
+/** The three registered function kinds a {@link FunctionReference} can describe. */
+export type FunctionKind = "action" | "mutation" | "query";
+
 /**
  * Opaque reference to a registered function emitted by `@cirrus/codegen`.
  *
@@ -5,7 +8,7 @@
  * Generated declarations decorate this with phantom type parameters so the
  * client can infer args / return values per call site.
  */
-export interface FunctionReference<_Kind extends "query" | "mutation" | "action" = "query" | "mutation" | "action", _Args = unknown, _Return = unknown> {
+export interface FunctionReference<_Kind extends FunctionKind = FunctionKind, _Args = unknown, _Return = unknown> {
     readonly __cirrusRef: string;
 }
 
@@ -93,6 +96,16 @@ export interface CirrusClientOptions {
     reconnect?: ReconnectOptions;
     url: string;
     WebSocket?: typeof WebSocket;
+    /**
+     * Token appended to the WebSocket URL as `?token=…`. The server matches it
+     * against `CIRRUS_WS_BEARER` (to clear the upgrade gate) and/or
+     * `CIRRUS_ADMIN_TOKEN` (to authorize `__cirrus_admin__:*` subscriptions —
+     * what the dashboard sets it to). Browsers can't set headers on the
+     * `WebSocket` constructor, so the query parameter is the only channel; it
+     * ends up in server logs and history, so prefer a short-lived rotating
+     * token in production.
+     */
+    wsToken?: string;
     wsUrl?: string;
 }
 
@@ -214,10 +227,13 @@ export interface GlobalTablePage {
     total: number;
 }
 
+/** A nullable timestamp field as better-auth serializes it: epoch-ms, ISO string, or null. */
+export type NullableTimestamp = null | number | string;
+
 /** One authenticated user, from `GET /_cirrus/admin/auth/users`. Mirrors better-auth's `user` row. */
 export interface AuthUser {
     [key: string]: unknown;
-    createdAt?: null | number | string;
+    createdAt?: NullableTimestamp;
     email?: null | string;
     emailVerified?: boolean | null;
     id: string;
@@ -228,8 +244,8 @@ export interface AuthUser {
 /** One auth session, from `GET /_cirrus/admin/auth/sessions`. Mirrors better-auth's `session` row. */
 export interface AuthSession {
     [key: string]: unknown;
-    createdAt?: null | number | string;
-    expiresAt?: null | number | string;
+    createdAt?: NullableTimestamp;
+    expiresAt?: NullableTimestamp;
     id: string;
     ipAddress?: null | string;
     userAgent?: null | string;

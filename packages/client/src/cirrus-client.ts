@@ -91,6 +91,8 @@ export class CirrusClient {
 
     public readonly wsUrl: string;
 
+    private readonly wsToken: string | undefined;
+
     private readonly fetchImpl: typeof fetch;
 
     private readonly WebSocketImpl: typeof WebSocket | undefined;
@@ -117,6 +119,7 @@ export class CirrusClient {
     public constructor(opts: CirrusClientOptions) {
         this.url = opts.url;
         this.wsUrl = opts.wsUrl ?? joinUrl(deriveWsUrl(opts.url), WS_PATH);
+        this.wsToken = opts.wsToken;
         this.fetchImpl = opts.fetch ?? (typeof fetch === "function" ? fetch.bind(globalThis) : (undefined as unknown as typeof fetch));
         this.WebSocketImpl = opts.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
         this.bookmark = opts.bookmarkStorage ?? createInMemoryBookmarkStorage();
@@ -518,13 +521,23 @@ export class CirrusClient {
     }
 
     private wsUrlFor(shardKey: string | undefined): string {
-        if (shardKey === undefined) {
+        const params: string[] = [];
+
+        if (shardKey !== undefined) {
+            params.push(`shard=${encodeURIComponent(shardKey)}`);
+        }
+
+        if (this.wsToken !== undefined) {
+            params.push(`token=${encodeURIComponent(this.wsToken)}`);
+        }
+
+        if (params.length === 0) {
             return this.wsUrl;
         }
 
         const separator = this.wsUrl.includes("?") ? "&" : "?";
 
-        return `${this.wsUrl}${separator}shard=${encodeURIComponent(shardKey)}`;
+        return `${this.wsUrl}${separator}${params.join("&")}`;
     }
 
     private async rpc(
