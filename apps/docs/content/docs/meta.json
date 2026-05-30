@@ -25,6 +25,7 @@
         "addons/mail",
         "addons/storage",
         "addons/scheduler",
+        "addons/dashboard",
         "---Migrating---",
         "migrating/from-convex",
         "---Operations---",

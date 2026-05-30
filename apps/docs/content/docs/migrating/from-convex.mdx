@@ -192,8 +192,12 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
 - **D1 eventual consistency on replicas**. Reads from `.global()` tables
   use the D1 Sessions API. Pass the `x-d1-bookmark` header to get
   read-your-writes; otherwise you may read a slightly stale replica.
-- **No managed dashboard**. Use Cloudflare's DO browser, the D1 console,
-  and `cirrus run` for ad-hoc RPC. A first-party dashboard is on the roadmap.
+- **Self-hosted dashboard, not managed**. There's no hosted control plane like
+  Convex's. Instead `@cirrus/dashboard` ships a first-party dashboard that
+  `cirrus dev` serves at `/__cirrus` (data browser, function runner, metrics,
+  migrations, scheduled jobs, and more) — gated by your own `CIRRUS_ADMIN_TOKEN`.
+  Cloudflare's DO browser, the D1 console, and `cirrus run` remain available for
+  ad-hoc work. See [@cirrus/dashboard](/docs/addons/dashboard).
 
 ## See also
 

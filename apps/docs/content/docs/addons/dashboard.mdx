@@ -1,0 +1,80 @@
+---
+title: "@cirrus/dashboard"
+description: Embeddable React panels for inspecting and operating a Cirrus backend.
+---
+
+`@cirrus/dashboard` is a component library for inspecting and operating a Cirrus
+backend — a data browser, function runner, metrics, migrations, scheduled jobs,
+file browser, and more. Compose the panels yourself behind a `<CirrusProvider>`,
+mount the ready-made `<Dashboard>` shell, or use the batteries-included
+`mountDashboard` entry.
+
+## Running the dashboard
+
+Three ways, smallest setup first:
+
+1. **`cirrus dev` (zero config).** The `@cirrus/vite` plugin serves the dashboard
+   at **`/__cirrus`** during dev and prints the URL on startup. Add
+   `@cirrus/dashboard` to your project's deps and it just works; opt out with
+   `cirrus({ dashboard: false })`.
+2. **Standalone app.** `apps/dashboard` is a deployable Vite SPA that points at
+   any worker via `VITE_CIRRUS_URL` — for hosting the dashboard separately from
+   dev.
+3. **Embed.** Mount `<DashboardApp baseUrl="…" />` or compose individual panels
+   under your own `<CirrusProvider>`.
+
+```ts
+// mount the whole app into a <div id="root">
+import { mountDashboard } from "@cirrus/dashboard/mount";
+
+mountDashboard({ baseUrl: "https://my-app.workers.dev" });
+```
+
+## Panels
+
+- `DataBrowser` — list a shard's tables and page through their rows (table/JSON
+  toggle), with optional row insert/patch/delete.
+- `GlobalDataBrowser` — the same, for `.global()` (D1-backed) tables.
+- `SchemaViewer` — every table with its row count, expandable to its columns.
+- `FunctionRunner` — pick a registered function, edit its JSON args, and invoke
+  it (query / mutation / action).
+- `MetricsPanel` — per-shard health: request/error counts, uptime, DB size, and
+  reactive-cache hit rate.
+- `MigrationsPanel` — inspect data-migration run-state and kick off a migration.
+- `ExportImportPanel` — snapshot a shard to NDJSON and restore it.
+- `FileBrowser` — page through storage (R2) objects by prefix.
+- `ScheduledJobs` — view and cancel functions queued via `runAfter` / `runAt`.
+- `UsersPanel` — browse auth users and their sessions (read-only).
+- `LogsPanel` — tail the shard's recent log ring buffer.
+
+## Admin gate
+
+The dashboard reaches the backend two ways: reserved `__cirrus_admin__:*` RPCs
+that `ShardDO` intercepts (data, schema, metrics, logs, migrations, export), and
+admin-gated worker endpoints under `/_cirrus/admin/*` for things that live
+outside the shard (scheduler, storage, functions, global tables, auth).
+
+**Both are disabled unless the server sets `CIRRUS_ADMIN_TOKEN`**, and the client
+must present a matching `Authorization: Bearer` token. The components issue no
+credentials of their own — configure the client's auth token at the host.
+
+```ts
+// worker entry — every admin surface is gated by adminToken
+createWorker({
+    shardDO: env.SHARD,
+    adminToken: env.CIRRUS_ADMIN_TOKEN,
+    schedulerDO: env.SCHEDULER, // enables the scheduled-jobs tab
+    functions: CIRRUS_FUNCTIONS, // enables function discovery
+    storageList: createStorage({ bucket: env.FILES }).list, // enables the file browser
+});
+```
+
+`globalIntrospector` (D1 tables) and `authIntrospector` (users/sessions) wire up
+the remaining tabs; see the package README for the full per-tab configuration.
+Tabs whose data source isn't configured are omitted from the `<Dashboard>` shell.
+
+## See also
+
+- [@cirrus/vite](/docs/api/vite) — the `dashboard` plugin option
+- [@cirrus/cli](/docs/api/cli) — `cirrus dev`
+- [Architecture](/docs/architecture)
