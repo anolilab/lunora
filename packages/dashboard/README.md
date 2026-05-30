@@ -18,6 +18,8 @@ panels yourself, or mount the ready-made `<Dashboard>` shell.
   it (query / mutation / action), showing the result or error. Auto-discovers the
   function list from the worker; pass an explicit `FunctionDescriptor[]` to skip
   discovery.
+- `MetricsPanel` — per-shard health: request/error counts, uptime, DB size, and
+  reactive-cache hit rate.
 - `MigrationsPanel` — inspect data-migration run-state and kick off a migration
   by id (direction, dry-run).
 - `ExportImportPanel` — snapshot a shard to NDJSON and restore NDJSON back.

@@ -347,4 +347,34 @@ describe("reactiveCache", () => {
 
         expect(calls).toBe(1);
     });
+
+    test("stats() tracks hits, misses, and live entry count", async () => {
+        const cache = new ReactiveCache();
+        const run = async () => ({ rows: ["r1"] });
+
+        await cache.run("messages:list:{}", new Set([depKey("messages", "r1")]), run); // miss
+        await cache.run("messages:list:{}", new Set([depKey("messages", "r1")]), run); // hit
+        await cache.run("users:get:u1", new Set([depKey("users", "u1")]), run); // miss
+
+        const stats = cache.stats();
+
+        expect(stats.hits).toBe(1);
+        expect(stats.misses).toBe(2);
+        expect(stats.entries).toBe(2);
+        expect(stats.evictions).toBe(0);
+        expect(stats.bytes).toBeGreaterThan(0);
+    });
+
+    test("stats() counts evictions when maxEntries is exceeded", async () => {
+        const cache = new ReactiveCache({ maxEntries: 1 });
+        const run = async () => ({ ok: true });
+
+        await cache.run("k1", new Set([depKey("t", "1")]), run);
+        await cache.run("k2", new Set([depKey("t", "2")]), run);
+
+        const stats = cache.stats();
+
+        expect(stats.entries).toBe(1);
+        expect(stats.evictions).toBe(1);
+    });
 });

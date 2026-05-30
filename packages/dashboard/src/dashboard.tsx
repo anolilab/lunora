@@ -5,13 +5,14 @@ import { ExportImportPanel } from "./export-import.js";
 import { FileBrowser } from "./file-browser.js";
 import { FunctionRunner } from "./function-runner.js";
 import { GlobalDataBrowser } from "./global-data-browser.js";
+import { MetricsPanel } from "./metrics-panel.js";
 import { MigrationsPanel } from "./migrations.js";
 import { ScheduledJobs, type ScheduledJobsProps } from "./scheduled-jobs.js";
 import { SchemaViewer } from "./schema-viewer.js";
 import type { FunctionDescriptor } from "./types.js";
 
 /** Identifier for each built-in dashboard tab. */
-export type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "migrations" | "schedule" | "schema";
+export type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "metrics" | "migrations" | "schedule" | "schema";
 
 export interface DashboardProps {
     /**
@@ -40,6 +41,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
     files: "Files",
     functions: "Functions",
     globals: "Global Tables",
+    metrics: "Metrics",
     migrations: "Migrations",
     schedule: "Scheduled",
     schema: "Schema",
@@ -59,7 +61,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
 export function Dashboard({ functions, initialShardKey, scheduledCancel, scheduledLoad }: DashboardProps): ReactElement {
     // Every tab is always shown: the function runner auto-discovers its list
     // from the worker when no `functions` prop is passed, so it's never empty.
-    const tabs: DashboardTab[] = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule"];
+    const tabs: DashboardTab[] = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "metrics"];
 
     const [active, setActive] = useState<DashboardTab>("data");
     const current = tabs.includes(active) ? active : "data";
@@ -92,6 +94,7 @@ export function Dashboard({ functions, initialShardKey, scheduledCancel, schedul
                 {current === "export" && <ExportImportPanel initialShardKey={initialShardKey} />}
                 {current === "files" && <FileBrowser />}
                 {current === "schedule" && <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />}
+                {current === "metrics" && <MetricsPanel initialShardKey={initialShardKey} />}
             </div>
         </div>
     );

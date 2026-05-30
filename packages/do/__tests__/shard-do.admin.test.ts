@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, test } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -269,5 +269,43 @@ describe("shardDO admin data migrations", () => {
 
         expect(response.status).toBe(404);
         await expect(response.json()).resolves.toMatchObject({ error: { code: "MIGRATION_NOT_FOUND" } });
+    });
+
+    test("getMetrics returns a health snapshot with request/error counts", async () => {
+        // A shard whose handleRpc fails for a marked path, so we can drive the
+        // request/error counters through the public fetch surface.
+        class CountingShard extends ShardDO {
+            public override async handleRpc(functionPath: string): Promise<unknown> {
+                if (functionPath === "boom:explode") {
+                    throw new Error("boom");
+                }
+
+                return { ok: true };
+            }
+        }
+
+        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const userRequest = (functionPath: string): Request =>
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            });
+
+        await shard.fetch(userRequest("messages:list"));
+        await shard.fetch(userRequest("boom:explode"));
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getMetrics, {}));
+
+        expect(response.status).toBe(200);
+
+        const body = (await response.json()) as { result: { cache: unknown; errors: number; requests: number; shard: string } };
+
+        expect(body.result.requests).toBe(2);
+        expect(body.result.errors).toBe(1);
+        expect(body.result.cache).toBeNull();
+
+        expectTypeOf(body.result.shard).toBeString();
     });
 });

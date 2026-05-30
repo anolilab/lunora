@@ -117,6 +117,15 @@ export class ReactiveCache {
     /** Cumulative byte charge across `entries`. Tracked incrementally. */
     private totalBytes = 0;
 
+    /** Lifetime cache-hit count, surfaced via {@link stats}. */
+    private hits = 0;
+
+    /** Lifetime cache-miss count (callback ran), surfaced via {@link stats}. */
+    private misses = 0;
+
+    /** Lifetime count of entries dropped by the LRU evictor. */
+    private evictions = 0;
+
     private readonly maxEntries: number;
 
     private readonly maxBytes: number;
@@ -161,6 +170,7 @@ export class ReactiveCache {
         const existing = this.entries.get(key);
 
         if (existing) {
+            this.hits += 1;
             existing.lastUsed = this.now();
             // Re-insert to move to the tail of the LRU order.
             this.entries.delete(key);
@@ -169,6 +179,7 @@ export class ReactiveCache {
             return existing.result as R;
         }
 
+        this.misses += 1;
         const result = await run();
         const bytes = estimateBytes(result);
         const entry: CacheEntry = {
@@ -348,7 +359,22 @@ export class ReactiveCache {
             }
 
             this.dropEntry(key, entry);
+            this.evictions += 1;
         }
+    }
+
+    /**
+     * Snapshot of lifetime cache counters plus the current live size. Drives the
+     * dashboard's metrics panel; cheap, allocation-light, and side-effect-free.
+     */
+    public stats(): { bytes: number; entries: number; evictions: number; hits: number; misses: number } {
+        return {
+            bytes: this.totalBytes,
+            entries: this.entries.size,
+            evictions: this.evictions,
+            hits: this.hits,
+            misses: this.misses,
+        };
     }
 }
 

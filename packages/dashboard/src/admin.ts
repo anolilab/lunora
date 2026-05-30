@@ -19,12 +19,33 @@ export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
  */
 export const ADMIN_FUNCTIONS = {
     exportShard: "__cirrus_admin__:exportShard",
+    getMetrics: "__cirrus_admin__:getMetrics",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
     migrationStatus: "__cirrus_admin__:migrationStatus",
     readTablePage: "__cirrus_admin__:readTablePage",
     runMigration: "__cirrus_admin__:runMigration",
 } as const;
+
+/** Reactive-cache hit/miss/eviction stats, present when a cache is configured. */
+export interface CacheStats {
+    bytes: number;
+    entries: number;
+    evictions: number;
+    hits: number;
+    misses: number;
+}
+
+/** Health snapshot returned by `__cirrus_admin__:getMetrics` for one shard. */
+export interface ShardMetrics {
+    cache: CacheStats | null;
+    databaseSize: null | number;
+    errors: number;
+    requests: number;
+    shard: string;
+    sinceMs: number;
+    uptimeMs: number;
+}
 
 /** A user table plus its current row count. */
 export interface TableInfo {

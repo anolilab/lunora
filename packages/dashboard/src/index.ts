@@ -1,4 +1,5 @@
 export type {
+    CacheStats,
     ExportRow,
     ImportError,
     ImportShardResult,
@@ -7,6 +8,7 @@ export type {
     MigrationStatus,
     MigrationStatusRow,
     RunMigrationArgs,
+    ShardMetrics,
     TableInfo,
     TablePage,
 } from "./admin.js";
@@ -23,6 +25,8 @@ export type { FunctionRunnerProps } from "./function-runner.js";
 export { FunctionRunner } from "./function-runner.js";
 export type { GlobalDataBrowserProps } from "./global-data-browser.js";
 export { GlobalDataBrowser } from "./global-data-browser.js";
+export type { MetricsPanelProps } from "./metrics-panel.js";
+export { MetricsPanel } from "./metrics-panel.js";
 export type { MigrationsPanelProps } from "./migrations.js";
 export { MigrationsPanel } from "./migrations.js";
 export type { ScheduledJobsProps, ScheduleRecord } from "./scheduled-jobs.js";

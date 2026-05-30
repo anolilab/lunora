@@ -239,6 +239,14 @@ export abstract class ShardDO {
     protected readonly reactiveCache: ReactiveCache | undefined;
 
     /**
+     * Lifetime request counters surfaced by the `__cirrus_admin__:getMetrics`
+     * RPC. In-memory only — they reset when the DO hibernates or restarts, which
+     * is the right granularity for a "since this instance woke" health readout
+     * (durable aggregation would be a separate, heavier feature).
+     */
+    private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now() };
+
+    /**
      * In-flight dependency tracker for the currently-executing query. Set by
      * {@link runCachedQuery} so the ctx-db hooks (wired via `onRead`) can
      * stamp deps without threading the tracker explicitly through every
@@ -394,6 +402,8 @@ export abstract class ShardDO {
             this.currentRequestUserId = request.headers.get("x-cirrus-userid") ?? undefined;
             this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-cirrus-identity"));
 
+            this.metrics.requests += 1;
+
             try {
                 const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
 
@@ -410,6 +420,8 @@ export abstract class ShardDO {
 
                 return response;
             } catch (error: unknown) {
+                this.metrics.errors += 1;
+
                 return this.errorToResponse(error);
             } finally {
                 this.currentRequestBookmark = undefined;
@@ -467,6 +479,34 @@ export abstract class ShardDO {
      * ceiling). We deliberately avoid throwing — apps should keep working;
      * the warning is the migration signal.
      */
+    /**
+     * Assemble the health snapshot served by `__cirrus_admin__:getMetrics`:
+     * lifetime request/error counts since this instance woke, the live SQLite
+     * size, and (when an opt-in reactive cache is configured) its hit/miss
+     * stats. All cheap, in-memory reads — no table scans.
+     */
+    private collectMetrics(): {
+        cache: null | { bytes: number; entries: number; evictions: number; hits: number; misses: number };
+        databaseSize: null | number;
+        errors: number;
+        requests: number;
+        shard: string;
+        sinceMs: number;
+        uptimeMs: number;
+    } {
+        const size = this.state.storage.sql?.databaseSize;
+
+        return {
+            cache: this.reactiveCache ? this.reactiveCache.stats() : null,
+            databaseSize: typeof size === "number" ? size : null,
+            errors: this.metrics.errors,
+            requests: this.metrics.requests,
+            shard: this.state.id?.name ?? ROOT_SHARD_NAME,
+            sinceMs: this.metrics.sinceMs,
+            uptimeMs: Date.now() - this.metrics.sinceMs,
+        };
+    }
+
     private maybeWarnRootSize(): void {
         if (ShardDO.rootSizeWarned) {
             return;
@@ -540,6 +580,10 @@ export abstract class ShardDO {
         try {
             if (functionPath === ADMIN_FUNCTIONS.listTables) {
                 return jsonResponse({ result: listTables(sql) }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
+                return jsonResponse({ result: this.collectMetrics() }, 200);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
