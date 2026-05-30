@@ -167,7 +167,7 @@ export class CirrusClient {
         return (await this.rpc(fn.__cirrusRef, args as Record<string, unknown>, opts.shardKey, { attachBookmark: true })) as ReturnOf<F>;
     }
 
-    public async mutation<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: MutationCallOptions<unknown, ReturnOf<F>> = {}): Promise<ReturnOf<F>> {
+    public async mutation<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: MutationCallOptions<unknown, unknown> = {}): Promise<ReturnOf<F>> {
         const argsRecord = args as Record<string, unknown>;
 
         // Apply optimistic updates to any subscriber listening on this fn.

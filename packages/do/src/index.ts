@@ -87,6 +87,8 @@ export type {
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
+    RunShardWriteArgs,
+    RunShardWriteResult,
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,

@@ -76,7 +76,8 @@ describe("offlineQueue — persistence", () => {
 
         expect(persisted).toHaveLength(1);
         expect(persisted[0]).toMatchObject({ functionPath: "posts:create", args: { title: "hi" }, shardKey: "room-1" });
-        expect(persisted[0]?.id).toBe(true);
+        expect(typeof persisted[0]?.id).toBe("string");
+        expect(persisted[0]?.id).not.toBe("");
     });
 
     test("overflow un-persists the dropped (oldest) entry", async () => {

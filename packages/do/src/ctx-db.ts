@@ -822,7 +822,10 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     }
 
     const ftName = ftsTableName(tableName, search.indexName);
-    const where: string[] = ["f MATCH ?"];
+    // MATCH must target the FTS table (by name or an indexed column), never the
+    // bare alias `f` — `f MATCH ?` is a "no such column: f" error in SQLite.
+    // We match the indexed `__text__` column so the alias join still works.
+    const where: string[] = [`f."__text__" MATCH ?`];
     const params: unknown[] = [buildFtsMatch(tokens)];
 
     for (const filter of search.filters) {
@@ -830,7 +833,10 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
         params.push(serializeSqlValue(filter.value));
     }
 
-    let querySql = `SELECT m.id, m._creationTime, m.${DOC_COLUMN} FROM ${quoteIdentifier(ftName)} f JOIN ${quoteIdentifier(tableName)} m ON m.id = f."__id__" WHERE ${where.join(" AND ")} ORDER BY f.rank`;
+    // `f.rank` is FTS5's bm25 relevance (best first); the `_creationTime DESC`
+    // tiebreak matches the scan fallback so equal-rank rows order newest-first
+    // on both engines.
+    let querySql = `SELECT m.id, m._creationTime, m.${DOC_COLUMN} FROM ${quoteIdentifier(ftName)} f JOIN ${quoteIdentifier(tableName)} m ON m.id = f."__id__" WHERE ${where.join(" AND ")} ORDER BY f.rank, m._creationTime DESC`;
 
     if (typeof limit === "number") {
         querySql += ` LIMIT ${Math.max(0, Math.floor(limit))}`;

@@ -5,7 +5,7 @@ import { useCirrus } from "./cirrus-provider.js";
 import type { UseMutationCallOptions } from "./types.js";
 
 export interface MutationHook<F extends FunctionReference> {
-    mutate: (args: ArgsOf<F>, options?: UseMutationCallOptions<unknown, ReturnOf<F>>) => Promise<ReturnOf<F>>;
+    mutate: (args: ArgsOf<F>, options?: UseMutationCallOptions) => Promise<ReturnOf<F>>;
     pending: boolean;
 }
 
@@ -20,7 +20,7 @@ export function useMutation<F extends FunctionReference>(fn: F): MutationHook<F>
     const pendingRef = useRef(false);
 
     const mutate = useCallback(
-        async (args: ArgsOf<F>, options?: UseMutationCallOptions<unknown, ReturnOf<F>>): Promise<ReturnOf<F>> => {
+        async (args: ArgsOf<F>, options?: UseMutationCallOptions): Promise<ReturnOf<F>> => {
             if (!pendingRef.current) {
                 pendingRef.current = true;
                 setPending(true);
