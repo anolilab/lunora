@@ -11,6 +11,13 @@ const ENTRIES: LogEntry[] = [
     { functionPath: "messages:list", level: "error", message: "kapow", timestamp: 1_700_000_001_000 },
 ];
 
+const MIXED_ENTRIES: LogEntry[] = [
+    { functionPath: "messages:send", level: "error", message: "boom failed", timestamp: 1_700_000_004_000 },
+    { functionPath: "messages:list", level: "warn", message: "slow query", timestamp: 1_700_000_003_000 },
+    { functionPath: "auth:login", level: "info", message: "BOOM recovered", timestamp: 1_700_000_002_000 },
+    { functionPath: "auth:logout", level: "info", message: "ok", timestamp: 1_700_000_001_000 },
+];
+
 const createClient = (entries: LogEntry[] = ENTRIES): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
@@ -90,5 +97,66 @@ describe("logsPanel", () => {
         const error = await screen.findByTestId("lg-error");
 
         expect(error.textContent).toBe("ADMIN_FORBIDDEN");
+    });
+
+    test("filters entries by case-insensitive search text", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createClient(MIXED_ENTRIES)));
+
+        await screen.findByTestId("lg-table");
+
+        fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "BOOM" } });
+
+        const rows = await screen.findAllByTestId("lg-row");
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]?.textContent).toContain("boom failed");
+        expect(rows[1]?.textContent).toContain("BOOM recovered");
+    });
+
+    test("shows the empty state when the search matches nothing", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(createClient(MIXED_ENTRIES)));
+
+        await screen.findByTestId("lg-table");
+
+        fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "no-such-message" } });
+
+        const empty = await screen.findByTestId("lg-empty");
+
+        expect(empty.textContent).toBe("No logs.");
+    });
+
+    test("filters entries by level", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient(MIXED_ENTRIES)));
+
+        await screen.findByTestId("lg-table");
+
+        fireEvent.change(screen.getByTestId("lg-level-filter"), { target: { value: "info" } });
+
+        const rows = await screen.findAllByTestId("lg-row");
+
+        expect(rows).toHaveLength(2);
+        expect(rows.every((row) => row.textContent?.includes("info"))).toBe(true);
+    });
+
+    test("composes search and level filters", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient(MIXED_ENTRIES)));
+
+        await screen.findByTestId("lg-table");
+
+        fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "boom" } });
+        fireEvent.change(screen.getByTestId("lg-level-filter"), { target: { value: "info" } });
+
+        const rows = await screen.findAllByTestId("lg-row");
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.textContent).toContain("BOOM recovered");
     });
 });

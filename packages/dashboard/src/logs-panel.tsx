@@ -1,7 +1,7 @@
 import { useCirrus } from "@cirrus/react";
-import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState } from "react";
+import { type ChangeEvent, type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
-import { ADMIN_FUNCTIONS, type LogEntry, type LogsResult } from "./admin.js";
+import { ADMIN_FUNCTIONS, type LogEntry, type LogLevel, type LogsResult } from "./admin.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
 
 export interface LogsPanelProps {
@@ -27,6 +27,8 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [entries, setEntries] = useState<LogEntry[]>([]);
     const [error, setError] = useState<null | string>(null);
+    const [search, setSearch] = useState<string>("");
+    const [levelFilter, setLevelFilter] = useState<string>("all");
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
@@ -47,6 +49,28 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
     useEffect(() => {
         void refresh(initialShardKey ?? "");
     }, [refresh, initialShardKey]);
+
+    // Distinct levels present in the fetched buffer, in a stable severity order,
+    // so the dropdown only offers levels that can actually match something.
+    const levels = useMemo<LogLevel[]>(() => {
+        const present = new Set(entries.map((entry) => entry.level));
+
+        return (["debug", "info", "warn", "error"] as const).filter((level) => present.has(level));
+    }, [entries]);
+
+    // Client-side search (message substring, case-insensitive) AND level filter,
+    // derived from the already-fetched entries — never triggers a refetch.
+    const filtered = useMemo<LogEntry[]>(() => {
+        const needle = search.trim().toLowerCase();
+
+        return entries.filter((entry) => {
+            if (levelFilter !== "all" && entry.level !== levelFilter) {
+                return false;
+            }
+
+            return needle === "" || entry.message.toLowerCase().includes(needle);
+        });
+    }, [entries, search, levelFilter]);
 
     return (
         <div data-testid="cirrus-logs">
@@ -69,6 +93,30 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
                 >
                     Refresh
                 </button>
+                <input
+                    aria-label="Search messages"
+                    data-testid="lg-search"
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                        setSearch(event.target.value);
+                    }}
+                    placeholder="search message"
+                    value={search}
+                />
+                <select
+                    aria-label="Level filter"
+                    data-testid="lg-level-filter"
+                    onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                        setLevelFilter(event.target.value);
+                    }}
+                    value={levelFilter}
+                >
+                    <option value="all">all</option>
+                    {levels.map((level) => (
+                        <option key={level} value={level}>
+                            {level}
+                        </option>
+                    ))}
+                </select>
             </div>
 
             {error !== null && (
@@ -77,9 +125,9 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
                 </p>
             )}
 
-            {error === null && entries.length === 0 && <p data-testid="lg-empty">No logs.</p>}
+            {error === null && filtered.length === 0 && <p data-testid="lg-empty">No logs.</p>}
 
-            {entries.length > 0 && (
+            {filtered.length > 0 && (
                 <table data-testid="lg-table">
                     <thead>
                         <tr>
@@ -90,7 +138,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
                         </tr>
                     </thead>
                     <tbody>
-                        {entries.map((entry, index) => (
+                        {filtered.map((entry, index) => (
                             <tr data-testid="lg-row" key={`${String(entry.timestamp)}-${String(index)}`}>
                                 <td>{new Date(entry.timestamp).toLocaleString()}</td>
                                 <td>{entry.level}</td>
