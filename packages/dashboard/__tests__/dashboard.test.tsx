@@ -28,22 +28,12 @@ const renderDashboard = (mock: MockClientHooks, props = {}) => (
 );
 
 describe("dashboard", () => {
-    test("shows the admin tabs (incl. schedule) by default and hides the function tab", () => {
+    test("shows every tab by default", () => {
         render(renderDashboard(createClient()));
 
-        expect(screen.getByTestId("dash-tab-data")).toBeDefined();
-        expect(screen.getByTestId("dash-tab-schema")).toBeDefined();
-        expect(screen.getByTestId("dash-tab-migrations")).toBeDefined();
-        expect(screen.getByTestId("dash-tab-export")).toBeDefined();
-        expect(screen.getByTestId("dash-tab-files")).toBeDefined();
-        expect(screen.getByTestId("dash-tab-schedule")).toBeDefined();
-        expect(screen.queryByTestId("dash-tab-functions")).toBeNull();
-    });
-
-    test("reveals the function tab when functions are supplied", () => {
-        render(renderDashboard(createClient(), { functions: [{ kind: "query", path: "messages:list" }] }));
-
-        expect(screen.getByTestId("dash-tab-functions")).toBeDefined();
+        for (const tab of ["data", "schema", "functions", "migrations", "export", "files", "schedule"]) {
+            expect(screen.getByTestId(`dash-tab-${tab}`)).toBeDefined();
+        }
     });
 
     test("renders the schedule panel via the client when its tab is selected", async () => {

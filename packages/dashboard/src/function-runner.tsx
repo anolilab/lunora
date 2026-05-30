@@ -1,11 +1,18 @@
 import type { FunctionReference } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
-import { type ChangeEvent, type ReactElement, useCallback, useMemo, useState } from "react";
+import { type ChangeEvent, type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 
+import { errorMessage } from "./internal.js";
 import type { FunctionDescriptor, RunStatus } from "./types.js";
 
 export interface FunctionRunnerProps {
-    readonly functions: FunctionDescriptor[];
+    /**
+     * Functions to expose. When omitted, the runner auto-discovers them via the
+     * client's `listFunctions()` (the admin-gated `/_cirrus/admin/functions`
+     * endpoint), so it works with no wiring when the worker is built with a
+     * `functions` registry. Supply the list to override discovery.
+     */
+    readonly functions?: FunctionDescriptor[];
 }
 
 const formatResult = (value: unknown): string => {
@@ -17,24 +24,63 @@ const formatResult = (value: unknown): string => {
 };
 
 /**
- * Interactive runner for a fixed set of registered functions: pick one, edit
- * its JSON arguments, optionally target a shard, then invoke it against the
- * live {@link useCirrus} client and inspect the result or error.
+ * Interactive runner for the registered functions: pick one, edit its JSON
+ * arguments, optionally target a shard, then invoke it against the live
+ * {@link useCirrus} client and inspect the result or error.
  *
- * Backend-agnostic — the host supplies the {@link FunctionDescriptor} list
- * (a query/mutation/action's `kind` is compile-time-only, so it must be named
- * here) and the component drives the existing client transport. No admin RPC
- * is required.
+ * By default the function list is auto-discovered from the worker's
+ * `/_cirrus/admin/functions` endpoint; pass an explicit `functions` array to
+ * skip discovery (a query/mutation/action's `kind` is compile-time-only, so it
+ * must be named).
  */
-export function FunctionRunner({ functions }: FunctionRunnerProps): ReactElement {
+export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps = {}): ReactElement {
     const client = useCirrus();
 
-    const [selectedPath, setSelectedPath] = useState<string>(() => functions[0]?.path ?? "");
+    const [discovered, setDiscovered] = useState<FunctionDescriptor[] | null>(null);
+    const [discoverError, setDiscoverError] = useState<null | string>(null);
+
+    // When the host supplies a list we use it verbatim; otherwise fall back to
+    // whatever discovery has loaded so far (empty until the effect resolves).
+    const functions = functionsProp ?? discovered ?? [];
+
+    const [selectedPath, setSelectedPath] = useState<string>("");
     const [argsText, setArgsText] = useState<string>("{}");
     const [shardKey, setShardKey] = useState<string>("");
     const [status, setStatus] = useState<RunStatus>("idle");
     const [result, setResult] = useState<unknown>(undefined);
     const [error, setError] = useState<null | string>(null);
+
+    useEffect(() => {
+        if (functionsProp !== undefined) {
+            return;
+        }
+
+        let cancelled = false;
+
+        void client
+            .listFunctions()
+            .then((list) => {
+                if (!cancelled) {
+                    setDiscovered(list);
+                }
+            })
+            .catch((error_: unknown) => {
+                if (!cancelled) {
+                    setDiscoverError(errorMessage(error_));
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [client, functionsProp]);
+
+    // Default the selection to the first function once a list is available.
+    useEffect(() => {
+        if (selectedPath === "" && functions.length > 0) {
+            setSelectedPath(functions[0]?.path ?? "");
+        }
+    }, [functions, selectedPath]);
 
     const selected = useMemo(() => functions.find((descriptor) => descriptor.path === selectedPath), [functions, selectedPath]);
 
@@ -91,6 +137,12 @@ export function FunctionRunner({ functions }: FunctionRunnerProps): ReactElement
 
     return (
         <div data-testid="cirrus-function-runner">
+            {discoverError !== null && (
+                <p data-testid="function-discover-error" role="alert">
+                    {discoverError}
+                </p>
+            )}
+
             <select
                 aria-label="Function"
                 data-testid="function-select"

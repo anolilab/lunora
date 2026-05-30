@@ -655,3 +655,38 @@ describe("cirrusClient — storage admin", () => {
         await expect(client.listStorageObjects()).resolves.toEqual({ cursor: undefined, objects: [] });
     });
 });
+
+// --- Functions admin --------------------------------------------------------
+
+describe("cirrusClient — functions admin", () => {
+    test("listFunctions GETs the admin endpoint and unwraps the list", async () => {
+        const functions = [
+            { kind: "query", path: "messages:list" },
+            { kind: "mutation", path: "messages:send" },
+        ];
+        const fetchMock = vi.fn(async () => jsonResponse({ functions }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listFunctions()).resolves.toEqual(functions);
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/functions");
+        expect(init.method).toBe("GET");
+    });
+
+    test("listFunctions defaults to an empty array when functions are absent", async () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({})) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listFunctions()).resolves.toEqual([]);
+    });
+});

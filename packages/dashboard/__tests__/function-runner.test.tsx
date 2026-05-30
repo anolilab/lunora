@@ -119,4 +119,37 @@ describe("functionRunner", () => {
         expect(screen.getByTestId("error").textContent).toBe("BOOM");
         expect(screen.queryByTestId("result")).toBeNull();
     });
+
+    test("auto-discovers functions from the client when none are supplied", async () => {
+        const mock = createMockClient({ listFunctions: () => functions });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <FunctionRunner />
+            </CirrusProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getAllByRole("option")).toHaveLength(3);
+        });
+
+        expect(mock.listFunctions).toHaveBeenCalledWith();
+        expect((screen.getByTestId("function-select") as HTMLSelectElement).value).toBe("messages:list");
+    });
+
+    test("surfaces a discovery error", async () => {
+        const mock = createMockClient();
+
+        mock.listFunctions.mockRejectedValueOnce(new Error("ADMIN_FORBIDDEN"));
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <FunctionRunner />
+            </CirrusProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("function-discover-error").textContent).toBe("ADMIN_FORBIDDEN");
+        });
+    });
 });

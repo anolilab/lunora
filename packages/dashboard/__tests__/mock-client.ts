@@ -1,10 +1,11 @@
-import type { CirrusClient, FunctionReference, ScheduleRecord, StorageListPage } from "@cirrus/client";
+import type { CirrusClient, FunctionDescriptor, FunctionReference, ScheduleRecord, StorageListPage } from "@cirrus/client";
 import { vi } from "vitest";
 
 export interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
     asClient: CirrusClient;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
+    listFunctions: ReturnType<typeof vi.fn>;
     listScheduledJobs: ReturnType<typeof vi.fn>;
     listStorageObjects: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
@@ -21,6 +22,7 @@ const makeMethod = (impl?: Impl): ReturnType<typeof vi.fn> =>
 export interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
+    listFunctions?: () => FunctionDescriptor[];
     listScheduledJobs?: () => ScheduleRecord[];
     listStorageObjects?: (options: { cursor?: string; limit?: number; prefix?: string }) => StorageListPage;
     mutation?: Impl;
@@ -31,6 +33,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const query = makeMethod(impls.query);
     const mutation = makeMethod(impls.mutation);
     const action = makeMethod(impls.action);
+    const listFunctions = vi.fn(async () => impls.listFunctions?.() ?? []);
     const listScheduledJobs = vi.fn(async () => impls.listScheduledJobs?.() ?? []);
     const cancelScheduledJob = vi.fn(async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true });
     const listStorageObjects = vi.fn(
@@ -40,11 +43,12 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const asClient = {
         action,
         cancelScheduledJob,
+        listFunctions,
         listScheduledJobs,
         listStorageObjects,
         mutation,
         query,
     } as unknown as CirrusClient;
 
-    return { action, asClient, cancelScheduledJob, listScheduledJobs, listStorageObjects, mutation, query };
+    return { action, asClient, cancelScheduledJob, listFunctions, listScheduledJobs, listStorageObjects, mutation, query };
 };

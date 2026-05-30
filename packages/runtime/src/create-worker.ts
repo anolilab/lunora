@@ -125,6 +125,32 @@ export interface StorageObject {
 }
 
 /**
+ * One registered function, as the discovery endpoint surfaces it. Structurally
+ * a subset of codegen's `RegisteredCirrusFunction` — only `kind` and
+ * `visibility` matter here, so the generated `CIRRUS_FUNCTIONS` map satisfies
+ * the {@link FunctionRegistryLike} value shape.
+ */
+export interface FunctionDescriptor {
+    kind: "action" | "mutation" | "query";
+    /** The `<file>:<function>` identifier, e.g. `messages:list`. */
+    path: string;
+    /** `"internal"` functions are never exposed by the discovery endpoint; absence === public. */
+    visibility?: "internal" | "public";
+}
+
+/** One value in {@link FunctionRegistryLike} — the bits of a registered function the discovery endpoint reads. */
+export interface FunctionRegistryEntry {
+    kind: "action" | "mutation" | "query";
+    visibility?: "internal" | "public";
+}
+
+/**
+ * The generated `CIRRUS_FUNCTIONS` dispatch table, narrowed to what the
+ * discovery endpoint reads. Pass the map straight from `_generated/server.ts`.
+ */
+export type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
+
+/**
  * Lists objects in the storage bucket for the admin file browser. Structurally
  * compatible with `@cirrus/storage`'s `Storage["list"]` — the runtime stays free
  * of a hard dependency on the storage package.
@@ -150,6 +176,14 @@ export interface WorkerOptions {
      * the export endpoint covers only shard-local tables.
      */
     exportGlobals?: GlobalExportFn;
+    /**
+     * The generated `CIRRUS_FUNCTIONS` map (from `_generated/server.ts`). When
+     * set, the worker exposes the admin-gated `GET /_cirrus/admin/functions`
+     * endpoint the dashboard uses to auto-discover queries/mutations/actions
+     * (internal functions are filtered out). Omit it and the endpoint responds
+     * `FUNCTIONS_NOT_CONFIGURED`.
+     */
+    functions?: FunctionRegistryLike;
     /**
      * Router for HTTP actions (`httpRouter()` from `@cirrus/server`, a hono app).
      * Consulted for requests that miss the explicit {@link WorkerOptions.routes}
@@ -246,6 +280,7 @@ const IMPORT_PATH = "/_cirrus/admin/import";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
+const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -415,6 +450,10 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
         if (url.pathname === STORAGE_PATH) {
             return handleStorageList(request);
+        }
+
+        if (url.pathname === FUNCTIONS_PATH) {
+            return handleFunctionsList(request);
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the
@@ -653,6 +692,29 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
         });
 
         return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleFunctionsList = (request: Request): Response => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin functions endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        if (!options.functions) {
+            throw new CirrusError("functions endpoint requires a `functions` registry on the worker", { code: "FUNCTIONS_NOT_CONFIGURED", status: 400 });
+        }
+
+        // Internal functions are never exposed — they're unreachable from the
+        // client RPC path, so surfacing them in the runner would only mislead.
+        const functions: FunctionDescriptor[] = Object.entries(options.functions)
+            .filter(([, entry]) => entry.visibility !== "internal")
+            .map(([path, entry]) => ({ kind: entry.kind, path }))
+            .sort((a, b) => a.path.localeCompare(b.path));
+
+        return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     const dispatchHttpRoute = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<null | Response> => {

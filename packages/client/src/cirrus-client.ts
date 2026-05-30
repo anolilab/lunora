@@ -7,6 +7,7 @@ import type {
     BookmarkStorage,
     CirrusClientOptions,
     ClientMessage,
+    FunctionDescriptor,
     FunctionReference,
     PersistenceAdapter,
     ReconnectOptions,
@@ -24,6 +25,7 @@ const WS_PATH = "/_cirrus/ws";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
+const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
 
@@ -267,6 +269,21 @@ export class CirrusClient {
         const body = (await this.adminFetch(SCHEDULED_CANCEL_PATH, "POST", { id })) as { cancelled?: boolean };
 
         return { cancelled: body.cancelled === true };
+    }
+
+    // --- Functions admin ----------------------------------------------------
+
+    /**
+     * List the registered public functions (queries / mutations / actions) with
+     * their kinds. Hits the admin-gated `GET /_cirrus/admin/functions` endpoint —
+     * the worker must be built with a `functions` registry and `adminToken`, and
+     * this client's auth token must match. Powers `@cirrus/dashboard`'s function
+     * runner auto-discovery.
+     */
+    public async listFunctions(): Promise<FunctionDescriptor[]> {
+        const body = (await this.adminFetch(FUNCTIONS_PATH, "GET")) as { functions?: FunctionDescriptor[] };
+
+        return body.functions ?? [];
     }
 
     // --- Storage admin ------------------------------------------------------

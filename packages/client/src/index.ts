@@ -14,6 +14,7 @@ export type {
     BookmarkStorage,
     CirrusClientOptions,
     ClientMessage,
+    FunctionDescriptor,
     FunctionReference,
     OfflineQueueOptions,
     PersistedMutation,

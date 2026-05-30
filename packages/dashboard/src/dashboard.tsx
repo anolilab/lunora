@@ -1,4 +1,4 @@
-import { type ReactElement, useMemo, useState } from "react";
+import { type ReactElement, useState } from "react";
 
 import { DataBrowser } from "./data-browser.js";
 import { ExportImportPanel } from "./export-import.js";
@@ -55,23 +55,12 @@ const TAB_LABELS: Record<DashboardTab, string> = {
  * its own.
  */
 export function Dashboard({ functions, initialShardKey, scheduledCancel, scheduledLoad }: DashboardProps): ReactElement {
-    const tabs = useMemo<DashboardTab[]>(() => {
-        const available: DashboardTab[] = ["data", "schema"];
+    // Every tab is always shown: the function runner auto-discovers its list
+    // from the worker when no `functions` prop is passed, so it's never empty.
+    const tabs: DashboardTab[] = ["data", "schema", "functions", "migrations", "export", "files", "schedule"];
 
-        if (functions !== undefined && functions.length > 0) {
-            available.push("functions");
-        }
-
-        available.push("migrations", "export", "files", "schedule");
-
-        return available;
-    }, [functions]);
-
-    const [active, setActive] = useState<DashboardTab>(() => tabs[0] ?? "data");
-
-    // Guard against the active tab disappearing (e.g. `functions` becomes empty).
-    const fallbackTab = tabs[0] ?? "data";
-    const current = tabs.includes(active) ? active : fallbackTab;
+    const [active, setActive] = useState<DashboardTab>("data");
+    const current = tabs.includes(active) ? active : "data";
 
     return (
         <div data-testid="cirrus-dashboard">
@@ -95,7 +84,7 @@ export function Dashboard({ functions, initialShardKey, scheduledCancel, schedul
             <div data-testid="dash-panel" role="tabpanel">
                 {current === "data" && <DataBrowser initialShardKey={initialShardKey} />}
                 {current === "schema" && <SchemaViewer initialShardKey={initialShardKey} />}
-                {current === "functions" && functions !== undefined && <FunctionRunner functions={functions} />}
+                {current === "functions" && <FunctionRunner functions={functions} />}
                 {current === "migrations" && <MigrationsPanel initialShardKey={initialShardKey} />}
                 {current === "export" && <ExportImportPanel initialShardKey={initialShardKey} />}
                 {current === "files" && <FileBrowser />}

@@ -190,3 +190,13 @@ export interface StorageListPage {
     cursor?: string;
     objects: StorageObject[];
 }
+
+/**
+ * One registered function, as returned by the worker's
+ * `GET /_cirrus/admin/functions` endpoint: its `<file>:<function>` path and
+ * which client method (`query` / `mutation` / `action`) invokes it.
+ */
+export interface FunctionDescriptor {
+    kind: "action" | "mutation" | "query";
+    path: string;
+}

@@ -6,6 +6,7 @@ import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/schedu
 import type { R2BucketLike } from "@cirrus/storage";
 import { buildSignedUrl, createStorage } from "@cirrus/storage";
 
+import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/server.js";
 import { createShardDO } from "../../cirrus/_generated/shard.js";
 
 export { SchedulerDO } from "./scheduler-do.js";
@@ -89,6 +90,9 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // endpoints the @cirrus/dashboard panels call.
         adminToken: env.CIRRUS_ADMIN_TOKEN,
         d1: env.DB,
+        // Exposes /_cirrus/admin/functions so the dashboard's runner can
+        // auto-discover queries/mutations/actions.
+        functions: CIRRUS_FUNCTIONS,
         resolveIdentity: async (request) => {
             if (!auth) {
                 return null;

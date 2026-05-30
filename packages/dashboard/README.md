@@ -14,8 +14,9 @@ panels yourself, or mount the ready-made `<Dashboard>` shell.
   table/JSON view toggle and refresh.
 - `SchemaViewer` — every table with its row count, expandable to its columns.
 - `FunctionRunner` — pick a registered function, edit its JSON args, and invoke
-  it (query / mutation / action), showing the result or error. Pass the set of
-  functions to expose as `FunctionDescriptor[]`.
+  it (query / mutation / action), showing the result or error. Auto-discovers the
+  function list from the worker; pass an explicit `FunctionDescriptor[]` to skip
+  discovery.
 - `MigrationsPanel` — inspect data-migration run-state and kick off a migration
   by id (direction, dry-run).
 - `ExportImportPanel` — snapshot a shard to NDJSON and restore NDJSON back.
@@ -100,4 +101,27 @@ createWorker({
     adminToken: env.CIRRUS_ADMIN_TOKEN,
     storageList: createStorage({ bucket: env.FILES }).list,
 });
+```
+
+### Function discovery
+
+`FunctionRunner` auto-discovers the function list via the client's
+`listFunctions()`, which hits the admin-gated `GET /_cirrus/admin/functions`
+endpoint. Pass the generated `CIRRUS_FUNCTIONS` registry to the worker (internal
+functions are filtered out server-side):
+
+```ts
+import { CIRRUS_FUNCTIONS } from "./cirrus/_generated/server.js";
+
+createWorker({
+    shardDO: env.SHARD,
+    adminToken: env.CIRRUS_ADMIN_TOKEN,
+    functions: CIRRUS_FUNCTIONS,
+});
+```
+
+To skip discovery (or expose a curated subset), pass the list directly:
+
+```tsx
+<FunctionRunner functions={[{ kind: "query", path: "messages:list" }]} />
 ```
