@@ -1,0 +1,16 @@
+{
+    "name": "cirrus-dashboard-app",
+    "tags": ["type:app", "category:dashboard"],
+    "targets": {
+        "lint:eslint": {
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
+            "command": "eslint ."
+        },
+        "lint:eslint:fix": {
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
+            "command": "eslint . --fix"
+        }
+    }
+}

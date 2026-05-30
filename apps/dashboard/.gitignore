@@ -1,0 +1,11 @@
+# Vite
+.vite/
+dist/
+
+# Node
+node_modules/
+*.tsbuildinfo
+
+# Local env
+.env*
+!.env.example
