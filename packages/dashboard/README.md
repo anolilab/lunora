@@ -25,6 +25,7 @@ panels yourself, or mount the ready-made `<Dashboard>` shell.
 - `ExportImportPanel` — snapshot a shard to NDJSON and restore NDJSON back.
 - `FileBrowser` — page through objects in the storage (R2) bucket by prefix.
 - `ScheduledJobs` — view and cancel functions queued via `runAfter` / `runAt`.
+- `UsersPanel` — browse auth users and drill into a user's sessions (read-only).
 
 ## Admin gate
 
@@ -159,6 +160,26 @@ createWorker({
     globalIntrospector: {
         listTables: () => listGlobalTables(exec, schema),
         readTablePage: (opts) => readGlobalTablePage(exec, schema, opts),
+    },
+});
+```
+
+### Users & sessions
+
+`UsersPanel` reads better-auth's `user` / `session` tables (read-only) via the
+client's `listAuthUsers()` / `listAuthSessions()`, hitting the admin-gated
+`/_cirrus/admin/auth/*` endpoints. Build an `authIntrospector` that selects only
+non-sensitive identity columns — never password hashes or tokens:
+
+```ts
+createWorker({
+    shardDO: env.SHARD,
+    adminToken: env.CIRRUS_ADMIN_TOKEN,
+    authIntrospector: {
+        // SELECT id, name, email, emailVerified, createdAt FROM "user" …
+        listUsers: (options) => readUsers(options),
+        // SELECT id, userId, expiresAt, ipAddress, userAgent FROM "session" …
+        listSessions: (options) => readSessions(options),
     },
 });
 ```

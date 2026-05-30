@@ -1,10 +1,23 @@
-import type { CirrusClient, FunctionDescriptor, FunctionReference, GlobalTableInfo, GlobalTablePage, ScheduleRecord, StorageListPage } from "@cirrus/client";
+import type {
+    AuthPage,
+    AuthSession,
+    AuthUser,
+    CirrusClient,
+    FunctionDescriptor,
+    FunctionReference,
+    GlobalTableInfo,
+    GlobalTablePage,
+    ScheduleRecord,
+    StorageListPage,
+} from "@cirrus/client";
 import { vi } from "vitest";
 
 export interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
     asClient: CirrusClient;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
+    listAuthSessions: ReturnType<typeof vi.fn>;
+    listAuthUsers: ReturnType<typeof vi.fn>;
     listFunctions: ReturnType<typeof vi.fn>;
     listGlobalTables: ReturnType<typeof vi.fn>;
     listScheduledJobs: ReturnType<typeof vi.fn>;
@@ -24,6 +37,8 @@ const makeMethod = (impl?: Impl): ReturnType<typeof vi.fn> =>
 export interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
+    listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
+    listAuthUsers?: (options: { limit?: number; offset?: number }) => AuthPage<AuthUser>;
     listFunctions?: () => FunctionDescriptor[];
     listGlobalTables?: () => GlobalTableInfo[];
     listScheduledJobs?: () => ScheduleRecord[];
@@ -47,10 +62,16 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const readGlobalTablePage = vi.fn(
         async (options: { limit?: number; offset?: number; table: string }) => impls.readGlobalTablePage?.(options) ?? { columns: [], rows: [], total: 0 },
     );
+    const listAuthUsers = vi.fn(async (options: { limit?: number; offset?: number } = {}) => impls.listAuthUsers?.(options) ?? { rows: [], total: 0 });
+    const listAuthSessions = vi.fn(
+        async (options: { limit?: number; offset?: number; userId?: string } = {}) => impls.listAuthSessions?.(options) ?? { rows: [], total: 0 },
+    );
 
     const asClient = {
         action,
         cancelScheduledJob,
+        listAuthSessions,
+        listAuthUsers,
         listFunctions,
         listGlobalTables,
         listScheduledJobs,
@@ -64,6 +85,8 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         action,
         asClient,
         cancelScheduledJob,
+        listAuthSessions,
+        listAuthUsers,
         listFunctions,
         listGlobalTables,
         listScheduledJobs,

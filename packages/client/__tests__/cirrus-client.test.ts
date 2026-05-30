@@ -733,3 +733,44 @@ describe("cirrusClient — global tables admin", () => {
         expect(parsed.searchParams.get("offset")).toBe("5");
     });
 });
+
+describe("cirrusClient — auth admin", () => {
+    test("listAuthUsers GETs the users endpoint with paging", async () => {
+        const page = { rows: [{ id: "u1" }], total: 1 };
+        const fetchMock = vi.fn(async () => jsonResponse(page));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listAuthUsers({ limit: 10, offset: 5 })).resolves.toEqual(page);
+
+        const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+        const parsed = new URL(requestUrl);
+
+        expect(parsed.pathname).toBe("/_cirrus/admin/auth/users");
+        expect(parsed.searchParams.get("limit")).toBe("10");
+        expect(parsed.searchParams.get("offset")).toBe("5");
+    });
+
+    test("listAuthSessions encodes userId + paging", async () => {
+        const fetchMock = vi.fn(async () => jsonResponse({ rows: [], total: 0 }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await client.listAuthSessions({ limit: 20, userId: "u1" });
+
+        const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+        const parsed = new URL(requestUrl);
+
+        expect(parsed.pathname).toBe("/_cirrus/admin/auth/sessions");
+        expect(parsed.searchParams.get("userId")).toBe("u1");
+        expect(parsed.searchParams.get("limit")).toBe("20");
+    });
+});

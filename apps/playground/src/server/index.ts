@@ -2,7 +2,7 @@ import type { CirrusAuth } from "@cirrus/auth";
 import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
-import type { ExecutionContextLike, GlobalIntrospector, Route, ShardNamespaceLike } from "@cirrus/runtime";
+import type { AuthIntrospector, ExecutionContextLike, GlobalIntrospector, Route, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
@@ -12,32 +12,79 @@ import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/server.js";
 import { createShardDO } from "../../cirrus/_generated/shard.js";
 import schema from "../../cirrus/schema.js";
 
+/** Adapt the raw D1 binding to `@cirrus/d1`'s `D1Exec`. Reads go through `all`; admin browsing never writes. */
+const buildExec = (db: D1DatabaseLike): D1Exec => ({
+    all: async (sql, parameters) => {
+        const result = await db
+            .prepare(sql)
+            .bind(...parameters)
+            .all<Record<string, unknown>>();
+
+        return result.results;
+    },
+    run: async (sql, parameters) => {
+        await db
+            .prepare(sql)
+            .bind(...parameters)
+            .run();
+    },
+});
+
 /**
- * Adapt the raw D1 binding to `@cirrus/d1`'s `D1Exec` so the dashboard's global
- * data browser can introspect `.global()` tables. Reads only — `run` is needed
- * by the shared helper signature but the introspector never writes.
+ * Introspect `.global()` (D1-backed) tables so the dashboard's global data
+ * browser can list and page them.
  */
 const d1Introspector = (db: D1DatabaseLike): GlobalIntrospector => {
-    const exec: D1Exec = {
-        all: async (sql, parameters) => {
-            const result = await db
-                .prepare(sql)
-                .bind(...parameters)
-                .all<Record<string, unknown>>();
-
-            return result.results;
-        },
-        run: async (sql, parameters) => {
-            await db
-                .prepare(sql)
-                .bind(...parameters)
-                .run();
-        },
-    };
+    const exec = buildExec(db);
 
     return {
         listTables: () => listGlobalTables(exec, schema as never),
         readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
+    };
+};
+
+/**
+ * Read-only auth introspector over better-auth's D1 `user` / `session` tables.
+ * Selects only non-sensitive identity columns (never password hashes or tokens),
+ * orders newest-first, and clamps the page size. Admin-gated by the runtime.
+ */
+const authIntrospector = (db: D1DatabaseLike): AuthIntrospector => {
+    const exec = buildExec(db);
+
+    const page = async <T>(
+        table: string,
+        columns: string,
+        where: string,
+        parameters: readonly unknown[],
+        limit?: number,
+        offset?: number,
+    ): Promise<{ rows: T[]; total: number }> => {
+        const cappedLimit = Math.min(Math.max(Math.trunc(limit ?? 50), 1), 500);
+        const flooredOffset = Math.max(0, Math.trunc(offset ?? 0));
+        const counted = await exec.all(`SELECT COUNT(*) AS c FROM "${table}" ${where}`, parameters);
+        const rows = await exec.all(`SELECT ${columns} FROM "${table}" ${where} ORDER BY "createdAt" DESC LIMIT ? OFFSET ?`, [
+            ...parameters,
+            cappedLimit,
+            flooredOffset,
+        ]);
+
+        return { rows: rows as T[], total: Number(counted[0]?.["c"] ?? 0) };
+    };
+
+    return {
+        listSessions: (options) => {
+            const filtered = options.userId !== undefined && options.userId !== "";
+
+            return page(
+                "session",
+                `"id", "userId", "expiresAt", "ipAddress", "userAgent", "createdAt"`,
+                filtered ? `WHERE "userId" = ?` : "",
+                filtered ? [options.userId] : [],
+                options.limit,
+                options.offset,
+            );
+        },
+        listUsers: (options) => page("user", `"id", "name", "email", "emailVerified", "image", "createdAt"`, "", [], options.limit, options.offset),
     };
 };
 
@@ -121,6 +168,8 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // When set, enables the admin-gated export/import and scheduled-job
         // endpoints the @cirrus/dashboard panels call.
         adminToken: env.CIRRUS_ADMIN_TOKEN,
+        // Exposes /_cirrus/admin/auth/* so the dashboard can browse users/sessions.
+        authIntrospector: env.DB ? authIntrospector(env.DB as D1DatabaseLike) : undefined,
         d1: env.DB,
         // Exposes /_cirrus/admin/functions so the dashboard's runner can
         // auto-discover queries/mutations/actions.

@@ -11,6 +11,9 @@ export type { SubscriptionCallback, SubscriptionState } from "./subscription.js"
 export { SubscriptionRegistry } from "./subscription.js";
 export type {
     ArgsOf,
+    AuthPage,
+    AuthSession,
+    AuthUser,
     BookmarkStorage,
     CirrusClientOptions,
     ClientMessage,

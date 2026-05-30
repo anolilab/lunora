@@ -1,5 +1,9 @@
 export type {
     AdminTableResolver,
+    AuthIntrospector,
+    AuthPage,
+    AuthSession,
+    AuthUser,
     ExecutionContextLike,
     FunctionDescriptor,
     FunctionRegistryEntry,

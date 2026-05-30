@@ -181,6 +181,46 @@ export interface GlobalIntrospector {
     readTablePage: (options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>;
 }
 
+/** One authenticated user, as the auth browser surfaces it. Mirrors better-auth's `user` row. */
+export interface AuthUser {
+    [key: string]: unknown;
+    createdAt?: null | number | string;
+    email?: null | string;
+    emailVerified?: boolean | null;
+    id: string;
+    image?: null | string;
+    name?: null | string;
+}
+
+/** One auth session, as the auth browser surfaces it. Mirrors better-auth's `session` row. */
+export interface AuthSession {
+    [key: string]: unknown;
+    createdAt?: null | number | string;
+    expiresAt?: null | number | string;
+    id: string;
+    ipAddress?: null | string;
+    userAgent?: null | string;
+    userId: string;
+}
+
+/** A page of users or sessions plus the total count, for paginated browsing. */
+export interface AuthPage<T> {
+    rows: T[];
+    total: number;
+}
+
+/**
+ * Read-only introspector for the auth store's users and sessions, backing the
+ * dashboard's users panel via `GET /_cirrus/admin/auth/users` and
+ * `/_cirrus/admin/auth/sessions`. The host wires this to better-auth's tables;
+ * the runtime stays free of a hard dependency on `@cirrus/auth`. Omit it and
+ * those endpoints respond `AUTH_NOT_CONFIGURED`.
+ */
+export interface AuthIntrospector {
+    listSessions: (options: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthSession>>;
+    listUsers: (options: { limit?: number; offset?: number }) => Promise<AuthPage<AuthUser>>;
+}
+
 export interface WorkerOptions {
     /**
      * Admin bearer token expected by the export/import endpoints. When unset,
@@ -188,6 +228,13 @@ export interface WorkerOptions {
      * per-shard admin gate uses.
      */
     adminToken?: string;
+    /**
+     * Read-only introspector for the auth store's users and sessions, backing
+     * the dashboard's users panel via `GET /_cirrus/admin/auth/users` and
+     * `/_cirrus/admin/auth/sessions`. Omit it and those endpoints respond
+     * `AUTH_NOT_CONFIGURED`.
+     */
+    authIntrospector?: AuthIntrospector;
     /**
      * D1 binding for `.global()` tables. Currently unused by the routing
      * layer; downstream packages will read it from `env.DB` directly.
@@ -315,6 +362,8 @@ const STORAGE_PATH = "/_cirrus/admin/storage";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
+const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
+const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -498,6 +547,14 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             return handleGlobalTablePage(request);
         }
 
+        if (url.pathname === AUTH_USERS_PATH) {
+            return handleAuthUsers(request);
+        }
+
+        if (url.pathname === AUTH_SESSIONS_PATH) {
+            return handleAuthSessions(request);
+        }
+
         // HTTP actions are the lowest-priority matcher: explicit routes and the
         // internal `/_cirrus/*` endpoints above always win. Once the request
         // reaches the router, hono owns routing — its 404 is the terminal 404.
@@ -598,8 +655,8 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                         // `resolveTableSharding`'s keys if the caller passed
                         // none — best effort; a project without the resolver
                         // will simply not fan out automatically.
-                        const probeTables
-                            = exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
+                        const probeTables =
+                            exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
 
                         const result = await coordinator.orchestrateExport(options.shardDO, {
                             args: { tables: exportTables },
@@ -806,6 +863,56 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
             table,
         });
+
+        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    /** Shared gate for the auth-introspection endpoints: admin auth + a configured introspector. */
+    const requireAuthIntrospector = (request: Request): AuthIntrospector => {
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin auth endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        if (!options.authIntrospector) {
+            throw new CirrusError("auth endpoints require an `authIntrospector` on the worker", { code: "AUTH_NOT_CONFIGURED", status: 400 });
+        }
+
+        return options.authIntrospector;
+    };
+
+    /** Parse the shared `limit` / `offset` paging params off an admin GET request. */
+    const parsePaging = (url: URL): { limit?: number; offset?: number } => {
+        const limitParam = url.searchParams.get("limit");
+        const offsetParam = url.searchParams.get("offset");
+        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
+        const offset = offsetParam === null ? undefined : Number.parseInt(offsetParam, 10);
+
+        return {
+            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
+        };
+    };
+
+    const handleAuthUsers = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Auth-users endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAuthIntrospector(request);
+        const page = await introspector.listUsers(parsePaging(new URL(request.url)));
+
+        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleAuthSessions = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Auth-sessions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAuthIntrospector(request);
+        const url = new URL(request.url);
+        const userId = url.searchParams.get("userId") ?? undefined;
+        const page = await introspector.listSessions({ ...parsePaging(url), userId: userId === "" ? undefined : userId });
 
         return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
     };
