@@ -29,7 +29,9 @@
     },
     "dependencies": {
         "@cirrus/client": "workspace:*",
-        "@cirrus/react": "workspace:*"
+        "@cirrus/react": "workspace:*",
+        "@tanstack/react-table": "catalog:frontend",
+        "@tanstack/react-virtual": "catalog:frontend"
     },
     "devDependencies": {
         "@testing-library/dom": "catalog:frontend",
