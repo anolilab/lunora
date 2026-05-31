@@ -1,8 +1,9 @@
 import { v } from "@cirrus/values";
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
 import { initCirrus } from "../src/builder/index.js";
-import { definePlugin, defineSchemaExtension, mergeSchemaExtension } from "../src/plugin.js";
+import { mutation, query } from "../src/functions.js";
+import { defineComponent, definePlugin, defineSchemaExtension, mergeSchemaExtension } from "../src/plugin.js";
 import { defineSchema, defineTable } from "../src/schema.js";
 
 describe("defineSchemaExtension", () => {
@@ -30,7 +31,7 @@ describe("definePlugin", () => {
 
         const plugin = definePlugin("ratelimit", {
             extension,
-            middleware: async ({ ctx, next }) => next({ ctx: { ratelimit: { hit: () => true } } }),
+            middleware: async ({ next }) => next({ ctx: { ratelimit: { hit: () => true } } }),
         });
 
         expect(plugin.key).toBe("ratelimit");
@@ -46,7 +47,7 @@ describe("definePlugin", () => {
         expect(onlyExtension.middleware).toBeUndefined();
 
         const onlyMiddleware = definePlugin("b", {
-            middleware: ({ ctx, next }) => next({ ctx: { x: 1 } }),
+            middleware: ({ next }) => next({ ctx: { x: 1 } }),
         });
 
         expect(onlyMiddleware.extension).toBeUndefined();
@@ -134,6 +135,66 @@ describe("defineSchema(...).extend(...)", () => {
     });
 });
 
+describe("defineComponent", () => {
+    test("bundles extension, middleware, and functions", () => {
+        const extension = defineSchemaExtension("ratelimit", {
+            tables: { ratelimit_buckets: defineTable({ count: v.number(), key: v.string() }) },
+        });
+
+        const check = query({
+            args: { key: v.string() },
+            handler: () => ({ allowed: true }),
+        });
+
+        const reset = mutation({
+            args: { key: v.string() },
+            handler: () => undefined,
+        });
+
+        const component = defineComponent("ratelimit", {
+            extension,
+            functions: { check, reset },
+            middleware: async ({ ctx, next }) => next({ ctx: { ...(ctx as object) } }),
+        });
+
+        expect(component.key).toBe("ratelimit");
+        expect(component.extension).toBe(extension);
+        expect(component.middleware).toBeTypeOf("function");
+        expect(component.functions.check).toBe(check);
+        expect(component.functions.reset).toBe(reset);
+    });
+
+    test("returns an empty functions record when none supplied", () => {
+        const component = defineComponent("empty", {});
+
+        expect(component.functions).toEqual({});
+    });
+
+    test("supports re-export wiring — destructuring component.functions yields real registered functions", () => {
+        const component = defineComponent("api", {
+            functions: {
+                ping: query({
+                    args: {},
+                    handler: () => "pong",
+                }),
+            },
+        });
+
+        // The re-export pattern users will follow:
+        const { ping } = component.functions;
+
+        expect(ping.kind).toBe("query");
+
+        expectTypeOf(ping.handler).toBeFunction();
+    });
+
+    test("rejects extension key mismatch (same rule as definePlugin)", () => {
+        const extension = defineSchemaExtension("foo", { tables: {} });
+
+        expect(() => defineComponent("bar", { extension })).toThrow(/extension key "foo" does not match plugin key/);
+    });
+});
+
 describe("plugin.middleware integration with the builder", () => {
     test("a plugin middleware composes with the builder chain", async () => {
         type RatelimitApi = { hit: (key: string) => boolean };
@@ -157,7 +218,7 @@ describe("plugin.middleware integration with the builder", () => {
 
         // The builder middleware sees a ctx with `hits`; plugin middleware adds `ratelimit`.
         const procedure = c.query
-            .use(async ({ ctx, next }) => next({ ctx: { hits: [] as string[] } }))
+            .use(async ({ next }) => next({ ctx: { hits: [] as string[] } }))
             .use(ratelimit.middleware!)
             .query(({ ctx }) => {
                 ctx.ratelimit.hit("u-1");

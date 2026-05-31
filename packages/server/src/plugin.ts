@@ -49,7 +49,7 @@
  */
 
 import type { Middleware } from "./builder/types.js";
-import type { Schema, TableDefinition } from "./types.js";
+import type { FunctionKind, RegisteredFunction, Schema, TableDefinition } from "./types.js";
 
 /**
  * Schema fragment a plugin contributes. Same shape as the `tables` map
@@ -130,6 +130,92 @@ export const definePlugin = <TExt extends Record<string, TableDefinition>, TCtxI
         key,
         ...options.extension ? { extension: options.extension } : {},
         ...options.middleware ? { middleware: options.middleware } : {},
+    };
+};
+
+/**
+ * Bundle of registered functions a {@link Component} ships. Keys are the
+ * function's local name (e.g. `check`, `reset`); the registered function
+ * value carries its own kind / args / handler.
+ *
+ * Users re-export from their own cirrus module so codegen picks them up:
+ *
+ * ```ts
+ * // cirrus/ratelimit.ts
+ * import { ratelimit } from "@vendor/ratelimit-component";
+ * export const { check, reset } = ratelimit.functions;
+ * // Emits as `ratelimit:check` / `ratelimit:reset` in the generated `api`.
+ * ```
+ *
+ * No codegen change is needed — re-exports are already how user code
+ * exposes its own queries / mutations.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any -- ComponentFunctions is a heterogeneous bag; per-entry types are recovered by the consumer's re-export. */
+export type ComponentFunctions = Readonly<Record<string, RegisteredFunction<any, any, FunctionKind>>>;
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * Component = {@link Plugin} with a bundle of registered functions. The
+ * extension + middleware + functions are independent: a component can ship
+ * functions without a schema (e.g. a stateless utility), or a schema
+ * without functions (e.g. shared table definitions), and any combination.
+ */
+export interface Component<
+    TExt extends Record<string, TableDefinition> = Record<string, TableDefinition>,
+    TCtxIn = unknown,
+    TCtxOut = TCtxIn,
+    F extends ComponentFunctions = ComponentFunctions,
+> extends Plugin<TExt, TCtxIn, TCtxOut> {
+    readonly functions: F;
+}
+
+export interface DefineComponentOptions<
+    TExt extends Record<string, TableDefinition>,
+    TCtxIn,
+    TCtxOut,
+    F extends ComponentFunctions,
+> extends DefinePluginOptions<TExt, TCtxIn, TCtxOut> {
+    /** Registered functions the component ships. Keys are the function's local name. */
+    functions?: F;
+}
+
+/**
+ * Convenience wrapper around {@link definePlugin} that also bundles a set
+ * of registered functions. The resulting `component.functions` object is a
+ * record of `name → registered query/mutation/action`; consumers
+ * re-export entries so codegen discovers them as user functions:
+ *
+ * ```ts
+ * export const ratelimit = defineComponent("ratelimit", {
+ *     extension: defineSchemaExtension("ratelimit", { tables: { ratelimit_buckets } }),
+ *     middleware: ({ ctx, next }) => next({ ctx: { ...ctx, ratelimit: api(ctx) } }),
+ *     functions: {
+ *         check: query({ args: { key: v.string() }, handler: async ({ ctx, args }) => ... }),
+ *         reset: mutation({ args: { key: v.string() }, handler: async ({ ctx, args }) => ... }),
+ *     },
+ * });
+ * ```
+ *
+ * v1 leaves codegen-side namespacing of component functions as a follow-up;
+ * the explicit re-export pattern works without any codegen change.
+ */
+export const defineComponent = <
+    TExt extends Record<string, TableDefinition>,
+    TCtxIn = unknown,
+    TCtxOut = TCtxIn,
+    F extends ComponentFunctions = ComponentFunctions,
+>(
+    key: string,
+    options: DefineComponentOptions<TExt, TCtxIn, TCtxOut, F>,
+): Component<TExt, TCtxIn, TCtxOut, F> => {
+    const plugin = definePlugin(key, {
+        ...options.extension ? { extension: options.extension } : {},
+        ...options.middleware ? { middleware: options.middleware } : {},
+    });
+
+    return {
+        ...plugin,
+        functions: (options.functions ?? ({} as F)) as F,
     };
 };
 

@@ -33,8 +33,8 @@ export type {
 export { httpAction, httpRoute, httpRouter } from "./http.js";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";
 export { defineMigration } from "./migration.js";
-export type { DefinePluginOptions, Plugin, SchemaExtension } from "./plugin.js";
-export { definePlugin, defineSchemaExtension, mergeSchemaExtension } from "./plugin.js";
+export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, SchemaExtension } from "./plugin.js";
+export { defineComponent, definePlugin, defineSchemaExtension, mergeSchemaExtension } from "./plugin.js";
 export type { DefinePolicyInput, Policy, PolicyContext, PolicyDecision, PolicyOperation, Role, WhereInput } from "./rls/index.js";
 export { definePolicies, definePolicy, defineRole, rls } from "./rls/index.js";
 export type {
