@@ -4,15 +4,55 @@ import { toQueuedPayload } from "./queue.js";
 import { renderEmail } from "./render.js";
 import type { CirrusMailOptions, Mailer, MailTransport, SendOpts, SendPayload } from "./types.js";
 
+/** RFC 5321 caps the entire mailbox path at 320 chars; reject anything longer. */
+const MAX_EMAIL_LENGTH = 320;
+const MAX_NAME_LENGTH = 256;
+
+const ADDRESS_PATTERN = /^\s*(.*?)\s*<\s*([^>]+)\s*>\s*$/;
+
+/**
+ * Reject CR/LF (the classic SMTP header-injection vector — splits the header
+ * into attacker-controlled extra headers) and commas (separate the address in
+ * SMTP `To:`/`Cc:` lists, so a single field with a `,` smuggles a second
+ * recipient past `to:` validation).
+ */
+const assertSafeAddressField = (field: "email" | "name", value: string): void => {
+    if (value.includes("\r") || value.includes("\n") || value.includes(",")) {
+        throw new Error(`@cirrus/mail: address ${field} must not contain CR, LF, or comma`);
+    }
+};
+
 /** `@visulima/email` models addresses as `{ email, name? }`. Accept either shape. */
 const toAddress = (input: string): { email: string; name?: string } => {
-    const match = /^\s*(.*?)\s*<\s*([^>]+)\s*>\s*$/.exec(input);
+    const match = ADDRESS_PATTERN.exec(input);
 
     if (match?.[1] && match[2]) {
-        return { name: match[1], email: match[2] };
+        const name = match[1];
+        const email = match[2];
+
+        if (name.length > MAX_NAME_LENGTH) {
+            throw new Error(`@cirrus/mail: address name must be <= ${MAX_NAME_LENGTH} characters`);
+        }
+
+        if (email.length > MAX_EMAIL_LENGTH) {
+            throw new Error(`@cirrus/mail: address email must be <= ${MAX_EMAIL_LENGTH} characters`);
+        }
+
+        assertSafeAddressField("name", name);
+        assertSafeAddressField("email", email);
+
+        return { name, email };
     }
 
-    return { email: input.trim() };
+    const email = input.trim();
+
+    if (email.length > MAX_EMAIL_LENGTH) {
+        throw new Error(`@cirrus/mail: address email must be <= ${MAX_EMAIL_LENGTH} characters`);
+    }
+
+    assertSafeAddressField("email", email);
+
+    return { email };
 };
 
 const toAddressList = (input: string | string[] | undefined): { email: string; name?: string }[] | undefined => {

@@ -25,6 +25,12 @@ export interface SchedulerDOState {
 
 export interface SchedulerEnv {
     [key: string]: unknown;
+    /**
+     * Base URL where the Worker is mounted. SchedulerDO uses this at dispatch
+     * time to call back into the Worker. Read at fire time (NOT taken from the
+     * request body) to prevent SSRF via a forged `originUrl` field.
+     */
+    CIRRUS_ORIGIN_URL?: string;
 }
 
 const HEADER_PREFIX = "id:";
@@ -50,7 +56,12 @@ const generateId = (): string => {
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
     functionPath: string;
-    originUrl: string;
+    /**
+     * Legacy field accepted but ignored: dispatch always uses
+     * `env.CIRRUS_ORIGIN_URL`. Kept on the wire so older `@cirrus/scheduler`
+     * clients can still talk to this DO.
+     */
+    originUrl?: string;
     scheduledFor: number;
     shardKey?: string;
 }
@@ -188,14 +199,24 @@ export class SchedulerDO {
         }
 
         for (const record of due) {
+            // Claim the job BEFORE dispatching: drop the time-index entry and
+            // write a `dispatched:<id>` marker. If the alarm re-fires (or this
+            // run is interrupted and retried) the index entry is gone, so the
+            // job won't be picked up again. recordRetry() will recreate a
+            // fresh index entry on failure.
+            await this.state.storage.delete(this.indexKey(record.scheduledFor, record.id));
+            await this.state.storage.put(`dispatched:${record.id}`, { dispatchedAt: Date.now() });
+
             const ok = await this.dispatch(record);
 
-            // Always clear the original time-index slot (the alarm has already
-            // fired for it). Whether we keep or replace the `id:` row depends
-            // on the dispatch outcome.
-            await this.state.storage.delete(this.indexKey(record.scheduledFor, record.id));
-
-            await (ok ? this.state.storage.delete(`${HEADER_PREFIX}${record.id}`) : this.recordRetry(record));
+            if (ok) {
+                await this.state.storage.delete(`${HEADER_PREFIX}${record.id}`);
+                await this.state.storage.delete(`${RETRY_PREFIX}${record.id}`);
+                await this.state.storage.delete(`dispatched:${record.id}`);
+            } else {
+                await this.state.storage.delete(`dispatched:${record.id}`);
+                await this.recordRetry(record);
+            }
         }
 
         await this.rescheduleAlarm();
@@ -212,9 +233,13 @@ export class SchedulerDO {
      * request. Returns `true` when the dispatch is considered successful (any
      * HTTP response), `false` if the fetch threw or returned a 5xx — those
      * cases enter the retry pipeline via {@link recordRetry}.
+     *
+     * The dispatch target is taken from `env.CIRRUS_ORIGIN_URL` (NOT from the
+     * stored record) to prevent SSRF via a forged `originUrl` on the schedule
+     * request.
      */
     protected async dispatch(record: ScheduleRecord): Promise<boolean> {
-        const { originUrl } = record as ScheduleRecord & { originUrl?: string };
+        const originUrl = typeof this.env.CIRRUS_ORIGIN_URL === "string" ? this.env.CIRRUS_ORIGIN_URL : undefined;
 
         if (!originUrl) {
             return true;
@@ -246,18 +271,20 @@ export class SchedulerDO {
      * After {@link MAX_RETRY_ATTEMPTS} attempts the record is parked under a
      * `dead:` key for manual inspection.
      */
-    private async recordRetry(record: ScheduleRecord & { attempts?: number; originUrl?: string }): Promise<void> {
+    private async recordRetry(record: ScheduleRecord & { attempts?: number }): Promise<void> {
         const attempts = (record.attempts ?? 0) + 1;
 
         if (attempts > MAX_RETRY_ATTEMPTS) {
             await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
+            // Park is terminal; clear any pending retry row.
+            await this.state.storage.delete(`${RETRY_PREFIX}${record.id}`);
 
             return;
         }
 
         const delayMs = RETRY_BASE_DELAY_MS * 2 ** (attempts - 1);
         const nextScheduledFor = Date.now() + delayMs;
-        const retryRecord: ScheduleRecord & { attempts: number; originUrl?: string } = {
+        const retryRecord: ScheduleRecord & { attempts: number } = {
             ...record,
             attempts,
             scheduledFor: nextScheduledFor,
@@ -272,19 +299,32 @@ export class SchedulerDO {
     private async handleSchedule(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => null)) as ScheduleRequestBody | null;
 
-        if (!body || typeof body.functionPath !== "string" || typeof body.scheduledFor !== "number") {
-            return this.error(400, "INVALID_INPUT", "functionPath and scheduledFor are required");
+        if (!body || typeof body.functionPath !== "string") {
+            return this.error(400, "INVALID_INPUT", "functionPath is required");
+        }
+
+        // Reject NaN, +/-Infinity and non-positive timestamps. A finite
+        // positive number is a precondition for the time-index padding to
+        // sort correctly.
+        if (typeof body.scheduledFor !== "number" || !Number.isFinite(body.scheduledFor) || body.scheduledFor <= 0) {
+            return this.error(400, "INVALID_INPUT", "scheduledFor must be a finite positive epoch-millisecond number");
+        }
+
+        // Dispatch target lives only in env — never trust an `originUrl` from
+        // the caller (would be an SSRF vector). Refuse schedules if the env
+        // hasn't been configured: the job would be unfireable.
+        if (typeof this.env.CIRRUS_ORIGIN_URL !== "string" || this.env.CIRRUS_ORIGIN_URL.length === 0) {
+            return this.error(500, "ORIGIN_NOT_CONFIGURED", "CIRRUS_ORIGIN_URL env binding must be set on the SchedulerDO");
         }
 
         const id = generateId();
-        const record: ScheduleRecord & { originUrl: string } = {
+        const record: ScheduleRecord = {
             id,
             functionPath: body.functionPath,
             args: body.args ?? {},
             scheduledFor: body.scheduledFor,
             shardKey: body.shardKey,
             enqueuedAt: Date.now(),
-            originUrl: body.originUrl,
         };
 
         await this.state.storage.put(`${HEADER_PREFIX}${id}`, record);
@@ -322,6 +362,8 @@ export class SchedulerDO {
     private async removeRecord(record: ScheduleRecord): Promise<void> {
         await this.state.storage.delete(`${HEADER_PREFIX}${record.id}`);
         await this.state.storage.delete(this.indexKey(record.scheduledFor, record.id));
+        // Drop any pending retry row so cancelled jobs don't leak storage.
+        await this.state.storage.delete(`${RETRY_PREFIX}${record.id}`);
     }
 
     private async rescheduleAlarm(): Promise<void> {

@@ -42,13 +42,28 @@ export const toQueuedPayload = (opts: QueuedSend): QueuedSend => ({
  * ```
  */
 export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promise<{ id: string }> => {
-    if (!payload || typeof payload !== "object") {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("@cirrus/mail: queue message body must be an object");
     }
 
-    const opts = payload as SendOpts;
+    const candidate = payload as Record<string, unknown>;
 
-    return mailer.send(opts);
+    // Shape-check the message body before handing it to the transport — the
+    // queue is an untrusted boundary (workers can land arbitrary JSON) and a
+    // malformed payload here would otherwise surface as an obscure provider
+    // error downstream.
+    if (typeof candidate.subject !== "string") {
+        throw new TypeError("@cirrus/mail: queue message must have a string `subject`");
+    }
+
+    const recipientIsString = typeof candidate.to === "string";
+    const recipientIsStringArray = Array.isArray(candidate.to) && candidate.to.every((value) => typeof value === "string");
+
+    if (!recipientIsString && !recipientIsStringArray) {
+        throw new Error("@cirrus/mail: queue message `to` must be a string or string[]");
+    }
+
+    return mailer.send(candidate as unknown as SendOpts);
 };
 
 export { type QueueLike } from "./types.js";

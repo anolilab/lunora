@@ -73,8 +73,15 @@ export const validateWranglerConfig = (wrangler: WranglerConfig | undefined, sch
     }
 
     const compatibilityDate = wrangler.compatibility_date ?? "";
+    // Lexical `<` only matches numeric comparison for strict `YYYY-MM-DD`; a
+    // malformed string like "2026-4-7" sorts before "2026-04-07" and would
+    // pass `>= REQUIRED_COMPATIBILITY_DATE` checks by accident. Enforce the
+    // shape so the comparison below is meaningful.
+    const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
-    if (compatibilityDate < REQUIRED_COMPATIBILITY_DATE) {
+    if (compatibilityDate && !isoDatePattern.test(compatibilityDate)) {
+        errors.push(`compatibility_date must be in YYYY-MM-DD format (got "${compatibilityDate}")`);
+    } else if (compatibilityDate < REQUIRED_COMPATIBILITY_DATE) {
         errors.push(`compatibility_date must be >= "${REQUIRED_COMPATIBILITY_DATE}" (got "${compatibilityDate || "<missing>"}")`);
     }
 

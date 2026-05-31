@@ -261,7 +261,9 @@ const string = (): ColumnValidator<string, string> =>
 const number = (): ColumnValidator<number, number> =>
     asColumn(
         createValidator<number>("number", (value, context) => {
-            if (typeof value !== "number" || Number.isNaN(value)) {
+            // Reject NaN and ±Infinity — they round-trip through JSON as `null`
+            // and break downstream code that assumes a real numeric value.
+            if (typeof value !== "number" || !Number.isFinite(value)) {
                 fail(context, "number", value);
             }
 
@@ -433,9 +435,18 @@ const record = <K extends Validator<string>, V extends Validator>(
                 }
 
                 const input = value as Record<string, unknown>;
-                const out: Record<string, unknown> = {};
+                // `Object.create(null)` so the result has no prototype chain —
+                // belt-and-braces against a `__proto__` key sneaking through.
+                const out = Object.create(null) as Record<string, unknown>;
 
                 for (const key of Object.keys(input)) {
+                    // Skip dangerous keys outright — these mutate the object
+                    // prototype if assigned via `out[key] = ...` on a normal
+                    // object literal, which is a JSON-level injection risk.
+                    if (key === "__proto__" || key === "constructor" || key === "prototype") {
+                        continue;
+                    }
+
                     const parsedKey = keyInternal._parse(key, { path: [...context.path, key] });
                     const parsedValue = valueInternal._parse(input[key], { path: [...context.path, key] });
 

@@ -21,6 +21,26 @@ export interface CronTriggerSnippet {
     wranglerJsonc: string;
 }
 
+// Single cron-piece: `*`, `*` followed by a step, a digit, a range, or a
+// range with a step. Intentionally permissive on numeric values (we don't
+// enforce minute < 60 etc.) — wrangler/Cloudflare will reject out-of-range
+// values — but strict enough to refuse free-form prose like "every minute"
+// that would otherwise silently no-op.
+const CRON_PIECE = /^(?:\*|\*\/\d+|\d+(?:-\d+)?(?:\/\d+)?)$/u;
+
+const isValidCronField = (field: string): boolean => field.split(",").every((piece) => CRON_PIECE.test(piece));
+
+/** Standard 5-field (minute hour day month dow) or 6-field (with seconds) cron. */
+const isValidCronExpression = (schedule: string): boolean => {
+    const tokens = schedule.trim().split(/\s+/u);
+
+    if (tokens.length !== 5 && tokens.length !== 6) {
+        return false;
+    }
+
+    return tokens.every((token) => isValidCronField(token));
+};
+
 /**
  * Produces the wrangler.jsonc fragment + dispatcher metadata for a recurring
  * function. The actual cron handler is mounted by `@cirrus/runtime` — we only
@@ -29,6 +49,10 @@ export interface CronTriggerSnippet {
 export const createCronTrigger = (options: CronTriggerOptions): CronTriggerSnippet => {
     if (!options.schedule || !options.fn) {
         throw new Error("@cirrus/scheduler: createCronTrigger() requires `schedule` and `fn`");
+    }
+
+    if (!isValidCronExpression(options.schedule)) {
+        throw new Error(`@cirrus/scheduler: invalid cron expression "${options.schedule}" — expected 5 or 6 space-separated fields (e.g. "0 * * * *")`);
     }
 
     const snippet = JSON.stringify(
