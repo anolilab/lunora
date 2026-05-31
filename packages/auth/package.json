@@ -17,6 +17,11 @@
             "import": "./dist/index.mjs",
             "require": "./dist/index.cjs"
         },
+        "./plugins": {
+            "types": "./dist/plugins.d.ts",
+            "import": "./dist/plugins.mjs",
+            "require": "./dist/plugins.cjs"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {
