@@ -100,7 +100,7 @@ export interface FunctionIR {
     exportName: string;
     /** Path relative to `<projectRoot>/cirrus/` without extension, e.g. "messages". */
     filePath: string;
-    kind: "action" | "mutation" | "query";
+    kind: "action" | "mutation" | "query" | "stream";
     /**
      * Serialized TS source for the handler's return type, with `Promise<T>`
      * unwrapped so callers see `T` directly. Defaults to `"unknown"` when

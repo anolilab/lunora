@@ -262,6 +262,15 @@ export abstract class ShardDO {
     private readonly subMemos = new WeakMap<WebSocket, Map<string, SubscriptionMemo>>();
 
     /**
+     * Per-socket {@link AbortController} map keyed by stream id, used to
+     * propagate a client unsubscribe (or a socket close) into the user
+     * handler. In-memory only: a hibernation drops the controllers, which is
+     * fine because the corresponding socket is gone too — the iterator
+     * pumping into it would have nowhere to write.
+     */
+    private readonly streamCancellers = new WeakMap<WebSocket, Map<string, AbortController>>();
+
+    /**
      * Opt-in per-shard reactive query cache. When the subclass passes
      * `ReactiveCacheOptions` to `super(state, env, { reactiveCache: { … } })`
      * the cache is instantiated here and exposed to subclasses via
@@ -891,9 +900,93 @@ export abstract class ShardDO {
             return;
         }
 
+        if (envelope.type === "stream" && envelope.query?.functionPath) {
+            // Streams are public-only: there is no admin-streaming surface, so
+            // anything matching the admin prefix is rejected up front rather
+            // than allowed to slip through executeStream().
+            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+                ws.send(JSON.stringify({ type: "error", id: envelope.id, message: "streams must be public" }));
+
+                return;
+            }
+
+            void this.handleStream(ws, envelope.id, envelope.query.functionPath, envelope.query.args ?? {});
+
+            return;
+        }
+
         if (envelope.type === "unsubscribe") {
+            // Stream cancel: abort the in-flight iterator (if any) before
+            // touching the subscription registry. unsubscribe() on a non-sub
+            // id is a no-op, so this stays safe even when id namespaces overlap.
+            const cancellers = this.streamCancellers.get(ws);
+            const controller = cancellers?.get(envelope.id);
+
+            if (controller) {
+                controller.abort();
+                cancellers?.delete(envelope.id);
+            }
+
             this.unsubscribe(ws, envelope.id);
             ws.send(JSON.stringify({ type: "ack", id: envelope.id }));
+        }
+    }
+
+    /**
+     * Drive a streaming-query iterator end-to-end:
+     *   1. Allocate a per-id {@link AbortController} so a later `unsubscribe`
+     *      (or socket close) tears the user iterator down.
+     *   2. Send a `{type:"ack"}` so the client knows the stream started before
+     *      any chunks land.
+     *   3. Pump every yielded chunk through a `{type:"chunk"}` frame.
+     *   4. On normal completion send `{type:"complete"}`; on throw send
+     *      `{type:"error"}`. Either way drop the controller.
+     */
+    private async handleStream(ws: WebSocket, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
+        const iterable = this.executeStream(functionPath, args);
+
+        if (!iterable) {
+            ws.send(JSON.stringify({ type: "error", id, error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` } }));
+
+            return;
+        }
+
+        const controller = new AbortController();
+        let cancellers = this.streamCancellers.get(ws);
+
+        if (!cancellers) {
+            cancellers = new Map();
+            this.streamCancellers.set(ws, cancellers);
+        }
+
+        cancellers.set(id, controller);
+        ws.send(JSON.stringify({ type: "ack", id }));
+
+        try {
+            for await (const chunk of iterable.iterator(controller.signal)) {
+                if (controller.signal.aborted) {
+                    break;
+                }
+
+                ws.send(JSON.stringify({ type: "chunk", id, data: chunk }));
+            }
+
+            if (!controller.signal.aborted) {
+                ws.send(JSON.stringify({ type: "complete", id }));
+            }
+        } catch (error: unknown) {
+            const { code } = error as { code?: string };
+            const message = error instanceof Error ? error.message : String(error);
+
+            ws.send(
+                JSON.stringify({
+                    type: "error",
+                    id,
+                    error: { code: typeof code === "string" ? code : "INTERNAL_SERVER_ERROR", message },
+                }),
+            );
+        } finally {
+            cancellers.delete(id);
         }
     }
 
@@ -903,6 +996,19 @@ export abstract class ShardDO {
      * again would throw "WebSocket has been closed" in the Workers runtime.
      */
     public async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+        // Abort in-flight stream iterators bound to this socket so user
+        // handlers stop pumping into a closed channel rather than discovering
+        // it on the next yield.
+        const cancellers = this.streamCancellers.get(ws);
+
+        if (cancellers) {
+            for (const controller of cancellers.values()) {
+                controller.abort();
+            }
+
+            this.streamCancellers.delete(ws);
+        }
+
         // Clear the attachment so a future reconnection starts clean.
         (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
 
@@ -1022,6 +1128,24 @@ export abstract class ShardDO {
         void args;
 
         return Promise.resolve(null);
+    }
+
+    /**
+     * Look up a streaming-query function and return a thunk that produces the
+     * `AsyncIterable<unknown>` when handed an {@link AbortSignal}. The codegen
+     * subclass overrides this to dispatch via `CIRRUS_FUNCTIONS`; the base
+     * default returns `null`, which surfaces as `{type:"error", code:"NOT_FOUND"}`
+     * to the client.
+     *
+     * The deferred-iterator shape (`(signal) => AsyncIterable<unknown>`) keeps
+     * the cancel signal pluggable per-call without coupling this signature to
+     * the wire-frame loop in {@link handleStream}.
+     */
+    protected executeStream(functionPath: string, args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        void functionPath;
+        void args;
+
+        return null;
     }
 
     /**

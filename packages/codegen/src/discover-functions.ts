@@ -8,7 +8,7 @@ import type { FunctionIR, ValidatorIR } from "./ir.js";
 import { parseObjectShape } from "./parse-validator.js";
 import { sanitizeNamespace } from "./paths.js";
 
-const FUNCTION_KINDS = new Set(["action", "mutation", "query"]);
+const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
 /**
  * Internal factory names exported from `@cirrus/server`, mapped to the kind
@@ -146,11 +146,13 @@ const unwrapHandlerReturn = (handler: Node): string => {
 
     let returnType = signature.getReturnType();
 
-    // Unwrap a single layer of `Promise<…>`. The runtime always awaits the
-    // handler, so callers should see the resolved type — not the wrapper.
+    // Unwrap a single layer of `Promise<…>` / `AsyncIterable<…>` /
+    // `AsyncGenerator<…, …, …>`. The runtime awaits / iterates the handler,
+    // so callers should see the inner element type — not the wrapper.
     const symbol = returnType.getSymbol() ?? returnType.getAliasSymbol();
+    const wrapperName = symbol?.getName();
 
-    if (symbol?.getName() === "Promise") {
+    if (wrapperName === "Promise" || wrapperName === "AsyncIterable" || wrapperName === "AsyncIterableIterator" || wrapperName === "AsyncGenerator") {
         const innerTypeArgument = returnType.getTypeArguments()[0];
 
         if (innerTypeArgument) {

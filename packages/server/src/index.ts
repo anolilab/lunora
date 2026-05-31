@@ -29,6 +29,7 @@ export type {
     HttpRouteBuilder,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
+    HttpStreamHandlerOptions,
 } from "./http.js";
 export { httpAction, httpRoute, httpRouter } from "./http.js";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";
@@ -77,6 +78,7 @@ export type {
     RegisteredFunction,
     RegisteredMutation,
     RegisteredQuery,
+    RegisteredStream,
     RelationDefinition,
     Scheduler,
     Schema,

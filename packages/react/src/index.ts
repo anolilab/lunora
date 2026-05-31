@@ -29,4 +29,6 @@ export { usePreloadedQuery } from "./use-preloaded-query.js";
 export { useQuery } from "./use-query.js";
 export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit.js";
 export { useRateLimit } from "./use-rate-limit.js";
+export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream.js";
+export { useStream } from "./use-stream.js";
 export { useSubscription } from "./use-subscription.js";

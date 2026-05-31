@@ -18,7 +18,13 @@ export interface SubscriptionQuery {
 export interface SubscriptionEnvelope {
     id: string;
     query?: SubscriptionQuery;
-    type: "subscribe" | "unsubscribe" | "ack";
+    /**
+     * `subscribe`/`unsubscribe`/`ack` drive live queries; `stream` opens a
+     * streaming-query iterator that yields {@link ServerChunkMessage} frames
+     * until the server emits `complete` (or the client cancels with
+     * `unsubscribe` on the same id).
+     */
+    type: "ack" | "stream" | "subscribe" | "unsubscribe";
 }
 
 export interface MutationDelta {

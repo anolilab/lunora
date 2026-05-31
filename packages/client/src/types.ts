@@ -1,5 +1,5 @@
-/** The three registered function kinds a {@link FunctionReference} can describe. */
-export type FunctionKind = "action" | "mutation" | "query";
+/** The registered function kinds a {@link FunctionReference} can describe. `stream` is a query that yields multiple frames over the WS. */
+export type FunctionKind = "action" | "mutation" | "query" | "stream";
 
 /**
  * Opaque reference to a registered function emitted by `@cirrus/codegen`.
@@ -136,7 +136,20 @@ export interface ClientAckMessage {
     type: "ack";
 }
 
-export type ClientMessage = ClientSubscribeMessage | ClientUnsubscribeMessage | ClientAckMessage;
+/**
+ * Start a streaming query. The id namespaces a fresh stream and is echoed on
+ * every {@link ServerChunkMessage} the server pushes back. Cancel a running
+ * stream by sending a {@link ClientUnsubscribeMessage} with the same id —
+ * subscription and stream id-spaces share the cancel channel; the prefix
+ * (`sub_*` vs `stream_*`) keeps the local registries searchable.
+ */
+export interface ClientStreamMessage {
+    id: string;
+    query: { args?: Record<string, unknown>; functionPath: string; shardKey?: string };
+    type: "stream";
+}
+
+export type ClientMessage = ClientAckMessage | ClientStreamMessage | ClientSubscribeMessage | ClientUnsubscribeMessage;
 
 /** Subscription protocol — server → client. */
 export interface ServerDataMessage {
@@ -163,7 +176,14 @@ export interface ServerCompleteMessage {
     type: "complete";
 }
 
-export type ServerMessage = ServerDataMessage | ServerErrorMessage | ServerAckMessage | ServerCompleteMessage;
+/** One frame of a streaming query — `data` carries the user-yielded chunk. */
+export interface ServerChunkMessage {
+    data: unknown;
+    id: string;
+    type: "chunk";
+}
+
+export type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage;
 
 export interface User {
     readonly email?: string;

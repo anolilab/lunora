@@ -188,7 +188,7 @@ export interface Schema<T extends Record<string, TableDefinition> = Record<strin
 
 // --- Function registration ---------------------------------------------------
 
-export type FunctionKind = "action" | "mutation" | "query";
+export type FunctionKind = "action" | "mutation" | "query" | "stream";
 
 /**
  * Call surface a function is exposed on. `public` functions are reachable from
@@ -209,6 +209,21 @@ export interface RegisteredFunction<A extends ArgsValidator, R, Kind extends Fun
 export type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
 export type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
 export type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
+
+/**
+ * A streaming query registration. Unlike {@link RegisteredFunction} the handler
+ * returns an `AsyncIterable<R>` synchronously (it does NOT `Promise<R>`); the
+ * runtime drives it frame by frame and forwards each chunk to the caller. The
+ * third `signal` argument is wired to the caller's cancel signal so the handler
+ * can stop early — break out of the loop or check `signal.aborted` between
+ * yields.
+ */
+export interface RegisteredStream<A extends ArgsValidator, R> {
+    readonly args: A;
+    readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
+    readonly kind: "stream";
+    readonly visibility?: FunctionVisibility;
+}
 
 // --- Context types -----------------------------------------------------------
 
