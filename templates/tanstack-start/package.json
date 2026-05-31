@@ -1,0 +1,31 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "cirrus dev",
+        "build": "vite build",
+        "start": "node .output/server/index.mjs",
+        "codegen": "cirrus codegen",
+        "deploy": "cirrus deploy"
+    },
+    "dependencies": {
+        "@cirrus/client": "^0.0.0",
+        "@cirrus/react": "^0.0.0",
+        "@cirrus/runtime": "^0.0.0",
+        "@cirrus/server": "^0.0.0",
+        "@tanstack/react-query": "^5.62.0",
+        "@tanstack/react-router": "^1.95.0",
+        "@tanstack/react-start": "^1.95.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0"
+    },
+    "devDependencies": {
+        "@cirrus/vite": "^0.0.0",
+        "@tanstack/router-plugin": "^1.95.0",
+        "@vitejs/plugin-react": "^5.0.0",
+        "vite": "^8.0.0",
+        "wrangler": "^4.0.0"
+    }
+}
