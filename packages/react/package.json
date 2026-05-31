@@ -20,9 +20,13 @@
     "scripts": {
         "build": "pnpm exec packem build",
         "build:prod": "pnpm exec packem build",
+        "lint:doctor": "react-doctor",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
-        "test": "vitest run",
-        "lint:doctor": "react-doctor"
+        "test": "vitest run"
     },
     "dependencies": {
         "@cirrus/client": "workspace:*",

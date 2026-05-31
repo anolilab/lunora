@@ -22,6 +22,10 @@
     "scripts": {
         "build": "pnpm exec packem build",
         "build:prod": "pnpm exec packem build",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "bench": "vitest bench --run"
