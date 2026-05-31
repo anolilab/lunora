@@ -1,0 +1,22 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "cirrus-example-auth-playground",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "d1_databases": [
+        // Auth identity, sessions, organizations, members live in D1 — better-auth
+        // discovers the schema across every configured plugin and runs migrations
+        // against this binding via `ensureMigrated` / `compileMigrationsSql`.
+        { "binding": "DB", "database_name": "cirrus-auth-playground", "database_id": "REPLACE_WITH_D1_ID" },
+    ],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "vars": {
+        // Set AUTH_SECRET (>= 32 random bytes, base64) in your wrangler secret store
+        // for production; this is a placeholder so `wrangler dev` boots locally.
+        "AUTH_SECRET": "dev-only-secret-please-replace-with-real-random-bytes",
+    },
+}

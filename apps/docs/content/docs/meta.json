@@ -22,6 +22,7 @@
         "api/d1",
         "---Add-ons---",
         "addons/auth",
+        "addons/auth-plugins",
         "addons/mail",
         "addons/storage",
         "addons/scheduler",
