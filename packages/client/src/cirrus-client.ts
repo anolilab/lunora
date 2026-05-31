@@ -1,6 +1,7 @@
 import { createInMemoryBookmarkStorage } from "./bookmark.js";
 import { OfflineQueue } from "./offline-queue.js";
 import { createReconnect, type ReconnectCalculator } from "./reconnect.js";
+import { createStream, type StreamHandle, type StreamIterable } from "./stream.js";
 import { type SubscriptionCallback, type SubscriptionErrorCallback, SubscriptionRegistry, type SubscriptionState } from "./subscription.js";
 import type {
     ArgsOf,
@@ -60,6 +61,8 @@ interface MutationCallOptions<TCurrent, TValue> {
  * are all per-connection so one shard dropping doesn't disturb the others.
  */
 interface ShardConnection {
+    /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
+    pendingStreams?: ClientMessage[];
     pendingUnsubscribes: string[];
     reconnect: ReconnectCalculator;
     reconnectTimer: ReturnType<typeof setTimeout> | null;
@@ -130,6 +133,16 @@ export class CirrusClient {
     private lastStatus: ConnectionStatus = "idle";
 
     private nextSubId = 0;
+
+    private nextStreamId = 0;
+
+    /**
+     * In-flight client-side stream readers, keyed by the stream id sent on the
+     * wire. The handle drives the underlying iterator queue and `shardKey`
+     * tells us which socket to push the cancel frame onto when the consumer
+     * calls `.cancel()` or the iterator is garbage-collected.
+     */
+    private readonly streams = new Map<string, { handle: StreamHandle; shardKey: string | undefined }>();
 
     public constructor(opts: CirrusClientOptions) {
         this.url = opts.url;
@@ -624,8 +637,83 @@ export class CirrusClient {
         };
     }
 
+    /**
+     * Open a streaming query. The function reference must point at a
+     * `kind:"stream"` registration (built with `c.query.input(...).stream(...)`);
+     * the returned iterable yields one element per chunk frame the server
+     * pushes, terminating when the server sends `complete` or the consumer
+     * calls `.cancel()`. Errors arrive as a rejection on the next `next()`.
+     *
+     * Streams ride the same WS as subscriptions and share the unsubscribe
+     * channel: cancelling sends `{type:"unsubscribe", id}` with the stream id,
+     * which the DO recognises as an abort signal for the in-flight iterator.
+     */
+    public stream<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: { maxBuffer?: number; shardKey?: string } = {}): StreamIterable<ReturnOf<F>> {
+        if (this.closed) {
+            throw new Error("CirrusClient: stream() called after close()");
+        }
+
+        if (this.WebSocketImpl === undefined) {
+            throw new Error("CirrusClient: streams require a WebSocket implementation");
+        }
+
+        this.nextStreamId += 1;
+        const id = `stream_${this.nextStreamId}`;
+        const { shardKey } = opts;
+        const argsRecord = (args ?? {}) as Record<string, unknown>;
+
+        const { handle, iterable } = createStream<ReturnOf<F>>({
+            maxBuffer: opts.maxBuffer,
+            onCancel: () => {
+                // Send the cancel frame on the matching connection (if any).
+                // If the socket is down we drop the cancel: the DO has already
+                // lost its handle on close, so there's nothing to abort.
+                const conn = this.getConnection(shardKey);
+
+                if (conn) {
+                    this.sendOn(conn, { type: "unsubscribe", id });
+                }
+
+                this.streams.delete(id);
+            },
+        });
+
+        // Record before sending so an immediate ack/chunk reaching the dispatch
+        // path before we return finds its target.
+        this.streams.set(id, { handle: handle as StreamHandle, shardKey });
+
+        this.ensureSocket(shardKey);
+
+        const conn = this.getConnection(shardKey);
+        const message: ClientMessage = {
+            type: "stream",
+            id,
+            query: { args: argsRecord, functionPath: fn.__cirrusRef, shardKey },
+        };
+
+        if (conn?.wsState === "open") {
+            this.sendOn(conn, message);
+        } else if (conn) {
+            // Defer the send to the open handler — the existing pending logic
+            // is for unsubscribes, so stash the stream-start frame separately.
+            conn.pendingStreams = conn.pendingStreams ?? [];
+            conn.pendingStreams.push(message);
+        }
+
+        return iterable;
+    }
+
     public close(): void {
         this.closed = true;
+
+        // Fail any in-flight streams so consumers see a deterministic
+        // termination instead of an iterator that hangs forever after the
+        // underlying socket goes away.
+        for (const stream of this.streams.values()) {
+            stream.handle.fail(Object.assign(new Error("CirrusClient closed"), { code: "CLIENT_CLOSED" }));
+        }
+
+        this.streams.clear();
 
         for (const conn of this.connections.values()) {
             if (conn.reconnectTimer !== null) {
@@ -845,6 +933,20 @@ export class CirrusClient {
                 }
             }
 
+            // Flush stream-start frames queued while we were (re)connecting.
+            // Reconnect-after-close: in-flight streams have already torn down
+            // on the server, so the only entries here are brand-new ones that
+            // raced the connect.
+            if (conn.pendingStreams && conn.pendingStreams.length > 0) {
+                const pending = conn.pendingStreams;
+
+                conn.pendingStreams = [];
+
+                for (const message of pending) {
+                    this.sendOn(conn, message);
+                }
+            }
+
             this.flushOfflineQueue(shardKey);
         });
 
@@ -938,13 +1040,43 @@ export class CirrusClient {
             return;
         }
 
+        if (message.type === "chunk") {
+            const { id, data } = message;
+            const stream = this.streams.get(id);
+
+            if (stream) {
+                stream.handle.push(data);
+            }
+
+            return;
+        }
+
         if (message.type === "error") {
+            // Stream-scoped errors arrive on the same `error` envelope as
+            // subscription errors; dispatch by id-prefix lookup.
+            const { id } = message;
+            const stream = id === undefined ? undefined : this.streams.get(id);
+
+            if (stream && id !== undefined) {
+                const code = typeof (message.error as { code?: unknown } | undefined)?.code === "string" ? (message.error as { code: string }).code : undefined;
+                const messageText =
+                    (typeof message.message === "string" ? message.message : undefined) ??
+                    (typeof (message.error as { message?: unknown } | undefined)?.message === "string"
+                        ? (message.error as { message: string }).message
+                        : "stream error");
+                const error = Object.assign(new Error(messageText), code ? { code } : undefined);
+
+                stream.handle.fail(error);
+                this.streams.delete(id);
+
+                return;
+            }
+
             // A subscription-scoped rejection (e.g. an admin subscription on a
             // socket that didn't clear the admin gate). Surface it to the
             // subscriber's onError so the UI can react instead of silently
             // never receiving data; the registration is left in place so a
             // later reconnect with proper credentials can still succeed.
-            const { id } = message;
             const state = id === undefined ? undefined : this.subscriptions.getById(id);
 
             if (state) {
@@ -987,6 +1119,19 @@ export class CirrusClient {
         }
 
         if (message.type === "complete") {
+            // Streams complete normally — close the iterator. Subscriptions
+            // can also receive `complete` (cancelled server-side); remove them
+            // from the registry. The two id-spaces don't overlap (`sub_*` vs
+            // `stream_*`) so the two lookups are mutually exclusive.
+            const stream = this.streams.get(message.id);
+
+            if (stream) {
+                stream.handle.complete();
+                this.streams.delete(message.id);
+
+                return;
+            }
+
             const state = this.subscriptions.getById(message.id);
 
             if (state) {

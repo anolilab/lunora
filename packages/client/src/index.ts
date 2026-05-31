@@ -8,6 +8,8 @@ export { createIndexedDbPersistence, createInMemoryPersistence } from "./persist
 export { preloadedQueryResult, preloadQuery } from "./preload.js";
 export type { ReconnectCalculator } from "./reconnect.js";
 export { createReconnect } from "./reconnect.js";
+export type { StreamHandle, StreamIterable } from "./stream.js";
+export { createStream, DEFAULT_MAX_BUFFER } from "./stream.js";
 export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription.js";
 export { SubscriptionRegistry } from "./subscription.js";
 export type {
