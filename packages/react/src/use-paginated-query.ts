@@ -1,7 +1,9 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
+import type { QueryKey } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { getCache } from "./cache.js";
+import { cirrusQueryKey, getSubscriptionRegistry } from "./cache.js";
 import { useCirrus } from "./cirrus-provider.js";
 import type { PaginationResult, PaginationStatus, UsePaginatedQueryOptions, UsePaginatedQueryResult } from "./types.js";
 
@@ -28,6 +30,10 @@ interface PageRequest {
  *
  * Changing `fn`, the base `args`, or `initialNumItems` resets the feed to its
  * first page.
+ *
+ * Pages live in TanStack Query's cache under per-page queryKeys; the
+ * subscription registry keeps one WS subscription per page open so a delta on
+ * any cursor patches the right slice without dropping the rest.
  */
 export function usePaginatedQuery<F extends FunctionReference>(
     fn: F,
@@ -35,7 +41,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
     options: UsePaginatedQueryOptions,
 ): UsePaginatedQueryResult<PageItemOf<F>> {
     const client = useCirrus();
-    const cache = getCache(client);
+    const queryClient = useQueryClient();
     const { initialNumItems, shardKey } = options;
 
     const skipped = args === "skip";
@@ -57,78 +63,100 @@ export function usePaginatedQuery<F extends FunctionReference>(
         setPages([{ cursor: null, numItems: initialNumItems }]);
     }
 
-    const pageEntries: Array<[string, Record<string, unknown>]> = pages.map((page) => {
+    // Build the (queryKey, args) pair for each loaded page.
+    const pageEntries = pages.map((page) => {
         const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.cursor, numItems: page.numItems } };
+        const key: QueryKey = cirrusQueryKey(fn, pageArgs, shardKey);
 
-        return [cache.keyOf(fn, pageArgs, shardKey), pageArgs];
+        return { args: pageArgs, key };
     });
-    const pageKeys = pageEntries.map(([key]) => key);
-    const pageKeysKey = pageKeys.join("|");
+    // Stable hash of every loaded page key — used as the effect-dep so we only
+    // re-attach when the page set actually changes.
+    const pageKeysHash = pageEntries.map(({ key }) => JSON.stringify(key)).join("|");
 
-    // The effect reads the latest desired (key → args) mapping from a ref so the
-    // dependency array can stay keyed on `pageKeysKey` alone, matching useQuery.
-    const desiredRef = useRef<{ entries: Array<[string, Record<string, unknown>]>; fn: F; shardKey: string | undefined }>({
-        entries: [],
-        fn,
-        shardKey,
-    });
+    // Read latest desired entries from a ref so the effect dep list can stay
+    // keyed on `pageKeysHash` alone — args/fn changes already invalidate the hash.
+    const desiredRef = useRef<{ entries: typeof pageEntries; fn: F; shardKey: string | undefined }>({ entries: [], fn, shardKey });
 
     desiredRef.current = { entries: pageEntries, fn, shardKey };
 
-    const handlesRef = useRef(new Map<string, () => void>());
+    // Track per-page detach handles so a page falling out of the request set
+    // releases its subscription without disturbing the others.
+    const detachesRef = useRef(new Map<string, () => void>());
 
     useEffect(() => {
-        const handles = handlesRef.current;
-        const notify = (): void => {
-            forceRender();
-        };
+        const detaches = detachesRef.current;
 
         if (skipped) {
-            for (const release of handles.values()) {
-                release();
+            for (const detach of detaches.values()) {
+                detach();
             }
 
-            handles.clear();
+            detaches.clear();
 
             return;
         }
 
         const desired = desiredRef.current;
-        const wanted = new Set(desired.entries.map(([key]) => key));
+        const registry = getSubscriptionRegistry(client);
+        const wanted = new Set(desired.entries.map(({ key }) => JSON.stringify(key)));
 
-        // Release pages that fell out of the request set, keeping survivors live
-        // so a `loadMore` never flickers earlier pages back to a loading state.
-        for (const [key, release] of handles) {
-            if (!wanted.has(key)) {
-                release();
-                handles.delete(key);
+        for (const [hash, detach] of detaches) {
+            if (!wanted.has(hash)) {
+                detach();
+                detaches.delete(hash);
             }
         }
 
-        for (const [key, pageArgs] of desired.entries) {
-            if (!handles.has(key)) {
-                handles.set(key, cache.acquire(desired.fn, pageArgs, desired.shardKey, notify).release);
-            }
-        }
+        for (const entry of desired.entries) {
+            const hash = JSON.stringify(entry.key);
 
-        notify();
-    }, [cache, pageKeysKey, skipped]);
+            if (detaches.has(hash)) {
+                continue;
+            }
+
+            // Trigger the initial fetch via TanStack so its dedup applies
+            // even when two mounts ask for the same page.
+            void queryClient.fetchQuery({
+                queryFn: () => client.query(desired.fn, entry.args as ArgsOf<F>, { shardKey: desired.shardKey }),
+                queryKey: entry.key,
+                staleTime: Number.POSITIVE_INFINITY,
+            });
+
+            detaches.set(hash, registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey));
+        }
+    }, [client, queryClient, pageKeysHash, skipped]);
 
     // Release every page on unmount.
     useEffect(
         () => () => {
-            for (const release of handlesRef.current.values()) {
-                release();
+            for (const detach of detachesRef.current.values()) {
+                detach();
             }
 
-            handlesRef.current.clear();
+            detachesRef.current.clear();
         },
         [],
     );
 
+    // Subscribe to TanStack cache events so a setQueryData from the registry
+    // triggers a re-render here.
+    useEffect(() => {
+        const cache = queryClient.getQueryCache();
+        const unsubscribe = cache.subscribe((event) => {
+            const hash = JSON.stringify(event.query.queryKey);
+
+            if (pageEntries.some(({ key }) => JSON.stringify(key) === hash)) {
+                forceRender();
+            }
+        });
+
+        return unsubscribe;
+    }, [queryClient, pageKeysHash]);
+
     const pageResults: Array<PaginationResult<PageItemOf<F>> | undefined> = skipped
         ? []
-        : pageKeys.map((key) => cache.peek(key)?.data as PaginationResult<PageItemOf<F>> | undefined);
+        : pageEntries.map(({ key }) => queryClient.getQueryData<PaginationResult<PageItemOf<F>>>(key));
 
     const results: PageItemOf<F>[] = [];
 
@@ -156,8 +184,6 @@ export function usePaginatedQuery<F extends FunctionReference>(
         }
     }
 
-    // Stash the cursor `loadMore` should append so the callback identity stays
-    // stable while still reading the freshest tail cursor.
     const nextCursorRef = useRef<null | string | undefined>(undefined);
 
     nextCursorRef.current = status === "CanLoadMore" ? nextCursor : undefined;
@@ -173,7 +199,6 @@ export function usePaginatedQuery<F extends FunctionReference>(
     }, []);
 
     return {
-        // `skip` is an intentional pause, not a pending fetch, so it never counts as loading.
         isLoading: !skipped && (status === "LoadingFirstPage" || status === "LoadingMore"),
         loadMore,
         results,

@@ -9,7 +9,10 @@ import { createMockClient } from "./mock-client.js";
 
 const fn = (ref: string): FunctionReference => ({ __cirrusRef: ref });
 
-const Display = ({ args = {} as Record<string, unknown> }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
+const DEFAULT_ARGS: Record<string, unknown> = {};
+const SHARED_ARGS: Record<string, unknown> = { a: 1 };
+
+const Display = ({ args = DEFAULT_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
     const data = useQuery(fn("posts:list"), args as Record<string, unknown> | "skip");
 
     return <div data-testid="display">{data === undefined ? "loading" : JSON.stringify(data)}</div>;
@@ -53,8 +56,8 @@ describe("useQuery", () => {
 
         render(
             <CirrusProvider client={mock.asClient}>
-                <Display args={{ a: 1 }} />
-                <Display args={{ a: 1 }} />
+                <Display args={SHARED_ARGS} />
+                <Display args={SHARED_ARGS} />
             </CirrusProvider>,
         );
 
@@ -89,6 +92,10 @@ describe("useQuery", () => {
             mock.emit("posts:list", 42);
         });
 
-        expect(screen.getByTestId("display").textContent).toBe("42");
+        // TanStack v5 schedules cache notifications on a microtask, so the
+        // post-emit update lands on a later commit — waitFor lets it flush.
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe("42");
+        });
     });
 });

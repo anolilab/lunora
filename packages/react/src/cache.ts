@@ -1,177 +1,138 @@
 import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/client";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
-export type CacheStatus = "idle" | "loading" | "ready" | "error";
-
-interface CacheEntry {
-    data: unknown;
-    error: Error | undefined;
-    /** Subscriber callbacks to notify when this entry changes. */
-    listeners: Set<() => void>;
-    /** Polling timer when WS fallback is in effect. */
+/**
+ * Per-key bookkeeping: a single WS subscription is shared across every hook
+ * that observes the same `queryKey`. {@link refCount} tracks the consumers so
+ * we close the underlying subscription on the last `detach()`.
+ */
+interface RegistryEntry {
+    /** Polling fallback when `client.subscribe` is unavailable (e.g. no WS). */
     pollTimer: ReturnType<typeof setInterval> | undefined;
-    /** Number of active consumers (useQuery / useSubscription mounts). */
     refCount: number;
-    status: CacheStatus;
-    /** WS unsubscribe for the active subscription, if one is open. */
+    /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
 }
 
+/** Stringified queryKey used as the internal index key for {@link CirrusSubscriptionRegistry}. */
+const keyHash = (queryKey: QueryKey): string => JSON.stringify(queryKey);
+
 /**
- * Shared, per-client query cache. Multiple components calling `useQuery` with
- * the same `(functionPath, args, shardKey)` share a single subscription and
- * a single snapshot, so re-renders are coordinated through one listener set.
+ * Per-client subscription dedup layer that sits *next to* TanStack Query.
+ *
+ * Where the old `QueryCache` owned both the data *and* the subscription
+ * lifecycle, this adapter only owns the subscription side: data lives in the
+ * TanStack {@link QueryClient}. The flow on every push:
+ *
+ *   client.subscribe(fn, args, value => qc.setQueryData(queryKey, value))
+ *
+ * Every hook that mounts a `useQuery({queryKey: ["cirrus", fn, args, shard]})`
+ * also calls `registry.attach(qc, queryKey, fn, args, shardKey)`; the registry
+ * dedupes by hashed queryKey so two components observing the same query open a
+ * single WS subscription. On the last `detach()` the subscription is closed
+ * (or the polling fallback is cleared).
+ *
+ * Polling fallback: if `client.subscribe` throws (no WS in the environment),
+ * the registry installs a 5s interval that calls `qc.invalidateQueries({
+ * queryKey })`, letting TanStack's own `refetch` loop drive freshness.
  */
-export class QueryCache {
-    private readonly entries = new Map<string, CacheEntry>();
+export class CirrusSubscriptionRegistry {
+    private readonly entries = new Map<string, RegistryEntry>();
 
     public constructor(private readonly client: CirrusClient) {}
 
-    public keyOf(fn: FunctionReference, args: unknown, shardKey: string | undefined): string {
-        return `${fn.__cirrusRef}::${JSON.stringify(args ?? {})}::${shardKey ?? ""}`;
-    }
-
-    public peek(key: string): CacheEntry | undefined {
-        return this.entries.get(key);
+    /**
+     * Hash a TanStack `queryKey` to the internal registry index. Exposed so a
+     * hook can look up the registry without re-implementing the hash.
+     */
+    public keyOf(queryKey: QueryKey): string {
+        return keyHash(queryKey);
     }
 
     /**
-     * Acquire (or reuse) a cache entry for the given query. Increments the
-     * refcount; callers must invoke the returned `release()` exactly once.
+     * Attach a consumer to the live subscription for `queryKey`. The first
+     * attach opens the underlying WS subscription; subsequent attaches reuse
+     * it (refcount-bumped). Returns the detach function — call it exactly once
+     * per attach.
      */
-    public acquire(
+    public attach(
+        queryClient: QueryClient,
+        queryKey: QueryKey,
         fn: FunctionReference,
         args: Record<string, unknown>,
         shardKey: string | undefined,
-        listener: () => void,
-        options: { initialData?: { value: unknown }; pollIntervalMs?: number } = {},
-    ): { entry: CacheEntry; key: string; release: () => void } {
-        const key = this.keyOf(fn, args, shardKey);
+        options: { pollIntervalMs?: number } = {},
+    ): () => void {
+        const key = keyHash(queryKey);
         let entry = this.entries.get(key);
 
         if (!entry) {
-            const seeded = options.initialData !== undefined;
-
-            entry = {
-                refCount: 0,
-                status: seeded ? "ready" : "loading",
-                data: seeded ? options.initialData?.value : undefined,
-                error: undefined,
-                listeners: new Set(),
-                unsubscribe: undefined,
-                pollTimer: undefined,
-            };
+            entry = { pollTimer: undefined, refCount: 0, unsubscribe: undefined };
             this.entries.set(key, entry);
-            // A preloaded entry already carries the server value, so skip the
-            // initial HTTP fetch and only attach the live subscription.
-            this.beginFetch(entry, fn, args, shardKey, options.pollIntervalMs ?? 5000, seeded);
+
+            try {
+                entry.unsubscribe = this.client.subscribe(
+                    fn,
+                    args,
+                    (value) => {
+                        queryClient.setQueryData(queryKey, value);
+                    },
+                    { shardKey },
+                );
+            } catch {
+                // WS unavailable — fall back to periodic invalidation so
+                // TanStack Query's own refetch loop keeps the cache fresh.
+                entry.pollTimer = setInterval(() => {
+                    void queryClient.invalidateQueries({ queryKey });
+                }, options.pollIntervalMs ?? 5000);
+            }
         }
 
         entry.refCount += 1;
-        entry.listeners.add(listener);
 
-        return {
-            entry,
-            key,
-            release: () => {
-                if (!entry) {
-                    return;
-                }
+        return () => {
+            // `entries.get(key)` is read again because a sibling detach may have
+            // already torn the entry down. Calling detach twice is a no-op.
+            const current = this.entries.get(key);
 
-                entry.listeners.delete(listener);
-                entry.refCount -= 1;
-
-                if (entry.refCount <= 0) {
-                    entry.unsubscribe?.();
-
-                    if (entry.pollTimer) {
-                        clearInterval(entry.pollTimer);
-                    }
-
-                    this.entries.delete(key);
-                }
-            },
-        };
-    }
-
-    /** Notify all listeners of a given entry that something changed. */
-    public emit(entry: CacheEntry): void {
-        for (const listener of entry.listeners) {
-            try {
-                listener();
-            } catch {
-                /* listener threw — ignore so other consumers still update */
+            if (!current) {
+                return;
             }
-        }
-    }
 
-    private beginFetch(
-        entry: CacheEntry,
-        fn: FunctionReference,
-        args: Record<string, unknown>,
-        shardKey: string | undefined,
-        pollIntervalMs: number,
-        skipInitialFetch = false,
-    ): void {
-        // Initial fetch (HTTP) so that even WS-less environments see a value.
-        // Skipped when the entry was seeded from a preloaded server value.
-        if (!skipInitialFetch) {
-            this.client
-                .query(fn as FunctionReference, args, { shardKey })
-                .then((value) => {
-                    entry.status = "ready";
-                    entry.data = value;
-                    entry.error = undefined;
-                    this.emit(entry);
-                })
-                .catch((error: unknown) => {
-                    entry.status = "error";
-                    entry.error = error instanceof Error ? error : new Error(String(error));
-                    this.emit(entry);
-                });
-        }
+            current.refCount -= 1;
 
-        // Live updates via WS subscription. The client subscribes regardless;
-        // if the WS implementation is missing, the subscribe call still wires
-        // the callback but never receives data.
-        try {
-            entry.unsubscribe = this.client.subscribe(
-                fn as FunctionReference,
-                args,
-                (value) => {
-                    entry.status = "ready";
-                    entry.data = value;
-                    entry.error = undefined;
-                    this.emit(entry);
-                },
-                { shardKey },
-            );
-        } catch {
-            // Fallback: poll over HTTP if subscribe is unavailable in this environment.
-            entry.pollTimer = setInterval(() => {
-                this.client
-                    .query(fn as FunctionReference, args, { shardKey })
-                    .then((value) => {
-                        entry.status = "ready";
-                        entry.data = value;
-                        entry.error = undefined;
-                        this.emit(entry);
-                    })
-                    .catch(() => undefined);
-            }, pollIntervalMs);
-        }
+            if (current.refCount <= 0) {
+                current.unsubscribe?.();
+
+                if (current.pollTimer) {
+                    clearInterval(current.pollTimer);
+                }
+
+                this.entries.delete(key);
+            }
+        };
     }
 }
 
-const cacheByClient = new WeakMap<CirrusClient, QueryCache>();
+/**
+ * Project a Cirrus `(fn, args, shardKey)` triple into the structural query key
+ * TanStack hashes for dedup. The `"cirrus"` literal namespaces our entries so
+ * an app's own queries can't collide with ours.
+ */
+export const cirrusQueryKey = (fn: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => {
+    return ["cirrus", fn.__cirrusRef, args, shardKey ?? null];
+};
 
-/** Returns the shared cache instance for `client`, creating it on first access. */
-export const getCache = (client: CirrusClient): QueryCache => {
-    let cache = cacheByClient.get(client);
+const registryByClient = new WeakMap<CirrusClient, CirrusSubscriptionRegistry>();
 
-    if (!cache) {
-        cache = new QueryCache(client);
-        cacheByClient.set(client, cache);
+/** Returns the shared subscription registry for `client`, creating it on first access. */
+export const getSubscriptionRegistry = (client: CirrusClient): CirrusSubscriptionRegistry => {
+    let registry = registryByClient.get(client);
+
+    if (!registry) {
+        registry = new CirrusSubscriptionRegistry(client);
+        registryByClient.set(client, registry);
     }
 
-    return cache;
+    return registry;
 };

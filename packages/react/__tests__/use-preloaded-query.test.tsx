@@ -55,7 +55,11 @@ describe("usePreloadedQuery", () => {
             mock.emit("posts:list", { count: 5 });
         });
 
-        expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 5 }));
+        // TanStack v5 schedules cache notifications on a microtask, so the
+        // post-emit update lands on a later commit — waitFor lets it flush.
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 5 }));
+        });
     });
 
     test("server-renders the preloaded value (SSR getServerSnapshot, no effects)", () => {

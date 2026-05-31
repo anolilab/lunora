@@ -1,7 +1,9 @@
 import type { FunctionReference } from "@cirrus/client";
+import type { QueryKey } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { getCache } from "./cache.js";
+import { cirrusQueryKey, getSubscriptionRegistry } from "./cache.js";
 import { useCirrus } from "./cirrus-provider.js";
 import type { PaginationResult, PaginationStatus, UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./types.js";
 import type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
@@ -31,7 +33,7 @@ export function useInfiniteQuery<F extends FunctionReference>(
     options: UseInfiniteQueryOptions,
 ): UseInfiniteQueryResult<PageItemOf<F>> {
     const client = useCirrus();
-    const cache = getCache(client);
+    const queryClient = useQueryClient();
     const { initialNumItems, shardKey } = options;
 
     const skipped = args === "skip";
@@ -41,10 +43,6 @@ export function useInfiniteQuery<F extends FunctionReference>(
     const [, forceRender] = useReducer((tick: number) => tick + 1, 0);
     const [pages, setPages] = useState<PageRequest[]>(() => [{ cursor: null, numItems: initialNumItems }]);
 
-    // Reset to the first page whenever the query identity, base args, or page
-    // size changes. Set-state-during-render (guarded by a ref) is React's
-    // sanctioned way to derive state from changing inputs without an extra
-    // commit.
     const resetKey = `${fn.__cirrusRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
     const resetKeyRef = useRef(resetKey);
 
@@ -53,79 +51,91 @@ export function useInfiniteQuery<F extends FunctionReference>(
         setPages([{ cursor: null, numItems: initialNumItems }]);
     }
 
-    const pageEntries: Array<[string, Record<string, unknown>]> = pages.map((page) => {
+    const pageEntries = pages.map((page) => {
         const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.cursor, numItems: page.numItems } };
+        const key: QueryKey = cirrusQueryKey(fn, pageArgs, shardKey);
 
-        return [cache.keyOf(fn, pageArgs, shardKey), pageArgs];
+        return { args: pageArgs, key };
     });
-    const pageKeys = pageEntries.map(([key]) => key);
-    const pageKeysKey = pageKeys.join("|");
+    const pageKeysHash = pageEntries.map(({ key }) => JSON.stringify(key)).join("|");
 
-    // The effect reads the latest desired (key → args) mapping from a ref so the
-    // dependency array can stay keyed on `pageKeysKey` alone, matching useQuery.
-    const desiredRef = useRef<{ entries: Array<[string, Record<string, unknown>]>; fn: F; shardKey: string | undefined }>({
-        entries: [],
-        fn,
-        shardKey,
-    });
+    const desiredRef = useRef<{ entries: typeof pageEntries; fn: F; shardKey: string | undefined }>({ entries: [], fn, shardKey });
 
     desiredRef.current = { entries: pageEntries, fn, shardKey };
 
-    const handlesRef = useRef(new Map<string, () => void>());
+    const detachesRef = useRef(new Map<string, () => void>());
 
     useEffect(() => {
-        const handles = handlesRef.current;
-        const notify = (): void => {
-            forceRender();
-        };
+        const detaches = detachesRef.current;
 
         if (skipped) {
-            for (const release of handles.values()) {
-                release();
+            for (const detach of detaches.values()) {
+                detach();
             }
 
-            handles.clear();
+            detaches.clear();
 
             return;
         }
 
         const desired = desiredRef.current;
-        const wanted = new Set(desired.entries.map(([key]) => key));
+        const registry = getSubscriptionRegistry(client);
+        const wanted = new Set(desired.entries.map(({ key }) => JSON.stringify(key)));
 
-        // Release pages that fell out of the request set, keeping survivors live
-        // so a `fetchNextPage` never flickers earlier pages back to a loading
-        // state.
-        for (const [key, release] of handles) {
-            if (!wanted.has(key)) {
-                release();
-                handles.delete(key);
+        for (const [hash, detach] of detaches) {
+            if (!wanted.has(hash)) {
+                detach();
+                detaches.delete(hash);
             }
         }
 
-        for (const [key, pageArgs] of desired.entries) {
-            if (!handles.has(key)) {
-                handles.set(key, cache.acquire(desired.fn, pageArgs, desired.shardKey, notify).release);
+        for (const entry of desired.entries) {
+            const hash = JSON.stringify(entry.key);
+
+            if (detaches.has(hash)) {
+                continue;
             }
+
+            void queryClient.fetchQuery({
+                queryFn: () =>
+                    (client.query as (fn: F, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(desired.fn, entry.args, {
+                        shardKey: desired.shardKey,
+                    }),
+                queryKey: entry.key,
+                staleTime: Number.POSITIVE_INFINITY,
+            });
+
+            detaches.set(hash, registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey));
         }
+    }, [client, queryClient, pageKeysHash, skipped]);
 
-        notify();
-    }, [cache, pageKeysKey, skipped]);
-
-    // Release every page on unmount.
     useEffect(
         () => () => {
-            for (const release of handlesRef.current.values()) {
-                release();
+            for (const detach of detachesRef.current.values()) {
+                detach();
             }
 
-            handlesRef.current.clear();
+            detachesRef.current.clear();
         },
         [],
     );
 
+    useEffect(() => {
+        const cache = queryClient.getQueryCache();
+        const unsubscribe = cache.subscribe((event) => {
+            const hash = JSON.stringify(event.query.queryKey);
+
+            if (pageEntries.some(({ key }) => JSON.stringify(key) === hash)) {
+                forceRender();
+            }
+        });
+
+        return unsubscribe;
+    }, [queryClient, pageKeysHash]);
+
     const pageResults: Array<PaginationResult<PageItemOf<F>> | undefined> = skipped
         ? []
-        : pageKeys.map((key) => cache.peek(key)?.data as PaginationResult<PageItemOf<F>> | undefined);
+        : pageEntries.map(({ key }) => queryClient.getQueryData<PaginationResult<PageItemOf<F>>>(key));
 
     const resolvedPages: PageItemOf<F>[][] = [];
 
@@ -153,9 +163,6 @@ export function useInfiniteQuery<F extends FunctionReference>(
         }
     }
 
-    // Stash the cursor `fetchNextPage` should append (and the default page size)
-    // so the callback identity stays stable while still reading the freshest
-    // tail cursor.
     const nextRef = useRef<{ cursor: null | string | undefined; defaultNumItems: number }>({ cursor: undefined, defaultNumItems: initialNumItems });
 
     nextRef.current = { cursor: status === "CanLoadMore" ? nextCursor : undefined, defaultNumItems: initialNumItems };
@@ -173,9 +180,7 @@ export function useInfiniteQuery<F extends FunctionReference>(
     return {
         fetchNextPage,
         hasNextPage: status === "CanLoadMore",
-        // A pending page beyond the first is a `fetchNextPage` in flight, distinct from the first-page load.
         isFetchingNextPage: !skipped && status === "LoadingMore",
-        // `skip` is an intentional pause, not a pending fetch, so it never counts as loading.
         isLoading: !skipped && status === "LoadingFirstPage",
         pages: resolvedPages,
         status,
