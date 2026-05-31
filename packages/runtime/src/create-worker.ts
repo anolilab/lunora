@@ -360,6 +360,7 @@ const MIGRATE_PATH = "/_cirrus/migrate";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
+const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
@@ -524,6 +525,10 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
         if (url.pathname === IMPORT_PATH) {
             return handleImport(request, env);
+        }
+
+        if (url.pathname === SCHEDULED_WS_PATH) {
+            return handleScheduledWebSocket(request);
         }
 
         if (url.pathname === SCHEDULED_CANCEL_PATH) {
@@ -776,13 +781,18 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
         };
     };
 
-    const resolveSchedulerStub = (request: Request): ResolvedShard => {
-        const namespace = requireAdminOption(request, options.schedulerDO, {
-            code: "SCHEDULER_NOT_CONFIGURED",
-            message: "scheduled endpoints require a `schedulerDO` namespace on the worker",
-        });
+    const requireSchedulerNamespace = (): ShardNamespaceLike => {
+        if (options.schedulerDO === undefined) {
+            throw new CirrusError("scheduled endpoints require a `schedulerDO` namespace on the worker", { code: "SCHEDULER_NOT_CONFIGURED", status: 400 });
+        }
 
-        return resolveShard(namespace, options.schedulerInstanceName ?? "default");
+        return options.schedulerDO;
+    };
+
+    const resolveSchedulerStub = (request: Request): ResolvedShard => {
+        assertAdminAuthorized(request);
+
+        return resolveShard(requireSchedulerNamespace(), options.schedulerInstanceName ?? "default");
     };
 
     const handleScheduledList = async (request: Request): Promise<Response> => {
@@ -793,6 +803,27 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
         const stub = resolveSchedulerStub(request);
 
         return stub.fetch(new Request("https://scheduler.internal/list", { method: "GET" }));
+    };
+
+    /**
+     * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
+     * dashboard can subscribe to the live job list. A browser `WebSocket` can't
+     * set an `Authorization` header, so the admin token is also accepted via the
+     * `?token=` query parameter — the only channel the constructor allows.
+     */
+    const handleScheduledWebSocket = (request: Request): Promise<Response> => {
+        if (request.headers.get("Upgrade") !== "websocket") {
+            throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken) && !checkAdminWsToken(request, options.adminToken)) {
+            throw new CirrusError("admin authorization required", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const namespace = requireSchedulerNamespace();
+        const stub = resolveShard(namespace, options.schedulerInstanceName ?? "default");
+
+        return stub.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
     };
 
     const handleScheduledCancel = async (request: Request): Promise<Response> => {
@@ -1391,6 +1422,21 @@ const streamingImport = async (
  * `Authorization` header handling is also plain — the per-shard gate is what
  * provides the constant-time check downstream.
  */
+/** Length-independent constant-time string compare for token checks. */
+const constantTimeEqual = (expected: string, supplied: string): boolean => {
+    const max = Math.max(expected.length, supplied.length);
+    let diff = expected.length ^ supplied.length;
+
+    for (let index = 0; index < max; index += 1) {
+        const ca = index < expected.length ? expected.charCodeAt(index) : 0;
+        const cb = index < supplied.length ? supplied.charCodeAt(index) : 0;
+
+        diff |= ca ^ cb;
+    }
+
+    return diff === 0;
+};
+
 const checkAdminAuth = (request: Request, expected: string | undefined): boolean => {
     if (!expected || expected.length === 0) {
         return false;
@@ -1408,18 +1454,23 @@ const checkAdminAuth = (request: Request, expected: string | undefined): boolean
         return false;
     }
 
-    const supplied = rest.join(" ").trim();
-    const max = Math.max(expected.length, supplied.length);
-    let diff = expected.length ^ supplied.length;
+    return constantTimeEqual(expected, rest.join(" ").trim());
+};
 
-    for (let index = 0; index < max; index += 1) {
-        const ca = index < expected.length ? expected.charCodeAt(index) : 0;
-        const cb = index < supplied.length ? supplied.charCodeAt(index) : 0;
-
-        diff |= ca ^ cb;
+/**
+ * Admin check for a browser WebSocket upgrade, which can't set an
+ * `Authorization` header — so the token rides in the `?token=` query parameter
+ * instead (the dashboard sends it there as the client's `wsToken`). It ends up
+ * in server logs, so a short-lived rotating token is preferable in production.
+ */
+const checkAdminWsToken = (request: Request, expected: string | undefined): boolean => {
+    if (!expected || expected.length === 0) {
+        return false;
     }
 
-    return diff === 0;
+    const supplied = new URL(request.url).searchParams.get("token");
+
+    return supplied !== null && constantTimeEqual(expected, supplied);
 };
 
 /** Re-exported helper so callers can roundtrip envelopes in tests. */

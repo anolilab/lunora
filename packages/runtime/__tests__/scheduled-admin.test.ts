@@ -151,4 +151,49 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(response.status).toBe(400);
         expect(calls).toEqual([]);
     });
+
+    test("ws proxies the upgrade to the scheduler's /ws with a valid bearer", async () => {
+        const { calls, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/scheduled/ws", { headers: { authorization: `Bearer ${ADMIN_TOKEN}`, Upgrade: "websocket" } }),
+            {},
+            fakeCtx,
+        );
+
+        expect(calls).toEqual([{ body: "", method: "GET", pathname: "/ws" }]);
+    });
+
+    test("ws accepts the admin token via the ?token query parameter (browsers can't set headers)", async () => {
+        const { calls, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        await worker.fetch(
+            new Request(`https://app.example/_cirrus/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),
+            {},
+            fakeCtx,
+        );
+
+        expect(calls).toEqual([{ body: "", method: "GET", pathname: "/ws" }]);
+    });
+
+    test("ws rejects an upgrade with no admin credentials (403)", async () => {
+        const { calls, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/scheduled/ws", { headers: { Upgrade: "websocket" } }), {}, fakeCtx);
+
+        expect(response.status).toBe(403);
+        expect(calls).toEqual([]);
+    });
+
+    test("ws rejects a non-upgrade request (426)", async () => {
+        const { namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        const response = await worker.fetch(new Request(`https://app.example/_cirrus/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { method: "GET" }), {}, fakeCtx);
+
+        expect(response.status).toBe(426);
+    });
 });
