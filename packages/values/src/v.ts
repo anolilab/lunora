@@ -29,6 +29,20 @@ export type ValidatorKind =
 export interface Validator<T = unknown> {
     readonly __type: T;
 
+    /**
+     * Attach a refinement predicate. The returned validator parses with the
+     * original rules first; if the result satisfies `predicate` it passes
+     * through, otherwise it throws a {@link ValidationError} carrying
+     * `message` (default: `"failed refinement"`). Multiple `.check()` calls
+     * chain — every predicate must return true.
+     *
+     * Works in any context — argument validators, column validators, or
+     * standalone — so it can encode invariants like
+     * `v.number().check(n => n >= 0)` or
+     * `v.string().check(s => s.length > 0, "must not be empty")`.
+     */
+    check: (predicate: (value: T) => boolean, message?: string) => Validator<T>;
+
     readonly kind: ValidatorKind;
 
     parse: (value: unknown) => T;
@@ -79,6 +93,8 @@ export interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInse
     $onUpdateFn: (fn: () => TSelect) => ColumnValidator<TSelect, TInsert>;
     /** Override the inferred select/insert type without changing runtime parsing (e.g. `v.string().$type<Id<"users">>()`). */
     $type: <TOverride>() => ColumnValidator<TOverride, TOverride>;
+    /** Refinement predicate run after parsing — see {@link Validator.check}. Chainable; preserves column modifiers. */
+    check: (predicate: (value: TSelect) => boolean, message?: string) => ColumnValidator<TSelect, TInsert>;
     /** Literal default applied in the write layer; field becomes optional on insert. */
     default: (value: TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
     /** Allow SQL NULL — widens the select type to `T | null`. */
@@ -140,6 +156,7 @@ interface InternalColumnValidator<T> extends InternalValidator<T> {
     $defaultFn: (fn: () => T) => InternalColumnValidator<T>;
     $onUpdateFn: (fn: () => T) => InternalColumnValidator<T>;
     $type: <TOverride>() => InternalColumnValidator<TOverride>;
+    check: (predicate: (value: T) => boolean, message?: string) => InternalColumnValidator<T>;
     default: (value: T) => InternalColumnValidator<T>;
     defaultNow: () => InternalColumnValidator<T>;
     nullable: () => InternalColumnValidator<null | T>;
@@ -203,6 +220,22 @@ const createValidator = <T>(
         };
 
         return createValidator<null | T>(kind, nullableParser, { ...meta, column: { ...column, notNull: false } });
+    };
+    // `.check()` composes a refinement on top of the existing parser. The
+    // returned validator keeps the same kind + column meta so column modifiers
+    // chained either before or after a check still apply.
+    validator.check = (predicate, message) => {
+        const refinedParser = (value: unknown, context: ParseContext): T => {
+            const parsed = parser(value, context);
+
+            if (!predicate(parsed)) {
+                fail(context, message ?? "value matching refinement", parsed);
+            }
+
+            return parsed;
+        };
+
+        return createValidator<T>(kind, refinedParser, meta);
     };
 
     return validator;
