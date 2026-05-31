@@ -253,7 +253,9 @@ export const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult =
     const snapshot = collectInfo(cwd);
 
     if (options.json) {
-        options.logger.info(JSON.stringify(snapshot, undefined, 2));
+        // Write straight to stdout so `cirrus info --json | jq` works — Pail
+        // prefixes (level + timestamps) would break the parser.
+        process.stdout.write(`${JSON.stringify(snapshot, undefined, 2)}\n`);
     } else {
         renderText(snapshot, options.logger);
     }

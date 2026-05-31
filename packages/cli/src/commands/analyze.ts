@@ -160,9 +160,9 @@ export const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise
         const report = buildReport(outdir);
 
         if (options.json) {
-            // Print the raw JSON via the logger so tests + CI capture it the
-            // same way as the other commands.
-            logger.info(JSON.stringify(report, undefined, 2));
+            // Write straight to stdout so `cirrus analyze --json | jq` works —
+            // Pail prefixes (level + timestamps) would break parsing.
+            process.stdout.write(`${JSON.stringify(report, undefined, 2)}\n`);
         } else {
             renderText(report, logger);
         }
