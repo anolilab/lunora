@@ -56,11 +56,15 @@ const collectEvents = (): { events: ObservabilityEvent[]; sink: ObservabilitySin
 describe("observabilitySink", () => {
     describe("emitRpcEvent", () => {
         test("no-ops when sink is undefined", () => {
-            expect(() => { emitRpcEvent(undefined, { durationMs: 1, functionPath: "x:y", ok: true }); }).not.toThrow();
+            expect(() => {
+                emitRpcEvent(undefined, { durationMs: 1, functionPath: "x:y", ok: true });
+            }).not.toThrow();
         });
 
         test("no-ops when onRpc is unset", () => {
-            expect(() => { emitRpcEvent({}, { durationMs: 1, functionPath: "x:y", ok: true }); }).not.toThrow();
+            expect(() => {
+                emitRpcEvent({}, { durationMs: 1, functionPath: "x:y", ok: true });
+            }).not.toThrow();
         });
 
         test("swallows sink callback errors", () => {
@@ -70,7 +74,9 @@ describe("observabilitySink", () => {
                 },
             };
 
-            expect(() => { emitRpcEvent(sink, { durationMs: 1, functionPath: "x:y", ok: true }); }).not.toThrow();
+            expect(() => {
+                emitRpcEvent(sink, { durationMs: 1, functionPath: "x:y", ok: true });
+            }).not.toThrow();
         });
 
         test("forwards the event when onRpc is set", () => {
@@ -176,13 +182,11 @@ describe("observabilitySink", () => {
 
         test("emits a fanOut event for cross-shard dispatch", async () => {
             const { events, sink } = collectEvents();
-            const coordinator: QueryCoordinator = {
+            // Use a permissive cast — observability events read only
+            // `result.ok` and `result.failed`, so a partial stub is fine.
+            const coordinator = {
                 fanOut: async () => ({ data: 42, errors: [], failed: 0, ok: 3 }),
-                orchestrateExport: async () => ({ errors: [], failed: 0, ok: 0, shards: [], tables: [] }),
-                orchestrateImport: async () => ({ conflicts: 0, errors: [], failed: 0, inserted: {}, ok: 0, shards: [] }),
-                orchestrateMigration: async () => ({ errors: [], failed: 0, ok: 0, shards: [] }),
-                registry: { listShardKeys: () => [] },
-            };
+            } as unknown as QueryCoordinator;
             const worker = createWorker({ observability: sink, queryCoordinator: coordinator, shardDO: shard.namespace });
 
             const response = await worker.fetch(

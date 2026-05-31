@@ -13,6 +13,8 @@ export type {
     WorkerOptions,
 } from "./create-worker.js";
 export { createWorker, defineRpcEnvelope } from "./create-worker.js";
+export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry.js";
+export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry.js";
 export type { CirrusErrorBody } from "./errors.js";
 export { CirrusError, toErrorResponse } from "./errors.js";
 export type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
