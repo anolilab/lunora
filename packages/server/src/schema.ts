@@ -1,5 +1,7 @@
 import type { Validator } from "@cirrus/values";
 
+import type { SchemaExtension } from "./plugin.js";
+import { mergeSchemaExtension } from "./plugin.js";
 import type {
     AggregateIndexDefinition,
     AggregateOp,
@@ -360,12 +362,31 @@ export const defineRankIndex = (name: string, options: RankIndexOptions): RankIn
  * declarations. Both are folded into the matching `tables[on].*Indexes` array
  * so runtime backends read every index uniformly off the table definition.
  */
+/**
+ * Schema with an in-place `.extend(plugin.extension)` method. Used so apps
+ * can compose plugin schemas: `defineSchema({...}).extend(authPlugin.extension)`.
+ *
+ * `extend` is non-mutating — returns a fresh `ExtendableSchema` containing
+ * the merged tables. Chains: `defineSchema(...).extend(a).extend(b)` is the
+ * typed equivalent of merging `a`'s tables then `b`'s.
+ */
+export type ExtendableSchema<T extends Record<string, TableDefinition>> = Schema<T> & {
+    extend: <X extends Record<string, TableDefinition>>(extension: SchemaExtension<X>) => ExtendableSchema<T & X>;
+};
+
+const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>): ExtendableSchema<T> => ({
+    ...schema,
+    extend<X extends Record<string, TableDefinition>>(extension: SchemaExtension<X>): ExtendableSchema<T & X> {
+        return withExtend(mergeSchemaExtension(schema, extension));
+    },
+});
+
 export const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
     aggregateIndexes: Record<string, AggregateIndexDefinition> = {},
     rankIndexes: Record<string, RankIndexDefinition> = {},
-): Schema<T> => {
+): ExtendableSchema<T> => {
     // Fill in the `on` field for every inline `.aggregateIndex(...)` /
     // `.rankIndex(...)` decl — the builder stashes `""` because it doesn't
     // know its own table name.
@@ -405,5 +426,5 @@ export const defineSchema = <T extends Record<string, TableDefinition>>(
         (table.rankIndexes as RankIndexDefinition[]).push(index);
     }
 
-    return { tables, vectorIndexes };
+    return withExtend({ tables, vectorIndexes });
 };
