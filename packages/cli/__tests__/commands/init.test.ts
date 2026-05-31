@@ -111,6 +111,37 @@ describe("cirrus init", () => {
         expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
     });
 
+    test("tanstack-start template scaffolds router + ssr entries", async () => {
+        const result = await runInitCommand({
+            cwd: workdir,
+            from: templatesRoot,
+            logger: silentLogger(),
+            name: "starter",
+            templateType: "tanstack-start",
+        });
+
+        expect(result.code).toBe(0);
+
+        const target = join(workdir, "starter");
+
+        expect(existsSync(join(target, "app.config.ts"))).toBe(true);
+        expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
+        expect(existsSync(join(target, "src", "router.tsx"))).toBe(true);
+        expect(existsSync(join(target, "src", "client.tsx"))).toBe(true);
+        expect(existsSync(join(target, "src", "ssr.tsx"))).toBe(true);
+        expect(existsSync(join(target, "src", "routes", "__root.tsx"))).toBe(true);
+        expect(existsSync(join(target, "src", "routes", "index.tsx"))).toBe(true);
+        expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
+        expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
+
+        const pkg = readFileSync(join(target, "package.json"), "utf8");
+
+        expect(pkg).toContain("@tanstack/react-start");
+        expect(pkg).toContain("@tanstack/react-router");
+        expect(pkg).toContain("@tanstack/react-query");
+        expect(pkg).toContain('"name": "starter"');
+    });
+
     test("next template is not yet available", async () => {
         const warnings: string[] = [];
 

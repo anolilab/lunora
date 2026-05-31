@@ -11,6 +11,12 @@ import { emitApi, emitDataModel, emitDrizzleSchema, emitServer, emitShard } from
 export interface CodegenOptions {
     /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
     cirrusDirectory?: string;
+    /**
+     * When true, run discovery + emit (so any schema/function parse error
+     * surfaces) but skip writing files to `_generated/`. The returned
+     * `outputDirectory` is still the path that *would* have been written.
+     */
+    dryRun?: boolean;
     /** Project root containing the `cirrus/` directory. */
     projectRoot: string;
 }
@@ -93,16 +99,18 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     const outputDirectory = join(cirrusDirectory, "_generated");
 
-    if (!existsSync(outputDirectory)) {
-        mkdirSync(outputDirectory, { recursive: true });
-    }
+    if (!options.dryRun) {
+        if (!existsSync(outputDirectory)) {
+            mkdirSync(outputDirectory, { recursive: true });
+        }
 
-    writeIfChanged(join(outputDirectory, "dataModel.ts"), dataModelContent);
-    writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
-    writeIfChanged(join(outputDirectory, "server.ts"), serverContent);
-    writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
-    writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
-    writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
+        writeIfChanged(join(outputDirectory, "dataModel.ts"), dataModelContent);
+        writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
+        writeIfChanged(join(outputDirectory, "server.ts"), serverContent);
+        writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
+        writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
+        writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
+    }
 
     return {
         generated: {

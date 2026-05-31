@@ -7,7 +7,7 @@ import { downloadTemplate } from "giget";
 
 import type { Logger } from "../util/logger.js";
 
-export type Template = "next" | "standalone" | "vite";
+export type Template = "next" | "standalone" | "tanstack-start" | "vite";
 
 export interface InitCommandOptions {
     cwd?: string;

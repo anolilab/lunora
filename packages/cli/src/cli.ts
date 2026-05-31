@@ -4,18 +4,41 @@ import { boxen } from "@visulima/boxen";
 import { Cerebro } from "@visulima/cerebro";
 import colorize from "@visulima/colorize";
 
+import { runAnalyzeCommand } from "./commands/analyze.js";
 import { runCodegenCommand } from "./commands/codegen.js";
 import { runExportCommand, runImportCommand } from "./commands/data-transfer.js";
 import { runDeployCommand } from "./commands/deploy.js";
 import { runDevCommand } from "./commands/dev.js";
+import { runDocsCommand } from "./commands/docs.js";
+import type { EnvSubcommand } from "./commands/env.js";
+import { runEnvCommand } from "./commands/env.js";
+import { runInfoCommand } from "./commands/info.js";
 import type { Template } from "./commands/init.js";
 import { runInitCommand } from "./commands/init.js";
 import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "./commands/migrate.js";
 import { runResetCommand } from "./commands/reset.js";
 import { runRpcCommand } from "./commands/run.js";
+import { runVerifyCommand } from "./commands/verify.js";
+import { runViewCommand } from "./commands/view.js";
 import { createLogger } from "./util/logger.js";
 
-export const COMMANDS = ["init", "dev", "codegen", "deploy", "run", "reset", "migrate", "export", "import"] as const;
+export const COMMANDS = [
+    "init",
+    "dev",
+    "codegen",
+    "deploy",
+    "run",
+    "reset",
+    "migrate",
+    "export",
+    "import",
+    "verify",
+    "info",
+    "env",
+    "analyze",
+    "view",
+    "docs",
+] as const;
 
 export type CommandName = (typeof COMMANDS)[number];
 
@@ -27,7 +50,11 @@ export interface RunCliOptions {
 }
 
 const isTemplate = (value: unknown): value is Template => {
-    return value === "vite" || value === "standalone" || value === "next";
+    return value === "vite" || value === "standalone" || value === "next" || value === "tanstack-start";
+};
+
+const isEnvSubcommand = (value: unknown): value is EnvSubcommand => {
+    return value === "list" || value === "get" || value === "set" || value === "unset" || value === "push";
 };
 
 const toStringOrUndefined = (value: unknown): string | undefined => {
@@ -71,7 +98,7 @@ interface BuildCliResult {
  * options to the front of argv. We need to know which options take a value
  * so we can keep "option value" pairs together during the reorder.)
  */
-const BOOLEAN_OPTIONS = new Set<string>(["all", "dry-run", "no-vite", "prod"]);
+const BOOLEAN_OPTIONS = new Set<string>(["all", "dry-run", "json", "no-vite", "prod", "remote", "yes"]);
 
 const isOptionToken = (token: string): boolean => {
     return token.startsWith("-");
@@ -169,7 +196,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 name: "template",
                 alias: "t",
                 type: String,
-                description: "Template to scaffold (vite | standalone | next)",
+                description: "Template to scaffold (vite | standalone | tanstack-start | next)",
                 defaultValue: "vite",
             },
             {
@@ -451,6 +478,112 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         ],
     });
 
+    cli.addCommand({
+        name: "verify",
+        description: "Validate wrangler.jsonc + run codegen in dry-run mode (no files written)",
+        execute: () => {
+            const result = runVerifyCommand({ cwd, logger });
+
+            exitCode.value = result.code;
+        },
+    });
+
+    cli.addCommand({
+        name: "info",
+        description: "Print resolved project config: @cirrus/* versions, wrangler summary, schema overview",
+        options: [{ description: "Emit a JSON snapshot instead of human text", name: "json", type: Boolean }],
+        execute: ({ options: parsed }) => {
+            const result = runInfoCommand({ cwd, json: parsed.json === true, logger });
+
+            exitCode.value = result.code;
+        },
+    });
+
+    cli.addCommand({
+        name: "env",
+        description: "Manage .dev.vars and push secrets via wrangler (list | get | set | unset | push)",
+        argument: { description: "list | get <KEY> | set <KEY> <VALUE> | unset <KEY> | push", name: "subcommand", type: String },
+        options: [
+            { description: "Target production for `push` (passes --env production to wrangler)", name: "prod", type: Boolean },
+            { description: "Required for `push` — confirms uploading secrets to Cloudflare", name: "yes", type: Boolean },
+        ],
+        execute: async ({ argument, options: parsed }) => {
+            const sub = argument[0];
+
+            if (!isEnvSubcommand(sub)) {
+                logger.error(`env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push`);
+                exitCode.value = 1;
+
+                return;
+            }
+
+            try {
+                const result = await runEnvCommand({
+                    cwd,
+                    key: argument[1],
+                    logger,
+                    prod: parsed.prod === true,
+                    subcommand: sub,
+                    value: argument[2],
+                    yes: parsed.yes === true,
+                });
+
+                exitCode.value = result.code;
+            } catch (error: unknown) {
+                logger.error(error instanceof Error ? error.message : String(error));
+                exitCode.value = 1;
+            }
+        },
+    });
+
+    cli.addCommand({
+        name: "analyze",
+        description: "Run wrangler dry-run and report bundle size, top modules, and _generated files",
+        options: [{ description: "Emit a JSON report instead of human text", name: "json", type: Boolean }],
+        execute: async ({ options: parsed }) => {
+            try {
+                const result = await runAnalyzeCommand({ cwd, json: parsed.json === true, logger });
+
+                exitCode.value = result.code;
+            } catch (error: unknown) {
+                logger.error(error instanceof Error ? error.message : String(error));
+                exitCode.value = 1;
+            }
+        },
+    });
+
+    cli.addCommand({
+        name: "view",
+        description: "Open the Cirrus dashboard in your browser (local dev by default, --remote for production)",
+        options: [{ description: "Open the deployed worker URL instead of localhost", name: "remote", type: Boolean }],
+        execute: async ({ options: parsed }) => {
+            try {
+                const result = await runViewCommand({ cwd, logger, remote: parsed.remote === true });
+
+                exitCode.value = result.code;
+            } catch (error: unknown) {
+                logger.error(error instanceof Error ? error.message : String(error));
+                exitCode.value = 1;
+            }
+        },
+    });
+
+    cli.addCommand({
+        name: "docs",
+        description: "Open the Cirrus docs in your browser (optional [section] path)",
+        argument: { description: "Optional path under the docs site (e.g. addons/dashboard)", name: "section", type: String },
+        execute: async ({ argument }) => {
+            try {
+                const result = await runDocsCommand({ logger, section: argument[0] });
+
+                exitCode.value = result.code;
+            } catch (error: unknown) {
+                logger.error(error instanceof Error ? error.message : String(error));
+                exitCode.value = 1;
+            }
+        },
+    });
+
     return { cli, exitCode };
 };
 
@@ -459,7 +592,7 @@ const HELP = `cirrus — Cirrus framework CLI
 Usage: cirrus <command> [options]
 
 Commands:
-  init [name] [-t <template>]   Scaffold a new Cirrus project (templates: vite, standalone, next)
+  init [name] [-t <template>]   Scaffold a new Cirrus project (templates: vite, standalone, tanstack-start, next)
        [--from <path>] [--source <src>]  Use a local templates dir or override the remote source
   dev  [--port <n>] [--no-vite] Run the dev server (Vite + wrangler, or wrangler alone)
   codegen                       Run codegen for cirrus/ functions and schema
@@ -478,6 +611,12 @@ Commands:
   import <path> [--table <n>]   Bulk-insert NDJSON rows via the admin endpoint
           [--batch-size <n>] [--prod] [--url <url>] [--token <t>]
   reset [--all]                 Clear local Miniflare state (and .cirrus-cache with --all)
+  verify                        Validate wrangler.jsonc + run codegen in dry-run mode
+  info [--json]                 Print resolved project config (packages, wrangler, schema)
+  env <sub> [args]              Manage .dev.vars (list | get <K> | set <K> <V> | unset <K> | push --yes [--prod])
+  analyze [--json]              Run wrangler dry-run and report bundle size + top modules
+  view [--remote]               Open the dashboard in your browser
+  docs [section]                Open the Cirrus docs in your browser
 
 Global options:
   -h, --help                    Show this help and exit
