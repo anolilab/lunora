@@ -248,3 +248,117 @@ describe("cross-backend guard", () => {
         await expect(writer.findMany("local", { with: { remote: true } })).rejects.toThrow(/cross-backend relation 'local.remote' not supported/);
     });
 });
+
+describe("cross-backend onDelete cascade (DO parent → D1 holder)", () => {
+    /**
+     * Schema: `groups` lives on the DO (root); `memberships` lives on D1
+     * (global) and holds an FK back to a group with `onDelete: cascade`. When
+     * a group is deleted, the cascade has to reach across into D1 and remove
+     * any membership pointing at it — that's what the new `globalDb` option
+     * to `createShardCtxDb` enables.
+     */
+    const schema: SchemaLike = {
+        tables: {
+            groups: {
+                indexes: [],
+                shape: { name: { kind: "string" } },
+                shardMode: { kind: "root" },
+            },
+            memberships: {
+                indexes: [{ fields: ["groupId"], name: "by_group" }],
+                relationMap: {
+                    group: { field: "groupId", kind: "one", onDelete: "cascade", references: "_id", table: "groups" },
+                },
+                shape: { groupId: { kind: "string" }, userId: { kind: "string" } },
+                shardMode: { kind: "global" },
+            },
+        },
+    };
+
+    /**
+     * In-memory fake "D1" writer that captures the rows it sees so the test
+     * can assert the cascade actually ran through it (not silently swallowed
+     * by the DO writer's lookup-by-id miss). Only the surface the cascade
+     * touches is implemented; everything else throws to surface accidental use.
+     */
+    const buildFakeGlobalDb = () => {
+        const rows = new Map<string, Record<string, unknown>>();
+
+        const writer = {
+            async delete(id: string) {
+                rows.delete(id);
+            },
+            async findMany(_table: string, query?: { where?: Record<string, unknown> }) {
+                const where = query?.where ?? {};
+                const page = [...rows.values()].filter((row) => Object.entries(where).every(([key, value]) => row[key] === value));
+
+                return { continueCursor: null, isDone: true, page };
+            },
+            async insert(_table: string, doc: Record<string, unknown>) {
+                const id = String(doc["_id"] ?? `m_${rows.size + 1}`);
+
+                rows.set(id, { ...doc, _id: id });
+
+                return id;
+            },
+            async patch(id: string, patch: Record<string, unknown>) {
+                const existing = rows.get(id);
+
+                if (existing) {
+                    rows.set(id, { ...existing, ...patch });
+                }
+            },
+        };
+
+        return { rows, writer };
+    };
+
+    test("cascade reaches into the supplied globalDb when the holder is global", async () => {
+        runShardMigrations(harness.sql, schema);
+
+        const { rows, writer: fake } = buildFakeGlobalDb();
+        const writer = createShardCtxDb({
+            clock: () => 1_700_000_000_000,
+            globalDb: fake as unknown as DatabaseWriterLike,
+            schema,
+            sql: harness.sql,
+        });
+
+        await writer.insert("groups", { _id: "g1", name: "Engineering" });
+        await fake.insert("memberships", { _id: "m1", groupId: "g1", userId: "u1" });
+        await fake.insert("memberships", { _id: "m2", groupId: "g1", userId: "u2" });
+        await fake.insert("memberships", { _id: "m3", groupId: "g2", userId: "u3" });
+
+        await writer.delete("g1");
+
+        // The cascade should have removed every membership pointing at g1
+        // and left the one pointing at g2 alone.
+        expect([...rows.keys()].sort()).toEqual(["m3"]);
+    });
+
+    test("missing globalDb throws a helpful error rather than silently dropping the cascade", async () => {
+        runShardMigrations(harness.sql, schema);
+
+        // No `globalDb` passed in — the cascade should refuse rather than
+        // delete the parent while leaving the global holders dangling.
+        const writer = createShardCtxDb({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+
+        await writer.insert("groups", { _id: "g1", name: "Engineering" });
+
+        await expect(writer.delete("g1")).rejects.toThrow(/cross-backend cascade.*globalDb/u);
+    });
+});
+
+describe("cross-backend onDelete rejected (D1 parent → shardBy holder)", () => {
+    /**
+     * The reverse direction (global → shardBy) genuinely can't be supported
+     * without Query Coordinator fan-out across DOs. The D1 writer's cascade
+     * pre-flights and throws when it would have to reach into a shardBy
+     * table. Tested in `@cirrus/d1`; this comment-only stub documents the
+     * symmetry from the DO side so a future Coordinator implementation
+     * has a clear home.
+     */
+    test.skip("global → shardBy cascade is documented as unsupported; covered in @cirrus/d1 tests", () => {
+        /* see packages/d1/__tests__/d1-ctx-db.test.ts for the actual coverage */
+    });
+});
