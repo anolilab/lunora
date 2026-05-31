@@ -28,6 +28,14 @@ import type {
 
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
+
+/**
+ * Maximum number of stream-start frames queued per connection while the
+ * socket is (re)connecting. Past this cap, the oldest queued stream is
+ * evicted (its consumer is failed with `STREAM_QUEUE_OVERFLOW`) so a stuck
+ * reconnect can never grow the queue unbounded.
+ */
+const MAX_PENDING_STREAMS = 64;
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
@@ -638,17 +646,28 @@ export class CirrusClient {
     }
 
     /**
-     * Open a streaming query. The function reference must point at a
+     * Open a streaming query. The function reference must be a
      * `kind:"stream"` registration (built with `c.query.input(...).stream(...)`);
-     * the returned iterable yields one element per chunk frame the server
-     * pushes, terminating when the server sends `complete` or the consumer
-     * calls `.cancel()`. Errors arrive as a rejection on the next `next()`.
+     * the type constraint catches accidental use of a query/mutation/action
+     * reference at compile time. The returned iterable yields one element per
+     * chunk frame the server pushes, terminating when the server sends
+     * `complete` or the consumer calls `.cancel()`. Errors arrive as a
+     * rejection on the next `next()`.
      *
      * Streams ride the same WS as subscriptions and share the unsubscribe
      * channel: cancelling sends `{type:"unsubscribe", id}` with the stream id,
      * which the DO recognises as an abort signal for the in-flight iterator.
+     *
+     * Stream-start frames buffered while the socket is (re)connecting are
+     * capped at {@link MAX_PENDING_STREAMS} per connection — overflowing the
+     * cap drops the oldest queued frame (and fails its consumer) so a stuck
+     * reconnect can't OOM the page.
      */
-    public stream<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: { maxBuffer?: number; shardKey?: string } = {}): StreamIterable<ReturnOf<F>> {
+    public stream<F extends FunctionReference<"stream">>(
+        fn: F,
+        args: ArgsOf<F>,
+        opts: { maxBuffer?: number; shardKey?: string } = {},
+    ): StreamIterable<ReturnOf<F>> {
         if (this.closed) {
             throw new Error("CirrusClient: stream() called after close()");
         }
@@ -697,6 +716,24 @@ export class CirrusClient {
             // Defer the send to the open handler — the existing pending logic
             // is for unsubscribes, so stash the stream-start frame separately.
             conn.pendingStreams = conn.pendingStreams ?? [];
+
+            // Bounded queue: an unreachable server would otherwise let
+            // `pendingStreams` grow without limit if the caller keeps opening
+            // streams. Drop the oldest (also failing its consumer) so the
+            // newest request always wins.
+            while (conn.pendingStreams.length >= MAX_PENDING_STREAMS) {
+                const dropped = conn.pendingStreams.shift();
+                const droppedId = (dropped as { id?: string } | undefined)?.id;
+                const droppedStream = droppedId ? this.streams.get(droppedId) : undefined;
+
+                if (droppedStream) {
+                    droppedStream.handle.fail(
+                        Object.assign(new Error("stream-start frame evicted while socket was unreachable"), { code: "STREAM_QUEUE_OVERFLOW" }),
+                    );
+                    this.streams.delete(droppedId as string);
+                }
+            }
+
             conn.pendingStreams.push(message);
         }
 
