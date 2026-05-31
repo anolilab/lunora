@@ -1,0 +1,117 @@
+import type { AddressInfo } from "node:net";
+
+import type { Plugin, ViteDevServer } from "vite";
+
+/** Dev-server path the dashboard SPA is served from. */
+export const DASHBOARD_PATH = "/__cirrus";
+
+/**
+ * The single-page document served at {@link DASHBOARD_PATH}. The inline module
+ * script imports `@cirrus/dashboard/mount` so Vite resolves + transforms it like
+ * any project module (HMR, deps pre-bundling). `transformIndexHtml` rewrites the
+ * bare specifier before this reaches the browser.
+ */
+const DASHBOARD_HTML = `<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Cirrus Dashboard</title>
+    </head>
+    <body>
+        <div id="root"></div>
+        <script type="module">
+            import { mountDashboard } from "@cirrus/dashboard/mount";
+
+            mountDashboard();
+        </script>
+    </body>
+</html>
+`;
+
+/**
+ * Build the user-facing dashboard URL from the dev server's resolved address.
+ * Pure so it can be unit-tested without a live server. Prefers Vite's own
+ * `resolvedUrls.local` (honours `host` / `base` / https); falls back to the raw
+ * socket address, bracketing IPv6 and normalising the wildcard host.
+ */
+export const buildDashboardUrl = (input: { address?: AddressInfo | null | string; base?: string; resolvedLocal?: string }): string => {
+    const path = DASHBOARD_PATH.replace(/^\//, "");
+
+    if (input.resolvedLocal !== undefined && input.resolvedLocal !== "") {
+        const origin = input.resolvedLocal.endsWith("/") ? input.resolvedLocal.slice(0, -1) : input.resolvedLocal;
+
+        return `${origin}/${path}`;
+    }
+
+    const base = input.base === undefined || input.base === "/" ? "" : input.base.replace(/\/$/, "");
+
+    if (input.address === null || input.address === undefined || typeof input.address === "string") {
+        return `http://localhost:5173${base}/${path}`;
+    }
+
+    const host = input.address.address === "::" || input.address.address === "0.0.0.0" ? "localhost" : input.address.address;
+    const bracketed = host.includes(":") ? `[${host}]` : host;
+
+    return `http://${bracketed}:${input.address.port}${base}/${path}`;
+};
+
+/**
+ * Vite plugin that serves the composed Cirrus dashboard at
+ * {@link DASHBOARD_PATH} during dev and prints its URL once the server is
+ * listening. Dev-only (`apply: "serve"`); it adds nothing to production builds.
+ *
+ * Because `cirrus dev` spawns Vite, this makes the dashboard available on
+ * `cirrus dev` and on a plain `vite` with no per-project files.
+ */
+export const dashboardPlugin = (): Plugin => {
+    return {
+        name: "cirrus:dashboard",
+        apply: "serve",
+        configureServer(server: ViteDevServer) {
+            server.middlewares.use((request, response, next) => {
+                const url = request.url ?? "";
+
+                if (url !== DASHBOARD_PATH && !url.startsWith(`${DASHBOARD_PATH}?`) && url !== `${DASHBOARD_PATH}/`) {
+                    next();
+
+                    return;
+                }
+
+                server
+                    .transformIndexHtml(url, DASHBOARD_HTML)
+                    .then((html) => {
+                        response.statusCode = 200;
+                        response.setHeader("Content-Type", "text/html");
+                        response.end(html);
+                    })
+                    .catch((error: unknown) => {
+                        // Surface transform failures rather than hanging the request.
+                        response.statusCode = 500;
+                        response.end(error instanceof Error ? error.message : String(error));
+                    });
+            });
+
+            // Print the dashboard URL once the server is actually listening, so
+            // the address/port are known. Returned hook runs after internal
+            // middlewares are installed.
+            return () => {
+                const announce = (): void => {
+                    const url = buildDashboardUrl({
+                        address: server.httpServer?.address() ?? null,
+                        base: server.config.base,
+                        resolvedLocal: server.resolvedUrls?.local[0],
+                    });
+
+                    server.config.logger.info(`  [36m➜[0m  [1mCirrus dashboard[0m: [36m${url}[0m`);
+                };
+
+                if (server.httpServer?.listening === true) {
+                    announce();
+                } else {
+                    server.httpServer?.once("listening", announce);
+                }
+            };
+        },
+    };
+};

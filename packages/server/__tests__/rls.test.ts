@@ -209,7 +209,7 @@ describe("rls — read path", () => {
         const policy = definePolicy<TestCtx>({
             on: "read",
             table: "documents",
-            when: ({ auth }) => auth.roles.includes("admin") ? true : { ownerId: auth.userId },
+            when: ({ auth }) => (auth.roles.includes("admin") ? true : { ownerId: auth.userId }),
         });
         const db = createFakeDb([]);
 

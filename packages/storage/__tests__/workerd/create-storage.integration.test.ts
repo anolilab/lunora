@@ -7,7 +7,7 @@
  * the runtime R2 surface workerd exposes.
  */
 import { env } from "cloudflare:test";
-import { describe, expect, expectTypeOf, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { createStorage } from "../../src/create-storage.js";
 import type { R2BucketLike } from "../../src/types.js";
@@ -24,9 +24,9 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
         });
 
         expect(putResult.key).toBe("greetings/hello.txt");
-
-        expectTypeOf(putResult.etag).toBeString();
-
+        // Runtime check that R2 returned an etag string (not a compile-time
+        // `expectTypeOf`, which would assert nothing about the live value).
+        expect(putResult.etag).toBeTypeOf("string");
         expect(putResult.etag.length).toBeGreaterThan(0);
 
         const got = await sut.download("greetings/hello.txt");

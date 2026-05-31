@@ -70,6 +70,8 @@ export type { DependencyTracker } from "./dependency-tracker.js";
 export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker.js";
 export type { ReadTablePageOptions, TableInfo, TablePage } from "./introspect.js";
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
+export type { LogEntry, LogLevel } from "./log-buffer.js";
+export { LogBuffer } from "./log-buffer.js";
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args.js";
 export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
 export type { RankDirection, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult, RankSortKeyLike } from "./rank.js";
@@ -85,6 +87,8 @@ export type {
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
+    RunShardWriteArgs,
+    RunShardWriteResult,
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,

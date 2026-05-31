@@ -80,20 +80,20 @@ const runMiddleware = async (middlewares: ReadonlyArray<Middleware<unknown, unkn
  * so a contract violation surfaces as a `ValidationError` at the source rather
  * than as malformed data downstream.
  */
-const makeHandler
-    = <Args extends ArgsValidator, Ctx, R>(
+const makeHandler =
+    <Args extends ArgsValidator, Ctx, R>(
         args: Args,
         middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
         userHandler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R,
         output?: Validator,
     ) =>
-        async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
-            const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
-            const ctx = await runMiddleware(middlewares, context);
-            const result = await userHandler({ args: parsed, ctx: ctx as Ctx });
+    async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
+        const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
+        const ctx = await runMiddleware(middlewares, context);
+        const result = await userHandler({ args: parsed, ctx: ctx as Ctx });
 
-            return (output ? output.parse(result) : result) as Awaited<R>;
-        };
+        return (output ? output.parse(result) : result) as Awaited<R>;
+    };
 
 /**
  * Construct a kind-specific builder. The terminal method is keyed by the kind
@@ -106,12 +106,12 @@ const makeHandler
  */
 const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "internal"): Record<string, unknown> => ({
     __cirrusProcedure: kind,
-    ...visibility ? { __cirrusVisibility: visibility } : {},
+    ...(visibility ? { __cirrusVisibility: visibility } : {}),
     [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => ({
         args: state.args,
         handler: makeHandler(state.args, state.middlewares, userHandler, state.output),
         kind,
-        ...visibility ? { visibility } : {},
+        ...(visibility ? { visibility } : {}),
     }),
     input: (validators: ArgsValidator) => makeBuilder(kind, { ...state, args: { ...state.args, ...validators } }, visibility),
     output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),

@@ -60,15 +60,15 @@ Unknown validator kinds throw `Unsupported validator kind: <name>` at parse time
 
 ## API
 
-| Export                  | Description                                                          |
-| ----------------------- | -------------------------------------------------------------------- |
-| `runCodegen(options)`   | Top-level entry. Discovers + emits. Returns the output directory.    |
-| `discoverSchema(...)`   | Parse `schema.ts` into a `SchemaIR`.                                 |
+| Export                   | Description                                                                            |
+| ------------------------ | -------------------------------------------------------------------------------------- |
+| `runCodegen(options)`    | Top-level entry. Discovers + emits. Returns the output directory.                      |
+| `discoverSchema(...)`    | Parse `schema.ts` into a `SchemaIR`.                                                   |
 | `discoverFunctions(...)` | Walk a directory and parse every `query`/`mutation`/`action` call into a `FunctionIR`. |
-| `emitApi(functions)`    | Render the typed `api.ts`.                                           |
-| `emitDataModel(schema)` | Render the typed `dataModel.ts`.                                     |
-| `emitServer()`          | Render the per-project `server.ts` re-export.                        |
-| `GENERATED_HEADER`      | Header banner prepended to every emitted file.                       |
+| `emitApi(functions)`     | Render the typed `api.ts`.                                                             |
+| `emitDataModel(schema)`  | Render the typed `dataModel.ts`.                                                       |
+| `emitServer()`           | Render the per-project `server.ts` re-export.                                          |
+| `GENERATED_HEADER`       | Header banner prepended to every emitted file.                                         |
 
 Types: `CodegenOptions`, `CodegenResult`, `SchemaIR`, `TableIR`, `IndexIR`, `FunctionIR`, `ValidatorIR`, `ProjectIR`.
 

@@ -67,11 +67,7 @@ describe("useMutation", () => {
         });
 
         expect(resolved).toEqual({ id: "p1" });
-        expect(mock.mutation).toHaveBeenCalledWith(
-            expect.objectContaining({ __cirrusRef: "posts:create" }),
-            { title: "hello" },
-            undefined,
-        );
+        expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "posts:create" }), { title: "hello" }, undefined);
         expect(screen.getByTestId("pending").textContent).toBe("no");
     });
 
@@ -104,10 +100,6 @@ describe("useMutation", () => {
             screen.getByTestId("btn").click();
         });
 
-        expect(mock.mutation).toHaveBeenCalledWith(
-            expect.objectContaining({ __cirrusRef: "counter:inc" }),
-            {},
-            { optimistic },
-        );
+        expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "counter:inc" }), {}, { optimistic });
     });
 });

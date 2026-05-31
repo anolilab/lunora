@@ -152,7 +152,7 @@ const camelCase = (slug: string): string =>
     slug
         .split("-")
         .filter((part) => part.length > 0)
-        .map((part, index) => index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1))
+        .map((part, index) => (index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1)))
         .join("");
 
 export interface MigrateCreateCommandOptions {

@@ -261,6 +261,83 @@ describe("cirrusClient — subscriptions", () => {
         expect(last).toEqual({ type: "unsubscribe", id: sub.id });
     });
 
+    test("appends wsToken to the WebSocket URL so the upgrade can authorize it", () => {
+        expect.assertions(2);
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: vi.fn() as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            wsToken: "admin tok/en",
+        });
+
+        client.subscribe(fn("__cirrus_admin__:getMetrics"), {}, () => undefined);
+
+        const { url } = latestSocket();
+
+        expect(url).toContain("token=admin%20tok%2Fen");
+        // The default WS path is still present alongside the token parameter.
+        expect(url).toContain("/_cirrus/ws");
+    });
+
+    test("surfaces a server subscription error to the onError callback", () => {
+        expect.assertions(2);
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: vi.fn() as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        const errors: { message: string }[] = [];
+        const data: unknown[] = [];
+
+        client.subscribe(fn("__cirrus_admin__:getMetrics"), {}, (d) => data.push(d), { onError: (error) => errors.push(error) });
+
+        const socket = latestSocket();
+
+        socket.open();
+        socket.receive({ type: "error", id: JSON.parse(socket.sent[0]!).id, message: "admin subscription requires admin authorization" });
+
+        expect(errors).toEqual([{ message: "admin subscription requires admin authorization" }]);
+        expect(data).toHaveLength(0);
+    });
+
+    test("re-sends an admin subscription with its token on reconnect", () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            wsToken: "adm1n",
+            reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
+        });
+
+        client.subscribe(fn("__cirrus_admin__:getMetrics"), {}, () => undefined);
+
+        const first = latestSocket();
+
+        first.open();
+        first.triggerClose();
+
+        vi.advanceTimersByTime(15);
+
+        const second = latestSocket();
+
+        second.open();
+
+        // The fresh socket carries the token again, so the server re-stamps the
+        // admin flag and the re-sent subscribe clears the admin gate.
+        expect(second).not.toBe(first);
+        expect(second.url).toContain("token=adm1n");
+        expect(JSON.parse(second.sent[0]!).query.functionPath).toBe("__cirrus_admin__:getMetrics");
+
+        vi.useRealTimers();
+    });
+
     test("on reconnect, all active subscriptions are re-sent", async () => {
         vi.useFakeTimers();
         const client = new CirrusClient({
@@ -532,5 +609,361 @@ describe("cirrusClient — optimistic updates", () => {
         await client.mutation(fn("c:get"), {}, { optimistic: () => 9 });
 
         expect(received).toEqual([0, 9]);
+    });
+});
+
+// --- Scheduler admin --------------------------------------------------------
+
+describe("cirrusClient — scheduler admin", () => {
+    test("listScheduledJobs GETs the admin endpoint with the bearer and unwraps records", async () => {
+        const records = [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "j1", scheduledFor: 2000 }];
+        const fetchMock = vi.fn(async () => jsonResponse({ records }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.setAuthToken("tkn");
+
+        const result = await client.listScheduledJobs();
+
+        expect(result).toEqual(records);
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/scheduled");
+        expect(init.method).toBe("GET");
+        expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer tkn");
+    });
+
+    test("listScheduledJobs defaults to an empty array when records are absent", async () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({})) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listScheduledJobs()).resolves.toEqual([]);
+    });
+
+    test("cancelScheduledJob POSTs the id and normalises the result", async () => {
+        const fetchMock = vi.fn(async () => jsonResponse({ cancelled: true }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        const result = await client.cancelScheduledJob("j1");
+
+        expect(result).toEqual({ cancelled: true });
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/scheduled/cancel");
+        expect(init.method).toBe("POST");
+        expect(JSON.parse(init.body as string)).toEqual({ id: "j1" });
+    });
+
+    test("scheduler admin surfaces the worker error envelope as a coded Error", async () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "nope" } }, { status: 403 })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listScheduledJobs()).rejects.toMatchObject({ code: "ADMIN_FORBIDDEN", message: "nope" });
+    });
+});
+
+// --- Storage admin ----------------------------------------------------------
+
+describe("cirrusClient — storage admin", () => {
+    test("listStorageObjects GETs the admin endpoint and unwraps the page", async () => {
+        const page = { cursor: "c1", objects: [{ etag: "e1", key: "a.png", size: 10 }] };
+        const fetchMock = vi.fn(async () => jsonResponse(page));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        const result = await client.listStorageObjects();
+
+        expect(result).toEqual(page);
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/storage");
+        expect(init.method).toBe("GET");
+    });
+
+    test("listStorageObjects encodes prefix / cursor / limit as query params", async () => {
+        const fetchMock = vi.fn(async () => jsonResponse({ objects: [] }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await client.listStorageObjects({ cursor: "z", limit: 25, prefix: "avatars/" });
+
+        const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+        const parsed = new URL(requestUrl);
+
+        expect(parsed.pathname).toBe("/_cirrus/admin/storage");
+        expect(parsed.searchParams.get("prefix")).toBe("avatars/");
+        expect(parsed.searchParams.get("cursor")).toBe("z");
+        expect(parsed.searchParams.get("limit")).toBe("25");
+    });
+
+    test("listStorageObjects defaults objects to an empty array", async () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({})) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listStorageObjects()).resolves.toEqual({ cursor: undefined, objects: [] });
+    });
+});
+
+// --- Functions admin --------------------------------------------------------
+
+describe("cirrusClient — functions admin", () => {
+    test("listFunctions GETs the admin endpoint and unwraps the list", async () => {
+        const functions = [
+            { kind: "query", path: "messages:list" },
+            { kind: "mutation", path: "messages:send" },
+        ];
+        const fetchMock = vi.fn(async () => jsonResponse({ functions }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listFunctions()).resolves.toEqual(functions);
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/functions");
+        expect(init.method).toBe("GET");
+    });
+
+    test("listFunctions defaults to an empty array when functions are absent", async () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({})) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listFunctions()).resolves.toEqual([]);
+    });
+});
+
+// --- Global (D1) tables admin -----------------------------------------------
+
+describe("cirrusClient — global tables admin", () => {
+    test("listGlobalTables GETs the admin endpoint", async () => {
+        const tables = [{ name: "organizations", rowCount: 2 }];
+        const fetchMock = vi.fn(async () => jsonResponse(tables));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listGlobalTables()).resolves.toEqual(tables);
+
+        const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+        expect(requestUrl).toBe("https://app.example/_cirrus/admin/global/tables");
+        expect(init.method).toBe("GET");
+    });
+
+    test("readGlobalTablePage encodes table / limit / offset as query params", async () => {
+        const page = { columns: ["_id"], rows: [{ _id: "o1" }], total: 1 };
+        const fetchMock = vi.fn(async () => jsonResponse(page));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.readGlobalTablePage({ limit: 10, offset: 5, table: "organizations" })).resolves.toEqual(page);
+
+        const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+        const parsed = new URL(requestUrl);
+
+        expect(parsed.pathname).toBe("/_cirrus/admin/global/table");
+        expect(parsed.searchParams.get("table")).toBe("organizations");
+        expect(parsed.searchParams.get("limit")).toBe("10");
+        expect(parsed.searchParams.get("offset")).toBe("5");
+    });
+});
+
+describe("cirrusClient — auth admin", () => {
+    test("listAuthUsers GETs the users endpoint with paging", async () => {
+        const page = { rows: [{ id: "u1" }], total: 1 };
+        const fetchMock = vi.fn(async () => jsonResponse(page));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await expect(client.listAuthUsers({ limit: 10, offset: 5 })).resolves.toEqual(page);
+
+        const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+        const parsed = new URL(requestUrl);
+
+        expect(parsed.pathname).toBe("/_cirrus/admin/auth/users");
+        expect(parsed.searchParams.get("limit")).toBe("10");
+        expect(parsed.searchParams.get("offset")).toBe("5");
+    });
+
+    test("listAuthSessions encodes userId + paging", async () => {
+        const fetchMock = vi.fn(async () => jsonResponse({ rows: [], total: 0 }));
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: fetchMock as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        await client.listAuthSessions({ limit: 20, userId: "u1" });
+
+        const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+        const parsed = new URL(requestUrl);
+
+        expect(parsed.pathname).toBe("/_cirrus/admin/auth/sessions");
+        expect(parsed.searchParams.get("userId")).toBe("u1");
+        expect(parsed.searchParams.get("limit")).toBe("20");
+    });
+});
+
+describe("cirrusClient — connection status", () => {
+    test("reports idle before any socket, then connecting/connected/offline across the socket lifecycle", () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
+        });
+
+        const seen: string[] = [];
+        const unsubscribe = client.onConnectionStatus((status) => seen.push(status));
+
+        // Fires immediately with the current (idle) status.
+        expect(seen).toEqual(["idle"]);
+        expect(client.connectionStatus()).toBe("idle");
+
+        // Opening a subscription creates a socket → connecting.
+        client.subscribe(fn("a:b"), {}, () => undefined);
+
+        expect(client.connectionStatus()).toBe("connecting");
+
+        const socket = latestSocket();
+
+        socket.open();
+
+        expect(client.connectionStatus()).toBe("connected");
+
+        // Drop drops to offline (between reconnect attempts).
+        socket.triggerClose();
+
+        expect(client.connectionStatus()).toBe("offline");
+
+        expect(seen).toEqual(["idle", "connecting", "connected", "offline"]);
+
+        unsubscribe();
+    });
+
+    test("stops notifying after unsubscribe", () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+        });
+
+        const seen: string[] = [];
+        const unsubscribe = client.onConnectionStatus((status) => seen.push(status));
+
+        unsubscribe();
+        client.subscribe(fn("a:b"), {}, () => undefined);
+
+        // Only the immediate idle callback landed before unsubscribe.
+        expect(seen).toEqual(["idle"]);
+    });
+});
+
+describe("cirrusClient — scheduled-jobs subscription", () => {
+    test("opens the scheduler admin WS with the token and delivers pushed job lists", () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            wsToken: "adm1n",
+        });
+
+        const seen: string[][] = [];
+        const unsubscribe = client.subscribeScheduledJobs((jobs) => seen.push(jobs.map((job) => job.id)));
+
+        const socket = latestSocket();
+
+        // Connects to the scheduler WS path with the admin token in the query.
+        expect(socket.url).toContain("/_cirrus/admin/scheduled/ws");
+        expect(socket.url).toContain("token=adm1n");
+
+        socket.open();
+        socket.receive({ records: [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "j1", scheduledFor: 2 }], type: "jobs" });
+
+        expect(seen).toEqual([["j1"]]);
+
+        // A frame of the wrong type is ignored.
+        socket.receive({ type: "other" });
+
+        expect(seen).toHaveLength(1);
+
+        unsubscribe();
+    });
+
+    test("reconnects after the socket drops", () => {
+        vi.useFakeTimers();
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            wsToken: "adm1n",
+            reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
+        });
+
+        const unsubscribe = client.subscribeScheduledJobs(() => undefined);
+
+        const first = latestSocket();
+
+        first.open();
+        first.triggerClose();
+
+        vi.advanceTimersByTime(15);
+
+        const second = latestSocket();
+
+        expect(second).not.toBe(first);
+        expect(second.url).toContain("/_cirrus/admin/scheduled/ws");
+
+        unsubscribe();
+        vi.useRealTimers();
     });
 });

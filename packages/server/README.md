@@ -38,12 +38,12 @@ export default defineSchema({
 
 Table modifiers:
 
-| Modifier                                | Effect                                                    |
-| --------------------------------------- | --------------------------------------------------------- |
-| `.index(name, fields, opts?)`           | Secondary index. Pass `{ unique: true }` to enforce.      |
-| `.searchIndex(name, { field, filterFields? })` | Full-text search index over a field.               |
-| `.shardBy(field)`                       | Route storage by field — one Durable Object per distinct value. |
-| `.global()`                             | Mark the table as D1-backed and cross-shard.              |
+| Modifier                                       | Effect                                                          |
+| ---------------------------------------------- | --------------------------------------------------------------- |
+| `.index(name, fields, opts?)`                  | Secondary index. Pass `{ unique: true }` to enforce.            |
+| `.searchIndex(name, { field, filterFields? })` | Full-text search index over a field.                            |
+| `.shardBy(field)`                              | Route storage by field — one Durable Object per distinct value. |
+| `.global()`                                    | Mark the table as D1-backed and cross-shard.                    |
 
 ### `cirrus/messages.ts`
 
@@ -71,7 +71,7 @@ export const send = mutation({
 export const notify = action({
     args: { email: v.string(), subject: v.string() },
     handler: async (ctx, args) => {
-        await ctx.fetch("https://api.resend.com/emails", { method: "POST", /* … */ });
+        await ctx.fetch("https://api.resend.com/emails", { method: "POST" /* … */ });
         await ctx.runMutation(api.notifications.markSent, { to: args.email });
     },
 });
@@ -79,11 +79,11 @@ export const notify = action({
 
 ## Contexts
 
-| Context       | `db`              | `storage`         | `scheduler` | `auth` | `fetch` | `run*` |
-| ------------- | ----------------- | ----------------- | ----------- | ------ | ------- | ------ |
-| `QueryCtx`    | `DatabaseReader`  | `ReadOnlyStorage` | —           | yes    | —       | —      |
-| `MutationCtx` | `DatabaseWriter`  | `ReadOnlyStorage` | yes         | yes    | —       | —      |
-| `ActionCtx`   | `DatabaseWriter`  | `Storage`         | yes         | yes    | yes     | yes    |
+| Context       | `db`             | `storage`         | `scheduler` | `auth` | `fetch` | `run*` |
+| ------------- | ---------------- | ----------------- | ----------- | ------ | ------- | ------ |
+| `QueryCtx`    | `DatabaseReader` | `ReadOnlyStorage` | —           | yes    | —       | —      |
+| `MutationCtx` | `DatabaseWriter` | `ReadOnlyStorage` | yes         | yes    | —       | —      |
+| `ActionCtx`   | `DatabaseWriter` | `Storage`         | yes         | yes    | yes     | yes    |
 
 - **Queries** are pure reads — no inserts, no storage writes, no `fetch`.
 - **Mutations** can mutate the DB and schedule work, but cannot perform external HTTP or R2 writes. Storage stays read-only here (you can `download`/`getSignedUrl` but not `upload`/`delete`) — full storage lives on actions.
@@ -93,16 +93,16 @@ Args are validated against the declared `args` validator at every call. On misma
 
 ## API
 
-| Export                          | Description                                                            |
-| ------------------------------- | ---------------------------------------------------------------------- |
-| `defineSchema(tables)`          | Build the application schema.                                          |
-| `defineTable(shape)`            | Build a single table with fluent index/shard modifiers.                |
-| `query({ args, handler })`      | Register a query.                                                      |
-| `mutation({ args, handler })`   | Register a mutation.                                                   |
-| `action({ args, handler })`     | Register an action.                                                    |
-| `v`                             | Validator namespace (re-exported from `@cirrus/values`).               |
-| `ValidationError`               | Thrown on args mismatch (re-exported).                                 |
-| `anyApi`                        | Proxy stand-in for the generated `api` object — useful in tests.       |
+| Export                        | Description                                                      |
+| ----------------------------- | ---------------------------------------------------------------- |
+| `defineSchema(tables)`        | Build the application schema.                                    |
+| `defineTable(shape)`          | Build a single table with fluent index/shard modifiers.          |
+| `query({ args, handler })`    | Register a query.                                                |
+| `mutation({ args, handler })` | Register a mutation.                                             |
+| `action({ args, handler })`   | Register an action.                                              |
+| `v`                           | Validator namespace (re-exported from `@cirrus/values`).         |
+| `ValidationError`             | Thrown on args mismatch (re-exported).                           |
+| `anyApi`                      | Proxy stand-in for the generated `api` object — useful in tests. |
 
 Types: `TableBuilder`, `TableDefinition`, `Schema`, `IndexDefinition`, `SearchIndexDefinition`, `ShardMode`, `QueryCtx`, `MutationCtx`, `ActionCtx`, `DatabaseReader`, `DatabaseWriter`, `TableReader`, `IndexRangeBuilder`, `ReadOnlyStorage`, `Storage`, `Scheduler`, `AuthState`, `RegisteredQuery`, `RegisteredMutation`, `RegisteredAction`, `RegisteredFunction`, `FunctionKind`, `ArgsValidator`, `InferArgs`, `Id`, `Infer`, `Validator`, `ValidatorKind`, `AnyApi`.
 

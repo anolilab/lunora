@@ -156,7 +156,7 @@ export class ShardRegistryDO {
             return jsonResponse(400, { error: { code: "BAD_REQUEST", message: "missing required query parameter: table" } });
         }
 
-        return jsonResponse(200, { shardKeys: [...this.tables.get(table) ?? []] });
+        return jsonResponse(200, { shardKeys: [...(this.tables.get(table) ?? [])] });
     }
 
     private async handleRegister(request: Request): Promise<Response> {

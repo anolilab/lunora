@@ -23,7 +23,17 @@ catalogs:
   lint:
     "@anolilab/eslint-config": 27.0.2
     "@anolilab/prettier-config": 10.0.1
+    "@eslint-react/eslint-plugin": 5.7.1
+    "@ospm/eslint-plugin-react-unhookify": ^1.0.2
     eslint: 10.4.0
+    eslint-plugin-jsx-a11y: ^6.10.2
+    eslint-plugin-react: ^7.37.5
+    eslint-plugin-react-compiler: ^19.1.0-rc.2
+    eslint-plugin-react-hooks: 7.1.1
+    eslint-plugin-react-perf: ^3.3.3
+    eslint-plugin-react-refresh: 0.5.2
+    eslint-plugin-react-you-might-not-need-an-effect: 0.10.0
+    eslint-plugin-validate-jsx-nesting: ^0.1.1
     husky: ^9.1.7
     prettier: 3.8.3
   node:
@@ -63,6 +73,8 @@ catalogs:
     jsonc-parser: ^3.3.1
     vite: ^8.0.14
   frontend:
+    "@tanstack/react-table": ^8.21.3
+    "@tanstack/react-virtual": ^3.13.26
     "@testing-library/dom": ^10.4.1
     "@testing-library/react": ^16.3.2
     "@types/react": ^19.2.15

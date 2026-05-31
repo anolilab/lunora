@@ -40,10 +40,14 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@cirrus/dashboard": "workspace:*",
         "@visulima/vite-overlay": "catalog:vite",
         "vite": "catalog:vite"
     },
     "peerDependenciesMeta": {
+        "@cirrus/dashboard": {
+            "optional": true
+        },
         "@visulima/vite-overlay": {
             "optional": true
         }

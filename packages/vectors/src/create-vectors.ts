@@ -44,10 +44,7 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
         return index.upsert([vector]);
     };
 
-    const upsertMany = async <TInput>(
-        indexName: string,
-        inputs: ReadonlyArray<UpsertInput<TInput>>,
-    ): Promise<VectorizeUpsertMutation> => {
+    const upsertMany = async <TInput>(indexName: string, inputs: ReadonlyArray<UpsertInput<TInput>>): Promise<VectorizeUpsertMutation> => {
         const index = resolveIndex(options.indexes, indexName);
         const vectors = await Promise.all(inputs.map(toVector));
 

@@ -1,0 +1,27 @@
+{
+    "name": "@cirrus/dashboard-app",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "build": "vite build",
+        "dev": "vite",
+        "lint:types": "tsc --noEmit",
+        "preview": "vite preview",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@cirrus/dashboard": "workspace:*",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
+        "vitest": "catalog:test"
+    }
+}

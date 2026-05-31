@@ -3,9 +3,15 @@ import type { ScheduleRecord } from "./types.js";
 /**
  * Minimal projection of `DurableObjectState` for the SchedulerDO. Declared
  * structurally so unit tests can pass a fake state without booting the
- * workers runtime.
+ * workers runtime. The WebSocket methods are optional: they back the live
+ * `/ws` subscription (push the job list on every change) and are absent in the
+ * storage-only fakes, in which case the DO simply serves no live sockets.
  */
 export interface SchedulerDOState {
+    /** Accept a hibernatable server WebSocket (workers `state.acceptWebSocket`). */
+    acceptWebSocket?: (ws: WebSocket) => void;
+    /** Every accepted server WebSocket (workers `state.getWebSockets`). */
+    getWebSockets?: () => WebSocket[];
     storage: {
         delete: (key: string | string[]) => Promise<number | boolean>;
         deleteAlarm: () => Promise<void> | void;
@@ -76,6 +82,10 @@ export class SchedulerDO {
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
 
+        if (url.pathname === "/ws" && request.headers.get("Upgrade") === "websocket") {
+            return this.handleWebSocketUpgrade();
+        }
+
         if (url.pathname === "/schedule" && request.method === "POST") {
             return this.handleSchedule(request);
         }
@@ -95,6 +105,60 @@ export class SchedulerDO {
                 headers: { "content-type": "application/json" },
             },
         );
+    }
+
+    /**
+     * Accept a hibernatable live subscription to the job list. The scheduler has
+     * exactly one subscription shape (the whole list), so there's no per-socket
+     * registry or dependency tracking — every accepted socket gets the full list
+     * on connect and on every change. The worker is responsible for gating the
+     * upgrade behind the admin token before it reaches here.
+     */
+    private async handleWebSocketUpgrade(): Promise<Response> {
+        if (this.state.acceptWebSocket === undefined) {
+            return this.error(501, "WS_UNSUPPORTED", "WebSocket subscriptions are not supported in this runtime");
+        }
+
+        const pair = new WebSocketPair();
+        const client = pair[0];
+        const server = pair[1];
+
+        this.state.acceptWebSocket(server);
+        // Seed the new subscriber with the current list so its first value
+        // arrives over the same channel as later changes.
+        server.send(JSON.stringify({ records: await this.listRecords(), type: "jobs" }));
+
+        return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
+    }
+
+    /**
+     * Re-list the jobs and push them to every connected subscriber. Called after
+     * any change (schedule / cancel / alarm-fire) so live dashboards reflect it
+     * immediately. A no-op when the runtime doesn't support hibernated sockets.
+     */
+    private async broadcastChange(): Promise<void> {
+        const sockets = this.state.getWebSockets?.();
+
+        if (sockets === undefined || sockets.length === 0) {
+            return;
+        }
+
+        const message = JSON.stringify({ records: await this.listRecords(), type: "jobs" });
+
+        for (const socket of sockets) {
+            try {
+                socket.send(message);
+            } catch {
+                /* a closing socket — the runtime will clean it up on close */
+            }
+        }
+    }
+
+    /** The current pending job records (shared by `/list` and the live channel). */
+    private async listRecords(): Promise<ScheduleRecord[]> {
+        const entries = await this.state.storage.list<ScheduleRecord>({ prefix: HEADER_PREFIX });
+
+        return [...entries.values()];
     }
 
     /** Called by the Workers runtime when the alarm previously set by `_rescheduleAlarm()` fires. */
@@ -135,6 +199,12 @@ export class SchedulerDO {
         }
 
         await this.rescheduleAlarm();
+
+        // Jobs fired (and were removed or moved to retry), so push the new list
+        // to live subscribers — this is the moment a dashboard wants to see.
+        if (due.length > 0) {
+            await this.broadcastChange();
+        }
     }
 
     /**
@@ -220,6 +290,7 @@ export class SchedulerDO {
         await this.state.storage.put(`${HEADER_PREFIX}${id}`, record);
         await this.state.storage.put(this.indexKey(record.scheduledFor, id), id);
         await this.rescheduleAlarm();
+        await this.broadcastChange();
 
         return this.json({ id, scheduledFor: record.scheduledFor });
     }
@@ -239,14 +310,13 @@ export class SchedulerDO {
 
         await this.removeRecord(record);
         await this.rescheduleAlarm();
+        await this.broadcastChange();
 
         return this.json({ cancelled: true });
     }
 
     private async handleList(): Promise<Response> {
-        const entries = await this.state.storage.list<ScheduleRecord>({ prefix: HEADER_PREFIX });
-
-        return this.json({ records: [...entries.values()] });
+        return this.json({ records: await this.listRecords() });
     }
 
     private async removeRecord(record: ScheduleRecord): Promise<void> {

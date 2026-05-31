@@ -38,7 +38,9 @@ export default defineConfig({
             generatedDir: "cirrus/_generated",
             overlay: true,
             validateWrangler: true,
-            cloudflare: { /* forwarded to @cloudflare/vite-plugin */ },
+            cloudflare: {
+                /* forwarded to @cloudflare/vite-plugin */
+            },
         })),
     ],
 });
@@ -58,24 +60,24 @@ The `cirrus(options)` factory composes up to four plugins in order:
 
 ## Options
 
-| Option              | Default                       | Meaning                                                                  |
-| ------------------- | ----------------------------- | ------------------------------------------------------------------------ |
-| `projectRoot`       | `process.cwd()`               | Resolves `schemaDir` and `wrangler.jsonc` against this.                  |
-| `schemaDir`         | `"cirrus"`                    | Directory containing `schema.ts` and your function files.                |
-| `generatedDir`      | `"<schemaDir>/_generated"`    | Where codegen writes `api.ts`, `server.ts`, `dataModel.ts`.              |
-| `overlay`           | `true`                        | Inject `@visulima/vite-overlay` when installed.                          |
-| `validateWrangler`  | `true`                        | Enforce wrangler.jsonc against schema bindings.                          |
-| `cloudflare`        | `{}`                          | Options forwarded to `@cloudflare/vite-plugin`. Pass `false` to skip.    |
+| Option             | Default                    | Meaning                                                               |
+| ------------------ | -------------------------- | --------------------------------------------------------------------- |
+| `projectRoot`      | `process.cwd()`            | Resolves `schemaDir` and `wrangler.jsonc` against this.               |
+| `schemaDir`        | `"cirrus"`                 | Directory containing `schema.ts` and your function files.             |
+| `generatedDir`     | `"<schemaDir>/_generated"` | Where codegen writes `api.ts`, `server.ts`, `dataModel.ts`.           |
+| `overlay`          | `true`                     | Inject `@visulima/vite-overlay` when installed.                       |
+| `validateWrangler` | `true`                     | Enforce wrangler.jsonc against schema bindings.                       |
+| `cloudflare`       | `{}`                       | Options forwarded to `@cloudflare/vite-plugin`. Pass `false` to skip. |
 
 ## API
 
-| Export                       | Description                                                  |
-| ---------------------------- | ------------------------------------------------------------ |
-| `cirrus(options?)`           | Async factory. Returns `ReadonlyArray<Plugin>`.              |
-| `codegenPlugin(resolved)`    | The codegen-on-save plugin in isolation.                     |
-| `wranglerValidatorPlugin(resolved)` | The wrangler.jsonc validator plugin in isolation.    |
-| `overlayPlugin()`            | Async factory for the `@visulima/vite-overlay` plugin. Returns a no-op when the package isn't installed. |
-| `VERSION`                    | Plugin version string.                                       |
+| Export                              | Description                                                                                              |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `cirrus(options?)`                  | Async factory. Returns `ReadonlyArray<Plugin>`.                                                          |
+| `codegenPlugin(resolved)`           | The codegen-on-save plugin in isolation.                                                                 |
+| `wranglerValidatorPlugin(resolved)` | The wrangler.jsonc validator plugin in isolation.                                                        |
+| `overlayPlugin()`                   | Async factory for the `@visulima/vite-overlay` plugin. Returns a no-op when the package isn't installed. |
+| `VERSION`                           | Plugin version string.                                                                                   |
 
 Types: `CirrusPluginOptions`, `ResolvedCirrusPluginOptions`, `CloudflarePluginOptions`, `CirrusPlugins`.
 

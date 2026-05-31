@@ -53,13 +53,13 @@ These constants are exported as `REQUIRED_FLAG` and `REQUIRED_COMPATIBILITY_DATE
 
 ## API
 
-| Export                                | Description                                                          |
-| ------------------------------------- | -------------------------------------------------------------------- |
-| `validateWrangler(config, schema?)`   | Pure validator. Alias of `validateWranglerConfig`. Returns `{ valid, errors, warnings }`. |
-| `validateWranglerConfig(config, ...)` | Same as `validateWrangler`. Canonical name.                          |
+| Export                                | Description                                                                                       |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `validateWrangler(config, schema?)`   | Pure validator. Alias of `validateWranglerConfig`. Returns `{ valid, errors, warnings }`.         |
+| `validateWranglerConfig(config, ...)` | Same as `validateWrangler`. Canonical name.                                                       |
 | `validateWranglerProject(options)`    | Reads + parses `wrangler.jsonc` from disk, runs the validator, returns the legacy problems shape. |
-| `REQUIRED_FLAG`                       | `"web_socket_auto_reply_to_close"`                                   |
-| `REQUIRED_COMPATIBILITY_DATE`         | `"2026-04-07"`                                                       |
+| `REQUIRED_FLAG`                       | `"web_socket_auto_reply_to_close"`                                                                |
+| `REQUIRED_COMPATIBILITY_DATE`         | `"2026-04-07"`                                                                                    |
 
 Types: `WranglerConfig`, `SchemaInfo`, `WranglerValidationReport`, `WranglerProjectValidationOptions`, `WranglerProjectValidationResult`.
 

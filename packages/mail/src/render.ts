@@ -6,9 +6,7 @@ import type { ReactElement } from "react";
  * provider payload. Wraps `@react-email/render` so we can swap to
  * `@visulima/email`'s react-email template engine without touching callers.
  */
-export const renderEmail = async (
-    element: ReactElement,
-): Promise<{ html: string; text: string }> => {
+export const renderEmail = async (element: ReactElement): Promise<{ html: string; text: string }> => {
     const html = await render(element, { pretty: false });
     const text = await render(element, { plainText: true });
 

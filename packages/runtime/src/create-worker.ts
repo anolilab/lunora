@@ -2,7 +2,7 @@ import { CirrusError, toErrorResponse } from "./errors.js";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
 import { emitRpcEvent } from "./observability.js";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator.js";
-import type { ShardNamespaceLike } from "./resolve-shard.js";
+import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard.js";
 import { resolveShard } from "./resolve-shard.js";
 
 /**
@@ -115,6 +115,115 @@ export type GlobalImportFn = (request: { rows: ReadonlyArray<{ doc: Record<strin
     inserted: Record<string, number>;
 }>;
 
+/** One R2 object as the storage browser surfaces it. Mirrors `@cirrus/storage`'s `R2ObjectLike`. */
+export interface StorageObject {
+    customMetadata?: Record<string, string>;
+    etag: string;
+    httpMetadata?: { contentType?: string };
+    key: string;
+    size: number;
+}
+
+/**
+ * One registered function, as the discovery endpoint surfaces it. Structurally
+ * a subset of codegen's `RegisteredCirrusFunction` — only `kind` and
+ * `visibility` matter here, so the generated `CIRRUS_FUNCTIONS` map satisfies
+ * the {@link FunctionRegistryLike} value shape.
+ */
+export interface FunctionDescriptor {
+    kind: "action" | "mutation" | "query";
+    /** The `<file>:<function>` identifier, e.g. `messages:list`. */
+    path: string;
+    /** `"internal"` functions are never exposed by the discovery endpoint; absence === public. */
+    visibility?: "internal" | "public";
+}
+
+/** One value in {@link FunctionRegistryLike} — the bits of a registered function the discovery endpoint reads. */
+export interface FunctionRegistryEntry {
+    kind: "action" | "mutation" | "query";
+    visibility?: "internal" | "public";
+}
+
+/**
+ * The generated `CIRRUS_FUNCTIONS` dispatch table, narrowed to what the
+ * discovery endpoint reads. Pass the map straight from `_generated/server.ts`.
+ */
+export type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
+
+/**
+ * Lists objects in the storage bucket for the admin file browser. Structurally
+ * compatible with `@cirrus/storage`'s `Storage["list"]` — the runtime stays free
+ * of a hard dependency on the storage package.
+ */
+export type StorageListFn = (prefix?: string, opts?: { cursor?: string; limit?: number }) => Promise<{ cursor?: string; objects: StorageObject[] }>;
+
+/** One `.global()` table plus its row count. Mirrors `@cirrus/d1`'s `GlobalTableInfo`. */
+export interface GlobalTableInfo {
+    name: string;
+    rowCount: number;
+}
+
+/** A window of rows from one global table. Mirrors `@cirrus/d1`'s `GlobalTablePage`. */
+export interface GlobalTablePage {
+    columns: string[];
+    rows: Record<string, unknown>[];
+    total: number;
+}
+
+/**
+ * Introspect `.global()` (D1-backed) tables for the data browser. Structurally
+ * compatible with `@cirrus/d1`'s `listGlobalTables` / `readGlobalTablePage`
+ * (curried with the D1 exec + schema) — the runtime stays free of a hard
+ * dependency on the D1 package.
+ */
+export interface GlobalIntrospector {
+    listTables: () => Promise<GlobalTableInfo[]>;
+    readTablePage: (options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>;
+}
+
+/** A timestamp as better-auth stores it: epoch-ms, an ISO string, or absent. */
+export type AuthTimestamp = null | number | string;
+
+/** One authenticated user, as the auth browser surfaces it. Mirrors better-auth's `user` row. */
+export interface AuthUser {
+    [key: string]: unknown;
+    createdAt?: AuthTimestamp;
+    email?: null | string;
+    emailVerified?: boolean | null;
+    id: string;
+    image?: null | string;
+    name?: null | string;
+}
+
+/** One auth session, as the auth browser surfaces it. Mirrors better-auth's `session` row. */
+export interface AuthSession {
+    [key: string]: unknown;
+    createdAt?: AuthTimestamp;
+    expiresAt?: AuthTimestamp;
+    id: string;
+    ipAddress?: null | string;
+    userAgent?: null | string;
+    userId: string;
+}
+
+/** A page of users or sessions plus the total count, for paginated browsing. */
+export interface AuthPage<T> {
+    rows: T[];
+    total: number;
+}
+
+/**
+ * Read-only introspector for the auth store's users and sessions, backing the
+ * dashboard's users panel via `GET /_cirrus/admin/auth/users` and
+ * `/_cirrus/admin/auth/sessions`. The host wires this to better-auth's tables;
+ * the runtime stays free of a hard dependency on `@cirrus/auth`. Omit it and
+ * those endpoints respond `AUTH_NOT_CONFIGURED`.
+ */
+export interface AuthIntrospector {
+    listSessions: (options: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthSession>>;
+    listUsers: (options: { limit?: number; offset?: number }) => Promise<AuthPage<AuthUser>>;
+}
+
 export interface WorkerOptions {
     /**
      * Admin bearer token expected by the export/import endpoints. When unset,
@@ -122,6 +231,13 @@ export interface WorkerOptions {
      * per-shard admin gate uses.
      */
     adminToken?: string;
+    /**
+     * Read-only introspector for the auth store's users and sessions, backing
+     * the dashboard's users panel via `GET /_cirrus/admin/auth/users` and
+     * `/_cirrus/admin/auth/sessions`. Omit it and those endpoints respond
+     * `AUTH_NOT_CONFIGURED`.
+     */
+    authIntrospector?: AuthIntrospector;
     /**
      * D1 binding for `.global()` tables. Currently unused by the routing
      * layer; downstream packages will read it from `env.DB` directly.
@@ -134,6 +250,22 @@ export interface WorkerOptions {
      * the export endpoint covers only shard-local tables.
      */
     exportGlobals?: GlobalExportFn;
+    /**
+     * The generated `CIRRUS_FUNCTIONS` map (from `_generated/server.ts`). When
+     * set, the worker exposes the admin-gated `GET /_cirrus/admin/functions`
+     * endpoint the dashboard uses to auto-discover queries/mutations/actions
+     * (internal functions are filtered out). Omit it and the endpoint responds
+     * `FUNCTIONS_NOT_CONFIGURED`.
+     */
+    functions?: FunctionRegistryLike;
+    /**
+     * Read-only introspector for `.global()` (D1) tables, backing the data
+     * browser's global mode via `GET /_cirrus/admin/global/tables` and
+     * `/_cirrus/admin/global/table`. Build it from `@cirrus/d1`'s
+     * `listGlobalTables` / `readGlobalTablePage`. Omit it and those endpoints
+     * respond `GLOBALS_NOT_CONFIGURED`.
+     */
+    globalIntrospector?: GlobalIntrospector;
     /**
      * Router for HTTP actions (`httpRouter()` from `@cirrus/server`, a hono app).
      * Consulted for requests that miss the explicit {@link WorkerOptions.routes}
@@ -191,8 +323,28 @@ export interface WorkerOptions {
      * first.
      */
     routes?: Record<string, Route>;
+    /**
+     * Namespace binding for the `SchedulerDO` (typically `env.SCHEDULER`). When
+     * set, the worker exposes the admin-gated `/_cirrus/admin/scheduled`
+     * endpoints used by the dashboard to list and cancel `runAfter` / `runAt`
+     * jobs. Omit it and those endpoints respond `SCHEDULER_NOT_CONFIGURED`.
+     */
+    schedulerDO?: ShardNamespaceLike;
+    /**
+     * Named `SchedulerDO` instance the admin endpoints target. Must match the
+     * `instanceName` passed to `createScheduler` (both default to `default`).
+     */
+    schedulerInstanceName?: string;
     /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
     shardDO: ShardNamespaceLike;
+    /**
+     * Storage lister backing the admin-gated `GET /_cirrus/admin/storage`
+     * endpoint the dashboard's file browser calls. The structural shape matches
+     * `@cirrus/storage`'s `Storage["list"]`, so passing `createStorage(...).list`
+     * (or the raw R2 bucket's `list`) satisfies it. Omit it and the endpoint
+     * responds `STORAGE_NOT_CONFIGURED`.
+     */
+    storageList?: StorageListFn;
 }
 
 export interface RpcContext {
@@ -207,6 +359,15 @@ const WS_PATH = "/_cirrus/ws";
 const MIGRATE_PATH = "/_cirrus/migrate";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
+const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
+const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
+const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
+const STORAGE_PATH = "/_cirrus/admin/storage";
+const FUNCTIONS_PATH = "/_cirrus/admin/functions";
+const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
+const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
+const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
+const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -332,7 +493,7 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                     functionPath: envelope.functionPath,
                     ok: response.ok,
                     shardKey,
-                    ...response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${response.status}`, status: response.status } },
+                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${response.status}`, status: response.status } }),
                 });
 
                 // Propagate the DO's bookmark header so the client can pin reads
@@ -364,6 +525,42 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
         if (url.pathname === IMPORT_PATH) {
             return handleImport(request, env);
+        }
+
+        if (url.pathname === SCHEDULED_WS_PATH) {
+            return handleScheduledWebSocket(request);
+        }
+
+        if (url.pathname === SCHEDULED_CANCEL_PATH) {
+            return handleScheduledCancel(request);
+        }
+
+        if (url.pathname === SCHEDULED_PATH) {
+            return handleScheduledList(request);
+        }
+
+        if (url.pathname === STORAGE_PATH) {
+            return handleStorageList(request);
+        }
+
+        if (url.pathname === FUNCTIONS_PATH) {
+            return handleFunctionsList(request);
+        }
+
+        if (url.pathname === GLOBAL_TABLES_PATH) {
+            return handleGlobalTables(request);
+        }
+
+        if (url.pathname === GLOBAL_TABLE_PATH) {
+            return handleGlobalTablePage(request);
+        }
+
+        if (url.pathname === AUTH_USERS_PATH) {
+            return handleAuthUsers(request);
+        }
+
+        if (url.pathname === AUTH_SESSIONS_PATH) {
+            return handleAuthSessions(request);
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the
@@ -466,8 +663,8 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                         // `resolveTableSharding`'s keys if the caller passed
                         // none — best effort; a project without the resolver
                         // will simply not fan out automatically.
-                        const probeTables
-                            = exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
+                        const probeTables =
+                            exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
 
                         const result = await coordinator.orchestrateExport(options.shardDO, {
                             args: { tables: exportTables },
@@ -527,6 +724,229 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             headers: { "content-type": "application/json" },
             status: 200,
         });
+    };
+
+    /**
+     * Resolve the configured `SchedulerDO` stub, asserting the binding is
+     * present and the caller is an admin. Shared by the list/cancel handlers so
+     * both enforce the same gate before touching the scheduler.
+     */
+    /** The `<CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
+    interface NotConfiguredError {
+        code: string;
+        message: string;
+    }
+
+    // --- Shared admin-endpoint helpers --------------------------------------
+    // Every admin route shares the same "valid bearer, else 403; required option
+    // configured, else <CODE>_NOT_CONFIGURED 400" preamble. Centralizing it keeps
+    // the gate uniform — a change to the auth posture touches one place.
+
+    /** Throw 403 unless the request carries a valid admin bearer. */
+    const assertAdminAuthorized = (request: Request): void => {
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+    };
+
+    /** Assert admin auth, then assert a worker option is configured; return it (narrowed non-undefined). */
+    const requireAdminOption = <T>(request: Request, value: T | undefined, notConfigured: NotConfiguredError): T => {
+        assertAdminAuthorized(request);
+
+        if (value === undefined) {
+            throw new CirrusError(notConfigured.message, { code: notConfigured.code, status: 400 });
+        }
+
+        return value;
+    };
+
+    /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
+    const queryParam = (url: URL, name: string): string | undefined => {
+        const value = url.searchParams.get(name);
+
+        return value === null || value === "" ? undefined : value;
+    };
+
+    /** Parse the shared `limit` / `offset` paging params off an admin GET request. */
+    const parsePaging = (request: Request): { limit?: number; offset?: number } => {
+        const url = new URL(request.url);
+        const limitParam = url.searchParams.get("limit");
+        const offsetParam = url.searchParams.get("offset");
+        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
+        const offset = offsetParam === null ? undefined : Number.parseInt(offsetParam, 10);
+
+        return {
+            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
+        };
+    };
+
+    const requireSchedulerNamespace = (): ShardNamespaceLike => {
+        if (options.schedulerDO === undefined) {
+            throw new CirrusError("scheduled endpoints require a `schedulerDO` namespace on the worker", { code: "SCHEDULER_NOT_CONFIGURED", status: 400 });
+        }
+
+        return options.schedulerDO;
+    };
+
+    const resolveSchedulerStub = (request: Request): ResolvedShard => {
+        assertAdminAuthorized(request);
+
+        return resolveShard(requireSchedulerNamespace(), options.schedulerInstanceName ?? "default");
+    };
+
+    const handleScheduledList = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Scheduled-list endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const stub = resolveSchedulerStub(request);
+
+        return stub.fetch(new Request("https://scheduler.internal/list", { method: "GET" }));
+    };
+
+    /**
+     * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
+     * dashboard can subscribe to the live job list. A browser `WebSocket` can't
+     * set an `Authorization` header, so the admin token is also accepted via the
+     * `?token=` query parameter — the only channel the constructor allows.
+     */
+    const handleScheduledWebSocket = (request: Request): Promise<Response> => {
+        if (request.headers.get("Upgrade") !== "websocket") {
+            throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken) && !checkAdminWsToken(request, options.adminToken)) {
+            throw new CirrusError("admin authorization required", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const namespace = requireSchedulerNamespace();
+        const stub = resolveShard(namespace, options.schedulerInstanceName ?? "default");
+
+        return stub.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
+    };
+
+    const handleScheduledCancel = async (request: Request): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Scheduled-cancel endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const stub = resolveSchedulerStub(request);
+        const body = (await request.json().catch(() => null)) as { id?: unknown } | null;
+
+        if (typeof body?.id !== "string" || body.id === "") {
+            throw new CirrusError("Scheduled-cancel requires a string `id`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return stub.fetch(
+            new Request("https://scheduler.internal/cancel", {
+                body: JSON.stringify({ id: body.id }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+    };
+
+    const handleStorageList = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Storage endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const storageList = requireAdminOption(request, options.storageList, {
+            code: "STORAGE_NOT_CONFIGURED",
+            message: "storage endpoint requires a `storageList` function on the worker",
+        });
+
+        const url = new URL(request.url);
+        const result = await storageList(queryParam(url, "prefix"), {
+            cursor: queryParam(url, "cursor"),
+            ...parsePaging(request),
+        });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleFunctionsList = (request: Request): Response => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const registry = requireAdminOption(request, options.functions, {
+            code: "FUNCTIONS_NOT_CONFIGURED",
+            message: "functions endpoint requires a `functions` registry on the worker",
+        });
+
+        // Internal functions are never exposed — they're unreachable from the
+        // client RPC path, so surfacing them in the runner would only mislead.
+        const functions: FunctionDescriptor[] = Object.entries(registry)
+            .filter(([, entry]) => entry.visibility !== "internal")
+            .map(([path, entry]) => ({ kind: entry.kind, path }))
+            .sort((a, b) => a.path.localeCompare(b.path));
+
+        return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleGlobalTables = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.globalIntrospector, {
+            code: "GLOBALS_NOT_CONFIGURED",
+            message: "global endpoints require a `globalIntrospector` on the worker",
+        });
+
+        return Response.json(await introspector.listTables(), { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleGlobalTablePage = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.globalIntrospector, {
+            code: "GLOBALS_NOT_CONFIGURED",
+            message: "global endpoints require a `globalIntrospector` on the worker",
+        });
+
+        const table = queryParam(new URL(request.url), "table");
+
+        if (table === undefined) {
+            throw new CirrusError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const page = await introspector.readTablePage({ ...parsePaging(request), table });
+
+        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleAuthUsers = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Auth-users endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.authIntrospector, {
+            code: "AUTH_NOT_CONFIGURED",
+            message: "auth endpoints require an `authIntrospector` on the worker",
+        });
+
+        return Response.json(await introspector.listUsers(parsePaging(request)), { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleAuthSessions = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Auth-sessions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.authIntrospector, {
+            code: "AUTH_NOT_CONFIGURED",
+            message: "auth endpoints require an `authIntrospector` on the worker",
+        });
+
+        const userId = queryParam(new URL(request.url), "userId");
+        const page = await introspector.listSessions({ ...parsePaging(request), userId });
+
+        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     const dispatchHttpRoute = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<null | Response> => {
@@ -631,8 +1051,8 @@ const buildErrorEvent = (
         error: { code, message, status },
         functionPath,
         ok: false,
-        ...extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {},
-        ...extra.shardKey ? { shardKey: extra.shardKey } : {},
+        ...(extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {}),
+        ...(extra.shardKey ? { shardKey: extra.shardKey } : {}),
     };
 };
 
@@ -1002,6 +1422,21 @@ const streamingImport = async (
  * `Authorization` header handling is also plain — the per-shard gate is what
  * provides the constant-time check downstream.
  */
+/** Length-independent constant-time string compare for token checks. */
+const constantTimeEqual = (expected: string, supplied: string): boolean => {
+    const max = Math.max(expected.length, supplied.length);
+    let diff = expected.length ^ supplied.length;
+
+    for (let index = 0; index < max; index += 1) {
+        const ca = index < expected.length ? expected.charCodeAt(index) : 0;
+        const cb = index < supplied.length ? supplied.charCodeAt(index) : 0;
+
+        diff |= ca ^ cb;
+    }
+
+    return diff === 0;
+};
+
 const checkAdminAuth = (request: Request, expected: string | undefined): boolean => {
     if (!expected || expected.length === 0) {
         return false;
@@ -1019,18 +1454,23 @@ const checkAdminAuth = (request: Request, expected: string | undefined): boolean
         return false;
     }
 
-    const supplied = rest.join(" ").trim();
-    const max = Math.max(expected.length, supplied.length);
-    let diff = expected.length ^ supplied.length;
+    return constantTimeEqual(expected, rest.join(" ").trim());
+};
 
-    for (let index = 0; index < max; index += 1) {
-        const ca = index < expected.length ? expected.charCodeAt(index) : 0;
-        const cb = index < supplied.length ? supplied.charCodeAt(index) : 0;
-
-        diff |= ca ^ cb;
+/**
+ * Admin check for a browser WebSocket upgrade, which can't set an
+ * `Authorization` header — so the token rides in the `?token=` query parameter
+ * instead (the dashboard sends it there as the client's `wsToken`). It ends up
+ * in server logs, so a short-lived rotating token is preferable in production.
+ */
+const checkAdminWsToken = (request: Request, expected: string | undefined): boolean => {
+    if (!expected || expected.length === 0) {
+        return false;
     }
 
-    return diff === 0;
+    const supplied = new URL(request.url).searchParams.get("token");
+
+    return supplied !== null && constantTimeEqual(expected, supplied);
 };
 
 /** Re-exported helper so callers can roundtrip envelopes in tests. */

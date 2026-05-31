@@ -1,8 +1,8 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, expectTypeOf, test } from "vitest";
 
 import { SchedulerDO } from "../src/scheduler-do.js";
 import type { ScheduleRecord } from "../src/types.js";
-import { createFakeState } from "./fake-state.js";
+import { createFakeSocket, createFakeState, createFakeStateWithSockets } from "./fake-state.js";
 
 interface ScheduleResponseBody {
     id: string;
@@ -50,7 +50,7 @@ describe("schedulerDO", () => {
         expect(response.status).toBe(200);
         expect(body.scheduledFor).toBe(scheduledFor);
 
-        expect(typeof body.id).toBe("string");
+        expectTypeOf(body.id).toBeString();
 
         expect(state.alarm).toBe(scheduledFor);
     });
@@ -126,5 +126,68 @@ describe("schedulerDO", () => {
         const response = await scheduler.fetch(post("/schedule", { args: {} }));
 
         expect(response.status).toBe(400);
+    });
+});
+
+describe("schedulerDO — live subscriptions", () => {
+    /** Parse the records out of the latest `{type:"jobs"}` message a socket received. */
+    const latestJobs = (sent: string[]): ScheduleRecord[] => {
+        const last = sent.at(-1);
+
+        return last === undefined ? [] : (JSON.parse(last) as { records: ScheduleRecord[] }).records;
+    };
+
+    test("pushes the job list to subscribers when a job is scheduled", async () => {
+        const state = createFakeStateWithSockets();
+        const scheduler = new TestScheduler(state, {});
+
+        // Simulate an already-connected subscriber.
+        state.acceptWebSocket?.(createFakeSocket() as never);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }));
+
+        const pushed = state.sockets[0]?.sent ?? [];
+
+        expect(pushed.length).toBeGreaterThan(0);
+        expect(latestJobs(pushed).map((record) => record.functionPath)).toEqual(["a"]);
+    });
+
+    test("pushes the updated list when a job is cancelled", async () => {
+        const state = createFakeStateWithSockets();
+        const scheduler = new TestScheduler(state, {});
+
+        const scheduled = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
+        );
+        const { id } = (await scheduled.json()) as ScheduleResponseBody;
+
+        // Connect after scheduling, then cancel — the cancel should push an empty list.
+        state.sockets.length = 0;
+        state.acceptWebSocket?.(createFakeSocket() as never);
+
+        await scheduler.fetch(post("/cancel", { id }));
+
+        expect(latestJobs(state.sockets[0]?.sent ?? [])).toEqual([]);
+    });
+
+    test("does not throw when broadcasting with no live sockets", async () => {
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, {});
+
+        // No WS hooks on the plain fake — broadcast must be a silent no-op.
+        const response = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
+        );
+
+        expect(response.status).toBe(200);
+    });
+
+    test("rejects a /ws upgrade when the runtime can't accept sockets", async () => {
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, {});
+
+        const response = await scheduler.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
+
+        expect(response.status).toBe(501);
     });
 });

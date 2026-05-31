@@ -1,3 +1,6 @@
+/** The three registered function kinds a {@link FunctionReference} can describe. */
+export type FunctionKind = "action" | "mutation" | "query";
+
 /**
  * Opaque reference to a registered function emitted by `@cirrus/codegen`.
  *
@@ -5,7 +8,7 @@
  * Generated declarations decorate this with phantom type parameters so the
  * client can infer args / return values per call site.
  */
-export interface FunctionReference<_Kind extends "query" | "mutation" | "action" = "query" | "mutation" | "action", _Args = unknown, _Return = unknown> {
+export interface FunctionReference<_Kind extends FunctionKind = FunctionKind, _Args = unknown, _Return = unknown> {
     readonly __cirrusRef: string;
 }
 
@@ -93,6 +96,16 @@ export interface CirrusClientOptions {
     reconnect?: ReconnectOptions;
     url: string;
     WebSocket?: typeof WebSocket;
+    /**
+     * Token appended to the WebSocket URL as `?token=…`. The server matches it
+     * against `CIRRUS_WS_BEARER` (to clear the upgrade gate) and/or
+     * `CIRRUS_ADMIN_TOKEN` (to authorize `__cirrus_admin__:*` subscriptions —
+     * what the dashboard sets it to). Browsers can't set headers on the
+     * `WebSocket` constructor, so the query parameter is the only channel; it
+     * ends up in server logs and history, so prefer a short-lived rotating
+     * token in production.
+     */
+    wsToken?: string;
     wsUrl?: string;
 }
 
@@ -156,4 +169,91 @@ export interface User {
     readonly email?: string;
     readonly id: string;
     readonly [key: string]: unknown;
+}
+
+/**
+ * One pending scheduled function, as returned by the worker's
+ * `GET /_cirrus/admin/scheduled` endpoint. Mirrors `@cirrus/scheduler`'s
+ * `ScheduleRecord` structurally so the client carries no dependency on it.
+ */
+export interface ScheduleRecord {
+    args: Record<string, unknown>;
+    enqueuedAt: number;
+    functionPath: string;
+    id: string;
+    scheduledFor: number;
+    shardKey?: string;
+}
+
+/**
+ * One object in the storage bucket, as returned by the worker's
+ * `GET /_cirrus/admin/storage` endpoint. Mirrors `@cirrus/storage`'s
+ * `R2ObjectLike` structurally.
+ */
+export interface StorageObject {
+    customMetadata?: Record<string, string>;
+    etag: string;
+    httpMetadata?: { contentType?: string };
+    key: string;
+    size: number;
+}
+
+/** One page of {@link StorageObject}s plus the cursor to fetch the next, if any. */
+export interface StorageListPage {
+    cursor?: string;
+    objects: StorageObject[];
+}
+
+/**
+ * One registered function, as returned by the worker's
+ * `GET /_cirrus/admin/functions` endpoint: its `<file>:<function>` path and
+ * which client method (`query` / `mutation` / `action`) invokes it.
+ */
+export interface FunctionDescriptor {
+    kind: "action" | "mutation" | "query";
+    path: string;
+}
+
+/** A `.global()` (D1-backed) table plus its row count, from `/_cirrus/admin/global/tables`. */
+export interface GlobalTableInfo {
+    name: string;
+    rowCount: number;
+}
+
+/** A window of rows from one global table, from `/_cirrus/admin/global/table`. */
+export interface GlobalTablePage {
+    columns: string[];
+    rows: Record<string, unknown>[];
+    total: number;
+}
+
+/** A nullable timestamp field as better-auth serializes it: epoch-ms, ISO string, or null. */
+export type NullableTimestamp = null | number | string;
+
+/** One authenticated user, from `GET /_cirrus/admin/auth/users`. Mirrors better-auth's `user` row. */
+export interface AuthUser {
+    [key: string]: unknown;
+    createdAt?: NullableTimestamp;
+    email?: null | string;
+    emailVerified?: boolean | null;
+    id: string;
+    image?: null | string;
+    name?: null | string;
+}
+
+/** One auth session, from `GET /_cirrus/admin/auth/sessions`. Mirrors better-auth's `session` row. */
+export interface AuthSession {
+    [key: string]: unknown;
+    createdAt?: NullableTimestamp;
+    expiresAt?: NullableTimestamp;
+    id: string;
+    ipAddress?: null | string;
+    userAgent?: null | string;
+    userId: string;
+}
+
+/** A page of users or sessions plus the total count. */
+export interface AuthPage<T> {
+    rows: T[];
+    total: number;
 }

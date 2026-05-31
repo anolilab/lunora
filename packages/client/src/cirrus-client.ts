@@ -1,25 +1,51 @@
 import { createInMemoryBookmarkStorage } from "./bookmark.js";
 import { OfflineQueue } from "./offline-queue.js";
 import { createReconnect, type ReconnectCalculator } from "./reconnect.js";
-import { type SubscriptionCallback, SubscriptionRegistry, type SubscriptionState } from "./subscription.js";
+import { type SubscriptionCallback, type SubscriptionErrorCallback, SubscriptionRegistry, type SubscriptionState } from "./subscription.js";
 import type {
     ArgsOf,
+    AuthPage,
+    AuthSession,
+    AuthUser,
     BookmarkStorage,
     CirrusClientOptions,
     ClientMessage,
+    FunctionDescriptor,
     FunctionReference,
+    GlobalTableInfo,
+    GlobalTablePage,
     PersistenceAdapter,
     ReconnectOptions,
     ReturnOf,
     RpcResponseBody,
+    ScheduleRecord,
     ServerMessage,
+    StorageListPage,
+    StorageObject,
     Unsubscribe,
 } from "./types.js";
 
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
+const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
+const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
+const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
+const STORAGE_PATH = "/_cirrus/admin/storage";
+const FUNCTIONS_PATH = "/_cirrus/admin/functions";
+const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
+const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
+const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
+const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
+
+/**
+ * Aggregate live-socket health across every shard connection, for a UI status
+ * indicator. `idle` = no socket opened yet; `connecting` = at least one socket
+ * is (re)connecting and none is open; `connected` = at least one socket is open;
+ * `offline` = sockets exist but all are down (between reconnect attempts).
+ */
+export type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
 
 interface MutationCallOptions<TCurrent, TValue> {
     optimistic?: (current: TCurrent | undefined) => TValue;
@@ -74,6 +100,8 @@ export class CirrusClient {
 
     public readonly wsUrl: string;
 
+    private readonly wsToken: string | undefined;
+
     private readonly fetchImpl: typeof fetch;
 
     private readonly WebSocketImpl: typeof WebSocket | undefined;
@@ -95,11 +123,18 @@ export class CirrusClient {
 
     private closed = false;
 
+    /** Subscribers to aggregate connection-status changes (see {@link onConnectionStatus}). */
+    private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
+
+    /** Last status broadcast, so we only notify listeners on an actual change. */
+    private lastStatus: ConnectionStatus = "idle";
+
     private nextSubId = 0;
 
     public constructor(opts: CirrusClientOptions) {
         this.url = opts.url;
         this.wsUrl = opts.wsUrl ?? joinUrl(deriveWsUrl(opts.url), WS_PATH);
+        this.wsToken = opts.wsToken;
         this.fetchImpl = opts.fetch ?? (typeof fetch === "function" ? fetch.bind(globalThis) : (undefined as unknown as typeof fetch));
         this.WebSocketImpl = opts.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
         this.bookmark = opts.bookmarkStorage ?? createInMemoryBookmarkStorage();
@@ -144,13 +179,77 @@ export class CirrusClient {
         return this.authToken;
     }
 
+    // --- Connection status --------------------------------------------------
+
+    /**
+     * Current aggregate live-socket status across all shard connections. See
+     * {@link ConnectionStatus}.
+     */
+    public connectionStatus(): ConnectionStatus {
+        return this.computeStatus();
+    }
+
+    /**
+     * Subscribe to aggregate connection-status changes. Invokes `listener`
+     * immediately with the current status, then on every transition. Returns an
+     * unsubscribe function.
+     */
+    public onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe {
+        this.statusListeners.add(listener);
+        listener(this.computeStatus());
+
+        return () => {
+            this.statusListeners.delete(listener);
+        };
+    }
+
+    /** Derive the aggregate status from the per-shard socket states. */
+    private computeStatus(): ConnectionStatus {
+        const conns = [...this.connections.values()];
+
+        if (conns.length === 0) {
+            return "idle";
+        }
+
+        if (conns.some((conn) => conn.wsState === "open")) {
+            return "connected";
+        }
+
+        if (conns.some((conn) => conn.wsState === "connecting")) {
+            return "connecting";
+        }
+
+        // Sockets exist but none is open or actively connecting — i.e. all are
+        // down between reconnect attempts.
+        return "offline";
+    }
+
+    /** Recompute the aggregate status and notify listeners if it changed. */
+    private emitConnectionStatus(): void {
+        const next = this.computeStatus();
+
+        if (next === this.lastStatus) {
+            return;
+        }
+
+        this.lastStatus = next;
+
+        for (const listener of this.statusListeners) {
+            try {
+                listener(next);
+            } catch {
+                /* listener threw — ignore */
+            }
+        }
+    }
+
     // --- RPC ---------------------------------------------------------------
 
     public async query<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
         return (await this.rpc(fn.__cirrusRef, args as Record<string, unknown>, opts.shardKey, { attachBookmark: true })) as ReturnOf<F>;
     }
 
-    public async mutation<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: MutationCallOptions<unknown, ReturnOf<F>> = {}): Promise<ReturnOf<F>> {
+    public async mutation<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: MutationCallOptions<unknown, unknown> = {}): Promise<ReturnOf<F>> {
         const argsRecord = args as Record<string, unknown>;
 
         // Apply optimistic updates to any subscriber listening on this fn.
@@ -241,19 +340,229 @@ export class CirrusClient {
         return (await this.rpc(fn.__cirrusRef, args as Record<string, unknown>, opts.shardKey)) as ReturnOf<F>;
     }
 
+    // --- Scheduler admin ----------------------------------------------------
+
+    /**
+     * List the functions queued via `runAfter` / `runAt`, soonest-due last
+     * (the worker returns them in storage order). Hits the admin-gated
+     * `/_cirrus/admin/scheduled` endpoint, so the worker must be built with a
+     * `schedulerDO` namespace and `adminToken`, and this client's auth token
+     * must match. Powers `@cirrus/dashboard`'s scheduled-jobs panel.
+     */
+    public async listScheduledJobs(): Promise<ScheduleRecord[]> {
+        const body = (await this.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
+
+        return body.records ?? [];
+    }
+
+    /** Cancel a pending scheduled job by id. Returns whether a job was removed. */
+    public async cancelScheduledJob(id: string): Promise<{ cancelled: boolean }> {
+        const body = (await this.adminFetch(SCHEDULED_CANCEL_PATH, "POST", { id })) as { cancelled?: boolean };
+
+        return { cancelled: body.cancelled === true };
+    }
+
+    /**
+     * Subscribe to the live scheduled-jobs list over the SchedulerDO's admin
+     * WebSocket. `onJobs` fires with the full list on connect and on every
+     * change (schedule / cancel / alarm-fire). Reconnects with the client's
+     * configured backoff. Requires `wsToken` to be set to the admin token (the
+     * browser can't send an `Authorization` header on a WS). Returns an
+     * unsubscribe function that closes the socket and stops reconnecting.
+     */
+    public subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe {
+        if (this.WebSocketImpl === undefined) {
+            return () => undefined;
+        }
+
+        const base = joinUrl(deriveWsUrl(this.url), SCHEDULED_WS_PATH);
+        const url = this.wsToken === undefined ? base : `${base}?token=${encodeURIComponent(this.wsToken)}`;
+        const reconnect = createReconnect(this.reconnectOptions);
+
+        let socket: null | WebSocket = null;
+        let timer: null | ReturnType<typeof setTimeout> = null;
+        let closed = false;
+
+        const connect = (): void => {
+            if (closed || this.WebSocketImpl === undefined) {
+                return;
+            }
+
+            socket = new this.WebSocketImpl(url);
+
+            socket.addEventListener("open", () => {
+                reconnect.reset();
+            });
+
+            socket.addEventListener("message", (event: MessageEvent) => {
+                try {
+                    const message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
+
+                    if (message.type === "jobs" && Array.isArray(message.records)) {
+                        onJobs(message.records);
+                    }
+                } catch {
+                    /* a non-JSON frame — ignore */
+                }
+            });
+
+            socket.addEventListener("close", () => {
+                socket = null;
+
+                if (!closed) {
+                    timer = setTimeout(connect, reconnect.next());
+                }
+            });
+
+            socket.onerror = () => {
+                /* the runtime follows up with close; reconnect handles it there */
+            };
+        };
+
+        connect();
+
+        return () => {
+            closed = true;
+
+            if (timer !== null) {
+                clearTimeout(timer);
+            }
+
+            socket?.close();
+        };
+    }
+
+    // --- Functions admin ----------------------------------------------------
+
+    /**
+     * List the registered public functions (queries / mutations / actions) with
+     * their kinds. Hits the admin-gated `GET /_cirrus/admin/functions` endpoint —
+     * the worker must be built with a `functions` registry and `adminToken`, and
+     * this client's auth token must match. Powers `@cirrus/dashboard`'s function
+     * runner auto-discovery.
+     */
+    public async listFunctions(): Promise<FunctionDescriptor[]> {
+        const body = (await this.adminFetch(FUNCTIONS_PATH, "GET")) as { functions?: FunctionDescriptor[] };
+
+        return body.functions ?? [];
+    }
+
+    // --- Storage admin ------------------------------------------------------
+
+    /**
+     * List objects in the storage bucket, optionally under a `prefix` and from a
+     * pagination `cursor`. Hits the admin-gated `GET /_cirrus/admin/storage`
+     * endpoint — the worker must be built with a `storageList` function and
+     * `adminToken`, and this client's auth token must match. Powers
+     * `@cirrus/dashboard`'s file browser.
+     */
+    public async listStorageObjects(options: { cursor?: string; limit?: number; prefix?: string } = {}): Promise<StorageListPage> {
+        const params = new URLSearchParams();
+
+        if (options.prefix !== undefined && options.prefix !== "") {
+            params.set("prefix", options.prefix);
+        }
+
+        if (options.cursor !== undefined && options.cursor !== "") {
+            params.set("cursor", options.cursor);
+        }
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        const query = params.toString();
+        const path = query === "" ? STORAGE_PATH : `${STORAGE_PATH}?${query}`;
+        const body = (await this.adminFetch(path, "GET")) as { cursor?: string; objects?: StorageObject[] };
+
+        return { cursor: body.cursor, objects: body.objects ?? [] };
+    }
+
+    // --- Global (D1) tables admin -------------------------------------------
+
+    /**
+     * List the `.global()` (D1-backed) tables with their row counts. Hits the
+     * admin-gated `GET /_cirrus/admin/global/tables` endpoint — the worker must
+     * be built with a `globalIntrospector` and `adminToken`. Powers the data
+     * browser's global mode.
+     */
+    public async listGlobalTables(): Promise<GlobalTableInfo[]> {
+        return (await this.adminFetch(GLOBAL_TABLES_PATH, "GET")) as GlobalTableInfo[];
+    }
+
+    /** Read a page of rows from one `.global()` table. */
+    public async readGlobalTablePage(options: { limit?: number; offset?: number; table: string }): Promise<GlobalTablePage> {
+        const params = new URLSearchParams({ table: options.table });
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        if (options.offset !== undefined) {
+            params.set("offset", String(options.offset));
+        }
+
+        return (await this.adminFetch(`${GLOBAL_TABLE_PATH}?${params.toString()}`, "GET")) as GlobalTablePage;
+    }
+
+    // --- Auth admin ---------------------------------------------------------
+
+    /**
+     * List authenticated users, paged. Hits the admin-gated
+     * `GET /_cirrus/admin/auth/users` endpoint — the worker must be built with an
+     * `authIntrospector` and `adminToken`. Powers the dashboard's users panel.
+     */
+    public async listAuthUsers(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<AuthUser>> {
+        const params = new URLSearchParams();
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        if (options.offset !== undefined) {
+            params.set("offset", String(options.offset));
+        }
+
+        const query = params.toString();
+
+        return (await this.adminFetch(query === "" ? AUTH_USERS_PATH : `${AUTH_USERS_PATH}?${query}`, "GET")) as AuthPage<AuthUser>;
+    }
+
+    /** List auth sessions, paged and optionally filtered to one user. */
+    public async listAuthSessions(options: { limit?: number; offset?: number; userId?: string } = {}): Promise<AuthPage<AuthSession>> {
+        const params = new URLSearchParams();
+
+        if (options.userId !== undefined && options.userId !== "") {
+            params.set("userId", options.userId);
+        }
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        if (options.offset !== undefined) {
+            params.set("offset", String(options.offset));
+        }
+
+        const query = params.toString();
+
+        return (await this.adminFetch(query === "" ? AUTH_SESSIONS_PATH : `${AUTH_SESSIONS_PATH}?${query}`, "GET")) as AuthPage<AuthSession>;
+    }
+
     // --- Subscriptions ------------------------------------------------------
 
     public subscribe<F extends FunctionReference>(
         fn: F,
         args: ArgsOf<F>,
         callback: (data: ReturnOf<F>) => void,
-        opts: { shardKey?: string } = {},
+        opts: { onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         const argsRecord = (args ?? {}) as Record<string, unknown>;
         const key = this.subscriptions.key(fn.__cirrusRef, argsRecord, opts.shardKey);
 
         let state = this.subscriptions.get(key);
         const cb = callback as SubscriptionCallback;
+        const errorCb = opts.onError;
 
         if (!state) {
             this.nextSubId += 1;
@@ -265,6 +574,7 @@ export class CirrusClient {
                 args: argsRecord,
                 shardKey: opts.shardKey,
                 callbacks: new Set<SubscriptionCallback>(),
+                errorCallbacks: new Set<SubscriptionErrorCallback>(),
                 lastValue: undefined,
                 acked: false,
                 serverVersion: 0,
@@ -273,6 +583,10 @@ export class CirrusClient {
         }
 
         state.callbacks.add(cb);
+
+        if (errorCb) {
+            state.errorCallbacks.add(errorCb);
+        }
 
         // Replay last value to new subscriber synchronously if available.
         if (state.lastValue !== undefined) {
@@ -292,6 +606,10 @@ export class CirrusClient {
             }
 
             state.callbacks.delete(cb);
+
+            if (errorCb) {
+                state.errorCallbacks.delete(errorCb);
+            }
 
             if (state.callbacks.size === 0) {
                 const conn = this.getConnection(state.shardKey);
@@ -362,13 +680,23 @@ export class CirrusClient {
     }
 
     private wsUrlFor(shardKey: string | undefined): string {
-        if (shardKey === undefined) {
+        const params: string[] = [];
+
+        if (shardKey !== undefined) {
+            params.push(`shard=${encodeURIComponent(shardKey)}`);
+        }
+
+        if (this.wsToken !== undefined) {
+            params.push(`token=${encodeURIComponent(this.wsToken)}`);
+        }
+
+        if (params.length === 0) {
             return this.wsUrl;
         }
 
         const separator = this.wsUrl.includes("?") ? "&" : "?";
 
-        return `${this.wsUrl}${separator}shard=${encodeURIComponent(shardKey)}`;
+        return `${this.wsUrl}${separator}${params.join("&")}`;
     }
 
     private async rpc(
@@ -427,6 +755,52 @@ export class CirrusClient {
         return body.result;
     }
 
+    /**
+     * Authenticated request to a non-RPC admin endpoint (the scheduler list /
+     * cancel routes). Attaches the bearer token, parses JSON, and surfaces the
+     * worker's `{ error: { code, message } }` envelope as a coded `Error` —
+     * mirroring {@link rpc} so callers see the same failure shape.
+     */
+    private async adminFetch(path: string, method: "GET" | "POST", payload?: Record<string, unknown>): Promise<unknown> {
+        if (!this.fetchImpl) {
+            throw new Error("CirrusClient: no `fetch` implementation available");
+        }
+
+        const headers: Record<string, string> = {};
+
+        if (this.authToken) {
+            headers["authorization"] = `Bearer ${this.authToken}`;
+        }
+
+        if (payload !== undefined) {
+            headers["content-type"] = "application/json";
+        }
+
+        const response = await this.fetchImpl(joinUrl(this.url, path), {
+            body: payload === undefined ? undefined : JSON.stringify(payload),
+            headers,
+            method,
+        });
+
+        let body: Record<string, unknown>;
+
+        try {
+            body = (await response.json()) as Record<string, unknown>;
+        } catch {
+            throw new Error(`CirrusClient: response was not JSON (status ${response.status})`);
+        }
+
+        if (body && typeof body === "object" && "error" in body) {
+            const envelope = body.error as { code?: string; message?: string };
+            const error = new Error(envelope.message ?? "admin request failed");
+
+            (error as Error & { code?: string }).code = envelope.code;
+            throw error;
+        }
+
+        return body;
+    }
+
     private ensureSocket(shardKey: string | undefined): void {
         if (this.closed || this.WebSocketImpl === undefined) {
             return;
@@ -439,6 +813,7 @@ export class CirrusClient {
         }
 
         conn.wsState = "connecting";
+        this.emitConnectionStatus();
 
         const socket = new this.WebSocketImpl(this.wsUrlFor(shardKey));
 
@@ -448,6 +823,7 @@ export class CirrusClient {
             conn.wsState = "open";
             conn.wasEverConnected = true;
             conn.reconnect.reset();
+            this.emitConnectionStatus();
 
             // Resubscribe everyone bound to this shard.
             this.markShardPendingAck(shardKey);
@@ -492,6 +868,7 @@ export class CirrusClient {
 
         conn.socket = null;
         conn.wsState = "idle";
+        this.emitConnectionStatus();
         this.markShardPendingAck(conn.shardKey);
 
         if (this.WebSocketImpl === undefined) {
@@ -556,6 +933,30 @@ export class CirrusClient {
 
             if (state) {
                 state.acked = true;
+            }
+
+            return;
+        }
+
+        if (message.type === "error") {
+            // A subscription-scoped rejection (e.g. an admin subscription on a
+            // socket that didn't clear the admin gate). Surface it to the
+            // subscriber's onError so the UI can react instead of silently
+            // never receiving data; the registration is left in place so a
+            // later reconnect with proper credentials can still succeed.
+            const { id } = message;
+            const state = id === undefined ? undefined : this.subscriptions.getById(id);
+
+            if (state) {
+                const error = { message: typeof message.message === "string" ? message.message : "subscription error" };
+
+                for (const errorCallback of state.errorCallbacks) {
+                    try {
+                        errorCallback(error);
+                    } catch {
+                        /* user callback threw — ignore */
+                    }
+                }
             }
 
             return;

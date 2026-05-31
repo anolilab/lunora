@@ -92,7 +92,7 @@ describe("runDataMigration — up", () => {
         const flagHighScores: DataMigrationLike = {
             id: "flag-high",
             table: "users",
-            up: (document) => Number(document["score"]) >= 30 ? { ...document, flagged: true } : undefined,
+            up: (document) => (Number(document["score"]) >= 30 ? { ...document, flagged: true } : undefined),
         };
 
         const result = await runDataMigration({ migration: flagHighScores, sql: harness.sql, writer });
@@ -114,6 +114,74 @@ describe("runDataMigration — up", () => {
         expect(row).toMatchObject({ changed: 5, cursor: null, direction: "up", id: "bump-version", processed: 5, status: "completed" });
         expect(row?.["started_at"]).toBe(1_800_000_000_000);
         expect(row?.["updated_at"]).toBe(1_800_000_000_000);
+    });
+
+    test("invokes onBatch once per persisted batch with climbing progress", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        const progress: { changed: number; processed: number }[] = [];
+
+        // 5 rows at batchSize 2 → batches of 2, 2, 1.
+        await runDataMigration({
+            batchSize: 2,
+            migration: bumpVersion,
+            onBatch: ({ changed, processed }) => {
+                progress.push({ changed, processed });
+            },
+            sql: harness.sql,
+            writer,
+        });
+
+        expect(progress).toEqual([
+            { changed: 2, processed: 2 },
+            { changed: 4, processed: 4 },
+            { changed: 5, processed: 5 },
+        ]);
+    });
+
+    test("does not invoke onBatch on a dry run (nothing is persisted)", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        let calls = 0;
+
+        await runDataMigration({
+            batchSize: 2,
+            dryRun: true,
+            migration: bumpVersion,
+            onBatch: () => {
+                calls += 1;
+            },
+            sql: harness.sql,
+            writer,
+        });
+
+        expect(calls).toBe(0);
+    });
+
+    test("a throwing onBatch is swallowed: the run completes and is not marked failed", async () => {
+        const writer = setupWriter();
+
+        await seed(writer);
+
+        // The flush/push that onBatch performs is best-effort; its failure must
+        // not abort the run nor flip the final (completed) batch to failed.
+        const result = await runDataMigration({
+            batchSize: 2,
+            migration: bumpVersion,
+            onBatch: () => {
+                throw new Error("flush boom");
+            },
+            sql: harness.sql,
+            writer,
+        });
+
+        expect(result.status).toBe("completed");
+        expect(result.processed).toBe(5);
+        expect(stateRow("bump-version")).toMatchObject({ cursor: null, status: "completed" });
     });
 });
 

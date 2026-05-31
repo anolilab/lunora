@@ -10,21 +10,21 @@ import { createMockClient } from "./mock-client.js";
 const fn = (ref: string): FunctionReference => ({ __cirrusRef: ref });
 
 /** Keyset-style backend over a fixed list, cursor = next offset as a string. */
-const makePaginator
-    = (items: string[]) =>
-        (_ref: string, args: unknown): { continueCursor: null | string; isDone: boolean; page: string[] } => {
-            const { paginationOpts } = args as { paginationOpts: { cursor: null | string; numItems: number } };
-            const offset = paginationOpts.cursor ? Number(paginationOpts.cursor) : 0;
-            const end = offset + paginationOpts.numItems;
-            const page = items.slice(offset, end);
-            const isDone = end >= items.length;
+const makePaginator =
+    (items: string[]) =>
+    (_ref: string, args: unknown): { continueCursor: null | string; isDone: boolean; page: string[] } => {
+        const { paginationOpts } = args as { paginationOpts: { cursor: null | string; numItems: number } };
+        const offset = paginationOpts.cursor ? Number(paginationOpts.cursor) : 0;
+        const end = offset + paginationOpts.numItems;
+        const page = items.slice(offset, end);
+        const isDone = end >= items.length;
 
-            return { continueCursor: isDone ? null : String(end), isDone, page };
-        };
+        return { continueCursor: isDone ? null : String(end), isDone, page };
+    };
 
-const wrapper
-    = (client: ReturnType<typeof createMockClient>["asClient"]) =>
-        ({ children }: PropsWithChildren): ReactElement => <CirrusProvider client={client}>{children}</CirrusProvider>;
+const wrapper =
+    (client: ReturnType<typeof createMockClient>["asClient"]) =>
+    ({ children }: PropsWithChildren): ReactElement => <CirrusProvider client={client}>{children}</CirrusProvider>;
 
 describe("useInfiniteQuery", () => {
     test("loads the first page into pages[0]", async () => {

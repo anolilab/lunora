@@ -99,3 +99,4 @@ playwright-report/
 
 # Local git worktrees (Agent tool isolation)
 .worktrees/
+.claude/worktrees/

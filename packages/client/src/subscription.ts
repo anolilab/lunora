@@ -2,11 +2,21 @@ import type { FunctionReference } from "./types.js";
 
 export type SubscriptionCallback = (data: unknown) => void;
 
+/** A subscription-scoped error the server pushed for this subscription id. */
+export interface SubscriptionError {
+    code?: string;
+    message: string;
+}
+
+export type SubscriptionErrorCallback = (error: SubscriptionError) => void;
+
 export interface SubscriptionState {
     /** True once the server has acked the subscription on the current socket. */
     acked: boolean;
     readonly args: Record<string, unknown>;
     readonly callbacks: Set<SubscriptionCallback>;
+    /** Notified when the server rejects this subscription (e.g. admin auth). */
+    readonly errorCallbacks: Set<SubscriptionErrorCallback>;
     readonly fn: FunctionReference;
     readonly id: string;
     /** Last known value, used to short-circuit `useQuery`-style consumers. */

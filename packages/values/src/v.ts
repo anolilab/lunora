@@ -8,23 +8,23 @@ export type Id<TableName extends string> = string & { readonly __table: TableNam
  * Runtime "kind" tag attached to every validator. Codegen and reflective tools
  * use this to inspect the shape without crawling the closure.
  */
-export type ValidatorKind
-    = | "any"
-        | "array"
-        | "bigint"
-        | "boolean"
-        | "bytes"
-        | "date"
-        | "id"
-        | "literal"
-        | "null"
-        | "number"
-        | "object"
-        | "optional"
-        | "record"
-        | "string"
-        | "timestamp"
-        | "union";
+export type ValidatorKind =
+    | "any"
+    | "array"
+    | "bigint"
+    | "boolean"
+    | "bytes"
+    | "date"
+    | "id"
+    | "literal"
+    | "null"
+    | "number"
+    | "object"
+    | "optional"
+    | "record"
+    | "string"
+    | "timestamp"
+    | "union";
 
 export interface Validator<T = unknown> {
     readonly __type: T;

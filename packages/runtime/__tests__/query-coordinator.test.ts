@@ -343,7 +343,7 @@ describe("orchestrateMigration", () => {
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
         const coordinator = createQueryCoordinator({ registry });
 
-        const spy = createShardSpy((shardKey) => shardKey === "b" ? runResult(1, 1, "failed") : runResult(2, 2));
+        const spy = createShardSpy((shardKey) => (shardKey === "b" ? runResult(1, 1, "failed") : runResult(2, 2)));
 
         const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest());
 
@@ -355,7 +355,7 @@ describe("orchestrateMigration", () => {
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
         const coordinator = createQueryCoordinator({ registry });
 
-        const spy = createShardSpy((shardKey) => shardKey === "b" ? runResult(2, 2, "in_progress") : runResult(2, 2));
+        const spy = createShardSpy((shardKey) => (shardKey === "b" ? runResult(2, 2, "in_progress") : runResult(2, 2)));
 
         const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest());
 

@@ -55,7 +55,7 @@ const getStringArrayProperty = (object: ObjectLiteralExpression, key: string): s
     return undefined;
 };
 
-const asMetric = (value: string | undefined): VectorIndexIR["metric"] => value && VECTOR_METRICS.has(value) ? (value as VectorIndexIR["metric"]) : undefined;
+const asMetric = (value: string | undefined): VectorIndexIR["metric"] => (value && VECTOR_METRICS.has(value) ? (value as VectorIndexIR["metric"]) : undefined);
 
 const asOnDelete = (value: string | undefined): RelationIR["onDelete"] =>
     value && ON_DELETE_ACTIONS.has(value) ? (value as RelationIR["onDelete"]) : undefined;
@@ -78,7 +78,7 @@ const parseRelations = (argument: Node): RelationIR[] => {
     } else if (Node.isBlock(body)) {
         const returnStatement = body.getStatements().find((statement) => Node.isReturnStatement(statement));
 
-        body = returnStatement && Node.isReturnStatement(returnStatement) ? returnStatement.getExpression() ?? body : body;
+        body = returnStatement && Node.isReturnStatement(returnStatement) ? (returnStatement.getExpression() ?? body) : body;
     }
 
     if (!Node.isObjectLiteralExpression(body)) {
@@ -169,14 +169,14 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
                         }
                     }
 
-                    const fields
-                        = fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression)
+                    const fields =
+                        fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression)
                             ? fieldsExpression
-                                .getElements()
-                                .filter((element): element is Expression => Node.isStringLiteral(element))
-                                .map((element) =>
-                                    (element as ReturnType<typeof fieldsExpression.getElements>[number] & { getLiteralText: () => string }).getLiteralText(),
-                                )
+                                  .getElements()
+                                  .filter((element): element is Expression => Node.isStringLiteral(element))
+                                  .map((element) =>
+                                      (element as ReturnType<typeof fieldsExpression.getElements>[number] & { getLiteralText: () => string }).getLiteralText(),
+                                  )
                             : [];
 
                     indexes.push({
@@ -383,8 +383,8 @@ export const discoverSchema = (project: Project, schemaPath: string): SchemaIR =
 
     // Standalone vector indexes live in the optional second argument (Shape B).
     const standaloneArgument = defineSchemaCall.getArguments()[1];
-    const standaloneVectorIndexes
-        = standaloneArgument && Node.isObjectLiteralExpression(standaloneArgument) ? parseStandaloneVectorIndexes(standaloneArgument) : [];
+    const standaloneVectorIndexes =
+        standaloneArgument && Node.isObjectLiteralExpression(standaloneArgument) ? parseStandaloneVectorIndexes(standaloneArgument) : [];
 
     // Flatten inline Shape A indexes (hoisted with their owning table) plus Shape B.
     const vectorIndexes: VectorIndexIR[] = [...tables.flatMap((table) => table.vectorIndexes), ...standaloneVectorIndexes];

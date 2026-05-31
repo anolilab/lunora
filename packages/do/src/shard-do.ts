@@ -5,10 +5,11 @@ import type { ExportRow, ImportShardResult } from "./admin-export-import.js";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import.js";
 import type { SqlExec } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
-import { readMigrationStatus } from "./data-migration.js";
+import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
 import { createDependencyTracker } from "./dependency-tracker.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
+import { LogBuffer } from "./log-buffer.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
 import { ConflictError, type TransactionSqlLike } from "./transaction.js";
@@ -117,6 +118,32 @@ export interface RunShardImportArgs {
     startLine?: number;
 }
 
+/**
+ * The single-row mutation the data browser's edit actions issue. `op` selects
+ * the writer method:
+ *
+ * - `insert` — create a row from `doc` (the writer assigns `_id`/`_creationTime`).
+ * - `patch` — shallow-merge `doc` into the row `id`.
+ * - `replace` — overwrite the row `id`'s fields with `doc` (keeping `_id`).
+ * - `delete` — remove the row `id`.
+ *
+ * Routing through the schema-aware writer (not raw SQL) is deliberate: it keeps
+ * the FTS / aggregate / rank shadow tables in sync and runs validators, exactly
+ * like a user mutation would.
+ */
+export interface RunShardWriteArgs {
+    doc?: Record<string, unknown>;
+    id?: string;
+    op: "delete" | "insert" | "patch" | "replace";
+    table: string;
+}
+
+/** Outcome of a {@link RunShardWriteArgs} operation. `id` is the affected row's primary key. */
+export interface RunShardWriteResult {
+    id: null | string;
+    op: "delete" | "insert" | "patch" | "replace";
+}
+
 /** Per-subscription memo used to suppress no-op pushes. */
 interface SubscriptionMemo {
     lastJson: string;
@@ -135,6 +162,15 @@ export const ROOT_DO_SIZE_WARN_BYTES = 1_073_741_824;
  * table without an explicit `.shardBy()` or `.global()` modifier.
  */
 export const ROOT_SHARD_NAME = "__root__";
+
+/**
+ * Dependency-set sentinel for admin introspection subscriptions that aren't
+ * bound to a single user table (`getMetrics`, `getLogs`, `listTables`,
+ * `migrationStatus`). It is `"*"` — a name no real SQLite table can take, so it
+ * never collides with a tracked write — and {@link refreshSubscriptions} treats
+ * a memo carrying it as "re-run on every write-flush".
+ */
+const ADMIN_WILDCARD = "*";
 
 /**
  * Base class for shard Durable Objects.
@@ -237,6 +273,24 @@ export abstract class ShardDO {
      * the query on the first call, just like it does today.
      */
     protected readonly reactiveCache: ReactiveCache | undefined;
+
+    /**
+     * Lifetime request counters surfaced by the `__cirrus_admin__:getMetrics`
+     * RPC. In-memory only — they reset when the DO hibernates or restarts, which
+     * is the right granularity for a "since this instance woke" health readout
+     * (durable aggregation would be a separate, heavier feature).
+     */
+    private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now() };
+
+    /**
+     * Recent RPC errors on this shard instance, surfaced by the
+     * `__cirrus_admin__:getLogs` RPC. In-memory only and bounded — like
+     * {@link metrics}, it resets on hibernation/restart. We only capture RPC
+     * dispatch failures here (path + error message), not user `console.*` output:
+     * intercepting the console cheaply isn't possible, so this is honestly a
+     * "recent RPC errors on this instance" feed, not a general application log.
+     */
+    private readonly logs = new LogBuffer();
 
     /**
      * In-flight dependency tracker for the currently-executing query. Set by
@@ -394,6 +448,8 @@ export abstract class ShardDO {
             this.currentRequestUserId = request.headers.get("x-cirrus-userid") ?? undefined;
             this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-cirrus-identity"));
 
+            this.metrics.requests += 1;
+
             try {
                 const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
 
@@ -410,6 +466,14 @@ export abstract class ShardDO {
 
                 return response;
             } catch (error: unknown) {
+                this.metrics.errors += 1;
+                this.logs.push({
+                    functionPath: payload.functionPath,
+                    level: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                });
+
                 return this.errorToResponse(error);
             } finally {
                 this.currentRequestBookmark = undefined;
@@ -467,6 +531,34 @@ export abstract class ShardDO {
      * ceiling). We deliberately avoid throwing — apps should keep working;
      * the warning is the migration signal.
      */
+    /**
+     * Assemble the health snapshot served by `__cirrus_admin__:getMetrics`:
+     * lifetime request/error counts since this instance woke, the live SQLite
+     * size, and (when an opt-in reactive cache is configured) its hit/miss
+     * stats. All cheap, in-memory reads — no table scans.
+     */
+    private collectMetrics(): {
+        cache: null | { bytes: number; entries: number; evictions: number; hits: number; misses: number };
+        databaseSize: null | number;
+        errors: number;
+        requests: number;
+        shard: string;
+        sinceMs: number;
+        uptimeMs: number;
+    } {
+        const size = this.state.storage.sql?.databaseSize;
+
+        return {
+            cache: this.reactiveCache ? this.reactiveCache.stats() : null,
+            databaseSize: typeof size === "number" ? size : null,
+            errors: this.metrics.errors,
+            requests: this.metrics.requests,
+            shard: this.state.id?.name ?? ROOT_SHARD_NAME,
+            sinceMs: this.metrics.sinceMs,
+            uptimeMs: Date.now() - this.metrics.sinceMs,
+        };
+    }
+
     private maybeWarnRootSize(): void {
         if (ShardDO.rootSizeWarned) {
             return;
@@ -535,27 +627,14 @@ export abstract class ShardDO {
             return jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "admin introspection is disabled or the bearer token is invalid" } }, 403);
         }
 
-        const sql = this.state.storage.sql as unknown as SqlExec;
-
         try {
-            if (functionPath === ADMIN_FUNCTIONS.listTables) {
-                return jsonResponse({ result: listTables(sql) }, 200);
-            }
+            // Read-only introspection ops share their logic with the WS
+            // subscription bridge (see readAdminOp / executeAdminSubscription),
+            // so a live subscriber and a one-shot POST observe the same shape.
+            const read = this.readAdminOp(functionPath, args);
 
-            if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
-                const page = readTablePage(sql, {
-                    limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-                    offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
-                    table: typeof args["table"] === "string" ? args["table"] : "",
-                });
-
-                return jsonResponse({ result: page }, 200);
-            }
-
-            if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
-                const id = typeof args["id"] === "string" ? args["id"] : undefined;
-
-                return jsonResponse({ result: { migrations: readMigrationStatus(sql, id) } }, 200);
+            if (read) {
+                return jsonResponse({ result: read.result }, 200);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.runMigration) {
@@ -594,10 +673,86 @@ export abstract class ShardDO {
                 return jsonResponse({ result }, 200);
             }
 
+            if (functionPath === ADMIN_FUNCTIONS.writeRow) {
+                const result = await this.runShardWrite(parseWriteRowArgs(args));
+
+                // The write went through the writer, which records the touched
+                // table; flush so live subscribers re-run against the new value.
+                await this.flushChangedTables();
+
+                return jsonResponse({ result }, 200);
+            }
+
             return jsonResponse({ error: { code: "UNKNOWN_ADMIN_OP", message: `unknown admin op: ${functionPath}` } }, 404);
         } catch (error: unknown) {
             return this.errorToResponse(error);
         }
+    }
+
+    /**
+     * Run a single read-only admin introspection op, returning its result plus
+     * the table-dependency set the subscription bridge uses to decide when to
+     * re-run it. Write/migration/export ops are NOT handled here — they stay in
+     * {@link handleAdminRpc} because they mutate state and can't be safely
+     * re-executed on every write-flush. Returns `null` for any non-read op.
+     *
+     * `readTablePage` depends on exactly the table it reads, so a write to an
+     * unrelated table never re-runs it. The counter/log ops (`getMetrics`,
+     * `getLogs`, `listTables`, `migrationStatus`) aren't bound to a single
+     * table; they carry the {@link ADMIN_WILDCARD} sentinel so
+     * {@link refreshSubscriptions} re-runs them on every write-flush. The
+     * per-socket JSON memo in {@link pushSubscriptionData} still suppresses
+     * pushes when the recomputed value is byte-identical.
+     */
+    private readAdminOp(functionPath: string, args: Record<string, unknown>): { result: unknown; tables: Set<string> } | null {
+        const sql = this.state.storage.sql as unknown as SqlExec;
+
+        if (functionPath === ADMIN_FUNCTIONS.listTables) {
+            return { result: listTables(sql), tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
+            return { result: this.collectMetrics(), tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getLogs) {
+            return { result: { entries: this.logs.entries() }, tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
+            const table = typeof args["table"] === "string" ? args["table"] : "";
+            const page = readTablePage(sql, {
+                limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+                offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
+                refs: this.tableRefs(table),
+                search: typeof args["search"] === "string" ? args["search"] : undefined,
+                table,
+            });
+
+            // An empty table name can't bind to a real dependency, so fall back
+            // to the wildcard rather than a set that never intersects a write.
+            return { result: page, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
+            const id = typeof args["id"] === "string" ? args["id"] : undefined;
+
+            return { result: { migrations: readMigrationStatus(sql, id) }, tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        return null;
+    }
+
+    /**
+     * Seed/refresh hook for `__cirrus_admin__:*` subscriptions, mirroring
+     * {@link executeSubscription} for user functions. Returns `null` for any
+     * path that isn't a read-only admin op so the caller can fall through.
+     * Synchronous — admin reads hit raw SQLite directly, no async dispatch.
+     */
+    private executeAdminSubscription(functionPath: string, args: Record<string, unknown>): SubscriptionOutcome | null {
+        const read = this.readAdminOp(functionPath, args);
+
+        return read ? { result: read.result, tables: read.tables } : null;
     }
 
     /**
@@ -611,6 +766,19 @@ export abstract class ShardDO {
         return Promise.reject(
             Object.assign(new Error(`data migration "${args.id}" is not registered`), { name: "CirrusError", code: "MIGRATION_NOT_FOUND", status: 404 }),
         );
+    }
+
+    /**
+     * Foreign-key map for `table`: doc field → target table, for every field
+     * declared `v.id("target")` in the schema, so the data browser can render
+     * those cells as links. The base class can't see the user's `schema.ts`, so
+     * it returns `undefined` (no links); the codegen subclass overrides this with
+     * the schema-derived map.
+     */
+    protected tableRefs(table: string): Record<string, string> | undefined {
+        void table;
+
+        return undefined;
     }
 
     /**
@@ -640,6 +808,17 @@ export abstract class ShardDO {
         void args;
 
         return Promise.resolve({ conflicts: 0, errors: [], inserted: {} });
+    }
+
+    /**
+     * Apply a single-row insert/patch/replace/delete through the schema-aware
+     * writer. The base class can't build a writer without the user's `schema.ts`,
+     * so it reports the table as unknown; the codegen-generated subclass overrides
+     * this to run the op against a live `createShardCtxDb(...)` writer (which
+     * maintains the FTS/aggregate/rank shadow tables and runs validators).
+     */
+    protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { name: "CirrusError", code: "UNKNOWN_TABLE", status: 404 }));
     }
 
     /**
@@ -678,6 +857,20 @@ export abstract class ShardDO {
         }
 
         if (envelope.type === "subscribe" && envelope.query) {
+            const { functionPath } = envelope.query;
+            const isAdmin = functionPath !== undefined && functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
+
+            // Admin introspection subscriptions read shard internals (raw rows,
+            // metrics, logs), so they are gated by the same `CIRRUS_ADMIN_TOKEN`
+            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
+            // socket that only cleared the user-subscription gate must never be
+            // able to read admin data by naming a reserved functionPath.
+            if (isAdmin && this.readAttachment(ws).admin !== true) {
+                ws.send(JSON.stringify({ type: "error", id: envelope.id, message: "admin subscription requires admin authorization" }));
+
+                return;
+            }
+
             this.subscribe(ws, envelope.id, envelope.query);
             ws.send(JSON.stringify({ type: "ack", id: envelope.id }));
 
@@ -685,10 +878,10 @@ export abstract class ShardDO {
             // value arrives over the same channel as later updates. When the
             // subclass doesn't support re-execution (base default), this is a
             // no-op and the subscriber relies on its initial HTTP query.
-            const { functionPath } = envelope.query;
-
             if (functionPath) {
-                const outcome = await this.executeSubscription(functionPath, envelope.query.args ?? {});
+                const outcome = isAdmin
+                    ? this.executeAdminSubscription(functionPath, envelope.query.args ?? {})
+                    : await this.executeSubscription(functionPath, envelope.query.args ?? {});
 
                 if (outcome) {
                     this.pushSubscriptionData(ws, envelope.id, outcome);
@@ -895,9 +1088,23 @@ export abstract class ShardDO {
     }
 
     /**
+     * Per-batch progress hook for the codegen subclass's data-migration runner
+     * (wired via `runDataMigration`'s `onBatch`). The runner persists progress to
+     * the reserved {@link DATA_MIGRATION_STATE_TABLE} through raw SQL the
+     * change-tracker can't observe, so record that table here and flush — that's
+     * what re-runs live `migrationStatus` subscribers mid-run. Centralised in the
+     * base class so subclasses don't have to remember the record-then-flush dance.
+     */
+    protected async flushMigrationProgress(): Promise<void> {
+        this.recordChangedTable(DATA_MIGRATION_STATE_TABLE);
+        await this.flushChangedTables();
+    }
+
+    /**
      * Drain the tables written during the in-flight RPC and re-run every
      * subscription that depends on one of them. Called after `handleRpc`
-     * resolves. No-op when nothing was written.
+     * resolves, and per-batch during a data migration via
+     * {@link flushMigrationProgress}. No-op when nothing was written.
      */
     private async flushChangedTables(): Promise<void> {
         const changed = this.pendingChangedTables;
@@ -935,16 +1142,20 @@ export abstract class ShardDO {
                     continue;
                 }
 
+                const isAdmin = functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
                 const memo = this.subMemos.get(ws)?.get(subId);
 
                 // Skip when we already know this subscription's tables and none
                 // of them changed. A missing memo means "unknown deps" — re-run
-                // to be safe.
-                if (memo && !setsIntersect(memo.tables, changed)) {
+                // to be safe. A memo carrying the admin wildcard always re-runs
+                // (its value isn't bound to any single table).
+                if (memo && !memo.tables.has(ADMIN_WILDCARD) && !setsIntersect(memo.tables, changed)) {
                     continue;
                 }
 
-                const outcome = await this.executeSubscription(functionPath, query.args ?? {});
+                const outcome = isAdmin
+                    ? this.executeAdminSubscription(functionPath, query.args ?? {})
+                    : await this.executeSubscription(functionPath, query.args ?? {});
 
                 if (!outcome) {
                     continue;
@@ -1030,15 +1241,52 @@ export abstract class ShardDO {
         const expectedBearer = env.CIRRUS_WS_BEARER;
 
         if (expectedBearer && expectedBearer.length > 0) {
-            const url = new URL(request.url);
-            const supplied = extractBearerToken(request.headers.get("authorization")) ?? url.searchParams.get("token");
+            const supplied = this.suppliedWsToken(request);
 
-            if (!supplied || !constantTimeEqual(supplied, expectedBearer)) {
+            // The admin token is accepted as an alternate credential so a
+            // dashboard can open its socket even when `CIRRUS_WS_BEARER` gates
+            // ordinary subscribers. The socket is flagged admin separately (see
+            // {@link isAdminSocket}); matching the bearer alone never grants it.
+            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !this.isAdminSocket(request))) {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /**
+     * Token presented on a WS upgrade: the `Authorization: Bearer` header when
+     * present, else the `?token=` query parameter (the only channel a browser
+     * `WebSocket` constructor can use). Returns `undefined` when neither is set.
+     */
+    private suppliedWsToken(request: Request): string | undefined {
+        const fromHeader = extractBearerToken(request.headers.get("authorization"));
+
+        if (fromHeader !== undefined) {
+            return fromHeader;
+        }
+
+        return new URL(request.url).searchParams.get("token") ?? undefined;
+    }
+
+    /**
+     * Whether the upgrade presented a token matching `CIRRUS_ADMIN_TOKEN`,
+     * constant-time compared. Closed (returns `false`) when the admin token is
+     * unset, mirroring {@link isAdminAuthorized} for the HTTP path so admin
+     * streaming is opt-in rather than exposed by default.
+     */
+    private isAdminSocket(request: Request): boolean {
+        const env = (this.env ?? {}) as { CIRRUS_ADMIN_TOKEN?: string };
+        const adminToken = env.CIRRUS_ADMIN_TOKEN;
+
+        if (!adminToken || adminToken.length === 0) {
+            return false;
+        }
+
+        const supplied = this.suppliedWsToken(request);
+
+        return supplied !== undefined && constantTimeEqual(supplied, adminToken);
     }
 
     private handleWebSocketUpgrade(request: Request): Response {
@@ -1051,7 +1299,10 @@ export abstract class ShardDO {
         const server = pair[1];
 
         this.state.acceptWebSocket(server);
-        (server as HibernatableWebSocket).serializeAttachment?.({ subs: {} } satisfies SocketAttachment);
+        // Stamp admin authorization onto the socket at upgrade so later
+        // `__cirrus_admin__:*` subscribe envelopes (which carry no credential of
+        // their own) can be gated without re-checking a token per message.
+        (server as HibernatableWebSocket).serializeAttachment?.({ admin: this.isAdminSocket(request), subs: {} } satisfies SocketAttachment);
 
         return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
     }
@@ -1100,6 +1351,38 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
         id,
         maxBatches: typeof args["maxBatches"] === "number" ? args["maxBatches"] : undefined,
     };
+};
+
+/**
+ * Validate the `__cirrus_admin__:writeRow` payload. Enforces that `id` is
+ * present for ops that target an existing row and that `doc` is present for ops
+ * that carry one, throwing a 400 `CirrusError` otherwise — the writer would
+ * reject these too, but failing here keeps the error shape uniform.
+ */
+const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => {
+    const { op } = args;
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+
+    if (op !== "insert" && op !== "patch" && op !== "replace" && op !== "delete") {
+        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (table.trim() === "") {
+        throw Object.assign(new Error("writeRow: `table` is required"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    const id = typeof args["id"] === "string" ? args["id"] : undefined;
+    const doc = typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
+
+    if (op !== "insert" && (id === undefined || id === "")) {
+        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (op !== "delete" && doc === undefined) {
+        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    return { doc, id, op, table };
 };
 
 const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {

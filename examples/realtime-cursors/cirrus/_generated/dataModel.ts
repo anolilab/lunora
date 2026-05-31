@@ -161,12 +161,102 @@ type LoadedCount<W> = W extends { _count: infer C } ? { _count: { [K in keyof C]
 /** `Doc<T>` narrowed to exactly the relations requested in the with-arg `W`. */
 export type LoadWith<T extends keyof DataModel, W> = Doc<T> & LoadedRelations<T, W> & LoadedCount<W>;
 
+/** Reducer applied by an aggregate (`avg`/`count`/`max`/`min`/`sum`). */
+export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
+
+/**
+ * Query-options shape shared by every aggregate reader. The RLS-aware ctx
+ * (§3.2) populates `baseWhere` so it composes here without a hard import.
+ * `restrictsCounts: true` flips `count()` into a thrown `COUNT_RLS_UNSUPPORTED`
+ * `CirrusError` rather than silently undercount.
+ */
+export interface RestrictableQueryOptions<TDoc> {
+    baseWhere?: Where<TDoc>;
+    restrictsCounts?: boolean;
+    where?: Where<TDoc>;
+}
+
+/** Args for `ctx.db.<table>.aggregate({ op, field?, where? })`. */
+export interface TableAggregateOptions<TDoc> extends RestrictableQueryOptions<TDoc> {
+    field?: keyof TDoc & string;
+    op: AggregateOp;
+}
+
+/** Args for `ctx.db.<table>.groupBy({ by, agg?, where? })`. */
+export interface TableGroupByOptions<TDoc> extends RestrictableQueryOptions<TDoc> {
+    agg?: { field?: keyof TDoc & string; op: AggregateOp };
+    by: ReadonlyArray<keyof TDoc & string>;
+}
+
+/** One entry returned by `groupBy` — the group's by-tuple plus the reducer value. */
+export interface GroupByEntry<TDoc> {
+    key: Partial<TDoc>;
+    value: null | number;
+}
+
+/** Args for `ctx.db.<table>.rank(name, args)`. `row` is either an id or a row doc. */
+export interface TableRankOptions<TDoc> extends RestrictableQueryOptions<TDoc> {
+    row: Id<keyof DataModel & string> | TDoc | string;
+}
+
+/** Result of `rank` — 1-based position within the partition + partition total. */
+export interface RankResult {
+    position: number;
+    total: number;
+}
+
+/** Args for `ctx.db.<table>.rankPage(name, args)`. */
+export interface TableRankPageOptions<TDoc> extends RestrictableQueryOptions<TDoc> {
+    cursor?: null | string;
+    take?: number;
+}
+
+/** One page returned by `rankPage`. */
+export interface RankPage<TDoc> {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: TDoc[];
+}
+
 /** Read-only typed table accessor exposed on `QueryCtx.db.<table>`. */
 export interface TableReaderFacade<T extends keyof DataModel> {
-    count: (where?: Where<Doc<T>>) => Promise<number>;
+    /**
+     * Reduce rows in this table to a scalar (`avg`/`max`/`min`/`sum` — `count`
+     * lives on its own method). Routes through a declared `aggregateIndex` when
+     * the planner can prove the request is answerable; otherwise scans.
+     */
+    aggregate: (options: TableAggregateOptions<Doc<T>>) => Promise<null | number>;
+    /**
+     * Count rows. The planner routes `where` keys that match a declared
+     * `aggregateIndex.by` set to the indexed counter (no scan); otherwise
+     * falls back to a SCAN. Accepts either a bare `where` tree or the broader
+     * `RestrictableQueryOptions` shape; the latter is the seam the RLS layer
+     * uses to inject `baseWhere` and `restrictsCounts`.
+     */
+    count: (where?: RestrictableQueryOptions<Doc<T>> | Where<Doc<T>>) => Promise<number>;
     findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;
+    findFirstOrThrow: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W>>;
     findMany: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<QueryPage<LoadWith<T, W>>>;
     get: (id: Id<T>) => Promise<Doc<T> | null>;
+    /**
+     * Group rows by the named keys and apply `agg` per group (defaults to
+     * `count`). Answered from the counter table when an aggregate index's
+     * `by` matches `options.by` exactly; otherwise scans.
+     */
+    groupBy: (options: TableGroupByOptions<Doc<T>>) => Promise<ReadonlyArray<GroupByEntry<Doc<T>>>>;
+    /**
+     * Return the 1-based position of `options.row` within its partition
+     * under the declared rankIndex `indexName`, plus the partition's total
+     * row count. `null` when the row isn't in the index. Honors the same
+     * `baseWhere` / `restrictsCounts` RLS seam as `count()`.
+     */
+    rank: (indexName: string, options: TableRankOptions<Doc<T>>) => Promise<null | RankResult>;
+    /**
+     * Walk the rank companion in declared sort order — sorted pagination
+     * accelerator. `options.where` may pin the partition; `cursor`/`take`
+     * follow the Convex-style keyset shape.
+     */
+    rankPage: (indexName: string, options?: TableRankPageOptions<Doc<T>>) => Promise<RankPage<Doc<T>>>;
 }
 
 /** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
@@ -186,3 +276,31 @@ export type DatabaseReaderFacade = {
 export type DatabaseWriterFacade = {
     readonly [T in keyof DataModel]: TableWriterFacade<T>;
 };
+
+/** Insert builder returned by `ctx.orm.insert(table)`. */
+export interface OrmInsertBuilder<T extends keyof DataModel> {
+    values: (values: Insert<T>) => Promise<Id<T>>;
+}
+
+/** Replace builder returned by `ctx.orm.replace(table, id)` — swaps the whole document. */
+export interface OrmReplaceBuilder<T extends keyof DataModel> {
+    with: (values: Insert<T>) => Promise<void>;
+}
+
+/** Update builder returned by `ctx.orm.update(table, id)` — patches the named fields. */
+export interface OrmUpdateBuilder<T extends keyof DataModel> {
+    set: (values: Partial<Insert<T>>) => Promise<void>;
+}
+
+/** Read-only ORM surface — `ctx.orm` on a `QueryCtx`. Mirrors `ctx.db` reads under a kitcn-style `query` namespace. */
+export interface OrmReader {
+    query: DatabaseReaderFacade;
+}
+
+/** Read-write ORM surface — `ctx.orm` on a `MutationCtx` / `ActionCtx`. Writes are addressed by id, like `ctx.db`. */
+export interface OrmWriter extends OrmReader {
+    delete: <T extends keyof DataModel>(table: T, id: Id<T>) => Promise<void>;
+    insert: <T extends keyof DataModel>(table: T) => OrmInsertBuilder<T>;
+    replace: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmReplaceBuilder<T>;
+    update: <T extends keyof DataModel>(table: T, id: Id<T>) => OrmUpdateBuilder<T>;
+}

@@ -39,24 +39,24 @@ const defaultMessage = (name: string, reason: RateLimitReason, retryAfter: numbe
  * hits) carrying `retryAfter` in milliseconds — the runtime maps it to the
  * matching RPC/HTTP status without any import of `@cirrus/server` at runtime.
  */
-export const rateLimit
-    = <Ctx>(limiter: LimiterResolver<Ctx>, name: string, options: RateLimitMiddlewareOptions<Ctx> = {}): Middleware<Ctx, Ctx> =>
-        async ({ ctx, next }) => {
-            const resolved = typeof limiter === "function" ? await limiter(ctx) : limiter;
-            const status = await resolved.limit(name, { count: options.count, key: options.key?.(ctx) });
+export const rateLimit =
+    <Ctx>(limiter: LimiterResolver<Ctx>, name: string, options: RateLimitMiddlewareOptions<Ctx> = {}): Middleware<Ctx, Ctx> =>
+    async ({ ctx, next }) => {
+        const resolved = typeof limiter === "function" ? await limiter(ctx) : limiter;
+        const status = await resolved.limit(name, { count: options.count, key: options.key?.(ctx) });
 
-            if (!status.ok) {
-                const reason = status.reason ?? "rate";
-                const mapped = STATUS_BY_REASON[reason];
-                const retryAfter = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
+        if (!status.ok) {
+            const reason = status.reason ?? "rate";
+            const mapped = STATUS_BY_REASON[reason];
+            const retryAfter = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
 
-                throw Object.assign(new Error(options.message ?? defaultMessage(name, reason, retryAfter)), {
-                    code: mapped.code,
-                    name: "CirrusError",
-                    retryAfter,
-                    status: mapped.status,
-                });
-            }
+            throw Object.assign(new Error(options.message ?? defaultMessage(name, reason, retryAfter)), {
+                code: mapped.code,
+                name: "CirrusError",
+                retryAfter,
+                status: mapped.status,
+            });
+        }
 
-            return next();
-        };
+        return next();
+    };

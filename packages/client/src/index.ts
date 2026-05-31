@@ -1,4 +1,5 @@
 export { createInMemoryBookmarkStorage } from "./bookmark.js";
+export type { ConnectionStatus } from "./cirrus-client.js";
 export { CirrusClient } from "./cirrus-client.js";
 export type { QueuedMutation } from "./offline-queue.js";
 export { OfflineQueue } from "./offline-queue.js";
@@ -7,14 +8,20 @@ export { createIndexedDbPersistence, createInMemoryPersistence } from "./persist
 export { preloadedQueryResult, preloadQuery } from "./preload.js";
 export type { ReconnectCalculator } from "./reconnect.js";
 export { createReconnect } from "./reconnect.js";
-export type { SubscriptionCallback, SubscriptionState } from "./subscription.js";
+export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription.js";
 export { SubscriptionRegistry } from "./subscription.js";
 export type {
     ArgsOf,
+    AuthPage,
+    AuthSession,
+    AuthUser,
     BookmarkStorage,
     CirrusClientOptions,
     ClientMessage,
+    FunctionDescriptor,
     FunctionReference,
+    GlobalTableInfo,
+    GlobalTablePage,
     OfflineQueueOptions,
     PersistedMutation,
     PersistenceAdapter,
@@ -23,7 +30,10 @@ export type {
     ReturnOf,
     RpcEnvelope,
     RpcResponseBody,
+    ScheduleRecord,
     ServerMessage,
+    StorageListPage,
+    StorageObject,
     Unsubscribe,
     User,
 } from "./types.js";

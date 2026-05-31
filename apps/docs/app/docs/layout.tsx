@@ -3,6 +3,9 @@ import type { ReactElement, ReactNode } from "react";
 
 import { source } from "@/lib/source";
 
+// Hoisted so the literal isn't reallocated (and re-flagged) per render.
+const NAV = { title: "Cirrus" };
+
 /**
  * Documentation chrome — sidebar, header, search trigger. The `notebook`
  * layout maps to the `DocsPage` component used in `[[...slug]]/page.tsx`;
@@ -10,12 +13,7 @@ import { source } from "@/lib/source";
  * to ensure pages aren't rendered outside their layout.
  */
 const DocsRouteLayout = ({ children }: { children: ReactNode }): ReactElement => (
-    <DocsLayout
-        nav={{
-            title: "Cirrus",
-        }}
-        tree={source.pageTree}
-    >
+    <DocsLayout nav={NAV} tree={source.pageTree}>
         {children}
     </DocsLayout>
 );

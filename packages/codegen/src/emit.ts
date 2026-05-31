@@ -684,8 +684,8 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>, migrations: Rea
     // `callRegistered` (and thus `context`) is only referenced when at least one
     // function exists; otherwise it would be an unused local / parameter.
     const callerParameter = functions.length > 0 ? "context" : "_context";
-    const callRegisteredHelper
-        = functions.length > 0
+    const callRegisteredHelper =
+        functions.length > 0
             ? `const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
@@ -874,25 +874,56 @@ export const CIRRUS_MIGRATIONS: Record<string, RegisteredDataMigration> = {${mig
  * file never hard-imports `@cirrus/scheduler` / `@cirrus/storage`); when a
  * thunk is omitted an error stub is wired in its place.
  */
+/**
+ * Foreign-key map per table for the data browser: `{ table: { field: target } }`
+ * for every field declared `v.id("target")` (unwrapping `v.optional(...)`). The
+ * generated shard hands this to the base `tableRefs` hook so the admin
+ * `readTablePage` can mark those cells as links.
+ */
+const buildTableRefs = (schema: SchemaIR): Record<string, Record<string, string>> => {
+    const refs: Record<string, Record<string, string>> = {};
+
+    for (const table of schema.tables) {
+        const fields: Record<string, string> = {};
+
+        for (const [field, validator] of Object.entries(table.shape)) {
+            const resolved = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+
+            if (resolved.kind === "id" && resolved.tableName !== undefined) {
+                fields[field] = resolved.tableName;
+            }
+        }
+
+        if (Object.keys(fields).length > 0) {
+            refs[table.name] = fields;
+        }
+    }
+
+    return refs;
+};
+
 export const emitShard = (schema: SchemaIR): string => {
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     const hasTables = schema.tables.length > 0;
+    const tableRefs = buildTableRefs(schema);
 
     const doTypeImports = [
-        ...hasTables ? ["AggregateOptions", "GroupByOptions"] : [],
+        ...(hasTables ? ["AggregateOptions", "GroupByOptions"] : []),
         "DatabaseWriterLike",
         "DataMigrationLike",
         "MigrationRunResult",
         "QueryArgs",
-        ...hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : [],
+        ...(hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : []),
         "RunShardMigrationArgs",
+        "RunShardWriteArgs",
+        "RunShardWriteResult",
         "SchedulerLike",
         "SchemaLike",
         "ShardDOState",
         "SqlExec",
         "WhereInput",
-        ...hasVectors ? ["WriteHook"] : [],
+        ...(hasVectors ? ["WriteHook"] : []),
     ];
 
     const importLines = [
@@ -1099,6 +1130,9 @@ interface FunctionReference {
     __cirrusRef: string;
 }
 
+/** Foreign-key columns per table (\`v.id("target")\` fields) for the data browser. */
+const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringify(tableRefs, null, 4)};
+
 export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${d1ConfigField}
@@ -1194,6 +1228,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return { result, tables };
         }
 
+        protected override tableRefs(table: string): Record<string, string> | undefined {
+            return CIRRUS_TABLE_REFS[table];
+        }
+
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
             const migration = CIRRUS_MIGRATIONS[args.id];
 
@@ -1224,9 +1262,67 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 dryRun: args.dryRun,
                 maxBatches: args.maxBatches,
                 migration: migration as unknown as DataMigrationLike,
+                // Flush after each batch so live migrationStatus subscribers see
+                // progress mid-run (the base method records the reserved state
+                // table the raw-SQL progress write is invisible to the tracker).
+                onBatch: () => this.flushMigrationProgress(),
                 sql: this.sql as SqlExec,
                 writer,
             });
+        }
+
+        protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+            const definition = (schema as unknown as SchemaLike).tables[args.table];
+
+            if (!definition) {
+                throw Object.assign(new Error(\`unknown table: \${args.table}\`), { name: "CirrusError", code: "UNKNOWN_TABLE", status: 404 });
+            }
+
+            // \`.global()\` tables live in D1, not this DO's SQLite — editing them
+            // here would corrupt nothing but would fail confusingly, so reject up
+            // front with a clear code the dashboard can surface.
+            if (definition.shardMode?.kind === "global") {
+                throw Object.assign(new Error(\`table "\${args.table}" is global; edit it through D1, not the shard\`), {
+                    name: "CirrusError",
+                    code: "GLOBAL_TABLE_NOT_EDITABLE",
+                    status: 400,
+                });
+            }
+
+            this.ensureMigrated();
+
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table);
+                },
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+
+            if (args.op === "insert") {
+                const id = await writer.insert(args.table, args.doc ?? {});
+
+                return { id, op: "insert" };
+            }
+
+            if (args.op === "delete") {
+                await writer.delete(args.id ?? "");
+
+                return { id: args.id ?? null, op: "delete" };
+            }
+
+            if (args.op === "replace") {
+                await writer.replace(args.id ?? "", args.doc ?? {});
+
+                return { id: args.id ?? null, op: "replace" };
+            }
+
+            await writer.patch(args.id ?? "", args.doc ?? {});
+
+            return { id: args.id ?? null, op: "patch" };
         }
 
         private ensureMigrated(): void {

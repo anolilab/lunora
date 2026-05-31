@@ -648,7 +648,7 @@ export const rls = <Ctx extends RlsCtxIn = RlsCtxIn>(policies: ReadonlyArray<Pol
         // branch on claims (`ctx.auth.identity.email` etc.) without each
         // policy paying for its own `getIdentity()` call. `null` covers both
         // the anonymous case and the no-resolver case (older auth states).
-        const identity = await auth.getIdentity?.() ?? null;
+        const identity = (await auth.getIdentity?.()) ?? null;
         const policyContext: PolicyContext<Ctx> = {
             auth: {
                 identity,
