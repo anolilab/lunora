@@ -33,7 +33,7 @@ const post = (path: string, body: unknown): Request =>
 describe("schedulerDO", () => {
     test("/schedule persists a record and sets the alarm to the earliest pending task", async () => {
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const scheduledFor = Date.now() + 60_000;
 
         const response = await scheduler.fetch(
@@ -57,7 +57,7 @@ describe("schedulerDO", () => {
 
     test("/schedule picks the earliest of two pending records for the alarm", async () => {
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
@@ -69,7 +69,7 @@ describe("schedulerDO", () => {
 
     test("/cancel removes a record and reschedules the alarm", async () => {
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
@@ -89,7 +89,7 @@ describe("schedulerDO", () => {
 
     test("/cancel returns cancelled=false for an unknown id", async () => {
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(post("/cancel", { id: "missing" }));
         const body = (await response.json()) as CancelResponseBody;
 
@@ -98,7 +98,7 @@ describe("schedulerDO", () => {
 
     test("alarm() dispatches due records and clears them from storage", async () => {
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const now = Date.now();
 
         await scheduler.fetch(post("/schedule", { functionPath: "due", args: { x: 1 }, scheduledFor: now - 1000, originUrl: "https://x.test" }));
@@ -114,7 +114,7 @@ describe("schedulerDO", () => {
 
     test("returns 404 for unknown routes", async () => {
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(new Request("https://scheduler.internal/nope", { method: "POST" }));
 
         expect(response.status).toBe(404);
@@ -122,7 +122,7 @@ describe("schedulerDO", () => {
 
     test("/schedule validates required fields", async () => {
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(post("/schedule", { args: {} }));
 
         expect(response.status).toBe(400);
@@ -139,7 +139,7 @@ describe("schedulerDO — live subscriptions", () => {
 
     test("pushes the job list to subscribers when a job is scheduled", async () => {
         const state = createFakeStateWithSockets();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
 
         // Simulate an already-connected subscriber.
         state.acceptWebSocket?.(createFakeSocket() as never);
@@ -154,7 +154,7 @@ describe("schedulerDO — live subscriptions", () => {
 
     test("pushes the updated list when a job is cancelled", async () => {
         const state = createFakeStateWithSockets();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
 
         const scheduled = await scheduler.fetch(
             post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
@@ -172,7 +172,7 @@ describe("schedulerDO — live subscriptions", () => {
 
     test("does not throw when broadcasting with no live sockets", async () => {
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
 
         // No WS hooks on the plain fake — broadcast must be a silent no-op.
         const response = await scheduler.fetch(
@@ -184,7 +184,7 @@ describe("schedulerDO — live subscriptions", () => {
 
     test("rejects a /ws upgrade when the runtime can't accept sockets", async () => {
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, {});
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
 
         const response = await scheduler.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
 
