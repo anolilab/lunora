@@ -79,7 +79,7 @@ export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableNam
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache.js";
 export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache.js";
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations.js";
-export { applyOnDelete, resolveWith } from "./relations.js";
+export { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
 export type { SessionRecord } from "./session-do.js";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
 export type {

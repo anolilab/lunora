@@ -274,17 +274,21 @@ export const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void
                 continue;
             }
 
-            // Cross-backend cascade was deliberately rejected in v1. With
+            // Cross-backend cascade is no longer rejected here. With
             // backend-aware callbacks (each receives `holderTable` so the
-            // caller can route to the right writer) we now let callers
-            // decide whether to support it; the unsupported direction
-            // (D1 → many shards) throws via its own findHolders implementation,
-            // while the supported direction (DO → D1) routes through the
-            // global writer the codegen passes into `createShardCtxDb`.
-            const _crossBackend = isGlobal(holderDefinition) !== isGlobal(parentDefinition);
-
-            void _crossBackend;
-
+            // caller can route to the right writer), the supported direction
+            // (DO → D1) routes through the global writer the codegen passes
+            // into `createShardCtxDb`; the unsupported direction (D1 → many
+            // shards) throws via the D1 caller's findHolders. Either way
+            // applyOnDelete itself stays backend-agnostic.
+            //
+            // **Atomicity caveat.** A cross-backend cascade is not
+            // transactional: the global cascade fires *before* the local
+            // DELETE commits. If the cascade succeeds and the local DELETE
+            // then fails, the parent row stays but its global holders are
+            // gone — leaving orphan-on-the-other-side. Callers that care
+            // should add their own compensation (a periodic reconciliation
+            // job, or wrap the cascade in a Cloudflare Queue with retries).
             const referencedValue = relation.references === "_id" ? deletedId : deletedReference(relation.references);
 
             if (referencedValue === null || referencedValue === undefined) {
@@ -311,5 +315,38 @@ export const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void
                 await (relation.onDelete === "cascade" ? onCascade(holderTable, holderId) : onSetNull(holderTable, holderId, relation.field));
             }
         }
+    }
+};
+
+/**
+ * Run each declared column's `validator.parse()` against the matching field on
+ * `document`. Fires user refinements (e.g. `v.number().check(n => n >= 0)`)
+ * at write time so an invariant violation surfaces as a `ValidationError`
+ * before the row hits SQL.
+ *
+ * Skips fields the validator doesn't declare a `parse` for (the structural
+ * fakes used in DO/D1 unit tests omit it) and skips fields absent from the
+ * document. The shape is iterated, not the document, so unknown fields pass
+ * through untouched — they're part of the JSON-blob shape but not part of the
+ * schema's declared columns.
+ *
+ * Lives here (alongside `applyOnDelete`) rather than in each backend's
+ * `ctx-db.ts` so DO + D1 share one implementation instead of two drift-prone
+ * copies. The signature is intentionally `validator.parse?` so the unit-test
+ * fakes (which never carry a runtime parser) keep working.
+ */
+export const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>): void => {
+    for (const [field, validator] of Object.entries(definition.shape)) {
+        if (!(field in document)) {
+            continue;
+        }
+
+        if (typeof validator?.parse !== "function") {
+            continue;
+        }
+
+        // Re-parse the field; the validator's own ValidationError carries the
+        // refinement message and propagates up to the caller unchanged.
+        validator.parse(document[field]);
     }
 };

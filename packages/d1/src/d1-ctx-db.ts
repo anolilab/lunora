@@ -51,6 +51,7 @@ import {
     rankTableName,
     resolveRankPartition,
     resolveWith,
+    runRowValidators,
     runTriggers,
     selectIndexForAggregate,
     selectIndexForCount,
@@ -265,27 +266,6 @@ const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<s
     }
 
     return result;
-};
-
-/**
- * Mirror of `runRowValidators` in `@cirrus/do`'s ctx-db. Fires column-level
- * refinements (declared via `.check(predicate)` on a validator) at write time
- * so the same invariants enforced on shard-local tables also fire on global
- * (.global() / D1) tables. Skips fields whose validator omits `parse` so the
- * structural fakes the test suite passes around still work.
- */
-const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>): void => {
-    for (const [field, validator] of Object.entries(definition.shape)) {
-        if (!(field in document)) {
-            continue;
-        }
-
-        if (typeof validator?.parse !== "function") {
-            continue;
-        }
-
-        validator.parse(document[field]);
-    }
 };
 
 /** Recompute every `.$onUpdateFn()` field the caller did not set explicitly, mutating `target` in place. */
