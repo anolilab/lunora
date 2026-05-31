@@ -52,9 +52,11 @@ interface ShardRegistryDOState {
     /**
      * Concurrency-blocking initializer — `state.blockConcurrencyWhile(fn)`
      * delays the next fetch dispatch until `fn` resolves. We use it to load
-     * the persisted snapshot exactly once at construction.
+     * the persisted snapshot exactly once at construction and to serialize
+     * the read-modify-write spans in `register` / `unregister` so two
+     * concurrent callers can't race the in-memory map.
      */
-    blockConcurrencyWhile: (callback: () => Promise<unknown>) => Promise<void>;
+    blockConcurrencyWhile: <T>(callback: () => Promise<T>) => Promise<T>;
     storage: {
         get: <T = unknown>(key: string) => Promise<T | undefined>;
         put: <T = unknown>(key: string, value: T) => Promise<void>;
@@ -167,21 +169,28 @@ export class ShardRegistryDO {
         }
 
         const { shardKey, table } = parsed.value;
-        let set = this.tables.get(table);
 
-        if (!set) {
-            set = new Set();
-            this.tables.set(table, set);
-        }
+        // Wrap the read-modify-write in `blockConcurrencyWhile` so two
+        // concurrent `register` calls don't race the in-memory map and
+        // persist a partial union. `ensureLoaded` runs outside this gate;
+        // it has its own at the top of `fetch`.
+        return this.state.blockConcurrencyWhile(async () => {
+            let set = this.tables.get(table);
 
-        if (set.has(shardKey)) {
-            return jsonResponse(200, { changed: false, ok: true });
-        }
+            if (!set) {
+                set = new Set();
+                this.tables.set(table, set);
+            }
 
-        set.add(shardKey);
-        await this.persist();
+            if (set.has(shardKey)) {
+                return jsonResponse(200, { changed: false, ok: true });
+            }
 
-        return jsonResponse(200, { changed: true, ok: true });
+            set.add(shardKey);
+            await this.persist();
+
+            return jsonResponse(200, { changed: true, ok: true });
+        });
     }
 
     private async handleSnapshot(): Promise<Response> {
@@ -202,21 +211,27 @@ export class ShardRegistryDO {
         }
 
         const { shardKey, table } = parsed.value;
-        const set = this.tables.get(table);
 
-        if (!set?.has(shardKey)) {
-            return jsonResponse(200, { changed: false, ok: true });
-        }
+        // Same race-on-mutate concern as `handleRegister` — wrap the
+        // read-modify-write so two concurrent unregisters don't both see
+        // the same set and overwrite each other's persist.
+        return this.state.blockConcurrencyWhile(async () => {
+            const set = this.tables.get(table);
 
-        set.delete(shardKey);
+            if (!set?.has(shardKey)) {
+                return jsonResponse(200, { changed: false, ok: true });
+            }
 
-        if (set.size === 0) {
-            this.tables.delete(table);
-        }
+            set.delete(shardKey);
 
-        await this.persist();
+            if (set.size === 0) {
+                this.tables.delete(table);
+            }
 
-        return jsonResponse(200, { changed: true, ok: true });
+            await this.persist();
+
+            return jsonResponse(200, { changed: true, ok: true });
+        });
     }
 
     /** Serialize the in-memory map to a single JSON-safe object and put. */

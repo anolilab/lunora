@@ -660,16 +660,30 @@ const runBoundedFanOut = async (
 const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
     const stub = resolveShard(namespace, shardKey);
 
+    // AbortController lets the timeout branch tear the in-flight fetch down
+    // rather than orphaning it — without this, a slow shard's response keeps
+    // its socket open after we've already resolved with a timeout error.
+    const controller = new AbortController();
+
     const forwarded = new Request("https://shard.internal/rpc", {
         body: prepared.body,
         headers: prepared.headers,
         method: "POST",
+        signal: controller.signal,
     });
 
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const timeoutPromise = new Promise<ShardRpcErr>((resolve) => {
         timeoutId = setTimeout(() => {
+            try {
+                controller.abort();
+            } catch {
+                // AbortController.abort() is documented as safe, but guard
+                // against runtime stubs that throw — the timeout error still
+                // needs to propagate.
+            }
+
             resolve({ kind: "err", message: `shard "${shardKey}" timed out after ${timeoutMs}ms`, shardKey, timedOut: true });
         }, timeoutMs);
     });

@@ -28,6 +28,14 @@ import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope,
  */
 export interface ShardDOState {
     acceptWebSocket: (ws: WebSocket, tags?: string[]) => void;
+    /**
+     * Concurrency-blocking gate — `state.blockConcurrencyWhile(fn)` delays
+     * the next fetch dispatch until `fn` resolves. Used by
+     * {@link ShardDO.runInTransaction} to serialize the BEGIN/COMMIT span
+     * against concurrent RPCs so a raw-SQL transaction is isolated from
+     * other in-flight handlers on the same DO.
+     */
+    blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
     getWebSockets: (tag?: string) => WebSocket[];
     /** Optional pointer to the DO instance id so we can detect `__root__`. */
     id?: { name?: string };
@@ -47,6 +55,8 @@ export interface ShardDOState {
             exec?: (query: string) => unknown;
         };
     };
+    /** Defer work past the response — used by `flushChangedTables` to keep the response path snappy. */
+    waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /**
@@ -399,27 +409,58 @@ export abstract class ShardDO {
             });
         }
 
-        this.transactionDepth = 1;
-        sqlHandle.exec("BEGIN");
+        // Capture `exec` into a const so the nested closure below doesn't
+        // re-widen `sqlHandle.exec` to a possibly-undefined function via
+        // the narrowing-loss control flow has after the guard.
+        const sqlExec = sqlHandle.exec.bind(sqlHandle);
 
-        try {
-            const value = await handler();
+        // Raw `BEGIN`/`COMMIT` via `sqlHandle.exec` is not isolated from
+        // concurrent fetch dispatch — a sibling RPC running between the
+        // two would observe (or worse, write through) the open
+        // transaction. `blockConcurrencyWhile` serializes ALL requests to
+        // this DO for the duration of the callback, which is what we need
+        // here. The cost is real: every concurrent reader stalls for the
+        // length of the transaction, not just writers. This is fine for
+        // the workloads SQLite-in-DO is built for (one DO per shard;
+        // bounded concurrency by design), but if a future workload is
+        // contention-sensitive we should migrate to `storage.transactionSync`
+        // (the platform's native, properly-scoped transaction primitive)
+        // and drop this gate.
+        // TODO(perf): switch to `state.storage.transactionSync(...)` once
+        // the workers-types definitions and our async-handler contract are
+        // both compatible — that primitive is sync-only today.
+        const run = async (): Promise<T> => {
+            this.transactionDepth = 1;
+            sqlExec("BEGIN");
 
-            sqlHandle.exec("COMMIT");
-
-            return value;
-        } catch (error) {
             try {
-                sqlHandle.exec("ROLLBACK");
-            } catch {
-                // The rollback itself may fail if the connection is in a
-                // bad state — swallow it so the original error propagates.
-            }
+                const value = await handler();
 
-            throw error;
-        } finally {
-            this.transactionDepth = 0;
+                sqlExec("COMMIT");
+
+                return value;
+            } catch (error) {
+                try {
+                    sqlExec("ROLLBACK");
+                } catch {
+                    // The rollback itself may fail if the connection is in a
+                    // bad state — swallow it so the original error propagates.
+                }
+
+                throw error;
+            } finally {
+                this.transactionDepth = 0;
+            }
+        };
+
+        if (typeof this.state.blockConcurrencyWhile === "function") {
+            return this.state.blockConcurrencyWhile(run);
         }
+
+        // Test doubles may not supply `blockConcurrencyWhile`; fall through to
+        // the bare path so existing unit tests keep working. Production state
+        // always carries the gate.
+        return run();
     }
 
     /**
@@ -880,7 +921,25 @@ export abstract class ShardDO {
                 return;
             }
 
-            this.subscribe(ws, envelope.id, envelope.query);
+            const status = this.subscribe(ws, envelope.id, envelope.query);
+
+            if (status !== "ok") {
+                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
+                const errorMessage =
+                    status === "too_many"
+                        ? `subscription cap of ${ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET} reached on this socket`
+                        : "failed to persist subscription attachment";
+
+                try {
+                    ws.send(JSON.stringify({ type: "error", id: envelope.id, code, error: { code, message: errorMessage } }));
+                } catch {
+                    // Socket may already be closed; nothing else we can do —
+                    // never let the webSocketMessage handler throw.
+                }
+
+                return;
+            }
+
             ws.send(JSON.stringify({ type: "ack", id: envelope.id }));
 
             // Seed the subscriber with the query's current result so the first
@@ -942,6 +1001,17 @@ export abstract class ShardDO {
      *   4. On normal completion send `{type:"complete"}`; on throw send
      *      `{type:"error"}`. Either way drop the controller.
      */
+    /**
+     * Per-socket cap on concurrent stream iterators. Each in-flight stream
+     * pins an `AbortController` + the user's async generator + any buffered
+     * chunks on the WS — letting a client open hundreds of streams in
+     * parallel would let it pin DO memory without ever sending a message.
+     * 8 is generous for legitimate clients (the dashboard rarely opens more
+     * than 2-3 simultaneously) and small enough that the worst-case memory
+     * footprint stays bounded.
+     */
+    protected static readonly MAX_STREAMS_PER_SOCKET = 8;
+
     private async handleStream(ws: WebSocket, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
         const iterable = this.executeStream(functionPath, args);
 
@@ -951,13 +1021,34 @@ export abstract class ShardDO {
             return;
         }
 
-        const controller = new AbortController();
         let cancellers = this.streamCancellers.get(ws);
 
         if (!cancellers) {
             cancellers = new Map();
             this.streamCancellers.set(ws, cancellers);
         }
+
+        // Enforce the per-socket in-flight cap before allocating any state
+        // for the new stream. A rejected stream never lands in the
+        // canceller map, so a flurry of rejections can't push the count
+        // past the cap.
+        if (cancellers.size >= ShardDO.MAX_STREAMS_PER_SOCKET) {
+            try {
+                ws.send(
+                    JSON.stringify({
+                        type: "error",
+                        id,
+                        error: { code: "TOO_MANY_STREAMS", message: `stream cap of ${ShardDO.MAX_STREAMS_PER_SOCKET} reached on this socket` },
+                    }),
+                );
+            } catch {
+                /* socket may be closed */
+            }
+
+            return;
+        }
+
+        const controller = new AbortController();
 
         cancellers.set(id, controller);
         ws.send(JSON.stringify({ type: "ack", id }));
@@ -967,6 +1058,13 @@ export abstract class ShardDO {
                 if (controller.signal.aborted) {
                     break;
                 }
+
+                // Defensive backpressure: when the runtime surfaces
+                // `bufferedAmount`, pause iteration if the socket already
+                // has > 1 MiB queued. Without this, a slow consumer can
+                // make the runtime's outbound buffer grow without bound
+                // while we keep pumping `ws.send` calls.
+                await awaitWsDrain(ws);
 
                 ws.send(JSON.stringify({ type: "chunk", id, data: chunk }));
             }
@@ -1009,6 +1107,12 @@ export abstract class ShardDO {
             this.streamCancellers.delete(ws);
         }
 
+        // Drop the per-socket subscription memo too — leaving it would pin
+        // the socket in the WeakMap until GC and (more importantly) keep the
+        // stale memo set around if the same socket id is reused after a
+        // bounce. Cheap to recompute on the next subscribe.
+        this.subMemos.delete(ws);
+
         // Clear the attachment so a future reconnection starts clean.
         (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
 
@@ -1028,14 +1132,47 @@ export abstract class ShardDO {
     public abstract handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown>;
 
     /**
+     * Per-socket subscription cap. Each subscription is stored in the
+     * hibernation attachment (which is serialized JSON), and runaway
+     * subscribe loops would let a single client wedge the attachment past
+     * the runtime's size budget — keep the per-socket ceiling well below
+     * that. 32 is enough for any reasonable client (one per visible
+     * panel/query) and small enough that an attachment serialization
+     * failure stays unlikely.
+     */
+    protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
+
+    /**
      * Register a subscription on the given socket. Stored via
      * `ws.serializeAttachment` so it survives hibernation.
+     *
+     * Returns a status so the caller can surface a structured error frame
+     * when the cap is hit or the attachment fails to serialize. We never
+     * throw out of this path — the WS hibernation API treats a thrown
+     * `webSocketMessage` as a fatal-channel error.
      */
-    protected subscribe(ws: WebSocket, subId: string, query: SubscriptionQuery): void {
+    protected subscribe(ws: WebSocket, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
         const attachment = this.readAttachment(ws);
 
+        if (Object.keys(attachment.subs).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
+            return "too_many";
+        }
+
         attachment.subs[subId] = query;
-        (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+
+        try {
+            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+        } catch {
+            // The attachment can fail to serialize if the JSON body grows
+            // past the runtime's per-socket limit. Roll back the in-memory
+            // mutation so a retry has a chance to land and surface a
+            // structured error to the caller.
+            delete attachment.subs[subId];
+
+            return "serialize_failed";
+        }
+
+        return "ok";
     }
 
     protected unsubscribe(ws: WebSocket, subId: string): void {
@@ -1229,6 +1366,13 @@ export abstract class ShardDO {
      * subscription that depends on one of them. Called after `handleRpc`
      * resolves, and per-batch during a data migration via
      * {@link flushMigrationProgress}. No-op when nothing was written.
+     *
+     * When the DO state exposes `waitUntil`, the refresh runs off the
+     * response path so the client doesn't block on subscription fan-out —
+     * a wide subscription set on a hot DO could otherwise add tens of ms
+     * to every write's tail latency. The user-facing write is already
+     * durable by the time we return; subscribers observe the change
+     * shortly after.
      */
     private async flushChangedTables(): Promise<void> {
         const changed = this.pendingChangedTables;
@@ -1246,6 +1390,12 @@ export abstract class ShardDO {
         this.currentRequestUserId = undefined;
         this.currentRequestIdentity = undefined;
 
+        if (typeof this.state.waitUntil === "function") {
+            this.state.waitUntil(this.refreshSubscriptions(changed));
+
+            return;
+        }
+
         await this.refreshSubscriptions(changed);
     }
 
@@ -1254,9 +1404,17 @@ export abstract class ShardDO {
      * the query and push a fresh `{ type: "data" }` frame when the result
      * differs from the last one sent. Subscriptions with no `functionPath`
      * (legacy delta-only) are left to {@link broadcastDelta}.
+     *
+     * The per-socket loop runs in parallel across sockets, bounded so a
+     * shard with thousands of live subscribers doesn't spin up thousands
+     * of `executeSubscription` calls in lockstep and saturate the DO
+     * isolate. Within a single socket we stay sequential — the same
+     * subscription set is small (cap of {@link ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET}).
      */
     private async refreshSubscriptions(changed: Set<string>): Promise<void> {
-        for (const ws of this.state.getWebSockets()) {
+        const sockets = [...this.state.getWebSockets()];
+
+        const refreshOne = async (ws: WebSocket): Promise<void> => {
             const attachment = this.readAttachment(ws);
 
             for (const [subId, query] of Object.entries(attachment.subs)) {
@@ -1287,7 +1445,29 @@ export abstract class ShardDO {
 
                 this.pushSubscriptionData(ws, subId, outcome);
             }
-        }
+        };
+
+        // Bounded fan-out: at most 8 sockets refresh in parallel. Larger
+        // batches don't help (subscription handlers spend their time on
+        // SQLite, which is single-threaded inside the DO) and risk
+        // exhausting the I/O budget.
+        const concurrency = 8;
+        let cursor = 0;
+        const worker = async (): Promise<void> => {
+            while (true) {
+                const index = cursor;
+
+                cursor += 1;
+
+                if (index >= sockets.length) {
+                    return;
+                }
+
+                await refreshOne(sockets[index]!);
+            }
+        };
+
+        await Promise.all(Array.from({ length: Math.min(concurrency, sockets.length) }, () => worker()));
     }
 
     /**
@@ -1442,6 +1622,30 @@ export abstract class ShardDO {
     }
 }
 
+/**
+ * Defensive WS backpressure helper. When the runtime exposes
+ * `bufferedAmount` on the socket, pause iteration whenever the outbound
+ * buffer is past 1 MiB; otherwise treat the socket as drained. Capped at
+ * 100 sleeps of 20 ms (≈ 2 s total) so a permanently-stuck buffer can't
+ * pin the iterator forever — past that we drop through and let the next
+ * `ws.send` surface the failure.
+ */
+const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
+    let attempts = 0;
+
+    while (attempts < 100) {
+        attempts += 1;
+
+        const buffered = (ws as { bufferedAmount?: unknown }).bufferedAmount;
+
+        if (typeof buffered !== "number" || buffered < 1_048_576) {
+            return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+};
+
 /** True when `a` and `b` share at least one element. */
 const setsIntersect = (a: Set<string>, b: Set<string>): boolean => {
     // Iterate the smaller set for fewer lookups.
@@ -1563,6 +1767,9 @@ const extractBearerToken = (authorization: string | null): string | undefined =>
  * input) so a shorter candidate can't short-circuit the loop. The
  * `lengthDiff` term folds a length mismatch into the result so unequal-length
  * strings still take the same number of XOR ops as equal-length ones.
+ *
+ * Keep in sync with `packages/runtime/src/create-worker.ts` constantTimeEqual —
+ * the two packages don't import from each other to avoid a circular dep.
  */
 const constantTimeEqual = (a: string, b: string): boolean => {
     const max = Math.max(a.length, b.length);

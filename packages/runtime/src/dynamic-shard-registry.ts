@@ -112,7 +112,17 @@ export const createDynamicShardRegistry = (options: DynamicShardRegistryOptions)
     const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_REGISTRY_CACHE_TTL_MS;
     const cache = new Map<string, CacheEntry>();
 
-    const stub = () => options.namespace.get(options.namespace.idFromName(instanceName));
+    // The stub is keyed by the fixed `instanceName` for the lifetime of this
+    // registry, so resolve it once at construction. Avoids paying the
+    // `idFromName` + `namespace.get` cost on every `register`/`list`/`unregister`.
+    let cachedStub: ReturnType<ShardNamespaceLike["get"]> | undefined;
+    const stub = (): ReturnType<ShardNamespaceLike["get"]> => {
+        if (!cachedStub) {
+            cachedStub = options.namespace.get(options.namespace.idFromName(instanceName));
+        }
+
+        return cachedStub;
+    };
 
     const post = async (path: string, body: unknown): Promise<Response> =>
         stub().fetch(

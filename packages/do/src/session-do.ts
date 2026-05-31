@@ -15,16 +15,45 @@
  * with one of:
  *
  *   POST   /create   body: { token, userId, ttlSeconds }
- *   GET    /get?token=...
- *   DELETE /revoke?token=...
+ *   GET    /get      header: `x-cirrus-session-token: <token>`
+ *   DELETE /revoke   header: `x-cirrus-session-token: <token>`
+ *
+ * Every request must additionally carry an `x-cirrus-session-secret` header
+ * whose value matches `env.SESSION_DO_SECRET`. The DO is reachable from any
+ * worker bound to its namespace, so a shared secret is the only thing that
+ * prevents a compromised or misbehaving worker from reading arbitrary
+ * sessions — the binding alone is not an auth surface.
  *
  * The DO returns JSON bodies that `@cirrus/auth` reshapes into its public
  * `AuthSession` type. Keep the surface narrow — anything more elaborate
  * should ride on top via a wrapper, not by widening this contract.
+ *
+ * # Subclassing
+ *
+ * Apps subclass `SessionDO` (or use the codegen subclass) and register the
+ * subclass in `wrangler.jsonc` as `SESSION`. The platform DO binding requires
+ * a concrete `DurableObject` class today; the structural state shape used by
+ * the unit tests is preserved so plain-object doubles still work.
  */
 
 /** Default TTL for new sessions (7 days), matching `@cirrus/auth`. */
 export const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;
+
+/** Hard ceiling on the requested TTL — 90 days. Longer sessions should ride on top via refresh. */
+export const SESSION_DO_TTL_MAX: number = 90 * 24 * 60 * 60;
+
+/** Header used to authenticate the calling worker to the SessionDO. */
+const SESSION_SECRET_HEADER = "x-cirrus-session-do-secret";
+
+/** Header used to carry the session token on `/get` and `/revoke`. */
+const SESSION_TOKEN_HEADER = "x-cirrus-session-token";
+
+/** Allowed character class for session tokens — base64url-ish so cookies stay clean. */
+const SESSION_TOKEN_PATTERN = /^[\w-]+$/;
+
+const MIN_TOKEN_LENGTH = 32;
+const MAX_TOKEN_LENGTH = 256;
+const MAX_USER_ID_LENGTH = 256;
 
 /**
  * Persisted session payload. Stored under `s:${token}` so the token never
@@ -48,6 +77,18 @@ interface SessionDOState {
     };
 }
 
+/**
+ * Env shape SessionDO reads. The runtime always carries the bindings the
+ * Worker declares; we only enumerate the ones this DO depends on.
+ *
+ * - `SESSION_DO_SECRET` — shared secret every caller must present in the
+ *   `x-cirrus-session-do-secret` header. Provisioned via `wrangler secret`.
+ *   When unset, every request is rejected with 401 (closed by default).
+ */
+interface SessionDOEnv {
+    SESSION_DO_SECRET?: string;
+}
+
 const jsonResponse = (status: number, body: unknown): Response =>
     Response.json(body, {
         status,
@@ -55,8 +96,68 @@ const jsonResponse = (status: number, body: unknown): Response =>
     });
 
 /**
- * Concrete (not abstract) DO class. Apps register this binding directly in
- * their `wrangler.jsonc` as `SESSION` — no subclassing required.
+ * Length-independent constant-time string compare. Mirrors the helper in
+ * `packages/do/src/shard-do.ts` and `packages/runtime/src/create-worker.ts` —
+ * duplicated rather than imported to keep SessionDO's surface free of
+ * package-internal couplings.
+ */
+const constantTimeEqual = (a: string, b: string): boolean => {
+    const max = Math.max(a.length, b.length);
+    let diff = a.length ^ b.length;
+
+    for (let index = 0; index < max; index += 1) {
+        const ca = index < a.length ? a.charCodeAt(index) : 0;
+        const cb = index < b.length ? b.charCodeAt(index) : 0;
+
+        diff |= ca ^ cb;
+    }
+
+    return diff === 0;
+};
+
+const isAuthorized = (request: Request, env: SessionDOEnv): boolean => {
+    const expected = env.SESSION_DO_SECRET;
+
+    if (typeof expected !== "string" || expected.length === 0) {
+        return false;
+    }
+
+    const supplied = request.headers.get(SESSION_SECRET_HEADER);
+
+    if (typeof supplied !== "string" || supplied.length === 0) {
+        return false;
+    }
+
+    return constantTimeEqual(expected, supplied);
+};
+
+const validateToken = (value: unknown): null | string => {
+    if (typeof value !== "string") {
+        return null;
+    }
+
+    if (value.length < MIN_TOKEN_LENGTH || value.length > MAX_TOKEN_LENGTH) {
+        return null;
+    }
+
+    if (!SESSION_TOKEN_PATTERN.test(value)) {
+        return null;
+    }
+
+    return value;
+};
+
+/**
+ * Concrete (not abstract) DO class. Subclass and register the subclass as
+ * the `SESSION` binding in `wrangler.jsonc`:
+ *
+ *     import { SessionDO } from "@cirrus/do";
+ *
+ *     export class AppSessionDO extends SessionDO {}
+ *
+ * The platform DO binding requires a concrete class today, hence the
+ * subclass step. The structural state/env shapes are preserved so unit
+ * tests can pass plain-object doubles without depending on `cloudflare:workers`.
  */
 export class SessionDO {
     protected state: SessionDOState;
@@ -69,6 +170,12 @@ export class SessionDO {
     }
 
     public async fetch(request: Request): Promise<Response> {
+        const env = (this.env ?? {}) as SessionDOEnv;
+
+        if (!isAuthorized(request, env)) {
+            return jsonResponse(401, { error: { code: "UNAUTHORIZED", message: "missing or invalid SessionDO secret" } });
+        }
+
         const url = new URL(request.url);
 
         if (request.method === "POST" && url.pathname === "/create") {
@@ -77,15 +184,37 @@ export class SessionDO {
             try {
                 body = (await request.json()) as typeof body;
             } catch {
-                return jsonResponse(400, { error: { code: "BAD_REQUEST", message: "invalid JSON body" } });
+                return jsonResponse(400, { error: "invalid_request" });
             }
 
-            const token = typeof body.token === "string" ? body.token : "";
-            const userId = typeof body.userId === "string" ? body.userId : "";
-            const ttlSeconds = typeof body.ttlSeconds === "number" && body.ttlSeconds > 0 ? body.ttlSeconds : SESSION_DO_TTL_DEFAULT;
+            const token = validateToken(body.token);
 
-            if (!token || !userId) {
-                return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token and userId required" } });
+            if (token === null) {
+                return jsonResponse(400, { error: "invalid_request" });
+            }
+
+            const { userId } = body;
+
+            if (typeof userId !== "string" || userId.length === 0 || userId.length > MAX_USER_ID_LENGTH) {
+                return jsonResponse(400, { error: "invalid_request" });
+            }
+
+            // Default the TTL when unset, then validate the (defaulted) value
+            // sits in the legal window. A `null`/missing field accepts the
+            // default; any other shape is a hard error so callers can't pass
+            // strings or negative numbers and silently get the default.
+            let ttlSeconds: number;
+
+            if (body.ttlSeconds === undefined || body.ttlSeconds === null) {
+                ttlSeconds = SESSION_DO_TTL_DEFAULT;
+            } else if (typeof body.ttlSeconds === "number") {
+                ttlSeconds = body.ttlSeconds;
+            } else {
+                return jsonResponse(400, { error: "invalid_request" });
+            }
+
+            if (!Number.isFinite(ttlSeconds) || !Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > SESSION_DO_TTL_MAX) {
+                return jsonResponse(400, { error: "invalid_request" });
             }
 
             const now = Date.now();
@@ -97,7 +226,7 @@ export class SessionDO {
         }
 
         if (request.method === "GET" && url.pathname === "/get") {
-            const token = url.searchParams.get("token");
+            const token = request.headers.get(SESSION_TOKEN_HEADER);
 
             if (!token) {
                 return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });
@@ -120,7 +249,7 @@ export class SessionDO {
         }
 
         if (request.method === "DELETE" && url.pathname === "/revoke") {
-            const token = url.searchParams.get("token");
+            const token = request.headers.get(SESSION_TOKEN_HEADER);
 
             if (!token) {
                 return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });

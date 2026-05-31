@@ -7,9 +7,7 @@ const createFakeState = (initial: Record<string, unknown> = {}) => {
     const storage = new Map<string, unknown>(Object.entries(initial));
 
     return {
-        blockConcurrencyWhile: async (callback: () => Promise<unknown>) => {
-            await callback();
-        },
+        blockConcurrencyWhile: async <T>(callback: () => Promise<T>): Promise<T> => callback(),
         storage: {
             get: async <T>(key: string): Promise<T | undefined> => storage.get(key) as T | undefined,
             put: async <T>(key: string, value: T): Promise<void> => {

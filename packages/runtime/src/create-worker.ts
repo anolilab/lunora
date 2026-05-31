@@ -239,6 +239,17 @@ export interface WorkerOptions {
      */
     authIntrospector?: AuthIntrospector;
     /**
+     * Optional per-shard authorization callback. Called from both the RPC
+     * dispatch path and the WebSocket upgrade path after `resolveIdentity`
+     * has produced an identity but before the request is forwarded to the
+     * named shard. Returning `false` (or a promise resolving to `false`)
+     * causes the runtime to reject the request with a 403
+     * `FORBIDDEN_SHARD` error. When unset, the runtime allows the
+     * request — preserving the historical "any client may name any
+     * shard" posture.
+     */
+    authorizeShard?: (identity: ResolvedIdentity | null, shardKey: string) => boolean | Promise<boolean>;
+    /**
      * D1 binding for `.global()` tables. Currently unused by the routing
      * layer; downstream packages will read it from `env.DB` directly.
      */
@@ -354,6 +365,14 @@ export interface RpcContext {
     shardKey: string;
 }
 
+/**
+ * Maximum body size (in bytes) accepted by any POST/PUT path the worker
+ * exposes. Larger payloads are rejected at the entry point with a 413
+ * before any parsing happens — neither `parseEnvelope`, `parseMigrateRequest`,
+ * `parseExportBody`, nor `streamingImport` will ever see them.
+ */
+const MAX_BODY_BYTES = 1_048_576;
+
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 const MIGRATE_PATH = "/_cirrus/migrate";
@@ -386,6 +405,17 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
     const handle = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<Response> => {
         const url = new URL(request.url);
 
+        // Cap inbound body size on POST/PUT before any parser runs. The check
+        // is a header read (no body materialization) so it costs nothing and
+        // protects every body-consuming endpoint uniformly.
+        if (request.method === "POST" || request.method === "PUT") {
+            const len = Number(request.headers.get("content-length") ?? 0);
+
+            if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
+                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+            }
+        }
+
         // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
         // We also accept legacy pathname-only keys for ad-hoc handlers.
         const methodAndPath = `${request.method} ${url.pathname}`;
@@ -401,6 +431,19 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             }
 
             const shardKey = url.searchParams.get("shard") ?? defaultShard;
+
+            // Resolve the calling identity (if any) and run the per-shard
+            // authorization callback before forwarding. The WS path doesn't
+            // need the rest of the forward context — only the identity for
+            // the authorization decision.
+            if (options.authorizeShard) {
+                const identity = options.resolveIdentity ? ((await options.resolveIdentity(request, env)) ?? null) : null;
+                const allowed = await options.authorizeShard(identity, shardKey);
+
+                if (!allowed) {
+                    throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+                }
+            }
 
             return forwardToShard(options.shardDO, shardKey, request);
         }
@@ -429,7 +472,22 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
             // Forward selected headers from the inbound request so the DO can
             // honour auth, sessions, and D1 read-your-writes consistency.
-            const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+            // Per-shard authorization runs after identity resolution and before
+            // the request is forwarded. Fan-out envelopes target every live
+            // shard for the table (no client-named shardKey), so the
+            // per-shard gate doesn't apply to them — the coordinator's
+            // registry decides which shards to visit. Single-shard
+            // dispatch goes through the callback below.
+            if (options.authorizeShard && !envelope.fanOut) {
+                const shardKeyForAuth = envelope.shardKey ?? defaultShard;
+                const allowed = await options.authorizeShard(identity, shardKeyForAuth);
+
+                if (!allowed) {
+                    throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+                }
+            }
 
             // Timing wraps the dispatch only — envelope parse + coordinator
             // gate + identity resolution happen above and are not part of
@@ -578,6 +636,10 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
     const handleMigrate = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
             throw new CirrusError("Migration endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
         }
 
         if (!options.queryCoordinator) {
@@ -1023,6 +1085,8 @@ interface ForwardContext {
     claims: Record<string, unknown> | null;
     /** Headers to forward to the shard (`content-type` + auth/cookie/bookmark/identity). */
     headers: Record<string, string>;
+    /** Full identity object returned by `resolveIdentity`, or `null` when anonymous. */
+    identity: ResolvedIdentity | null;
     /** Resolved stable user id, or `null` when anonymous. */
     userId: null | string;
 }
@@ -1080,13 +1144,13 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     }
 
     if (!resolveIdentity) {
-        return { claims: null, headers, userId: null };
+        return { claims: null, headers, identity: null, userId: null };
     }
 
     const identity = await resolveIdentity(request, env);
 
     if (!identity || typeof identity.userId !== "string" || identity.userId.length === 0) {
-        return { claims: null, headers, userId: null };
+        return { claims: null, headers, identity: null, userId: null };
     }
 
     headers["x-cirrus-userid"] = identity.userId;
@@ -1101,7 +1165,7 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
         headers["x-cirrus-identity"] = JSON.stringify(claims);
     }
 
-    return { claims, headers, userId };
+    return { claims, headers, identity, userId };
 };
 
 const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
@@ -1422,7 +1486,12 @@ const streamingImport = async (
  * `Authorization` header handling is also plain — the per-shard gate is what
  * provides the constant-time check downstream.
  */
-/** Length-independent constant-time string compare for token checks. */
+/**
+ * Length-independent constant-time string compare for token checks.
+ *
+ * Keep in sync with `packages/do/src/shard-do.ts` constantTimeEqual — the
+ * two packages don't import from each other to avoid a circular dep.
+ */
 const constantTimeEqual = (expected: string, supplied: string): boolean => {
     const max = Math.max(expected.length, supplied.length);
     let diff = expected.length ^ supplied.length;

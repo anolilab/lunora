@@ -541,10 +541,20 @@ const isFtsAvailable = (sql: SqlExec): boolean => {
 
     try {
         runSql(sql, `CREATE VIRTUAL TABLE IF NOT EXISTS "__cirrus_fts_probe" USING fts5(x)`);
-        runSql(sql, `DROP TABLE IF EXISTS "__cirrus_fts_probe"`);
         available = true;
     } catch {
         available = false;
+    } finally {
+        // Always attempt the DROP so the probe table never lingers — if the
+        // CREATE threw, the IF EXISTS makes the DROP a no-op; if the CREATE
+        // succeeded but a later statement threw (today there isn't one,
+        // but keep the invariant for future probes), the DROP still runs.
+        try {
+            runSql(sql, `DROP TABLE IF EXISTS "__cirrus_fts_probe"`);
+        } catch {
+            // The probe table cleanup is best-effort; swallow so the
+            // availability decision still propagates.
+        }
     }
 
     ftsAvailabilityCache.set(sql, available);
