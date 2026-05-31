@@ -445,7 +445,7 @@ const tokenizeSearch = (query: string): string[] => query.toLowerCase().match(/[
  * token must be present — mirroring the fallback scorer's conjunction semantics.
  */
 const buildFtsMatch = (tokens: ReadonlyArray<string>): string =>
-    tokens.map((token, index) => index === tokens.length - 1 ? `"${token}"*` : `"${token}"`).join(" AND ");
+    tokens.map((token, index) => (index === tokens.length - 1 ? `"${token}"*` : `"${token}"`)).join(" AND ");
 
 /** Coerce a search/filter field value to the text FTS indexes and the scorer scans. */
 const stringifySearchText = (value: unknown): string => {
@@ -2180,10 +2180,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`document not found: ${id}`);
             }
 
-            const needsPrevious
-                = hasTrigger(schema, tableName, "update")
-                    || (schema.tables[tableName]?.aggregateIndexes ?? []).length > 0
-                    || (schema.tables[tableName]?.rankIndexes ?? []).length > 0;
+            const needsPrevious =
+                hasTrigger(schema, tableName, "update") ||
+                (schema.tables[tableName]?.aggregateIndexes ?? []).length > 0 ||
+                (schema.tables[tableName]?.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? lookupById(id)?.row : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };

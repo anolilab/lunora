@@ -493,7 +493,7 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                     functionPath: envelope.functionPath,
                     ok: response.ok,
                     shardKey,
-                    ...response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${response.status}`, status: response.status } },
+                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${response.status}`, status: response.status } }),
                 });
 
                 // Propagate the DO's bookmark header so the client can pin reads
@@ -1051,8 +1051,8 @@ const buildErrorEvent = (
         error: { code, message, status },
         functionPath,
         ok: false,
-        ...extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {},
-        ...extra.shardKey ? { shardKey: extra.shardKey } : {},
+        ...(extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {}),
+        ...(extra.shardKey ? { shardKey: extra.shardKey } : {}),
     };
 };
 
