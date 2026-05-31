@@ -1,0 +1,175 @@
+---
+title: "@cirrus/auth plugins"
+description: Org, admin, and other better-auth plugins surfaced as first-class Cirrus middleware.
+---
+
+`@cirrus/auth` is a thin wrapper around [better-auth](https://better-auth.com).
+The Cirrus-specific surface is small on purpose:
+
+- `createAuth(options)` — `betterAuth(options)` with a clearer error when
+  `secret` is missing.
+- `handleAuthRequest(auth, request)` — prefix routing for `/api/auth/*`.
+- `ensureMigrated(auth)` / `compileMigrationsSql(options)` — schema sync for
+  the configured plugins.
+- `withAuthPlugins(auth)` — middleware that mounts the plugin endpoint API
+  onto `ctx.authApi`.
+
+The actual plugin behaviour (organizations, admin, OAuth, MFA, …) is
+better-auth's. Cirrus just re-exports the factories under
+`@cirrus/auth/plugins` so you don't have to know the deep import paths.
+
+## Supported plugins
+
+Re-exported from `@cirrus/auth/plugins`:
+
+```ts
+import {
+    admin,
+    anonymous,
+    bearer,
+    customSession,
+    emailOTP,
+    genericOAuth,
+    jwt,
+    magicLink,
+    multiSession,
+    oAuthProxy,
+    oidcProvider,
+    organization,
+    phoneNumber,
+    siwe,
+    twoFactor,
+    username,
+} from "@cirrus/auth/plugins";
+```
+
+Anything else better-auth ships (or anything from the community, e.g.
+Polar) keeps working — `createAuth(...)` passes `plugins:` through
+unchanged.
+
+## Add org + admin
+
+```ts
+// cirrus/auth.ts
+import { createAuth } from "@cirrus/auth";
+import { admin, organization } from "@cirrus/auth/plugins";
+
+export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
+    createAuth({
+        // Better-auth accepts the D1 binding directly; no Kysely wiring.
+        database: env.DB as never,
+        emailAndPassword: { enabled: true },
+        plugins: [
+            organization({ allowUserToCreateOrganization: true }),
+            admin({ defaultRole: "user" }),
+        ],
+        secret: env.AUTH_SECRET,
+    });
+```
+
+That's the whole change — the new tables (`organization`, `member`,
+`invitation`, …) are discovered by `ensureMigrated` next time the worker
+boots.
+
+## The `withAuthPlugins` middleware
+
+`@cirrus/auth/middleware` exports a Cirrus-style middleware factory that
+surfaces every plugin endpoint on `ctx.authApi`:
+
+```ts
+import { httpAction } from "@cirrus/server";
+import { withAuthPlugins } from "@cirrus/auth/middleware";
+
+import { auth } from "./auth.js";
+
+// Compose once with .use(...) and every handler downstream sees authApi.
+export const createOrg = httpAction(async (ctx, request) => {
+    const { name } = await request.json();
+
+    const org = await ctx.authApi.createOrganization({
+        body: { name, slug: name.toLowerCase().replace(/\s+/g, "-") },
+        headers: request.headers,
+    });
+
+    return Response.json(org);
+});
+```
+
+`ctx.authApi` is typed against the plugin set loaded on the auth instance —
+`createOrganization`, `inviteMember`, `listMembers`, `banUser`,
+`impersonateUser`, etc. all show up automatically.
+
+### Why callers still pass `headers`
+
+Cirrus's procedure context carries the resolved identity (`ctx.auth.userId`,
+`ctx.auth.getIdentity()`) but not the raw inbound `Headers`. Better-auth
+endpoints need the headers to read the caller's session cookie, so the
+middleware does **not** pre-bind them — pass them through from the transport
+that has them:
+
+- **HTTP action** — `request.headers` (as shown above).
+- **WebSocket subscription** — propagated from the upgrade request.
+- **Server-to-server** (cron job, queue consumer) — pass `new Headers()` and
+  authenticate via a bearer token or service-key plugin instead.
+
+## Migrations
+
+`ensureMigrated(auth)` does a schema diff and applies missing DDL on the
+configured database — fine for dev and small deployments:
+
+```ts
+// src/server/index.ts
+import { ensureMigrated, handleAuthRequest } from "@cirrus/auth";
+
+import { buildAuth } from "../../cirrus/auth.js";
+
+export default {
+    async fetch(request, env, ctx) {
+        const auth = buildAuth(env);
+
+        await ensureMigrated(auth); // idempotent, cached per options
+
+        const authResponse = await handleAuthRequest(auth, request);
+        if (authResponse) return authResponse;
+
+        return worker.fetch(request, env, ctx);
+    },
+};
+```
+
+For production, prefer pre-applying the schema at deploy time:
+
+```bash
+node -e "
+import('@cirrus/auth').then(async ({ compileMigrationsSql }) => {
+    const sql = await compileMigrationsSql({
+        database: undefined, // schema-only, no live DB
+        secret: 'placeholder',
+        plugins: [/* same list as runtime */],
+    });
+    console.log(sql);
+});
+" > schema.sql
+
+wrangler d1 execute my-db --file schema.sql
+```
+
+The migration runner discovers every loaded plugin's tables, so adding
+`organization()` / `admin()` / Polar / etc. picks them up for free.
+
+## Full demo
+
+The [`examples/auth-playground`](https://github.com/anolilab/cirrus/tree/alpha/examples/auth-playground)
+app shows the whole flow end-to-end: sign-up, create org, invite member,
+admin-only ban panel.
+
+## Polar billing
+
+Intentionally not bundled. If you want Polar in the mix:
+
+```bash
+pnpm add @polar-sh/better-auth
+```
+
+then add `polar(...)` to the `plugins:` array in your `createAuth(...)`
+call. `ensureMigrated` will pick up Polar's tables on the next boot.
