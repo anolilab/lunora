@@ -620,6 +620,35 @@ describe("relations", () => {
         await expect(writer.delete("u1")).rejects.toBeInstanceOf(ConflictError);
         await expect(writer.get("u1")).resolves.not.toBeNull();
     });
+
+    test("cross-backend (global → shardBy) cascade is refused with a clear message", async () => {
+        // `messages` is declared shardBy here — that's the unsupported
+        // direction from D1's POV. The writer must throw on the cascade
+        // attempt rather than silently leave the holders behind.
+        const schema: SchemaLike = {
+            tables: {
+                messages: {
+                    indexes: [],
+                    relationMap: {
+                        author: { field: "authorId", kind: "one", onDelete: "cascade", references: "_id", table: "users" },
+                    },
+                    shape: { authorId: col("string"), body: col("string") },
+                    shardMode: { field: "authorId", kind: "shardBy" },
+                },
+                users: { indexes: [], shape: { name: col("string") } },
+            },
+        };
+
+        harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
+        // No D1 messages table — they live on shards in the real topology;
+        // the cascade must refuse before we'd reach the missing table.
+
+        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+
+        await writer.insert("users", { _id: "u1", name: "Ada" });
+
+        await expect(writer.delete("u1")).rejects.toThrow(/cross-backend cascade.*shardBy/u);
+    });
 });
 
 describe("triggers", () => {

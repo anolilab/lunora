@@ -232,10 +232,24 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
 export interface ApplyOnDeleteOptions {
     deletedId: string;
     deletedReference: (references: string) => unknown;
-    findHolders: (tableName: string, field: string, value: unknown) => Promise<Array<Record<string, unknown>>>;
-    onCascade: (id: string) => Promise<void>;
+    /**
+     * Locate holder rows pointing at the deleted parent. Receives the
+     * `holderTable` so the caller can route to the right backend
+     * (DO SQLite vs D1) per-table.
+     */
+    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Array<Record<string, unknown>>>;
+    /**
+     * Delete a holder row. `holderTable` is the row's table so the caller can
+     * route the delete to the matching backend's writer — same shape as
+     * {@link findHolders}.
+     */
+    onCascade: (holderTable: string, id: string) => Promise<void>;
     onRestrict: (message: string) => never;
-    onSetNull: (id: string, field: string) => Promise<void>;
+    /**
+     * Null out the FK on a holder row. `holderTable` lets the caller route
+     * the patch to the right backend.
+     */
+    onSetNull: (holderTable: string, id: string, field: string) => Promise<void>;
     schema: { readonly tables: Record<string, TableDefinitionLike> };
     tableName: string;
 }
@@ -260,9 +274,16 @@ export const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void
                 continue;
             }
 
-            if (isGlobal(holderDefinition) !== isGlobal(parentDefinition)) {
-                throw new Error(`cross-backend relation '${holderTable}.${relation.field}' onDelete not supported in v1 — route through the Query Coordinator`);
-            }
+            // Cross-backend cascade was deliberately rejected in v1. With
+            // backend-aware callbacks (each receives `holderTable` so the
+            // caller can route to the right writer) we now let callers
+            // decide whether to support it; the unsupported direction
+            // (D1 → many shards) throws via its own findHolders implementation,
+            // while the supported direction (DO → D1) routes through the
+            // global writer the codegen passes into `createShardCtxDb`.
+            const _crossBackend = isGlobal(holderDefinition) !== isGlobal(parentDefinition);
+
+            void _crossBackend;
 
             const referencedValue = relation.references === "_id" ? deletedId : deletedReference(relation.references);
 
@@ -287,7 +308,7 @@ export const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void
                     continue;
                 }
 
-                await (relation.onDelete === "cascade" ? onCascade(holderId) : onSetNull(holderId, relation.field));
+                await (relation.onDelete === "cascade" ? onCascade(holderTable, holderId) : onSetNull(holderTable, holderId, relation.field));
             }
         }
     }

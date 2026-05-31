@@ -208,3 +208,94 @@ describe("type inference", () => {
         expect(ageCheck && tagsCheck).toBe(true);
     });
 });
+
+describe(".check() refinement", () => {
+    test("passes when the predicate holds", () => {
+        const nonNeg = v.number().check((n) => n >= 0);
+
+        expect(nonNeg.parse(0)).toBe(0);
+        expect(nonNeg.parse(42)).toBe(42);
+    });
+
+    test("throws ValidationError with the user message when the predicate fails", () => {
+        const nonNeg = v.number().check((n) => n >= 0, "must be non-negative");
+
+        try {
+            nonNeg.parse(-1);
+            expect.fail("expected ValidationError");
+        } catch (error: unknown) {
+            expect(error).toBeInstanceOf(ValidationError);
+
+            if (error instanceof ValidationError) {
+                expect(error.expected).toBe("must be non-negative");
+                // describeValue stringifies primitives by their typeof.
+                expect(error.received).toBe("number");
+                expect(error.message).toContain("non-negative");
+            }
+        }
+    });
+
+    test("uses a default message when none is supplied", () => {
+        const evenOnly = v.number().check((n) => n % 2 === 0);
+
+        try {
+            evenOnly.parse(3);
+            expect.fail("expected ValidationError");
+        } catch (error: unknown) {
+            expect(error).toBeInstanceOf(ValidationError);
+
+            if (error instanceof ValidationError) {
+                expect(error.expected).toMatch(/refinement/u);
+            }
+        }
+    });
+
+    test("composes — multiple .check() calls all must pass", () => {
+        const slug = v
+            .string()
+            .check((s) => s.length > 0, "must not be empty")
+            .check((s) => /^[a-z]+$/u.test(s), "lowercase letters only");
+
+        expect(slug.parse("hello")).toBe("hello");
+        expect(() => slug.parse("")).toThrow(/empty/u);
+        expect(() => slug.parse("Hello")).toThrow(/lowercase/u);
+    });
+
+    test("runs after the inner parser — type errors surface first", () => {
+        const positiveInt = v.number().check((n) => Number.isInteger(n) && n > 0);
+
+        // Non-number fails the underlying number parser, not the refinement.
+        try {
+            positiveInt.parse("3" as unknown as number);
+            expect.fail("expected ValidationError");
+        } catch (error: unknown) {
+            expect(error).toBeInstanceOf(ValidationError);
+
+            if (error instanceof ValidationError) {
+                expect(error.expected).toBe("number");
+            }
+        }
+    });
+
+    test("works on column validators and preserves modifier chain", () => {
+        const slug = v
+            .string()
+            .check((s) => s.length > 0, "must not be empty")
+            .unique();
+
+        // The validator runtime is the same parse() path — refinement still fires.
+        expect(() => slug.parse("")).toThrow(/empty/u);
+        expect(slug.parse("hello")).toBe("hello");
+    });
+
+    test("safeParse surfaces a check failure as ok:false", () => {
+        const positive = v.number().check((n) => n > 0, "must be positive");
+        const failure = positive.safeParse(-3);
+
+        expect(failure.ok).toBe(false);
+
+        if (!failure.ok) {
+            expect(failure.error.expected).toBe("must be positive");
+        }
+    });
+});

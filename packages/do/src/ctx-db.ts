@@ -110,6 +110,14 @@ export interface ColumnMetaLike {
 export interface ValidatorLike {
     readonly _meta?: { readonly column?: ColumnMetaLike };
     readonly kind?: string;
+    /**
+     * Optional runtime parser. Real validators from `@cirrus/values` always
+     * supply this; the structural fakes used in DO unit tests typically don't.
+     * The write layer calls it (when present) on each field before persisting
+     * so refinements declared via `.check(predicate)` fire on insert / patch /
+     * replace as well as on argument validation.
+     */
+    readonly parse?: (value: unknown) => unknown;
 }
 
 /** Notifies hibernated subscribers that a row in `table` changed. */
@@ -170,6 +178,19 @@ export interface CtxDbOptions {
      */
     cache?: ReactiveCache;
     clock?: Clock;
+    /**
+     * Optional writer for tables flagged `.global()`. When provided, an
+     * `onDelete` cascade declared on a shard-local table whose holder lives
+     * on a global table routes through this writer (DO → D1 cascade). Without
+     * it, cross-backend cascades throw — same behaviour as v1.
+     *
+     * Generated `shard.ts` passes the same D1-backed writer it uses for
+     * `ctx.db.<globalTable>` reads/writes, so cascades and direct writes share
+     * one D1 round-trip path. Non-transactional across backends: the local
+     * delete commits before the global cascade fires, so a failure on the
+     * global side leaves the local row gone — document at the call site.
+     */
+    globalDb?: DatabaseWriterLike;
     idGenerator?: IdGenerator;
     onRead?: ReadHook;
     onWrite?: WriteHook;
@@ -1043,6 +1064,34 @@ const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<s
  * mutating `target` in place — so timestamps refresh on `patch`/`replace`
  * unless the caller overrode them.
  */
+/**
+ * Run each declared column's `validator.parse()` against the matching field on
+ * `document`. Fires user refinements (e.g. `v.number().check(n => n >= 0)`)
+ * at write time so an invariant violation surfaces as a `ValidationError`
+ * before the row hits SQLite.
+ *
+ * Skips fields the validator doesn't declare a `parse` for (the structural
+ * fakes used in unit tests omit it) and skips fields absent from the document.
+ * The shape is iterated, not the document, so unknown fields pass through
+ * untouched — they're part of the JSON-blob shape but not part of the schema's
+ * declared columns.
+ */
+const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>): void => {
+    for (const [field, validator] of Object.entries(definition.shape)) {
+        if (!(field in document)) {
+            continue;
+        }
+
+        if (typeof validator?.parse !== "function") {
+            continue;
+        }
+
+        // Re-parse the field; the validator's own ValidationError carries the
+        // refinement message and propagates up to the caller unchanged.
+        validator.parse(document[field]);
+    }
+};
+
 const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string, unknown>, target: Record<string, unknown>): void => {
     for (const [field, column] of tableColumns(definition)) {
         if (column.onUpdateFn && !(field in provided)) {
@@ -1077,6 +1126,33 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const scheduler = options.scheduler ?? throwingScheduler;
+    const { globalDb } = options;
+
+    /** True when `tableName` is declared `.global()` (i.e. lives in D1, not this DO). */
+    const isGlobalTable = (tableName: string): boolean => schema.tables[tableName]?.shardMode?.kind === "global";
+
+    /**
+     * Pick the writer that owns `holderTable`. Local tables stay on this DO's
+     * SQLite (`writer`); global tables route to the optional `globalDb`. Without
+     * a globalDb supplied, cross-backend cascades throw — same behaviour as
+     * the v1 unsupported path, but the message now points at the missing
+     * wiring instead of the relation itself.
+     */
+    const routeForHolder = (holderTable: string): DatabaseWriterLike => {
+        if (isGlobalTable(holderTable)) {
+            if (!globalDb) {
+                throw new Error(
+                    `cross-backend cascade for global holder '${holderTable}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`,
+                );
+            }
+
+            return globalDb;
+        }
+
+        // Same backend — return the local writer at call time so we get the
+        // post-construction reference (it's a closure variable).
+        return writer;
+    };
 
     let triggerDepth = 0;
 
@@ -2068,6 +2144,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             const withDefaults = applyInsertDefaults(definition, document);
+
+            // Refinements declared via `.check(predicate)` fire here on the
+            // post-default row so a defaulted value still passes its checks.
+            runRowValidators(definition, withDefaults);
+
             const id = typeof withDefaults["_id"] === "string" ? (withDefaults["_id"] as string) : generateId();
             const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"] as number) : clock();
 
@@ -2137,6 +2218,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             applyOnUpdate(schema.tables[tableName]!, patch, merged);
 
+            // Run column refinements on the merged row so a patch that flips a
+            // field to an invalid value (e.g. negative amount) is rejected
+            // before SQLite sees it.
+            runRowValidators(schema.tables[tableName]!, merged);
+
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
             }
@@ -2190,6 +2276,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             applyOnUpdate(schema.tables[tableName]!, document, replaced);
 
+            // Refinement checks fire on the post-onUpdate row so a defaulted
+            // field still has to satisfy its `.check()` predicate.
+            runRowValidators(schema.tables[tableName]!, replaced);
+
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
             }
@@ -2241,15 +2331,21 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Resolve declared `onDelete` actions on holder rows *before* the
             // physical delete, so `restrict` can abort and cascaded child
             // deletes still fire their own broadcast/onWrite per row.
+            //
+            // The callbacks pass through `routeForHolder` so a holder living
+            // on a global (`.global()`) table is reached through the supplied
+            // D1-backed `globalDb` writer, not this DO's local SQLite.
+            // Cross-backend cascade is **not transactional**: the local row
+            // commits below regardless of whether the global cascade succeeds.
             await applyOnDelete({
                 deletedId: id,
                 deletedReference: (references) => existing?.[references],
-                findHolders: async (holderTable, field, value) => (await writer.findMany(holderTable, { where: { [field]: value } })).page,
-                onCascade: (holderId) => writer.delete(holderId),
+                findHolders: async (holderTable, field, value) => (await routeForHolder(holderTable).findMany(holderTable, { where: { [field]: value } })).page,
+                onCascade: (holderTable, holderId) => routeForHolder(holderTable).delete(holderId),
                 onRestrict: (message) => {
                     throw new ConflictError(message);
                 },
-                onSetNull: (holderId, field) => writer.patch(holderId, { [field]: null }),
+                onSetNull: (holderTable, holderId, field) => routeForHolder(holderTable).patch(holderId, { [field]: null }),
                 schema,
                 tableName,
             });
