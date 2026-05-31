@@ -29,6 +29,7 @@
         "@cirrus/ratelimit": "workspace:*"
     },
     "devDependencies": {
+        "@tanstack/react-query": "catalog:frontend",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
         "@types/node": "catalog:types",
@@ -44,10 +45,14 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@tanstack/react-query": "^5.93.0",
         "react": "^18.3.1",
         "react-dom": "^18.3.1"
     },
     "peerDependenciesMeta": {
+        "@tanstack/react-query": {
+            "optional": false
+        },
         "react": {
             "optional": false
         },
