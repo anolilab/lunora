@@ -223,9 +223,10 @@ export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvComm
                 args,
                 command: "pnpm",
                 cwd,
-                // wrangler secret put reads the value from stdin in CI mode;
-                // injecting it via env keeps the value off the recorded argv.
-                env: { CIRRUS_SECRET_VALUE: entry.value },
+                // `wrangler secret put <name>` reads the value from stdin. We
+                // pipe it through the spawner's `input` channel so the secret
+                // never lands on the command line, in env, or in shell history.
+                input: entry.value,
             };
 
             descriptors.push(descriptor);
