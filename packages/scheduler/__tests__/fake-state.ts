@@ -63,3 +63,40 @@ export const createFakeState = (): SchedulerDOState & {
 
     return state;
 };
+
+/** A fake server WebSocket that records everything sent to it. */
+export interface FakeSocket {
+    close: () => void;
+    send: (data: string) => void;
+    readonly sent: string[];
+}
+
+export const createFakeSocket = (): FakeSocket => {
+    const sent: string[] = [];
+
+    return {
+        sent,
+        close: () => undefined,
+        send: (data: string) => {
+            sent.push(data);
+        },
+    };
+};
+
+/**
+ * A storage fake plus the WebSocket hooks the live `/ws` channel needs:
+ * `acceptWebSocket` records a socket and `getWebSockets` returns them, so
+ * broadcast behaviour is testable without the workers runtime.
+ */
+export const createFakeStateWithSockets = (): ReturnType<typeof createFakeState> & { sockets: FakeSocket[] } => {
+    const base = createFakeState();
+    const sockets: FakeSocket[] = [];
+
+    return Object.assign(base, {
+        sockets,
+        acceptWebSocket: (ws: WebSocket) => {
+            sockets.push(ws as unknown as FakeSocket);
+        },
+        getWebSockets: () => sockets as unknown as WebSocket[],
+    });
+};
