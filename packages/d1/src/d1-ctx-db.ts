@@ -267,6 +267,27 @@ const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<s
     return result;
 };
 
+/**
+ * Mirror of `runRowValidators` in `@cirrus/do`'s ctx-db. Fires column-level
+ * refinements (declared via `.check(predicate)` on a validator) at write time
+ * so the same invariants enforced on shard-local tables also fire on global
+ * (.global() / D1) tables. Skips fields whose validator omits `parse` so the
+ * structural fakes the test suite passes around still work.
+ */
+const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>): void => {
+    for (const [field, validator] of Object.entries(definition.shape)) {
+        if (!(field in document)) {
+            continue;
+        }
+
+        if (typeof validator?.parse !== "function") {
+            continue;
+        }
+
+        validator.parse(document[field]);
+    }
+};
+
 /** Recompute every `.$onUpdateFn()` field the caller did not set explicitly, mutating `target` in place. */
 const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string, unknown>, target: Record<string, unknown>): void => {
     for (const [field, column] of tableColumns(definition)) {
@@ -285,7 +306,17 @@ const isUniqueViolation = (error: unknown): boolean => error instanceof Error &&
  * small fixed scan.
  */
 const tableNameFromId = async (exec: D1Exec, schema: SchemaLike, id: string): Promise<string | undefined> => {
-    for (const tableName of Object.keys(schema.tables)) {
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        // Skip tables that don't live in D1 — `.shardBy()` is spread across
+        // many DOs and would never have a D1 row to find. The default root
+        // mode is also DO-side; we only need to probe `.global()` tables.
+        // (Schemas authored before the `.global()` flag existed don't set
+        // shardMode at all — preserve the legacy "probe every table" behaviour
+        // there so existing fixtures keep working.)
+        if (definition.shardMode !== undefined && definition.shardMode.kind !== "global") {
+            continue;
+        }
+
         const rows = await exec.all(`SELECT 1 FROM ${quoteIdentifier(tableName)} WHERE "id" = ? LIMIT 1`, [id]);
 
         if (rows.length > 0) {
@@ -1103,15 +1134,29 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
             }
 
+            // D1 → shard cascade is the hard direction: holders that live on
+            // a `.shardBy()` table are spread across many DOs and would need
+            // Query Coordinator fan-out. v1 routes every holder through this
+            // D1 writer — same-backend (D1 → D1) cascades work, and shard
+            // holders simply won't have rows here so cascades are no-ops.
+            // For the explicit shardBy case we'd want a hard error; deferred.
             await applyOnDelete({
                 deletedId: id,
                 deletedReference: (references) => existing?.[references],
-                findHolders: async (holderTable, field, value) => (await writer.findMany(holderTable, { where: { [field]: value } })).page,
-                onCascade: (holderId) => writer.delete(holderId),
+                findHolders: async (holderTable, field, value) => {
+                    if (schema.tables[holderTable]?.shardMode?.kind === "shardBy") {
+                        throw new Error(
+                            `cross-backend cascade from global '${tableName}' into shardBy '${holderTable}' is not supported — would require Query Coordinator fan-out across shards`,
+                        );
+                    }
+
+                    return (await writer.findMany(holderTable, { where: { [field]: value } })).page;
+                },
+                onCascade: (_holderTable, holderId) => writer.delete(holderId),
                 onRestrict: (message) => {
                     throw new ConflictError(message);
                 },
-                onSetNull: (holderId, field) => writer.patch(holderId, { [field]: null }),
+                onSetNull: (_holderTable, holderId, field) => writer.patch(holderId, { [field]: null }),
                 schema,
                 tableName,
             });
@@ -1234,6 +1279,11 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             const withDefaults = applyInsertDefaults(definition, document);
+
+            // Refinements declared via `.check(predicate)` fire on the
+            // post-default row so a defaulted value still passes its checks.
+            runRowValidators(definition, withDefaults);
+
             const id = typeof withDefaults["_id"] === "string" ? (withDefaults["_id"] as string) : generateId();
             const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"] as number) : clock();
 
@@ -1283,6 +1333,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             applyOnUpdate(definition, patch, merged);
 
+            // Refinement checks fire on the merged row so a patch that flips
+            // a field to an invalid value is rejected before D1 sees it.
+            runRowValidators(definition, merged);
+
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
             }
@@ -1323,6 +1377,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
             applyOnUpdate(definition, document, replaced);
+
+            // Refinement checks fire on the post-onUpdate row so a defaulted
+            // field still has to satisfy its `.check()` predicate.
+            runRowValidators(definition, replaced);
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
