@@ -24,7 +24,7 @@ describe("useAuth", () => {
     test("initial token reflects client.getAuthToken()", () => {
         const mock = createMockClient();
 
-        mock.getAuthToken.mockReturnValueOnce("seeded-token");
+        mock.getAuthToken.mockReturnValue("seeded-token");
 
         render(
             <CirrusProvider client={mock.asClient}>

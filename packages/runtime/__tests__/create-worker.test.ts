@@ -328,6 +328,7 @@ describe("createWorker — migration endpoint", () => {
         );
 
         const worker = createWorker({
+            adminToken: "s3cret",
             queryCoordinator: {
                 fanOut: vi.fn() as never,
                 orchestrateMigration: orchestrateMigration as never,
@@ -358,15 +359,20 @@ describe("createWorker — migration endpoint", () => {
     });
 
     test("400s when no queryCoordinator is configured", async () => {
-        const worker = createWorker({ shardDO: shard.namespace });
+        const worker = createWorker({ adminToken: "s3cret", shardDO: shard.namespace });
 
-        const res = await worker.fetch(migrateRequest({ functionPath: "__cirrus_admin__:runMigration", table: "messages" }), {}, fakeCtx);
+        const res = await worker.fetch(
+            migrateRequest({ functionPath: "__cirrus_admin__:runMigration", table: "messages" }, { authorization: "Bearer s3cret" }),
+            {},
+            fakeCtx,
+        );
 
         expect(res.status).toBe(400);
     });
 
     test("rejects a non-migration functionPath with 400", async () => {
         const worker = createWorker({
+            adminToken: "s3cret",
             queryCoordinator: {
                 fanOut: vi.fn() as never,
                 orchestrateMigration: vi.fn() as never,
@@ -377,13 +383,14 @@ describe("createWorker — migration endpoint", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(migrateRequest({ functionPath: "messages:list", table: "messages" }), {}, fakeCtx);
+        const res = await worker.fetch(migrateRequest({ functionPath: "messages:list", table: "messages" }, { authorization: "Bearer s3cret" }), {}, fakeCtx);
 
         expect(res.status).toBe(400);
     });
 
     test("rejects a missing table with 400", async () => {
         const worker = createWorker({
+            adminToken: "s3cret",
             queryCoordinator: {
                 fanOut: vi.fn() as never,
                 orchestrateMigration: vi.fn() as never,
@@ -394,7 +401,7 @@ describe("createWorker — migration endpoint", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(migrateRequest({ functionPath: "__cirrus_admin__:runMigration" }), {}, fakeCtx);
+        const res = await worker.fetch(migrateRequest({ functionPath: "__cirrus_admin__:runMigration" }, { authorization: "Bearer s3cret" }), {}, fakeCtx);
 
         expect(res.status).toBe(400);
     });
