@@ -10,6 +10,7 @@ import type {
     RegisteredAction,
     RegisteredMutation,
     RegisteredQuery,
+    RegisteredStream,
 } from "../types.js";
 
 /** Builder discriminator. Codegen reads this kind. */
@@ -54,6 +55,17 @@ export interface QueryBuilder<Ctx, Args extends ArgsValidator, Output = undefine
     query: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
+    /**
+     * Terminal: declare this procedure as a streaming query. The handler is an
+     * async generator (or any function returning an `AsyncIterable<R>`) that
+     * yields one chunk per server-pushed frame. The third `signal` argument is
+     * tripped when the client cancels — break out of the loop or check
+     * `signal.aborted` between yields. `.output()` does not apply: per-chunk
+     * validation is opt-in via the handler itself.
+     */
+    stream: <R>(
+        handler: (options: { args: InferArgs<Args>; ctx: Ctx; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+    ) => RegisteredStream<Args, R>;
     use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => QueryBuilder<CtxOut, Args, Output>;
 }
 
@@ -91,6 +103,10 @@ export interface InternalQueryBuilder<Ctx, Args extends ArgsValidator, Output = 
     query: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
+    /** See {@link QueryBuilder.stream}; the internal variant routes the registration into `internal` instead of `api`. */
+    stream: <R>(
+        handler: (options: { args: InferArgs<Args>; ctx: Ctx; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+    ) => RegisteredStream<Args, R>;
     use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => InternalQueryBuilder<CtxOut, Args, Output>;
 }
 

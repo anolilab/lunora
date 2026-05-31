@@ -47,8 +47,8 @@ export type CirrusRouteHandler = (c: Context<CirrusHttpEnv>) => Promise<Response
  */
 export const httpAction =
     (handler: HttpActionHandler): CirrusRouteHandler =>
-    async (c) =>
-        handler(c.get("cirrus"), c.req.raw);
+        async (c) =>
+            handler(c.get("cirrus"), c.req.raw);
 
 /**
  * Create the hono app for HTTP actions. Pre-wired with a middleware that lifts
@@ -99,6 +99,20 @@ export interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Bod
 }
 
 /**
+ * The `{ ctx, searchParams, params, request, signal }` a streaming HTTP
+ * handler receives. There is no parsed `body` — streams are typically GET, and
+ * the raw `request` is exposed if a handler needs to read the body itself.
+ * `signal` is tripped when the client disconnects.
+ */
+export interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params extends ArgsValidator> {
+    ctx: HttpActionCtx;
+    params: InferArgs<Params>;
+    request: Request;
+    searchParams: InferArgs<SearchParams>;
+    signal: AbortSignal;
+}
+
+/**
  * A typed REST route under construction. `.searchParams()` / `.body()` /
  * `.params()` accumulate validator maps (later calls merge, a colliding key
  * wins) that decode the URL query, JSON body, and hono path params into the
@@ -120,6 +134,16 @@ export interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body exten
     output: <V extends Validator>(validator: V) => HttpRouteBuilder<SearchParams, Body, Params, Infer<V>>;
     params: <P extends ArgsValidator>(validators: P) => HttpRouteBuilder<SearchParams, Body, P & Params, Output>;
     searchParams: <S extends ArgsValidator>(validators: S) => HttpRouteBuilder<S & SearchParams, Body, Params, Output>;
+    /**
+     * Terminal: declare this route as a streaming Server-Sent Events endpoint.
+     * The handler is an async generator (or any function returning an
+     * `AsyncIterable<R>`) that yields one chunk per SSE `data:` frame; on
+     * iterator completion the route writes a final `event: complete` frame; on
+     * throw, an `event: error` frame is written with `{code, message}` before
+     * the stream closes. The chunks are JSON-encoded; `R` is inferred from the
+     * handler's yielded type.
+     */
+    stream: <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => CirrusRouteHandler;
 }
 
 /** Opens a fresh {@link HttpRouteBuilder}. The `path` documents intent; hono owns the actual routing at mount. */
@@ -352,20 +376,113 @@ const errorResponse = (error: unknown): Response => {
  */
 const buildRouteHandler =
     (state: RouteState, userHandler: LooseHandler): CirrusRouteHandler =>
-    async (c) => {
-        try {
-            const ctx = c.get("cirrus");
-            const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
-            const params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
-            const body = Object.keys(state.body).length > 0 ? await parseBody(state.body, c) : {};
-            const result = await userHandler({ body, ctx, params, searchParams });
-            const payload = state.output ? applyOutput(state.output, result) : result;
+        async (c) => {
+            try {
+                const ctx = c.get("cirrus");
+                const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
+                const params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
+                const body = Object.keys(state.body).length > 0 ? await parseBody(state.body, c) : {};
+                const result = await userHandler({ body, ctx, params, searchParams });
+                const payload = state.output ? applyOutput(state.output, result) : result;
 
-            return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
-        } catch (error: unknown) {
-            return errorResponse(error);
-        }
-    };
+                return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
+            } catch (error: unknown) {
+                return errorResponse(error);
+            }
+        };
+
+type LooseStreamHandler = (options: {
+    ctx: HttpActionCtx;
+    params: Record<string, unknown>;
+    request: Request;
+    searchParams: Record<string, unknown>;
+    signal: AbortSignal;
+}) => AsyncGenerator<unknown, void, void> | AsyncIterable<unknown>;
+
+/**
+ * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
+ * separator. `event:` is omitted for `data` (the default event name); we use
+ * named events only for the terminal sentinels (`complete`, `error`).
+ */
+const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
+    const data = JSON.stringify(chunk);
+    const prefix = event ? `event: ${event}\n` : "";
+
+    return `${prefix}data: ${data}\n\n`;
+};
+
+/**
+ * Compile the accumulated route state into an SSE {@link CirrusRouteHandler}.
+ * Pumps the user iterator into a `text/event-stream` `ReadableStream`. The
+ * stream wires the client `request.signal` through to the user handler so a
+ * disconnect aborts in-flight work, and surfaces handler-thrown errors as an
+ * `event: error` SSE frame (so clients see a structured payload instead of an
+ * opaque transport-level disconnect).
+ */
+const buildStreamHandler =
+    (state: RouteState, userHandler: LooseStreamHandler): CirrusRouteHandler =>
+        async (c) => {
+            let searchParams: Record<string, unknown>;
+            let params: Record<string, unknown>;
+
+            try {
+                searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
+                params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
+            } catch (error: unknown) {
+                return errorResponse(error);
+            }
+
+            const ctx = c.get("cirrus");
+            const request = c.req.raw;
+            const encoder = new TextEncoder();
+            const ac = new AbortController();
+
+            request.signal.addEventListener("abort", () => {
+                ac.abort();
+            });
+
+            const stream = new ReadableStream<Uint8Array>({
+                async start(controller) {
+                    try {
+                        const iterator = userHandler({ ctx, params, request, searchParams, signal: ac.signal });
+
+                        for await (const chunk of iterator) {
+                            if (ac.signal.aborted) {
+                                break;
+                            }
+
+                            controller.enqueue(encoder.encode(sseFrame(chunk)));
+                        }
+
+                        controller.enqueue(encoder.encode(sseFrame({}, "complete")));
+                    } catch (error: unknown) {
+                        const payload =
+                            error instanceof CirrusError
+                                ? { code: error.code, message: error.message }
+                                : { code: "INTERNAL_SERVER_ERROR", message: error instanceof Error ? error.message : String(error) };
+
+                        controller.enqueue(encoder.encode(sseFrame(payload, "error")));
+                    } finally {
+                        controller.close();
+                    }
+                },
+                cancel() {
+                // The downstream consumer dropped the stream — propagate the
+                // cancel to the user iterator so any in-flight work bails out.
+                    ac.abort();
+                },
+            });
+
+            return new Response(stream, {
+                headers: {
+                    "cache-control": "no-cache, no-transform",
+                    "content-type": "text/event-stream; charset=utf-8",
+                    // Hint to proxies (including Cloudflare's own buffering layer)
+                    // that this response must not be coalesced.
+                    "x-accel-buffering": "no",
+                },
+            });
+        };
 
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => ({
     body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
@@ -373,12 +490,13 @@ const makeRouteBuilder = (state: RouteState): Record<string, unknown> => ({
     output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
     params: (validators: ArgsValidator) => makeRouteBuilder({ ...state, params: { ...state.params, ...validators } }),
     searchParams: (validators: ArgsValidator) => makeRouteBuilder({ ...state, searchParams: { ...state.searchParams, ...validators } }),
+    stream: (userHandler: LooseStreamHandler): CirrusRouteHandler => buildStreamHandler(state, userHandler),
 });
 
 const makeRouteFactory =
     (method: HttpMethod): HttpRouteFactory =>
-    (path: string) =>
-        makeRouteBuilder({ body: {}, method, params: {}, path, searchParams: {} }) as unknown as HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
+        (path: string) =>
+            makeRouteBuilder({ body: {}, method, params: {}, path, searchParams: {} }) as unknown as HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
 
 /**
  * Typed REST route builder. Compiles down to a {@link CirrusRouteHandler}, so a
