@@ -1,5 +1,5 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, test } from "vitest";
 
 import { createAuth } from "../src/create-auth.js";
 import { withAuthPlugins } from "../src/middleware.js";
@@ -18,9 +18,9 @@ import { admin, organization } from "../src/plugins.js";
  */
 
 interface MockHandlerCtx {
-    authApi?: {
+    authApi?: Record<string, unknown> & {
         createOrganization?: (...args: unknown[]) => Promise<unknown>;
-    } & Record<string, unknown>;
+    };
 }
 
 const SECRET = "x".repeat(32);
@@ -34,10 +34,13 @@ const SECRET = "x".repeat(32);
  * middleware's signature is internal-shape-specific; the test only cares
  * about the runtime contract.
  */
-const runMiddleware = async <CtxOut>(middleware: (options: { ctx: unknown; next: (opts?: { ctx: Record<string, unknown> }) => Promise<unknown> }) => unknown, initialCtx: unknown): Promise<CtxOut> => {
+const runMiddleware = async <CtxOut>(
+    middleware: (options: { ctx: unknown; next: (opts?: { ctx: Record<string, unknown> }) => Promise<unknown> }) => unknown,
+    initialCtx: unknown,
+): Promise<CtxOut> => {
     let captured: unknown = initialCtx;
     const next = async (opts?: { ctx: Record<string, unknown> }): Promise<unknown> => {
-        const merged = { ...(initialCtx as Record<string, unknown>), ...((opts?.ctx as Record<string, unknown>) ?? {}) };
+        const merged = { ...(initialCtx as Record<string, unknown>), ...(opts?.ctx as Record<string, unknown>) };
 
         captured = merged;
 
@@ -100,7 +103,8 @@ describe("withAuthPlugins", () => {
 
         expect(ctx.authApi).toBeDefined();
         expect(ctx.authApi).toBe(auth.api);
-        expect(typeof ctx.authApi?.createOrganization).toBe("function");
+
+        expectTypeOf(ctx.authApi?.createOrganization).toBeFunction();
     });
 
     test("ctx.authApi.createOrganization writes to the underlying store", async () => {
@@ -129,5 +133,33 @@ describe("withAuthPlugins", () => {
 
         expect(organizations).toHaveLength(1);
         expect(organizations[0]).toMatchObject({ name: "Acme", slug: "acme" });
+    });
+
+    test("composing after another middleware preserves the upstream ctx fields", async () => {
+        expect.assertions(3);
+
+        // Pretend an upstream middleware has already installed `userId` on
+        // the ctx. The middleware under test must layer authApi on top
+        // *without* dropping userId — that's the regression the type fix
+        // guards (the prior shape returned just `CirrusAuthApiContext<Auth>`,
+        // erasing whatever the upstream had installed).
+        const ctxIn = { userId: "u_42" };
+
+        // The builder's runtime `next({ ctx: ext })` shallow-merges the
+        // extension over the incoming ctx. We model that exactly here.
+        const ctxOut = await withAuthPlugins(auth)({
+            ctx: ctxIn,
+            next: (async (options?: { ctx: Record<string, unknown> }) => {
+                return options?.ctx ? { ...ctxIn, ...options.ctx } : ctxIn;
+            }) as Parameters<ReturnType<typeof withAuthPlugins<typeof auth>>>[0]["next"],
+        });
+
+        // Both fields must survive into the downstream ctx — the regression
+        // dropped `userId`. The type-level narrowing (`CtxIn & CirrusAuthApiContext<Auth>`)
+        // is also asserted at compile time below via the typed access.
+        expect(ctxOut).toMatchObject({ userId: "u_42" });
+        expect(ctxOut.authApi).toBeDefined();
+
+        expectTypeOf((ctxOut.authApi as { createOrganization?: unknown }).createOrganization).toBeFunction();
     });
 });

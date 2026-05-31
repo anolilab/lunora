@@ -2,7 +2,7 @@ import type { FunctionReference, Preloaded } from "@cirrus/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
-import { cirrusQueryKey, getSubscriptionRegistry } from "./cache.js";
+import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache.js";
 import { useCirrus } from "./cirrus-provider.js";
 
 /**
@@ -42,10 +42,12 @@ export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
         const registry = getSubscriptionRegistry(client);
 
         return registry.attach(queryClient, queryKey, fn, args, shardKey);
-    }, [client, queryClient, JSON.stringify(queryKey)]);
+    }, [client, queryClient, serializeQueryKey(queryKey)]);
 
-    // `data` is typed as `T | undefined` because TanStack hedges its type
-    // against an empty initialData, but our `initialData: value` is always
-    // present so the cast is safe.
-    return data as T;
+    // TanStack types `data` as `T | undefined` even with `initialData` because
+    // the option could be a falsy value. We always pass the preloaded `value`
+    // so the only way to land here with `undefined` is the consumer preloading
+    // an explicit `undefined` — preserve that semantic via `??` instead of
+    // forcing a cast that lies about possible runtime states.
+    return data ?? value;
 }

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { runAnalyzeCommand } from "../../src/commands/analyze.js";
 import type { Logger } from "../../src/util/logger.js";
@@ -60,18 +60,29 @@ describe("cirrus analyze", () => {
         expect(result.report?.generatedFiles.map((f) => f.path)).toEqual([join("cirrus", "_generated", "api.ts")]);
     });
 
-    test("--json emits a machine-readable report", async () => {
-        const { logger, recorded } = recordingLogger();
+    test("--json emits a machine-readable report on stdout (jq-pipeable)", async () => {
+        const { logger } = recordingLogger();
+        const written: string[] = [];
+        const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+            written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
 
-        const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, json: true, logger });
+            return true;
+        }) as typeof process.stdout.write);
 
-        expect(result.code).toBe(0);
+        try {
+            const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, json: true, logger });
 
-        // The JSON payload is logged via info.
-        const payload = JSON.parse(recorded.infos[0] ?? "{}");
+            expect(result.code).toBe(0);
 
-        expect(payload.totalFiles).toBe(3);
-        expect(payload.topModules[0].path).toBe("worker.js");
+            // Stdout payload should be just the JSON (no Pail prefixes) so a
+            // downstream `jq` can consume it verbatim.
+            const payload = JSON.parse(written.join(""));
+
+            expect(payload.totalFiles).toBe(3);
+            expect(payload.topModules[0].path).toBe("worker.js");
+        } finally {
+            spy.mockRestore();
+        }
     });
 
     test("invokes wrangler dry-run with --outdir when no inspectOnly is given", async () => {

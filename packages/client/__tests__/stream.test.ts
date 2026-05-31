@@ -180,6 +180,35 @@ describe("createStream", () => {
     test("default buffer is at least 64 chunks", () => {
         expect(DEFAULT_MAX_BUFFER).toBeGreaterThanOrEqual(64);
     });
+
+    test("delivers `undefined` chunks without dropping them", async () => {
+        const { handle, iterable } = createStream<undefined | { ok: boolean }>({ onCancel: () => {} });
+        const iter = iterable[Symbol.asyncIterator]();
+
+        // Pending-then-push path: schedule the next() first, then enqueue
+        // undefined via the flushOne path.
+        const pendingNext = iter.next();
+
+        queueMicrotask(() => {
+            handle.push(undefined);
+        });
+
+        await expect(pendingNext).resolves.toEqual({ done: false, value: undefined });
+
+        // Buffer-then-shift path: enqueue undefined first, then read it.
+        handle.push(undefined);
+
+        await expect(iter.next()).resolves.toEqual({ done: false, value: undefined });
+
+        // Real value after undefined still flows.
+        handle.push({ ok: true });
+
+        await expect(iter.next()).resolves.toEqual({ done: false, value: { ok: true } });
+
+        handle.complete();
+
+        await expect(iter.next()).resolves.toEqual({ done: true, value: undefined });
+    });
 });
 
 // --- CirrusClient.stream() integration tests --------------------------------

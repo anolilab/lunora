@@ -5,6 +5,12 @@ export interface SpawnDescriptor {
     command: string;
     cwd?: string;
     env?: Readonly<Record<string, string>>;
+    /**
+     * Pipe this string into the child's stdin and close it. Used to feed
+     * `wrangler secret put` its value without exposing it on the command
+     * line or in env. When absent, stdin is inherited from the parent.
+     */
+    input?: string;
 }
 
 export interface SpawnResult {
@@ -19,10 +25,15 @@ export type Spawner = (descriptor: SpawnDescriptor) => Promise<SpawnResult>;
 
 export const defaultSpawner: Spawner = (descriptor) => {
     return new Promise<SpawnResult>((resolve, reject) => {
+        const hasInput = typeof descriptor.input === "string";
         const child = nodeSpawn(descriptor.command, [...descriptor.args], {
             cwd: descriptor.cwd ?? process.cwd(),
             env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
-            stdio: "inherit",
+            // When the caller pipes input we need a writable stdin handle —
+            // "inherit" gives us the parent's stdin which we can't write to.
+            // stdout/stderr stay inherited so logs/errors land where the user
+            // can see them in the terminal.
+            stdio: hasInput ? ["pipe", "inherit", "inherit"] : "inherit",
         });
 
         child.on("error", (error) => {
@@ -32,6 +43,12 @@ export const defaultSpawner: Spawner = (descriptor) => {
         child.on("exit", (code) => {
             resolve({ code: code ?? 0 });
         });
+
+        if (hasInput && child.stdin) {
+            // End the write so the child sees EOF and exits its read loop.
+            // Most CLIs (wrangler secret put included) read until EOF.
+            child.stdin.end(descriptor.input);
+        }
     });
 };
 

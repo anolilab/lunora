@@ -101,10 +101,10 @@ describe("shardDO streaming queries", () => {
         state = {
             id: { name: "shard-stream" },
             storage: { sql: db.sql as unknown as ShardDOState["storage"]["sql"] },
-            acceptWebSocket(ws) {
+            acceptWebSocket(ws: WebSocket) {
                 sockets.push(ws as unknown as FakeWebSocket);
             },
-            getWebSockets() {
+            getWebSockets(): WebSocket[] {
                 return sockets as unknown as WebSocket[];
             },
         } as unknown as ShardDOState;

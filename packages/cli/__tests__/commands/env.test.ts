@@ -146,11 +146,13 @@ describe("cirrus env", () => {
 
         expect(result.code).toBe(0);
         expect(calls).toHaveLength(2);
-        // The value is in env, never in argv.
+        // The value is piped into stdin, never in argv or env.
         expect(calls[0]?.descriptor.args.join(" ")).toBe("exec wrangler secret put FIRST");
         expect(calls[1]?.descriptor.args.join(" ")).toBe("exec wrangler secret put SECOND");
-        expect(calls[0]?.descriptor.env?.CIRRUS_SECRET_VALUE).toBe("one");
-        expect(calls[1]?.descriptor.env?.CIRRUS_SECRET_VALUE).toBe("two");
+        expect(calls[0]?.descriptor.input).toBe("one");
+        expect(calls[1]?.descriptor.input).toBe("two");
+        // Sanity: no env leak.
+        expect(calls[0]?.descriptor.env).toBeUndefined();
     });
 
     test("push --prod adds --env production", async () => {

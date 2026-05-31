@@ -3,7 +3,7 @@ import type { QueryKey } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { cirrusQueryKey, getSubscriptionRegistry } from "./cache.js";
+import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache.js";
 import { useCirrus } from "./cirrus-provider.js";
 import type { PaginationResult, PaginationStatus, UsePaginatedQueryOptions, UsePaginatedQueryResult } from "./types.js";
 
@@ -72,7 +72,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
     });
     // Stable hash of every loaded page key — used as the effect-dep so we only
     // re-attach when the page set actually changes.
-    const pageKeysHash = pageEntries.map(({ key }) => JSON.stringify(key)).join("|");
+    const pageKeysHash = pageEntries.map(({ key }) => serializeQueryKey(key)).join("|");
 
     // Read latest desired entries from a ref so the effect dep list can stay
     // keyed on `pageKeysHash` alone — args/fn changes already invalidate the hash.
@@ -99,7 +99,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
 
         const desired = desiredRef.current;
         const registry = getSubscriptionRegistry(client);
-        const wanted = new Set(desired.entries.map(({ key }) => JSON.stringify(key)));
+        const wanted = new Set(desired.entries.map(({ key }) => serializeQueryKey(key)));
 
         for (const [hash, detach] of detaches) {
             if (!wanted.has(hash)) {
@@ -109,7 +109,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
         }
 
         for (const entry of desired.entries) {
-            const hash = JSON.stringify(entry.key);
+            const hash = serializeQueryKey(entry.key);
 
             if (detaches.has(hash)) {
                 continue;
@@ -144,9 +144,9 @@ export function usePaginatedQuery<F extends FunctionReference>(
     useEffect(() => {
         const cache = queryClient.getQueryCache();
         const unsubscribe = cache.subscribe((event) => {
-            const hash = JSON.stringify(event.query.queryKey);
+            const hash = serializeQueryKey(event.query.queryKey);
 
-            if (pageEntries.some(({ key }) => JSON.stringify(key) === hash)) {
+            if (pageEntries.some(({ key }) => serializeQueryKey(key) === hash)) {
                 forceRender();
             }
         });

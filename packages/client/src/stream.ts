@@ -19,7 +19,12 @@ export interface StreamHandle<T = unknown> {
     readonly complete: () => void;
     /** Surface an error to any pending consumer; subsequent pushes are dropped. */
     readonly fail: (error: Error) => void;
-    /** Push one chunk; throws if the buffer is full. */
+    /**
+     * Push one chunk. Silent no-op once the stream is `complete`, `fail`-ed,
+     * or `cancel`-ed. When the buffer is already at `maxBuffer`, the stream
+     * is failed with a `STREAM_BACKPRESSURE` error and the push is dropped —
+     * the producer never sees a thrown exception.
+     */
     readonly push: (value: T) => void;
 }
 
@@ -62,9 +67,14 @@ export const createStream = <T>(options: { maxBuffer?: number; onCancel: () => v
             return true;
         }
 
-        const value = buffer.shift();
+        // Check length BEFORE shifting — a stream of `T = X | undefined` may
+        // legitimately enqueue an `undefined` value, and `buffer.shift()`
+        // alone returns `undefined` for both "I shifted an undefined" and
+        // "buffer was empty". The length probe disambiguates so undefined
+        // chunks are delivered instead of silently dropped.
+        if (buffer.length > 0) {
+            const value = buffer.shift() as T;
 
-        if (value !== undefined) {
             waiter.resolve({ done: false, value });
 
             return true;

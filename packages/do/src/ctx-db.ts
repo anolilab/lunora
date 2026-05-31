@@ -36,7 +36,7 @@ import type { RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, R
 import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank.js";
 import type { ReactiveCache } from "./reactive-cache.js";
 import type { RelationDefinitionLike } from "./relations.js";
-import { applyOnDelete, resolveWith } from "./relations.js";
+import { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
 import { ConflictError, NotFoundError } from "./transaction.js";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 import { hasTrigger, runTriggers } from "./triggers.js";
@@ -76,7 +76,11 @@ export interface TableDefinitionLike {
     readonly relationMap?: Record<string, RelationDefinitionLike>;
     readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
     readonly shape: Record<string, ValidatorLike>;
-    readonly shardMode?: { kind: "global" | "root" | "shardBy" };
+    // Mirror of `@cirrus/server`'s `ShardMode`. The `shardBy` variant carries
+    // a `field` (the column the runtime hashes on) but most consumers only
+    // read `kind`, so `field` is left optional here to keep the structural
+    // mirror narrow without forcing every callsite to spread the variant.
+    readonly shardMode?: { field?: string; kind: "global" | "root" | "shardBy" };
     readonly triggerMap?: Record<string, TriggerDefinitionLike>;
 }
 
@@ -1064,34 +1068,6 @@ const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<s
  * mutating `target` in place — so timestamps refresh on `patch`/`replace`
  * unless the caller overrode them.
  */
-/**
- * Run each declared column's `validator.parse()` against the matching field on
- * `document`. Fires user refinements (e.g. `v.number().check(n => n >= 0)`)
- * at write time so an invariant violation surfaces as a `ValidationError`
- * before the row hits SQLite.
- *
- * Skips fields the validator doesn't declare a `parse` for (the structural
- * fakes used in unit tests omit it) and skips fields absent from the document.
- * The shape is iterated, not the document, so unknown fields pass through
- * untouched — they're part of the JSON-blob shape but not part of the schema's
- * declared columns.
- */
-const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>): void => {
-    for (const [field, validator] of Object.entries(definition.shape)) {
-        if (!(field in document)) {
-            continue;
-        }
-
-        if (typeof validator?.parse !== "function") {
-            continue;
-        }
-
-        // Re-parse the field; the validator's own ValidationError carries the
-        // refinement message and propagates up to the caller unchanged.
-        validator.parse(document[field]);
-    }
-};
-
 const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string, unknown>, target: Record<string, unknown>): void => {
     for (const [field, column] of tableColumns(definition)) {
         if (column.onUpdateFn && !(field in provided)) {

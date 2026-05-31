@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { runInfoCommand } from "../../src/commands/info.js";
 import type { Logger } from "../../src/util/logger.js";
@@ -91,18 +91,29 @@ describe("cirrus info", () => {
         expect(result.snapshot.schema?.tables.length).toBeGreaterThan(0);
     });
 
-    test("--json emits a machine-readable snapshot", () => {
-        const { logger, recorded } = recordingLogger();
+    test("--json emits a machine-readable snapshot on stdout (jq-pipeable)", () => {
+        const { logger } = recordingLogger();
+        const written: string[] = [];
+        const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+            written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
 
-        const result = runInfoCommand({ cwd: workdir, json: true, logger });
+            return true;
+        }) as typeof process.stdout.write);
 
-        expect(result.code).toBe(0);
+        try {
+            const result = runInfoCommand({ cwd: workdir, json: true, logger });
 
-        // First info line is JSON; second pass it through JSON.parse.
-        const payload = JSON.parse(recorded.infos[0] ?? "{}");
+            expect(result.code).toBe(0);
 
-        expect(payload.cirrusPackages?.length).toBeGreaterThan(0);
-        expect(payload.wrangler?.name).toBe("demo-worker");
+            // Stdout payload is just the JSON, no Pail prefixes — downstream
+            // tools like `jq` can consume it verbatim.
+            const payload = JSON.parse(written.join(""));
+
+            expect(payload.cirrusPackages?.length).toBeGreaterThan(0);
+            expect(payload.wrangler?.name).toBe("demo-worker");
+        } finally {
+            spy.mockRestore();
+        }
     });
 
     test("missing wrangler is reported but does not fail", () => {
