@@ -130,4 +130,43 @@ describe("scheduledJobs", () => {
             vi.useRealTimers();
         }
     });
+
+    test("Live subscribes to the scheduler WS and renders pushed job lists when client-sourced", async () => {
+        expect.assertions(3);
+
+        // No custom loadJobs → the panel sources from the client, so Live uses
+        // the WebSocket push (not polling).
+        const mock = createMockClient({ listScheduledJobs: () => [] });
+
+        render(withProvider(mock, <ScheduledJobs />));
+
+        await screen.findByTestId("sj-empty");
+
+        // The toggle reads "Live" (push) in client-sourced mode.
+        expect(screen.getByTestId("sj-auto").textContent).toContain("Live");
+
+        fireEvent.click(screen.getByTestId("sj-auto"));
+
+        expect(mock.subscribeScheduledJobs).toHaveBeenCalledTimes(1);
+
+        // A server push renders the jobs without any HTTP refetch.
+        mock.emitJobs([{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "pushed", scheduledFor: 5000 }]);
+
+        await screen.findByTestId("sj-row-pushed");
+
+        expect(screen.getByTestId("sj-row-pushed")).toBeDefined();
+    });
+
+    test("Live falls back to polling labels when a custom loadJobs is supplied", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient();
+
+        render(withProvider(mock, <ScheduledJobs loadJobs={async () => RECORDS} />));
+
+        await screen.findByTestId("sj-table");
+
+        // Host owns the transport → no WS push, the toggle reads "Auto".
+        expect(screen.getByTestId("sj-auto").textContent).toContain("Auto");
+    });
 });

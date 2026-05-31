@@ -78,13 +78,13 @@ climb mid-run). With Live off, the panels stay one-shot (load + manual
 
 The HTTP-backed panels read through admin endpoints over D1, the SessionDO, the
 SchedulerDO and R2 — backends with no subscription channel — so they can't use
-the WebSocket push above. **Scheduled jobs** and **Users** instead offer an
-**Auto** toggle that polls on an interval (`useAutoRefresh`, paused while the
-tab is hidden). For the scheduler this is the right model, not a compromise:
-jobs fire on wall-clock time, so polling lets you watch them count down and
-disappear as their alarms fire — there's no write event for a server to push.
-True server-pushed updates for these would require replicating the ShardDO
-subscription infrastructure into each backend DO.
+the WebSocket push above. **Scheduled jobs** now supports **true server push**: its **Live** toggle opens
+a WebSocket to the SchedulerDO, which broadcasts the full job list on every
+schedule / cancel / alarm-fire — so jobs appear and vanish the instant they
+change. (With a custom `loadJobs` the host owns the transport, so the toggle
+falls back to interval polling.) **Users** still polls on an **Auto** toggle
+(`useAutoRefresh`, paused while the tab is hidden), since the auth store has no
+subscription channel.
 
 A **connection badge** in the header reflects the client's aggregate live-socket
 health (idle / connecting / connected / offline) via `useConnectionStatus`, so

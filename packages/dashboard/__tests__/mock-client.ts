@@ -20,6 +20,8 @@ export interface MockClientHooks {
     emit: (reference: string, value: unknown) => void;
     /** Push a subscription error to every live subscriber registered for `reference`. */
     emitError: (reference: string, message: string) => void;
+    /** Push a job list to every live `subscribeScheduledJobs` subscriber. */
+    emitJobs: (jobs: ScheduleRecord[]) => void;
     listAuthSessions: ReturnType<typeof vi.fn>;
     listAuthUsers: ReturnType<typeof vi.fn>;
     listFunctions: ReturnType<typeof vi.fn>;
@@ -30,6 +32,7 @@ export interface MockClientHooks {
     query: ReturnType<typeof vi.fn>;
     readGlobalTablePage: ReturnType<typeof vi.fn>;
     subscribe: ReturnType<typeof vi.fn>;
+    subscribeScheduledJobs: ReturnType<typeof vi.fn>;
 }
 
 type Impl = (reference: string, args: unknown, options: unknown) => unknown;
@@ -104,6 +107,21 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         }
     };
 
+    // Live scheduled-jobs WS subscription: records callbacks; `emitJobs` pushes.
+    const jobsCallbacks = new Set<(jobs: ScheduleRecord[]) => void>();
+    const subscribeScheduledJobs = vi.fn((onJobs: (jobs: ScheduleRecord[]) => void) => {
+        jobsCallbacks.add(onJobs);
+
+        return () => {
+            jobsCallbacks.delete(onJobs);
+        };
+    });
+    const emitJobs = (jobs: ScheduleRecord[]): void => {
+        for (const callback of jobsCallbacks) {
+            callback(jobs);
+        }
+    };
+
     const asClient = {
         action,
         cancelScheduledJob,
@@ -117,6 +135,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         query,
         readGlobalTablePage,
         subscribe,
+        subscribeScheduledJobs,
     } as unknown as CirrusClient;
 
     return {
@@ -125,6 +144,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         cancelScheduledJob,
         emit,
         emitError,
+        emitJobs,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
@@ -135,5 +155,6 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         query,
         readGlobalTablePage,
         subscribe,
+        subscribeScheduledJobs,
     };
 };

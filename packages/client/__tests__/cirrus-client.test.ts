@@ -906,3 +906,64 @@ describe("cirrusClient — connection status", () => {
         expect(seen).toEqual(["idle"]);
     });
 });
+
+describe("cirrusClient — scheduled-jobs subscription", () => {
+    test("opens the scheduler admin WS with the token and delivers pushed job lists", () => {
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            wsToken: "adm1n",
+        });
+
+        const seen: string[][] = [];
+        const unsubscribe = client.subscribeScheduledJobs((jobs) => seen.push(jobs.map((job) => job.id)));
+
+        const socket = latestSocket();
+
+        // Connects to the scheduler WS path with the admin token in the query.
+        expect(socket.url).toContain("/_cirrus/admin/scheduled/ws");
+        expect(socket.url).toContain("token=adm1n");
+
+        socket.open();
+        socket.receive({ records: [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "j1", scheduledFor: 2 }], type: "jobs" });
+
+        expect(seen).toEqual([["j1"]]);
+
+        // A frame of the wrong type is ignored.
+        socket.receive({ type: "other" });
+
+        expect(seen).toHaveLength(1);
+
+        unsubscribe();
+    });
+
+    test("reconnects after the socket drops", () => {
+        vi.useFakeTimers();
+
+        const client = new CirrusClient({
+            url: "https://app.example",
+            fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+            WebSocket: createMockWebSocket(),
+            wsToken: "adm1n",
+            reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
+        });
+
+        const unsubscribe = client.subscribeScheduledJobs(() => undefined);
+
+        const first = latestSocket();
+
+        first.open();
+        first.triggerClose();
+
+        vi.advanceTimersByTime(15);
+
+        const second = latestSocket();
+
+        expect(second).not.toBe(first);
+        expect(second.url).toContain("/_cirrus/admin/scheduled/ws");
+
+        unsubscribe();
+        vi.useRealTimers();
+    });
+});

@@ -28,6 +28,7 @@ import type {
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
+const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
@@ -359,6 +360,76 @@ export class CirrusClient {
         const body = (await this.adminFetch(SCHEDULED_CANCEL_PATH, "POST", { id })) as { cancelled?: boolean };
 
         return { cancelled: body.cancelled === true };
+    }
+
+    /**
+     * Subscribe to the live scheduled-jobs list over the SchedulerDO's admin
+     * WebSocket. `onJobs` fires with the full list on connect and on every
+     * change (schedule / cancel / alarm-fire). Reconnects with the client's
+     * configured backoff. Requires `wsToken` to be set to the admin token (the
+     * browser can't send an `Authorization` header on a WS). Returns an
+     * unsubscribe function that closes the socket and stops reconnecting.
+     */
+    public subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe {
+        if (this.WebSocketImpl === undefined) {
+            return () => undefined;
+        }
+
+        const base = joinUrl(deriveWsUrl(this.url), SCHEDULED_WS_PATH);
+        const url = this.wsToken === undefined ? base : `${base}?token=${encodeURIComponent(this.wsToken)}`;
+        const reconnect = createReconnect(this.reconnectOptions);
+
+        let socket: null | WebSocket = null;
+        let timer: null | ReturnType<typeof setTimeout> = null;
+        let closed = false;
+
+        const connect = (): void => {
+            if (closed || this.WebSocketImpl === undefined) {
+                return;
+            }
+
+            socket = new this.WebSocketImpl(url);
+
+            socket.addEventListener("open", () => {
+                reconnect.reset();
+            });
+
+            socket.addEventListener("message", (event: MessageEvent) => {
+                try {
+                    const message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
+
+                    if (message.type === "jobs" && Array.isArray(message.records)) {
+                        onJobs(message.records);
+                    }
+                } catch {
+                    /* a non-JSON frame — ignore */
+                }
+            });
+
+            socket.addEventListener("close", () => {
+                socket = null;
+
+                if (!closed) {
+                    timer = setTimeout(connect, reconnect.next());
+                }
+            });
+
+            socket.onerror = () => {
+                /* the runtime follows up with close; reconnect handles it there */
+            };
+        };
+
+        connect();
+
+        return () => {
+            closed = true;
+
+            if (timer !== null) {
+                clearTimeout(timer);
+            }
+
+            socket?.close();
+        };
     }
 
     // --- Functions admin ----------------------------------------------------

@@ -82,13 +82,28 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
         void refresh();
     }, [refresh]);
 
-    // Auto-refresh: the scheduler fires on wall-clock time, so polling lets the
-    // operator watch jobs count down and disappear as their alarms fire. The
-    // SchedulerDO is HTTP-only (no subscription channel), so this is the honest
-    // "live" — not a WS push.
+    // Live updates. When the panel sources jobs from the client (no custom
+    // `loadJobs`), it subscribes to the SchedulerDO's WebSocket — the server
+    // pushes the full list on every schedule/cancel/alarm-fire, so jobs appear
+    // and vanish the instant they change. With a custom `loadJobs` the host owns
+    // the transport, so we fall back to interval polling.
+    const livePush = loadJobs === undefined;
+
+    useEffect(() => {
+        if (!auto || !livePush) {
+            return undefined;
+        }
+
+        return client.subscribeScheduledJobs((records) => {
+            setError(null);
+            setJobs([...records].sort((a, b) => a.scheduledFor - b.scheduledFor));
+        });
+    }, [auto, livePush, client]);
+
+    // Polling fallback for the custom-loader case (no WS to subscribe to).
     useAutoRefresh(() => {
         void refresh();
-    }, auto);
+    }, auto && !livePush);
 
     const cancel = useCallback(
         async (id: string): Promise<void> => {
@@ -128,7 +143,7 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                 }}
                 type="button"
             >
-                {auto ? "Auto: on" : "Auto: off"}
+                {auto ? `${livePush ? "Live" : "Auto"}: on` : `${livePush ? "Live" : "Auto"}: off`}
             </button>
 
             {error !== null && (
