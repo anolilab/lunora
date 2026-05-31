@@ -303,6 +303,92 @@ describe("createWorker", () => {
         expect(headers["x-cirrus-userid"]).toBe("user_42");
         expect(JSON.parse(headers["x-cirrus-identity"]!)).toEqual({ email: "u@example.com" });
     });
+
+    test("denies fan-out by default when authorizeShard is set without authorizeFanOut", async () => {
+        const fanOut = vi.fn();
+        const worker = createWorker({
+            shardDO: shard.namespace,
+            queryCoordinator: {
+                fanOut: fanOut as never,
+                orchestrateMigration: vi.fn() as never,
+                orchestrateExport: vi.fn() as never,
+                orchestrateImport: vi.fn() as never,
+                registry: {} as never,
+            },
+            authorizeShard: () => true,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { table: "messages", merge: { kind: "concat" } } }),
+            }),
+            {},
+            fakeCtx,
+        );
+
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_FANOUT" } });
+        expect(fanOut).not.toHaveBeenCalled();
+    });
+
+    test("invokes authorizeFanOut with identity, table, and functionPath", async () => {
+        const fanOut = vi.fn(async () => ({ data: [], errors: [], failed: 0, ok: 0 }));
+        const authorizeFanOut = vi.fn(() => true);
+        const worker = createWorker({
+            shardDO: shard.namespace,
+            queryCoordinator: {
+                fanOut: fanOut as never,
+                orchestrateMigration: vi.fn() as never,
+                orchestrateExport: vi.fn() as never,
+                orchestrateImport: vi.fn() as never,
+                registry: {} as never,
+            },
+            authorizeFanOut,
+            resolveIdentity: () => ({ userId: "user_42" }),
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { table: "messages", merge: { kind: "concat" } } }),
+            }),
+            {},
+            fakeCtx,
+        );
+
+        expect(authorizeFanOut).toHaveBeenCalledTimes(1);
+        expect(authorizeFanOut).toHaveBeenCalledWith({ userId: "user_42" }, "messages", "messages:list");
+        expect(fanOut).toHaveBeenCalledTimes(1);
+    });
+
+    test("rejects fan-out when authorizeFanOut returns false", async () => {
+        const fanOut = vi.fn();
+        const worker = createWorker({
+            shardDO: shard.namespace,
+            queryCoordinator: {
+                fanOut: fanOut as never,
+                orchestrateMigration: vi.fn() as never,
+                orchestrateExport: vi.fn() as never,
+                orchestrateImport: vi.fn() as never,
+                registry: {} as never,
+            },
+            authorizeFanOut: () => false,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                method: "POST",
+                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { table: "messages", merge: { kind: "concat" } } }),
+            }),
+            {},
+            fakeCtx,
+        );
+
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_FANOUT" } });
+        expect(fanOut).not.toHaveBeenCalled();
+    });
 });
 
 describe("createWorker — migration endpoint", () => {

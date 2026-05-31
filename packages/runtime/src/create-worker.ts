@@ -239,6 +239,18 @@ export interface WorkerOptions {
      */
     authIntrospector?: AuthIntrospector;
     /**
+     * Optional table-level authorization callback for fan-out RPC envelopes.
+     * Called after `resolveIdentity` and before `coordinator.fanOut` walks
+     * the registry. Returning `false` rejects the request with 403
+     * `FORBIDDEN_FANOUT`. When unset, fan-out is denied by default
+     * whenever {@link authorizeShard} is configured — fan-out is a
+     * privileged operation (it dispatches the caller's function across
+     * every live shard for the table) and a per-shard gate is not
+     * sufficient to authorize it. Apps that need client-driven fan-out
+     * must opt in explicitly via this callback.
+     */
+    authorizeFanOut?: (identity: ResolvedIdentity | null, table: string, functionPath: string) => boolean | Promise<boolean>;
+    /**
      * Optional per-shard authorization callback. Called from both the RPC
      * dispatch path and the WebSocket upgrade path after `resolveIdentity`
      * has produced an identity but before the request is forwarded to the
@@ -247,6 +259,12 @@ export interface WorkerOptions {
      * `FORBIDDEN_SHARD` error. When unset, the runtime allows the
      * request — preserving the historical "any client may name any
      * shard" posture.
+     *
+     * Note: this callback does NOT gate fan-out envelopes — fan-out
+     * targets every live shard for a table and must be authorized at the
+     * table level via {@link authorizeFanOut}. Configuring this callback
+     * without `authorizeFanOut` causes fan-out envelopes to be denied by
+     * default.
      */
     authorizeShard?: (identity: ResolvedIdentity | null, shardKey: string) => boolean | Promise<boolean>;
     /**
@@ -475,12 +493,30 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
 
             // Per-shard authorization runs after identity resolution and before
-            // the request is forwarded. Fan-out envelopes target every live
-            // shard for the table (no client-named shardKey), so the
-            // per-shard gate doesn't apply to them — the coordinator's
-            // registry decides which shards to visit. Single-shard
-            // dispatch goes through the callback below.
-            if (options.authorizeShard && !envelope.fanOut) {
+            // the request is forwarded. Fan-out envelopes target every
+            // live shard for the table (no client-named shardKey), so the
+            // per-shard gate cannot authorize them — `authorizeFanOut`
+            // gates fan-out at the table level. Single-shard dispatch
+            // goes through `authorizeShard`.
+            if (envelope.fanOut) {
+                if (options.authorizeFanOut) {
+                    const allowed = await options.authorizeFanOut(identity, envelope.fanOut.table, envelope.functionPath);
+
+                    if (!allowed) {
+                        throw new CirrusError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
+                    }
+                } else if (options.authorizeShard) {
+                    // `authorizeShard` is configured but `authorizeFanOut`
+                    // is not. Fan-out is a privileged op (it bypasses the
+                    // per-shard gate by design), so default-deny instead
+                    // of silently letting any authenticated caller
+                    // enumerate every shard for the table.
+                    throw new CirrusError("Fan-out requires `authorizeFanOut` to be configured on the worker when `authorizeShard` is set", {
+                        code: "FORBIDDEN_FANOUT",
+                        status: 403,
+                    });
+                }
+            } else if (options.authorizeShard) {
                 const shardKeyForAuth = envelope.shardKey ?? defaultShard;
                 const allowed = await options.authorizeShard(identity, shardKeyForAuth);
 
