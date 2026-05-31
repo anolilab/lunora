@@ -200,6 +200,20 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return { result, tables };
         }
 
+        protected override executeStream(functionPath: string, args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+            const registered = CIRRUS_FUNCTIONS[functionPath];
+
+            if (!registered || registered.kind !== "stream" || registered.visibility === "internal") {
+                return null;
+            }
+
+            this.ensureMigrated();
+
+            return {
+                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx(), args, signal),
+            };
+        }
+
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return CIRRUS_TABLE_REFS[table];
         }

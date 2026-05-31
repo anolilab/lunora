@@ -792,9 +792,14 @@ export const internalAction = internalActionBase as unknown as <A extends ArgsVa
  * registered function.
  */
 export interface RegisteredCirrusFunction {
-    kind: "action" | "mutation" | "query";
+    kind: "action" | "mutation" | "query" | "stream";
     args: Record<string, unknown>;
-    handler: (context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown;
+    /**
+     * For \`"action" | "mutation" | "query"\` the handler is awaited and its result returned.
+     * For \`"stream"\` the handler returns an \`AsyncIterable\` synchronously and takes an
+     * \`AbortSignal\` as a third argument — the runtime drives it frame-by-frame.
+     */
+    handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>);
     /** \`"internal"\` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
@@ -1226,6 +1231,20 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const result = await registered.handler(ctx, args);
 
             return { result, tables };
+        }
+
+        protected override executeStream(functionPath: string, args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+            const registered = CIRRUS_FUNCTIONS[functionPath];
+
+            if (!registered || registered.kind !== "stream" || registered.visibility === "internal") {
+                return null;
+            }
+
+            this.ensureMigrated();
+
+            return {
+                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx(), args, signal),
+            };
         }
 
         protected override tableRefs(table: string): Record<string, string> | undefined {

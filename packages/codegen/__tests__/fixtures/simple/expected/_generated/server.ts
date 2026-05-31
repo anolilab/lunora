@@ -93,9 +93,14 @@ export const internalAction = internalActionBase as unknown as <A extends ArgsVa
  * registered function.
  */
 export interface RegisteredCirrusFunction {
-    kind: "action" | "mutation" | "query";
+    kind: "action" | "mutation" | "query" | "stream";
     args: Record<string, unknown>;
-    handler: (context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown;
+    /**
+     * For `"action" | "mutation" | "query"` the handler is awaited and its result returned.
+     * For `"stream"` the handler returns an `AsyncIterable` synchronously and takes an
+     * `AbortSignal` as a third argument — the runtime drives it frame-by-frame.
+     */
+    handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>);
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
