@@ -1,68 +1,51 @@
 import type { FunctionReference, Preloaded } from "@cirrus/client";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
 
-import { getCache } from "./cache.js";
+import { cirrusQueryKey, getSubscriptionRegistry } from "./cache.js";
 import { useCirrus } from "./cirrus-provider.js";
 
 /**
  * Hydrate a query from a {@link Preloaded} token produced by `preloadQuery`
  * during SSR, then keep it live.
  *
- * The first render — on the server and on the client before effects run —
- * returns the preloaded value, so the server markup and the initial client
- * markup match (no hydration mismatch, no loading flash). Once mounted, the
- * hook seeds the shared query cache with that value (skipping the redundant
- * initial fetch) and attaches a WS subscription, so later server pushes update
- * the value just like {@link useQuery}.
+ * The first render returns the preloaded value (TanStack's `initialData`),
+ * so the server markup and the initial client markup match — no hydration
+ * mismatch, no loading flash. After mount, a WS subscription attaches so
+ * later server pushes update the value just like {@link useQuery}.
+ *
+ * The {@link Preloaded} token's `value` seeds `initialData`; we don't need a
+ * full dehydrate/hydrate dance because the consumer hands us the resolved
+ * value directly. Apps that want to share a pre-populated QueryClient across
+ * many preloaded queries can pass their own `queryClient` to `CirrusProvider`
+ * and hydrate it themselves via TanStack's `hydrate(qc, dehydratedState)`.
  */
 export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
     const client = useCirrus();
-    const cache = getCache(client);
+    const queryClient = useQueryClient();
 
     const { args, functionPath, shardKey, value } = preloaded;
     const fn = useMemo<FunctionReference>(() => ({ __cirrusRef: functionPath }), [functionPath]);
-    const key = cache.keyOf(fn, args, shardKey);
+    const queryKey = useMemo(() => cirrusQueryKey(fn, args, shardKey), [fn.__cirrusRef, JSON.stringify(args), shardKey]);
 
-    // Stable subscribe handle so useSyncExternalStore doesn't churn (mirrors useQuery).
-    const listenersRef = useRef(new Set<() => void>());
-    const subscribe = useRef((cb: () => void) => {
-        listenersRef.current.add(cb);
-
-        return () => {
-            listenersRef.current.delete(cb);
-        };
-    }).current;
-
-    const acquireRef = useRef({ args, fn, shardKey, value });
-
-    acquireRef.current = { args, fn, shardKey, value };
+    const { data } = useTanStackQuery<T>({
+        // Seed the cache with the server value so the first paint doesn't
+        // re-fetch. TanStack treats `initialData` as fresh — the WS push from
+        // the registry is what supplies subsequent updates.
+        initialData: value,
+        queryFn: () => client.query(fn, args as Record<string, never>, { shardKey }) as Promise<T>,
+        queryKey,
+        staleTime: Number.POSITIVE_INFINITY,
+    });
 
     useEffect(() => {
-        const notify = (): void => {
-            for (const listener of listenersRef.current) {
-                listener();
-            }
-        };
+        const registry = getSubscriptionRegistry(client);
 
-        const { args: currentArgs, fn: currentFn, shardKey: currentShardKey, value: currentValue } = acquireRef.current;
-        const handle = cache.acquire(currentFn, currentArgs, currentShardKey, notify, { initialData: { value: currentValue } });
+        return registry.attach(queryClient, queryKey, fn, args, shardKey);
+    }, [client, queryClient, JSON.stringify(queryKey)]);
 
-        notify();
-
-        return () => {
-            handle.release();
-        };
-    }, [cache, key]);
-
-    const getSnapshot = (): T => {
-        const entry = cache.peek(key);
-
-        // Fall back to the preloaded value until live data lands — covers both
-        // the pre-effect first render and an entry another hook left "loading".
-        return (entry?.data ?? value) as T;
-    };
-
-    const getServerSnapshot = (): T => value;
-
-    return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+    // `data` is typed as `T | undefined` because TanStack hedges its type
+    // against an empty initialData, but our `initialData: value` is always
+    // present so the cast is safe.
+    return data as T;
 }

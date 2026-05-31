@@ -1,7 +1,8 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
 
-import { getCache } from "./cache.js";
+import { cirrusQueryKey, getSubscriptionRegistry } from "./cache.js";
 import { useCirrus } from "./cirrus-provider.js";
 import type { UseQueryOptions } from "./types.js";
 
@@ -9,77 +10,52 @@ import type { UseQueryOptions } from "./types.js";
  * Subscribe to a server query.
  *
  * Returns `undefined` until the first response lands. Pass `"skip"` for
- * `args` to short-circuit the query (no network call, no cache entry).
+ * `args` to short-circuit the query (no network call, no subscription).
  *
- * Multiple components calling `useQuery` with the same arguments share a
- * single underlying network call thanks to the shared cache in `cache.ts`.
+ * Internally this routes through TanStack Query: the queryKey is
+ * `["cirrus", fn.__cirrusRef, args, shardKey]` (TanStack hashes structurally
+ * so an args object built in a different key order still dedupes). The
+ * subscription registry shares a single WS subscription across every consumer
+ * of the same queryKey; pushes call `queryClient.setQueryData(...)`.
  */
 export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "skip", options: UseQueryOptions = {}): ReturnOf<F> | undefined {
     const client = useCirrus();
-    const cache = getCache(client);
+    const queryClient = useQueryClient();
+    const { shardKey } = options;
 
     const skipped = args === "skip";
     const argsRecord = (skipped ? {} : (args as Record<string, unknown>)) ?? {};
-    const { shardKey } = options;
-    const key = cache.keyOf(fn, argsRecord, shardKey);
 
-    const releaseRef = useRef<(() => void) | null>(null);
-    const lastKeyRef = useRef<string | null>(null);
+    // Memoise the queryKey so the effect dep array tracks structural equality
+    // via TanStack's hash, not reference equality of the args object.
+    const queryKey = useMemo(() => cirrusQueryKey(fn, argsRecord, shardKey), [fn.__cirrusRef, JSON.stringify(argsRecord), shardKey]);
 
-    // Maintain a stable subscribe handle so useSyncExternalStore doesn't churn.
-    const listenersRef = useRef(new Set<() => void>());
-
-    const subscribe = useRef((cb: () => void) => {
-        listenersRef.current.add(cb);
-
-        return () => {
-            listenersRef.current.delete(cb);
-        };
-    }).current;
-
-    // Latest acquire inputs. `key` already encodes (fn, argsRecord, shardKey),
-    // so the effect re-runs whenever any of them changes; reading them from a
-    // ref keeps the dependency array honest without re-acquiring every render.
-    const acquireRef = useRef({ argsRecord, fn, shardKey });
-
-    acquireRef.current = { argsRecord, fn, shardKey };
+    const { data } = useTanStackQuery<ReturnOf<F>>({
+        enabled: !skipped,
+        queryFn: () => client.query<F>(fn, argsRecord as ArgsOf<F>, { shardKey }) as Promise<ReturnOf<F>>,
+        queryKey,
+        // Cirrus is push-driven: once the initial fetch resolves, the WS owns
+        // freshness. Staleness only matters when the subscription is missing,
+        // and the registry handles that with a polling fallback.
+        staleTime: Number.POSITIVE_INFINITY,
+    });
 
     useEffect(() => {
         if (skipped) {
             return;
         }
 
-        const notify = (): void => {
-            for (const listener of listenersRef.current) {
-                listener();
-            }
-        };
+        const registry = getSubscriptionRegistry(client);
 
-        const { argsRecord: currentArgs, fn: currentFn, shardKey: currentShardKey } = acquireRef.current;
-        const handle = cache.acquire(currentFn, currentArgs, currentShardKey, notify);
+        return registry.attach(queryClient, queryKey, fn, argsRecord, shardKey);
+    }, [client, queryClient, registry_key(queryKey), skipped]);
 
-        releaseRef.current = handle.release;
-        lastKeyRef.current = key;
-
-        // Trigger an immediate notify in case data already exists.
-        notify();
-
-        return () => {
-            handle.release();
-            releaseRef.current = null;
-            lastKeyRef.current = null;
-        };
-    }, [cache, key, skipped]);
-
-    const getSnapshot = (): ReturnOf<F> | undefined => {
-        if (skipped) {
-            return undefined;
-        }
-
-        const entry = cache.peek(key);
-
-        return entry?.data as ReturnOf<F> | undefined;
-    };
-
-    return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    return data;
 }
+
+/**
+ * Stringify the queryKey for the effect's dependency array. TanStack hashes
+ * queryKeys structurally, so we use the same shape here to avoid re-attaching
+ * on every render when the args object identity changes but its contents don't.
+ */
+const registry_key = (queryKey: ReturnType<typeof cirrusQueryKey>): string => JSON.stringify(queryKey);
