@@ -38,14 +38,15 @@ const createDb = async (initiallyAppliedSql: string[] = []): Promise<FakeDb> => 
             run: async () => {
                 executed.push({ sql, binds: [...binds] });
 
-                // Drizzle inlines the hash literal via sql.raw, so it shows up in the SQL,
-                // not in binds. Parse it back out so the fake can simulate applied state.
-                const hashPattern = /INSERT INTO __drizzle_migrations \(hash, created_at\) VALUES \('([0-9a-f]+)',/u;
-                // eslint-disable-next-line sonarjs/prefer-regexp-exec -- false positive on String.match with captured groups
-                const insertMatch = sql.match(hashPattern);
+                // The runner now binds `hash` and `created_at` as parameters
+                // (drizzle emits `?` placeholders). Snapshot the bound hash so
+                // the fake can simulate applied state.
+                if (sql.includes("INSERT INTO") && sql.includes("__drizzle_migrations")) {
+                    const boundHash = binds[0];
 
-                if (insertMatch) {
-                    appliedHashes.push(insertMatch[1] as string);
+                    if (typeof boundHash === "string" && /^[0-9a-f]+$/u.test(boundHash)) {
+                        appliedHashes.push(boundHash);
+                    }
                 }
 
                 return { success: true };
@@ -127,6 +128,43 @@ describe("migrationRunner", () => {
                     { version: 2, name: "copy_paste", sql: identicalSql },
                 ]),
         ).toThrow(/identical SQL/u);
+    });
+
+    test("rejects multi-statement migration SQL", async () => {
+        const db = await createDb();
+        const runner = new MigrationRunner(db, [
+            {
+                version: 1,
+                name: "multi",
+                sql: "CREATE TABLE a (id INTEGER); CREATE TABLE b (id INTEGER);",
+            },
+        ]);
+
+        await expect(runner.run()).rejects.toThrow(/more than one SQL statement/u);
+    });
+
+    test("permits semicolons inside string literals", async () => {
+        const db = await createDb();
+        const runner = new MigrationRunner(db, [{ version: 1, name: "literal", sql: "INSERT INTO config (k, v) VALUES ('label', 'a;b');" }]);
+
+        const result = await runner.run();
+
+        expect(result.applied.map((m) => m.version)).toEqual([1]);
+    });
+
+    test("permits semicolons inside comments", async () => {
+        const db = await createDb();
+        const runner = new MigrationRunner(db, [
+            {
+                version: 1,
+                name: "comment",
+                sql: "-- multi; line; semis\nCREATE TABLE c (id INTEGER);",
+            },
+        ]);
+
+        const result = await runner.run();
+
+        expect(result.applied.map((m) => m.version)).toEqual([1]);
     });
 
     test("sorts out-of-order migrations before applying", async () => {

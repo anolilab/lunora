@@ -27,10 +27,29 @@ const fromBase64Url = (input: string): Uint8Array => {
 const importHmacKey = async (secret: string): Promise<CryptoKey> =>
     crypto.subtle.importKey("raw", textEncoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 
-const canonicalize = (key: string, exp: number, method: "GET" | "PUT"): string => `${method}\n${key}\n${exp}`;
+// Host is lowercased so a signature minted for `Example.com` verifies against
+// `example.com` — DNS is case-insensitive, but the URL parser preserves case.
+const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: number): string => `${method}\n${host.toLowerCase()}\n${key}\n${exp}`;
+
+const extractHost = (input: string): string => {
+    // Tolerate a bare host-or-base by trying URL first; fall back to splitting
+    // off the path. Either way, the canonical form is just `host[:port]`.
+    try {
+        return new URL(input).host;
+    } catch {
+        const noScheme = input.replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "");
+
+        return noScheme.split("/")[0] ?? "";
+    }
+};
 
 /**
  * Worker-signed URL: `${publicBaseUrl}/${key}?exp=<unix>&method=<GET|PUT>&sig=<base64url-hmac>`.
+ *
+ * The HMAC canonical includes the URL host so a signature minted for one bucket
+ * cannot be replayed against another host on the same signing secret. Even so,
+ * the signing secret MUST NOT be shared across buckets/tenants — host binding
+ * narrows replay surface but is not a substitute for per-tenant key isolation.
  *
  * The Worker handling `GET /storage/:key` should call {@link verifySignedUrl}
  * to validate the signature + expiry before streaming the R2 body.
@@ -45,8 +64,9 @@ export const buildSignedUrl = async (
     const method = args.method ?? "GET";
     const expiresInSeconds = args.expiresInSeconds ?? 60 * 60;
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
+    const host = extractHost(args.baseUrl);
     const cryptoKey = await importHmacKey(args.secret);
-    const signature = await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(canonicalize(args.key, exp, method)));
+    const signature = await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(canonicalize(method, host, args.key, exp)));
     const sig = toBase64Url(new Uint8Array(signature));
 
     const base = args.baseUrl.endsWith("/") ? args.baseUrl.slice(0, -1) : args.baseUrl;
@@ -58,7 +78,12 @@ export const buildSignedUrl = async (
 export interface VerifyResult {
     key?: string;
     method?: "GET" | "PUT";
-    reason?: "expired" | "bad_signature" | "malformed";
+    /**
+     * Internal-only failure reason for server logs/diagnostics. **Do not echo
+     * to clients** — a precise reason ("expired" vs "bad_signature") is a
+     * signing oracle. Public responses should expose only `valid`.
+     */
+    reason?: "bad_signature" | "expired" | "malformed";
     valid: boolean;
 }
 
@@ -91,7 +116,12 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
     const key = url.pathname.replace(/^\//, "").split("/").map(decodeURIComponent).join("/");
     const cryptoKey = await importHmacKey(secret);
     const sigBytes = fromBase64Url(sig);
-    const valid = await crypto.subtle.verify("HMAC", cryptoKey, sigBytes as unknown as BufferSource, textEncoder.encode(canonicalize(key, exp, method)));
+    const valid = await crypto.subtle.verify(
+        "HMAC",
+        cryptoKey,
+        sigBytes as unknown as BufferSource,
+        textEncoder.encode(canonicalize(method, url.host, key, exp)),
+    );
 
     if (!valid) {
         return { valid: false, reason: "bad_signature" };

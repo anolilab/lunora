@@ -281,11 +281,69 @@ const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string,
 const isUniqueViolation = (error: unknown): boolean => error instanceof Error && /unique constraint failed/i.test(error.message);
 
 /**
+ * Capacity of the per-ctx-db `id → tableName` LRU. Bounded so a long-lived ctx
+ * (the writer outlives a single request) doesn't accumulate unbounded entries.
+ */
+const TABLE_NAME_CACHE_CAPACITY = 128;
+
+/**
+ * LRU cache over `id → tableName` resolutions. Backed by a `Map` whose insertion
+ * order is the LRU order: on hit we delete-then-reinsert to move the key to the
+ * tail; on overflow we evict the head (the oldest entry). Per-instance so a new
+ * ctx-db starts cold and a unit test never inherits another's cache.
+ */
+const createTableNameCache = (): {
+    get: (id: string) => string | undefined;
+    set: (id: string, table: string) => void;
+} => {
+    const map = new Map<string, string>();
+
+    return {
+        get: (id) => {
+            const hit = map.get(id);
+
+            if (hit === undefined) {
+                return undefined;
+            }
+
+            // Move to tail (most-recently-used) by re-inserting.
+            map.delete(id);
+            map.set(id, hit);
+
+            return hit;
+        },
+        set: (id, table) => {
+            if (map.has(id)) {
+                map.delete(id);
+            } else if (map.size >= TABLE_NAME_CACHE_CAPACITY) {
+                const oldest = map.keys().next().value;
+
+                if (oldest !== undefined) {
+                    map.delete(oldest);
+                }
+            }
+
+            map.set(id, table);
+        },
+    };
+};
+
+/**
  * Probe each table for `id`, mirroring the DO's id-only `get`/`patch`/`delete`
  * resolution. The schema handed in is the global-table subset, so this is a
- * small fixed scan.
+ * small fixed scan — we fan the probes out in parallel and return on the first
+ * hit. A small LRU caches successful lookups so a hot id (e.g. the same row
+ * updated repeatedly within a request) avoids the fan-out on every call.
  */
-const tableNameFromId = async (exec: D1Exec, schema: SchemaLike, id: string): Promise<string | undefined> => {
+const tableNameFromId = async (exec: D1Exec, schema: SchemaLike, id: string, cache: ReturnType<typeof createTableNameCache>): Promise<string | undefined> => {
+    const cached = cache.get(id);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const candidates: string[] = [];
+
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         // Skip tables that don't live in D1 — `.shardBy()` is spread across
         // many DOs and would never have a D1 row to find. The default root
@@ -297,10 +355,23 @@ const tableNameFromId = async (exec: D1Exec, schema: SchemaLike, id: string): Pr
             continue;
         }
 
-        const rows = await exec.all(`SELECT 1 FROM ${quoteIdentifier(tableName)} WHERE "id" = ? LIMIT 1`, [id]);
+        candidates.push(tableName);
+    }
 
-        if (rows.length > 0) {
-            return tableName;
+    // Fire every probe at once; the first non-empty result wins.
+    const probes = await Promise.all(
+        candidates.map(async (tableName) => {
+            const rows = await exec.all(`SELECT 1 FROM ${quoteIdentifier(tableName)} WHERE "id" = ? LIMIT 1`, [id]);
+
+            return { found: rows.length > 0, tableName };
+        }),
+    );
+
+    for (const result of probes) {
+        if (result.found) {
+            cache.set(id, result.tableName);
+
+            return result.tableName;
         }
     }
 
@@ -312,6 +383,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const scheduler = options.scheduler ?? throwingScheduler;
+
+    // Per-ctx-db LRU bounding the `id → tableName` resolution cost. See
+    // {@link createTableNameCache} for the size cap rationale.
+    const tableNameCache = createTableNameCache();
 
     let triggerDepth = 0;
 
@@ -336,8 +411,11 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
-     * Rebuild a counter from a full table scan. Cheap to call (cache-guarded);
+     * Rebuild a counter from a paged table scan. Cheap to call (cache-guarded);
      * idempotent — TRUNCATE then re-tally so a previously-skewed counter heals.
+     * Pages via a keyset cursor on `id` (the table's primary key) with a fixed
+     * batch size, so a large global table never has to fit in a single result
+     * buffer.
      */
     const ensureBackfilled = async (tableName: string, index: AggregateIndexDefinitionLike): Promise<boolean> => {
         const cacheKey = `${tableName}::${index.name}`;
@@ -356,24 +434,45 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         }
 
         const definition = schema.tables[tableName]!;
-        const rows = await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)}`, []);
         const by = index.by ?? [];
         const tallies = new Map<string, number>();
+        const BATCH_SIZE = 500;
+        let cursorId: string | undefined;
 
-        for (const row of rows) {
-            const doc = decodeRow(definition, row);
+        // Keyset pagination on `id` — page by the last row's id rather than
+        // buffering the entire table. Tallies accumulate incrementally so the
+        // memory footprint is `unique(by) ` keys, not row count.
+        while (true) {
+            const pageRows =
+                cursorId === undefined
+                    ? await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY "id" ASC LIMIT ?`, [BATCH_SIZE])
+                    : await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" > ? ORDER BY "id" ASC LIMIT ?`, [cursorId, BATCH_SIZE]);
 
-            if (!doc) {
-                continue;
+            if (pageRows.length === 0) {
+                break;
             }
 
-            if (index.where && !matchesStaticWhere(doc, index.where)) {
-                continue;
+            for (const row of pageRows) {
+                const doc = decodeRow(definition, row);
+
+                if (!doc) {
+                    continue;
+                }
+
+                if (index.where && !matchesStaticWhere(doc, index.where)) {
+                    continue;
+                }
+
+                const encoded = encodeAggregateKey(by, doc);
+
+                tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
             }
 
-            const encoded = encodeAggregateKey(by, doc);
+            cursorId = pageRows.at(-1)?.["id"] as string | undefined;
 
-            tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
+            if (pageRows.length < BATCH_SIZE) {
+                break;
+            }
         }
 
         const aggTable = aggregateTableName(tableName, index.name);
@@ -462,7 +561,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
     /**
      * Lazy backfill of a rank companion. Mirrors the aggregate counter twin —
-     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db.
+     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db. Pages
+     * the source table via keyset cursor on `id` so an unbounded table never
+     * has to fit in a single SELECT.
      */
     const ensureRankBackfilled = async (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> => {
         const cacheKey = `${tableName}::rank::${index.name}`;
@@ -481,7 +582,6 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         }
 
         const definition = schema.tables[tableName]!;
-        const rows = await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)}`, []);
         const rankTable = rankTableName(tableName, index.name);
 
         await exec.run(`DELETE FROM ${quoteIdentifier(rankTable)}`, []);
@@ -491,21 +591,41 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
         const insertSql = `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`;
 
-        for (const row of rows) {
-            const doc = decodeRow(definition, row);
+        const BATCH_SIZE = 500;
+        let cursorId: string | undefined;
 
-            if (!doc) {
-                continue;
+        while (true) {
+            const pageRows =
+                cursorId === undefined
+                    ? await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY "id" ASC LIMIT ?`, [BATCH_SIZE])
+                    : await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" > ? ORDER BY "id" ASC LIMIT ?`, [cursorId, BATCH_SIZE]);
+
+            if (pageRows.length === 0) {
+                break;
             }
 
-            if (index.where && !matchesRankStaticWhere(doc, index.where)) {
-                continue;
+            for (const row of pageRows) {
+                const doc = decodeRow(definition, row);
+
+                if (!doc) {
+                    continue;
+                }
+
+                if (index.where && !matchesRankStaticWhere(doc, index.where)) {
+                    continue;
+                }
+
+                const partitionKey = encodePartitionKey(index.partitionBy ?? [], doc);
+                const sortValues = index.sortBy.map((key) => serializeColumnValue(doc[key.field] ?? null));
+
+                await exec.run(insertSql, [doc["_id"] as string, partitionKey, ...sortValues]);
             }
 
-            const partitionKey = encodePartitionKey(index.partitionBy ?? [], doc);
-            const sortValues = index.sortBy.map((key) => serializeColumnValue(doc[key.field] ?? null));
+            cursorId = pageRows.at(-1)?.["id"] as string | undefined;
 
-            await exec.run(insertSql, [doc["_id"] as string, partitionKey, ...sortValues]);
+            if (pageRows.length < BATCH_SIZE) {
+                break;
+            }
         }
 
         rankBackfilled.set(cacheKey, true);
@@ -1032,11 +1152,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const usable = hasMore ? rankRows.slice(0, take) : rankRows;
 
             // Batched hydration: a single `IN (?, ?, …)` per chunk instead of
-            // one SELECT per rank row. D1's SQL-parameter ceiling is on the
-            // order of 100/query, so we chunk and fan the chunks out via
-            // Promise.all. A 100-row page used to issue 101 D1 queries;
-            // it now issues ⌈n/IN_CHUNK_SIZE⌉.
-            const IN_CHUNK_SIZE = 100;
+            // one SELECT per rank row. D1 documents a 100-parameter ceiling per
+            // statement (https://developers.cloudflare.com/d1/platform/limits/),
+            // so we chunk well below it to leave headroom for any future
+            // wrapping params and to avoid skirting the limit. A 100-row page
+            // used to issue 101 D1 queries; it now issues ⌈n/IN_CHUNK_SIZE⌉.
+            const IN_CHUNK_SIZE = 50;
             const ids = usable.map((rankRow) => rankRow[RANK_TIEBREAK] as string);
             const chunks: string[][] = [];
 
@@ -1098,7 +1219,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         },
 
         async delete(id) {
-            const tableName = await tableNameFromId(exec, schema, id);
+            const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
 
             if (!tableName) {
                 return;
@@ -1240,7 +1361,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         },
 
         async get(id) {
-            const tableName = await tableNameFromId(exec, schema, id);
+            const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
 
             if (!tableName) {
                 return null;
@@ -1251,6 +1372,15 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             return decodeRow(schema.tables[tableName]!, rows[0]);
         },
 
+        /**
+         * Insert a document. When the document carries `_id`, that value is
+         * used as the row's primary key (required for snapshot import + tests
+         * that pin ids). **Security note for callers:** never pass an `_id`
+         * sourced from untrusted client input — a caller able to choose its own
+         * id can collide with peer rows, defeat unique constraints, and forge
+         * references in foreign tables. Strip `_id` from client payloads in
+         * mutations and only allow it on dev/admin import paths.
+         */
         async insert(tableName, document) {
             const definition = schema.tables[tableName];
 
@@ -1296,7 +1426,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         },
 
         async patch(id, patch) {
-            const tableName = await tableNameFromId(exec, schema, id);
+            const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
 
             if (!tableName) {
                 throw new Error(`document not found: ${id}`);
@@ -1343,7 +1473,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         },
 
         async replace(id, document) {
-            const tableName = await tableNameFromId(exec, schema, id);
+            const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
 
             if (!tableName) {
                 throw new Error(`document not found: ${id}`);

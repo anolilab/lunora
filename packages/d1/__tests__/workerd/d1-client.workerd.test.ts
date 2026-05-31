@@ -70,17 +70,14 @@ describe("d1 (workerd)", () => {
         expect(rows.results.every((row) => /^[0-9a-f]{64}$/u.test(row.hash))).toBe(true);
     });
 
-    test("migrationRunner applies multi-statement migrations atomically via drizzle batch", async () => {
-        // Two CREATE TABLEs in one migration — exercises the `;`-split + batch
-        // path. If drizzle's `SQLiteRaw._prepare()` / `stmt.bind()` chain ever
-        // regresses, this test fails at the workerd boundary where unit-test
-        // fakes can't catch it.
+    test("migrationRunner applies separate single-statement migrations in order", async () => {
+        // Each migration must be a single SQL statement (multi-statement
+        // migrations were rejected after the security audit — semicolon-split
+        // mishandles literals + comments). Two `CREATE TABLE`s become two
+        // migrations; the runner applies them in version order.
         const migrations = [
-            {
-                version: 1,
-                name: "two_tables",
-                sql: "CREATE TABLE users (id TEXT PRIMARY KEY);\nCREATE TABLE posts (id TEXT PRIMARY KEY, author TEXT NOT NULL);",
-            },
+            { version: 1, name: "users", sql: "CREATE TABLE users (id TEXT PRIMARY KEY)" },
+            { version: 2, name: "posts", sql: "CREATE TABLE posts (id TEXT PRIMARY KEY, author TEXT NOT NULL)" },
         ];
 
         const result = await SELF.fetch("https://test/migrate", {
@@ -88,9 +85,9 @@ describe("d1 (workerd)", () => {
             body: JSON.stringify({ migrations }),
         }).then((r) => r.json() as Promise<{ applied: { version: number }[]; skipped: { version: number }[] }>);
 
-        expect(result.applied.map((m) => m.version)).toEqual([1]);
+        expect(result.applied.map((m) => m.version)).toEqual([1, 2]);
 
-        // Both tables present — the batch executed end-to-end.
+        // Both tables present — each migration ran end-to-end.
         const users = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").first<{ name: string }>();
         const posts = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='posts'").first<{ name: string }>();
 

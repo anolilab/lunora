@@ -171,13 +171,13 @@ export const createVectorSyncHook = (options: { schema: SchemaLike; vectors: Vec
         }
 
         if (event.op === "delete") {
-            for (const index of inlineIndexes) {
-                await vectors.deleteByIds(index.name, [event.id]);
-            }
-
-            for (const [name] of standaloneIndexes) {
-                await vectors.deleteByIds(name, [event.id]);
-            }
+            // Each Vectorize index is independent: a delete on index A can't
+            // observe a delete on index B, so the per-index calls run in
+            // parallel rather than serially.
+            await Promise.all([
+                ...inlineIndexes.map((index) => vectors.deleteByIds(index.name, [event.id])),
+                ...standaloneIndexes.map(([name]) => vectors.deleteByIds(name, [event.id])),
+            ]);
 
             return;
         }
@@ -188,28 +188,28 @@ export const createVectorSyncHook = (options: { schema: SchemaLike; vectors: Vec
             return;
         }
 
-        for (const index of inlineIndexes) {
-            const value = row[index.field];
-
-            if (value === undefined || value === null) {
-                continue;
-            }
-
-            await vectors.upsert(index.name, {
-                id: event.id,
-                input: String(value),
-                embed: index.embed,
-                metadata: index.metadata ? pickMetadata(row, index.metadata) : undefined,
-            });
-        }
-
-        for (const [name, definition] of standaloneIndexes) {
-            await vectors.upsert(name, {
-                id: event.id,
-                input: definition.select(row),
-                embed: definition.embed,
-                metadata: definition.metadata?.(row),
-            });
-        }
+        // Same per-index independence on the write path — fan the upserts out
+        // and await as a group. Embedders may make remote calls, so the
+        // serial loop was a hidden N× latency multiplier per write.
+        await Promise.all([
+            ...inlineIndexes
+                .filter((index) => row[index.field] !== undefined && row[index.field] !== null)
+                .map((index) =>
+                    vectors.upsert(index.name, {
+                        id: event.id,
+                        input: String(row[index.field]),
+                        embed: index.embed,
+                        metadata: index.metadata ? pickMetadata(row, index.metadata) : undefined,
+                    }),
+                ),
+            ...standaloneIndexes.map(([name, definition]) =>
+                vectors.upsert(name, {
+                    id: event.id,
+                    input: definition.select(row),
+                    embed: definition.embed,
+                    metadata: definition.metadata?.(row),
+                }),
+            ),
+        ]);
     };
 };

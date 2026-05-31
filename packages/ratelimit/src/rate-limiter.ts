@@ -7,9 +7,21 @@ export interface RateLimiterOptions<Names extends string> {
     config: RateLimitConfigMap<Names>;
     /** Keys that are always denied, regardless of limit state. */
     denyList?: Iterable<string>;
+    /**
+     * Optional key normalizer applied to every incoming `args.key` (the
+     * deny-list check, the storage key, and downstream shard selection all see
+     * the normalized form). Use for case-folding, trimming, or canonicalizing
+     * IPs/emails so equivalent inputs share a single bucket. The deny-list
+     * itself is consulted as-is; normalize the deny-list entries up front to
+     * match.
+     */
+    normalize?: (key: string) => string;
     /** Clock injection for tests. Defaults to `Date.now`. */
     now?: () => number;
-    /** Shard selector in `[0, 1)`, injected for tests. Defaults to `Math.random`. */
+    /**
+     * @deprecated Shard selection is now a deterministic hash of `args.key`,
+     * so this option is unused. Retained for type compatibility.
+     */
     random?: () => number;
     /** Persistence. Defaults to a per-instance in-memory store. */
     store?: RateLimitStore;
@@ -21,6 +33,24 @@ export interface RateLimiterOptions<Names extends string> {
 // shard suffix is unambiguous too.
 const storageKeyFor = (name: string, key: string | undefined): string =>
     key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`;
+
+/**
+ * Deterministic shard selector. A FNV-1a-style rolling hash over the storage
+ * key — same input always lands on the same shard so a single hot key can't
+ * thrash across buckets the way `Math.random()` did. Per-key throughput is
+ * therefore `rate/shards`; aggregate throughput across distinct keys spreads
+ * uniformly. Use `shards: 1` (or unset) for a single bucket.
+ */
+const hashToShard = (storageKey: string, shards: number): number => {
+    let hash = 0;
+
+    for (let index = 0; index < storageKey.length; index += 1) {
+        // eslint-disable-next-line unicorn/prefer-math-trunc -- 32-bit integer wraparound (`| 0`) is the correct hashing primitive here; Math.trunc would not wrap.
+        hash = (hash * 31 + storageKey.charCodeAt(index)) | 0;
+    }
+
+    return Math.abs(hash) % shards;
+};
 
 // A sharded config splits its rate and capacity evenly across N sub-buckets,
 // each enforced independently. `shards <= 1` (or unset) leaves the config as-is.
@@ -38,17 +68,17 @@ export class RateLimiter<Names extends string = string> {
 
     private readonly denyList: Set<string>;
 
-    private readonly now: () => number;
+    private readonly normalize: (key: string) => string;
 
-    private readonly random: () => number;
+    private readonly now: () => number;
 
     private readonly store: RateLimitStore;
 
     constructor(options: RateLimiterOptions<Names>) {
         this.config = options.config;
         this.denyList = new Set(options.denyList);
+        this.normalize = options.normalize ?? ((key: string): string => key);
         this.now = options.now ?? Date.now;
-        this.random = options.random ?? Math.random;
         this.store = options.store ?? createMemoryStore();
 
         for (const [name, config] of Object.entries<RateLimitConfig>(this.config)) {
@@ -73,16 +103,17 @@ export class RateLimiter<Names extends string = string> {
         const config = this.resolve(name);
         const shards = config.shards ?? 1;
         const now = this.now();
+        const normalizedKey = args.key === undefined ? undefined : this.normalize(args.key);
 
         if (shards > 1) {
             const shardConfig = perShardConfig(config, shards);
-            const stored = await Promise.all(this.shardKeys(name, args.key, shards).map((storageKey) => Promise.resolve(this.store.get(storageKey))));
+            const stored = await Promise.all(this.shardKeys(name, normalizedKey, shards).map((storageKey) => Promise.resolve(this.store.get(storageKey))));
             const value = stored.reduce((total, prior) => total + availableAt(shardConfig, prior ?? undefined, now).value, 0);
 
             return { config, ts: now, value };
         }
 
-        const current = availableAt(config, await this.store.get(storageKeyFor(name, args.key)), now);
+        const current = availableAt(config, await this.store.get(storageKeyFor(name, normalizedKey)), now);
 
         return { config, ts: current.ts, value: current.value };
     }
@@ -95,8 +126,9 @@ export class RateLimiter<Names extends string = string> {
     /** Clear accounting for a `(name, key)` pair (e.g. on successful login). */
     public async reset(name: Names, args: { key?: string } = {}): Promise<void> {
         const shards = this.resolve(name).shards ?? 1;
+        const normalizedKey = args.key === undefined ? undefined : this.normalize(args.key);
 
-        await Promise.all(this.shardKeys(name, args.key, shards).map((storageKey) => Promise.resolve(this.store.delete(storageKey))));
+        await Promise.all(this.shardKeys(name, normalizedKey, shards).map((storageKey) => Promise.resolve(this.store.delete(storageKey))));
     }
 
     private resolve(name: Names): RateLimitConfig {
@@ -118,9 +150,13 @@ export class RateLimiter<Names extends string = string> {
 
     private async run(name: Names, args: RateLimitArgs, consume: boolean): Promise<RateLimitStatus> {
         const config = this.resolve(name);
+        const normalizedKey = args.key === undefined ? undefined : this.normalize(args.key);
 
-        // The deny list short-circuits before any token accounting.
-        if (args.key !== undefined && this.denyList.has(args.key)) {
+        // The deny list short-circuits before any token accounting. Both the
+        // normalizer's output and the raw input are checked so callers can
+        // populate the deny-list either before or after normalization without
+        // surprises (the normalized form is canonical for storage).
+        if (normalizedKey !== undefined && (this.denyList.has(normalizedKey) || this.denyList.has(args.key as string))) {
             const status: RateLimitStatus = { ok: false, reason: "deny", retryAfter: Number.POSITIVE_INFINITY };
 
             if (args.throws) {
@@ -131,12 +167,13 @@ export class RateLimiter<Names extends string = string> {
         }
 
         const shards = config.shards ?? 1;
-        const base = storageKeyFor(name, args.key);
-        // A hot limit spreads writes across shards: each request lands on one
-        // shard at random, so aggregate throughput approximates `rate` while no
-        // single key/DO is contended. The cost is variance — an unlucky shard
-        // can reject while sibling shards still hold capacity.
-        const storageKey = shards > 1 ? `${base}#${Math.floor(this.random() * shards)}` : base;
+        const base = storageKeyFor(name, normalizedKey);
+        // Deterministic hash routes a given (name, key) to a fixed shard. Per
+        // sibling shards are independent — per-key rate is `rate/shards`,
+        // aggregate across distinct keys spreads to ~`rate`. Random shard
+        // selection (the old behavior) allowed a single key to drain every
+        // shard before any of them rate-limited, which defeated the cap.
+        const storageKey = shards > 1 ? `${base}#${hashToShard(base, shards)}` : base;
         const prior = await this.store.get(storageKey);
         const { status, value } = evaluate(perShardConfig(config, shards), prior, {
             consume,

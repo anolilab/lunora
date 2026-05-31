@@ -79,27 +79,33 @@ export class MigrationRunner {
 
     private async applyOne(migration: Migration, hash: string): Promise<void> {
         // D1 lacks user-level BEGIN/COMMIT, but `batch` runs statements
-        // atomically. Split on `;` boundaries that aren't trivially empty.
-        const statementTexts = migration.sql
-            .split(/;\s*(?:\n|$)/u)
-            .map((part) => part.trim())
-            .filter((part) => part.length > 0);
+        // atomically. A migration is required to be a single statement (or
+        // a whitespace-only trailing `;`) — a naive split-on-`;` mishandles
+        // semicolons inside string literals and comments. Callers wanting
+        // multiple statements per file should split them across migrations.
+        assertSingleStatement(migration);
 
-        // Inline the tracking row as a literal SQL fragment (no params). drizzle's
-        // `SQLiteRaw._prepare()` returns itself but has no `.stmt`, so when batch
-        // sees params it crashes at `stmt.bind(...)`. Matching drizzle's own d1
-        // migrator: build the INSERT entirely via `sql.raw()` so params.length is
-        // 0 and drizzle falls back to `this.client.prepare(sql).bind()`.
-        // `hash` is hex from SHA-256; safe to inline as a literal.
-        const insertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at) VALUES ('${hash}', ${Date.now()})`;
+        const statementText = migration.sql.replace(/;\s*$/u, "").trim();
 
-        const items = [...statementTexts.map((text) => this.client.drizzle.run(sql.raw(text))), this.client.drizzle.run(sql.raw(insertSql))];
+        // Atomically apply the migration body via drizzle's batch — same as
+        // before. The tracking row (`hash`, `created_at`) is then written via
+        // a *bound* D1 prepared statement so neither value is interpolated
+        // into SQL. Although `hash` is hex from SHA-256 and structurally safe,
+        // string-inlining sets a fragile precedent and breaks if a future
+        // field is user-supplied. We can't keep this INSERT inside the same
+        // `client.batch(...)` call because drizzle's d1 batch path crashes on
+        // a `SQLiteRaw` whose `params.length > 0` (it has no `.stmt` to bind
+        // against). The cost: if the migration body succeeds but the tracking
+        // INSERT fails (network blip), the migration will be re-applied on
+        // the next run — matching drizzle's own migrator behavior and relying
+        // on user SQL being idempotent (`CREATE TABLE IF NOT EXISTS`, etc.).
+        const items = [this.client.drizzle.run(sql.raw(statementText))];
 
-        // At runtime each `db.run(sql.raw(...))` is a `SQLiteRaw` instance —
-        // it satisfies drizzle's BatchItem contract via its `_prepare()` method,
-        // even though the TS signature claims `Promise<RunResult>`. The cast
-        // bridges that runtime/type-system gap; without it tsc rejects the call.
         await this.client.batch(items as unknown as Parameters<typeof this.client.batch>[0]);
+
+        const insertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at) VALUES (?, ?)`;
+
+        await this.client.raw.prepare(insertSql).bind(hash, Date.now()).run();
     }
 
     private assertUniqueVersions(): void {
@@ -132,6 +138,142 @@ export class MigrationRunner {
         }
     }
 }
+
+/**
+ * Reject a migration whose SQL contains more than one statement. Performs a
+ * quote- and comment-aware scan so semicolons inside `'...'`, `"..."`,
+ * `--`-line comments, and `/* ... *\/` blocks don't trip the check. A trailing
+ * `;` followed only by whitespace and/or comments is allowed (and `;` is
+ * stripped before submission to D1).
+ *
+ * Callers wanting multiple statements per migration should split them into
+ * separate `Migration` entries — `batch()` runs them atomically anyway.
+ */
+const assertSingleStatement = (migration: Migration): void => {
+    const text = migration.sql;
+    let inSingle = false;
+    let inDouble = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+
+    for (let index = 0; index < text.length; index += 1) {
+        const character = text[index]!;
+        const next = text[index + 1];
+
+        if (inLineComment) {
+            if (character === "\n") {
+                inLineComment = false;
+            }
+
+            continue;
+        }
+
+        if (inBlockComment) {
+            if (character === "*" && next === "/") {
+                inBlockComment = false;
+                index += 1;
+            }
+
+            continue;
+        }
+
+        if (inSingle) {
+            if (character === "'") {
+                // SQL escapes a quote by doubling it.
+                if (next === "'") {
+                    index += 1;
+                } else {
+                    inSingle = false;
+                }
+            }
+
+            continue;
+        }
+
+        if (inDouble) {
+            if (character === '"') {
+                if (next === '"') {
+                    index += 1;
+                } else {
+                    inDouble = false;
+                }
+            }
+
+            continue;
+        }
+
+        if (character === "'") {
+            inSingle = true;
+            continue;
+        }
+
+        if (character === '"') {
+            inDouble = true;
+            continue;
+        }
+
+        if (character === "-" && next === "-") {
+            inLineComment = true;
+            index += 1;
+            continue;
+        }
+
+        if (character === "/" && next === "*") {
+            inBlockComment = true;
+            index += 1;
+            continue;
+        }
+
+        if (character === ";") {
+            // Permit a trailing `;` followed only by whitespace/comments —
+            // resume the lexer past the `;` and require that no further
+            // executable token appears.
+            for (let trailing = index + 1; trailing < text.length; trailing += 1) {
+                const tail = text[trailing]!;
+                const tailNext = text[trailing + 1];
+
+                if (inLineComment) {
+                    if (tail === "\n") {
+                        inLineComment = false;
+                    }
+
+                    continue;
+                }
+
+                if (inBlockComment) {
+                    if (tail === "*" && tailNext === "/") {
+                        inBlockComment = false;
+                        trailing += 1;
+                    }
+
+                    continue;
+                }
+
+                if (tail === "-" && tailNext === "-") {
+                    inLineComment = true;
+                    trailing += 1;
+                    continue;
+                }
+
+                if (tail === "/" && tailNext === "*") {
+                    inBlockComment = true;
+                    trailing += 1;
+                    continue;
+                }
+
+                // Any whitespace is fine; anything else means a second
+                // statement starts after the `;`.
+                if (!/\s/u.test(tail)) {
+                    throw new Error(
+                        `Migration "${migration.name}" (v${migration.version}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
+                    );
+                }
+            }
+
+            return;
+        }
+    }
+};
 
 /**
  * SHA-256 of the migration SQL, hex-encoded. Available natively in both the

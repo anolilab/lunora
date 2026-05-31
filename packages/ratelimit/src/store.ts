@@ -45,6 +45,16 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
 /**
  * SQLite-backed store for durable, per-DO rate-limit state. Persists each
  * `(name, key)` pair as one row so limits survive hibernation and eviction.
+ *
+ * **Atomicity:** the store does not wrap individual operations in an explicit
+ * SQL transaction. Inside a Durable Object the DO's input gate serializes
+ * every RPC call against the storage, so the limiter's read-modify-write
+ * sequence runs to completion without interleaving — this is the same
+ * guarantee the surrounding `evaluate()` step depends on. **Outside a DO**
+ * (e.g. driving `createSqlStore` from a long-lived `node:sqlite` connection in
+ * tests or a custom host) the caller is responsible for serialization; the
+ * SQL surface used here (`exec`) is not a substitute for transactional
+ * isolation across concurrent invocations.
  */
 export const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     const { sql } = options;

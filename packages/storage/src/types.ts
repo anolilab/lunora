@@ -5,7 +5,11 @@
 export interface R2BucketLike {
     delete: (key: string) => Promise<void>;
     get: (key: string) => Promise<R2ObjectBodyLike | null>;
-    list: (options?: { cursor?: string; limit?: number; prefix?: string }) => Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }>;
+    list: (options?: { cursor?: string; delimiter?: string; limit?: number; prefix?: string }) => Promise<{
+        cursor?: string;
+        objects: R2ObjectLike[];
+        truncated?: boolean;
+    }>;
     put: (
         key: string,
         body: ReadableStream | ArrayBuffer | Blob | string | null,
@@ -36,12 +40,22 @@ export interface CirrusStorageOptions {
 }
 
 export interface UploadOptions {
+    /** Optional content-type allowlist; the supplied `contentType` must match. */
+    allowedContentTypes?: ReadonlyArray<string>;
     contentType?: string;
     customMetadata?: Record<string, string>;
+    /**
+     * Maximum body size in bytes. Enforced for `ArrayBuffer`/`Blob` sources
+     * whose length is known synchronously; ignored for `ReadableStream`.
+     */
+    maxSize?: number;
 }
 
 export interface ListOptions {
     cursor?: string;
+    /** R2 list delimiter — when set, common prefixes group instead of listing. */
+    delimiter?: string;
+    /** Defaults to 100, capped at 1000 (R2 limit). */
     limit?: number;
 }
 

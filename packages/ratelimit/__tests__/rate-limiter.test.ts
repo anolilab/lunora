@@ -206,67 +206,46 @@ describe("live refill", () => {
 describe("sharding", () => {
     const shardedConfig = { hits: { kind: "token bucket", period: 1000, rate: 4, shards: 2 } } satisfies RateLimitConfigMap<"hits">;
 
-    const shardedLimiter = (random: () => number) => new RateLimiter({ config: shardedConfig, now: () => 0, random });
+    const shardedLimiter = () => new RateLimiter({ config: shardedConfig, now: () => 0 });
 
-    test("spreads requests across shards and enforces the aggregate rate", async () => {
-        // Alternate shard 0 and shard 1; each holds rate/shards = 2.
-        const sequence = [0, 0.5, 0, 0.5, 0];
-        let calls = 0;
-        const limiter = shardedLimiter(() => {
-            const value = sequence[calls % sequence.length] ?? 0;
+    test("same key always lands on the same shard (deterministic)", async () => {
+        const limiter = shardedLimiter();
 
-            calls += 1;
-
-            return value;
-        });
-
-        for (let n = 0; n < 4; n += 1) {
-            await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: true });
-        }
-
-        // Both shards are now empty; the fifth request (shard 0) is rejected.
-        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: false, reason: "rate" });
+        // Per-shard capacity is rate/shards = 2. A single key drains exactly
+        // its own shard's worth of tokens — no more, no less — because every
+        // call hashes to the same shard.
+        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: true });
+        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: true });
+        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: false, reason: "rate" });
     });
 
     test("getValue aggregates the remaining capacity of every shard", async () => {
-        const limiter = shardedLimiter(() => 0);
+        const limiter = shardedLimiter();
 
-        const full = await limiter.getValue("hits");
+        const full = await limiter.getValue("hits", { key: "alice" });
 
-        // Two shards, each full at 2.
+        // Two shards, each full at 2 — aggregate is 4.
         expect(full.value).toBe(4);
         expect(full.config).toMatchObject({ rate: 4, shards: 2 });
 
-        await limiter.limit("hits");
-        await limiter.limit("hits");
+        await limiter.limit("hits", { key: "alice" });
+        await limiter.limit("hits", { key: "alice" });
 
-        // Shard 0 is drained (0); shard 1 is untouched (2).
-        expect((await limiter.getValue("hits")).value).toBe(2);
-    });
-
-    test("an unlucky shard rejects while a sibling still holds capacity", async () => {
-        const limiter = shardedLimiter(() => 0);
-
-        await limiter.limit("hits");
-        await limiter.limit("hits");
-
-        // Shard 0 is empty even though shard 1 still has 2 — the variance the
-        // sharding tradeoff accepts.
-        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: false });
-        expect((await limiter.getValue("hits")).value).toBe(2);
+        // Alice's shard is drained (0); the other shard is untouched (2).
+        expect((await limiter.getValue("hits", { key: "alice" })).value).toBe(2);
     });
 
     test("reset clears every shard", async () => {
-        const limiter = shardedLimiter(() => 0);
+        const limiter = shardedLimiter();
 
-        await limiter.limit("hits");
-        await limiter.limit("hits");
+        await limiter.limit("hits", { key: "alice" });
+        await limiter.limit("hits", { key: "alice" });
 
-        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: false });
+        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: false });
 
-        await limiter.reset("hits");
+        await limiter.reset("hits", { key: "alice" });
 
-        await expect(limiter.limit("hits")).resolves.toMatchObject({ ok: true });
+        await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: true });
     });
 
     test("rejects a non-integer shard count at construction", () => {

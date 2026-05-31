@@ -153,8 +153,22 @@ const validateRow = (schema: SchemaLike, table: string, doc: Record<string, unkn
 };
 
 export interface ImportGlobalArgs {
+    /**
+     * Optional direct exec handle to the same D1 database the writer targets.
+     * When supplied, the conflict pre-probe issues a single
+     * `SELECT 1 FROM <table> WHERE id = ? LIMIT 1` against the row's declared
+     * table instead of falling back to `writer.get(id)`, which scans every
+     * global table looking for the id. Strongly recommended for large schemas
+     * — the writer-fallback is O(N tables) per row.
+     */
+    exec?: D1ExecLike;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
+}
+
+/** Minimal slice of `D1Exec` (declared locally to avoid a circular import). */
+export interface D1ExecLike {
+    all: (sql: string, parameters: readonly unknown[]) => Promise<Array<Record<string, unknown>>>;
 }
 
 /**
@@ -197,11 +211,22 @@ export const importGlobalRows = async (writer: DatabaseWriterLike, schema: Schem
 
         if (explicitId !== undefined) {
             try {
-                const existing = await writer.get(explicitId);
+                // Direct table+id probe when an exec handle is available —
+                // avoids the writer.get() fallback's per-row N-table scan.
+                if (args.exec) {
+                    const probe = await args.exec.all(`SELECT 1 AS hit FROM ${quoteIdentifier(table)} WHERE "id" = ? LIMIT 1`, [explicitId]);
 
-                if (existing !== null) {
-                    conflicts += 1;
-                    continue;
+                    if (probe.length > 0) {
+                        conflicts += 1;
+                        continue;
+                    }
+                } else {
+                    const existing = await writer.get(explicitId);
+
+                    if (existing !== null) {
+                        conflicts += 1;
+                        continue;
+                    }
                 }
             } catch {
                 // ignored — the writer's insert path will surface a hard error

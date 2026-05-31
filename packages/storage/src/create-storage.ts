@@ -1,12 +1,96 @@
 import { buildSignedUrl } from "./signed-url.js";
 import type { CirrusStorageOptions, ListOptions, R2ObjectBodyLike, R2ObjectLike, SignedUrlOptions, Storage, UploadOptions } from "./types.js";
 
+/** R2's documented key-length ceiling. */
+const MAX_KEY_LENGTH = 1024;
+
+/** R2's documented per-page list ceiling. */
+const MAX_LIST_LIMIT = 1000;
+
+/** Default page size for `list()` — chosen to bound a default call's response shape. */
+const DEFAULT_LIST_LIMIT = 100;
+
+/**
+ * Reject keys that escape the bucket, contain a path-traversal segment, or
+ * exceed R2's size ceiling. Used by every operation that takes a `key` —
+ * upload/delete/get — so a malicious caller can't probe peer prefixes via
+ * `..`, an empty string, or a NUL byte.
+ *
+ * Note: this does not enforce tenancy. Callers MUST also scope keys with a
+ * per-tenant prefix (see {@link scopeKey}) to prevent IDOR across tenants.
+ */
+const validateKey = (key: string): void => {
+    if (typeof key !== "string" || key.length === 0) {
+        throw new Error("@cirrus/storage: key must be a non-empty string");
+    }
+
+    if (key.length > MAX_KEY_LENGTH) {
+        throw new Error(`@cirrus/storage: key exceeds ${MAX_KEY_LENGTH}-byte limit`);
+    }
+
+    if (key.includes("\0")) {
+        throw new Error("@cirrus/storage: key contains NUL byte");
+    }
+
+    if (key.startsWith("/")) {
+        throw new Error("@cirrus/storage: key must not start with `/`");
+    }
+
+    // Reject `..` as a path component (not just substring) so `a..b` is fine
+    // but `a/../b`, `../b`, `b/..` are rejected.
+    const segments = key.split("/");
+
+    for (const segment of segments) {
+        if (segment === "..") {
+            throw new Error("@cirrus/storage: key contains a `..` path component");
+        }
+    }
+};
+
+/**
+ * Compose a per-tenant key from a scope prefix and a caller-supplied key.
+ * Both halves are validated — the prefix may not contain `..` or NUL either,
+ * and the resulting key must stay under R2's length ceiling. Recommended for
+ * any multi-tenant deployment so client-supplied keys can't address peer data.
+ */
+export const scopeKey = (prefix: string, key: string): string => {
+    validateKey(prefix);
+    validateKey(key);
+
+    const trimmedPrefix = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+    const composed = `${trimmedPrefix}/${key}`;
+
+    if (composed.length > MAX_KEY_LENGTH) {
+        throw new Error(`@cirrus/storage: scoped key exceeds ${MAX_KEY_LENGTH}-byte limit`);
+    }
+
+    return composed;
+};
+
 export const createStorage = (options: CirrusStorageOptions): Storage => {
     if (!options.bucket) {
         throw new Error("@cirrus/storage: `bucket` is required");
     }
 
     const upload = async (key: string, body: ReadableStream | ArrayBuffer | Blob, uploadOpts: UploadOptions = {}): Promise<{ etag: string; key: string }> => {
+        validateKey(key);
+
+        if (uploadOpts.allowedContentTypes && uploadOpts.contentType && !uploadOpts.allowedContentTypes.includes(uploadOpts.contentType)) {
+            throw new Error(`@cirrus/storage: contentType "${uploadOpts.contentType}" not in allowedContentTypes`);
+        }
+
+        // `maxSize` is best-effort: enforced for byte sources we can size
+        // synchronously (ArrayBuffer/Blob). ReadableStream byte counts aren't
+        // known up front; callers streaming uploads must rely on the upstream
+        // R2 multipart enforcement or pre-buffer.
+        if (typeof uploadOpts.maxSize === "number") {
+            const size = body instanceof ArrayBuffer ? body.byteLength : body instanceof Blob ? body.size : undefined;
+
+            if (size !== undefined && size > uploadOpts.maxSize) {
+                throw new Error(`@cirrus/storage: body exceeds maxSize (${size} > ${uploadOpts.maxSize})`);
+            }
+        }
+
         const object = await options.bucket.put(key, body, {
             httpMetadata: uploadOpts.contentType ? { contentType: uploadOpts.contentType } : undefined,
             customMetadata: uploadOpts.customMetadata,
@@ -15,14 +99,28 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         return { key: object.key, etag: object.etag };
     };
 
-    const download = async (key: string): Promise<R2ObjectBodyLike | null> => options.bucket.get(key);
+    const download = async (key: string): Promise<R2ObjectBodyLike | null> => {
+        validateKey(key);
+
+        return options.bucket.get(key);
+    };
 
     const deleteObject = async (key: string): Promise<void> => {
+        validateKey(key);
         await options.bucket.delete(key);
     };
 
     const list = async (prefix?: string, listOpts: ListOptions = {}): Promise<{ cursor?: string; objects: R2ObjectLike[] }> => {
-        const result = await options.bucket.list({ prefix, limit: listOpts.limit, cursor: listOpts.cursor });
+        // `prefix` is intentionally permissive: it's read-only and a malformed
+        // value just produces an empty result. We still reject NUL bytes since
+        // the R2 binding silently truncates at the NUL on some runtimes.
+        if (prefix !== undefined && prefix.includes("\0")) {
+            throw new Error("@cirrus/storage: prefix contains NUL byte");
+        }
+
+        const requested = listOpts.limit ?? DEFAULT_LIST_LIMIT;
+        const limit = Math.min(Math.max(1, Math.floor(requested)), MAX_LIST_LIMIT);
+        const result = await options.bucket.list({ prefix, limit, cursor: listOpts.cursor, delimiter: listOpts.delimiter });
 
         return { objects: result.objects, cursor: result.cursor };
     };
@@ -31,6 +129,8 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         if (!options.publicBaseUrl) {
             throw new Error("@cirrus/storage: `publicBaseUrl` is required for getUrl()");
         }
+
+        validateKey(key);
 
         return `${options.publicBaseUrl.replace(/\/+$/, "")}/${key}`;
     };
@@ -43,6 +143,8 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         if (!options.signingSecret) {
             throw new Error("@cirrus/storage: `signingSecret` is required for getSignedUrl()");
         }
+
+        validateKey(key);
 
         return buildSignedUrl({
             baseUrl: options.publicBaseUrl,

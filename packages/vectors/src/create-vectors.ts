@@ -32,6 +32,51 @@ const toVector = async <TInput>(input: UpsertInput<TInput>): Promise<VectorizeVe
     };
 };
 
+/** Vectorize hard ceiling on `topK` per query. */
+const MAX_TOP_K = 100;
+
+/** Vectorize hard ceiling on the `ids` array for batched id lookups. */
+const MAX_ID_BATCH = 1000;
+
+/** Vectorize hard ceiling on a single `upsertMany` batch. */
+const MAX_UPSERT_BATCH = 1000;
+
+/** Cap on parallel `toVector` (embedder) calls inside a single `upsertMany`. */
+const UPSERT_EMBED_CONCURRENCY = 8;
+
+/**
+ * Map `items` through `fn` with bounded parallelism — at most `limit` calls in
+ * flight at once. Preserves input order in the output. Written inline to avoid
+ * a `p-limit` dependency.
+ */
+const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number, fn: (item: T, index: number) => Promise<U>): Promise<U[]> => {
+    if (items.length === 0) {
+        return [];
+    }
+
+    const effectiveLimit = Math.max(1, Math.min(limit, items.length));
+    const results: U[] = Array.from({ length: items.length });
+    let cursor = 0;
+
+    const workers = Array.from({ length: effectiveLimit }, async () => {
+        while (true) {
+            const index = cursor;
+
+            cursor += 1;
+
+            if (index >= items.length) {
+                return;
+            }
+
+            results[index] = await fn(items[index]!, index);
+        }
+    });
+
+    await Promise.all(workers);
+
+    return results;
+};
+
 export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
     if (!options.indexes || Object.keys(options.indexes).length === 0) {
         throw new Error("@cirrus/vectors: at least one index binding is required");
@@ -46,13 +91,26 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
 
     const upsertMany = async <TInput>(indexName: string, inputs: ReadonlyArray<UpsertInput<TInput>>): Promise<VectorizeUpsertMutation> => {
         const index = resolveIndex(options.indexes, indexName);
-        const vectors = await Promise.all(inputs.map(toVector));
+
+        if (inputs.length > MAX_UPSERT_BATCH) {
+            throw new RangeError(`@cirrus/vectors: upsertMany batch exceeds ${MAX_UPSERT_BATCH} (got ${inputs.length}) — split across calls`);
+        }
+
+        // Bound the parallel embedder fan-out so a 1000-vector batch doesn't
+        // spawn 1000 concurrent embedder calls (which typically hits a remote
+        // provider and would otherwise rate-limit or DoS the embedder).
+        const vectors = await concurrentMap(inputs, UPSERT_EMBED_CONCURRENCY, toVector);
 
         return index.upsert(vectors);
     };
 
     const query = async <TInput>(indexName: string, input: QueryInput<TInput>): Promise<VectorizeMatches> => {
         const index = resolveIndex(options.indexes, indexName);
+
+        if (input.topK !== undefined && (!Number.isInteger(input.topK) || input.topK < 1 || input.topK > MAX_TOP_K)) {
+            throw new RangeError(`@cirrus/vectors: topK must be an integer in [1, ${MAX_TOP_K}] (got ${input.topK})`);
+        }
+
         let values: ReadonlyArray<number>;
 
         if (input.vector) {
@@ -77,11 +135,19 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
     const getByIds = async (indexName: string, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => {
         const index = resolveIndex(options.indexes, indexName);
 
+        if (ids.length > MAX_ID_BATCH) {
+            throw new RangeError(`@cirrus/vectors: getByIds accepts at most ${MAX_ID_BATCH} ids (got ${ids.length})`);
+        }
+
         return index.getByIds(ids);
     };
 
     const deleteByIds = async (indexName: string, ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => {
         const index = resolveIndex(options.indexes, indexName);
+
+        if (ids.length > MAX_ID_BATCH) {
+            throw new RangeError(`@cirrus/vectors: deleteByIds accepts at most ${MAX_ID_BATCH} ids (got ${ids.length})`);
+        }
 
         return index.deleteByIds(ids);
     };

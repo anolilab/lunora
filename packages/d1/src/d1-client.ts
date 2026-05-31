@@ -38,6 +38,15 @@ export interface D1PreparedStatementLike {
  * `batch`) for callers that want to build queries against generated
  * `sqliteTable` schemas instead of raw SQL strings.
  */
+/**
+ * Cap on cached prepared statements per `D1Client` / `D1Session`. The cache
+ * uses a `Map` (insertion order = LRU order) so an overflow evicts the
+ * oldest-prepared SQL string. Without the bound a worker that dynamically
+ * builds SQL (e.g. dialect-compiled `WHERE` clauses with varying columns)
+ * would leak references over the worker's lifetime.
+ */
+const STMT_CACHE_CAPACITY = 256;
+
 export class D1Client {
     private readonly db: D1DatabaseLike;
 
@@ -45,6 +54,7 @@ export class D1Client {
      * SQL string -> prepared statement. Prepared statements are reusable in
      * D1; preparing the same SQL twice forces the worker to round-trip the
      * statement plan. Caching is per-instance so unit-test isolation holds.
+     * Bounded to {@link STMT_CACHE_CAPACITY} via LRU eviction.
      */
     private readonly stmtCache = new Map<string, D1PreparedStatementLike>();
 
@@ -78,10 +88,25 @@ export class D1Client {
         const cached = this.stmtCache.get(sql);
 
         if (cached) {
+            // Move to tail (MRU) by re-inserting so the LRU eviction below
+            // discards genuinely cold entries.
+            this.stmtCache.delete(sql);
+            this.stmtCache.set(sql, cached);
+
             return cached;
         }
 
         const stmt = this.db.prepare(sql);
+
+        // LRU eviction: drop the oldest entry (insertion-order head) once the
+        // cap is reached. Map iteration order matches insertion order.
+        if (this.stmtCache.size >= STMT_CACHE_CAPACITY) {
+            const oldest = this.stmtCache.keys().next().value;
+
+            if (oldest !== undefined) {
+                this.stmtCache.delete(oldest);
+            }
+        }
 
         this.stmtCache.set(sql, stmt);
 
@@ -153,10 +178,21 @@ export class D1Session {
         const cached = this.stmtCache.get(sql);
 
         if (cached) {
+            this.stmtCache.delete(sql);
+            this.stmtCache.set(sql, cached);
+
             return cached;
         }
 
         const stmt = this.session.prepare(sql);
+
+        if (this.stmtCache.size >= STMT_CACHE_CAPACITY) {
+            const oldest = this.stmtCache.keys().next().value;
+
+            if (oldest !== undefined) {
+                this.stmtCache.delete(oldest);
+            }
+        }
 
         this.stmtCache.set(sql, stmt);
 
