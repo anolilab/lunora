@@ -115,12 +115,17 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
 
             try {
                 await cancelImpl(id);
-                await refresh();
+
+                // When a live WS subscription is active, the server pushes the
+                // updated list on cancel — so skip the redundant HTTP refetch.
+                if (!(auto && livePush)) {
+                    await refresh();
+                }
             } catch (error_) {
                 setError(errorMessage(error_));
             }
         },
-        [cancelImpl, refresh],
+        [auto, cancelImpl, livePush, refresh],
     );
 
     return (

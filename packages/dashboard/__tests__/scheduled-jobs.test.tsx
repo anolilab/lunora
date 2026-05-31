@@ -169,4 +169,32 @@ describe("scheduledJobs", () => {
         // Host owns the transport → no WS push, the toggle reads "Auto".
         expect(screen.getByTestId("sj-auto").textContent).toContain("Auto");
     });
+
+    test("under Live, cancelling does not fire a redundant HTTP refetch (the WS pushes the update)", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({ listScheduledJobs: () => RECORDS });
+
+        render(withProvider(mock, <ScheduledJobs />));
+
+        await screen.findByTestId("sj-table");
+        fireEvent.click(screen.getByTestId("sj-auto")); // Live on (client-sourced → WS push)
+
+        const listCallsBefore = mock.listScheduledJobs.mock.calls.length;
+
+        // Cancel a job, then confirm the inline ConfirmButton.
+        fireEvent.click(screen.getByTestId("sj-cancel-a"));
+        fireEvent.click(screen.getByTestId("sj-cancel-a-confirm"));
+
+        await waitFor(() => {
+            if (mock.cancelScheduledJob.mock.calls.length === 0) {
+                throw new Error("cancel not called yet");
+            }
+        });
+
+        // The cancel went through…
+        expect(mock.cancelScheduledJob).toHaveBeenCalledWith("a");
+        // …but no extra listScheduledJobs() refetch fired — the WS push covers it.
+        expect(mock.listScheduledJobs.mock.calls.length).toBe(listCallsBefore);
+    });
 });
