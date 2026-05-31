@@ -1,0 +1,228 @@
+import { beforeEach, describe, expect, test } from "vitest";
+
+import type { ExecutionContextLike } from "../src/create-worker.js";
+import { createWorker } from "../src/create-worker.js";
+import type { ObservabilityEvent, ObservabilitySink } from "../src/observability.js";
+import { emitRpcEvent } from "../src/observability.js";
+import type { QueryCoordinator } from "../src/query-coordinator.js";
+import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+
+interface ShardSpy {
+    namespace: ShardNamespaceLike;
+    response: Response;
+    /** When set, the stub fetch rejects with this error instead of returning a response. */
+    throwOnFetch?: Error;
+}
+
+const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSpy => {
+    const stubFor = () => ({
+        fetch: async () => {
+            if (spy.throwOnFetch) {
+                throw spy.throwOnFetch;
+            }
+
+            return spy.response;
+        },
+    });
+
+    const namespace: ShardNamespaceLike = {
+        idFromName: (name) => ({ __name: name }),
+        get: () => stubFor(),
+    };
+
+    const spy: ShardSpy = { namespace, response };
+
+    return spy;
+};
+
+const fakeCtx: ExecutionContextLike = {
+    passThroughOnException: () => undefined,
+    waitUntil: () => undefined,
+};
+
+const collectEvents = (): { events: ObservabilityEvent[]; sink: ObservabilitySink } => {
+    const events: ObservabilityEvent[] = [];
+
+    return {
+        events,
+        sink: {
+            onRpc: (event) => {
+                events.push(event);
+            },
+        },
+    };
+};
+
+describe("observabilitySink", () => {
+    describe("emitRpcEvent", () => {
+        test("no-ops when sink is undefined", () => {
+            expect(() => { emitRpcEvent(undefined, { durationMs: 1, functionPath: "x:y", ok: true }); }).not.toThrow();
+        });
+
+        test("no-ops when onRpc is unset", () => {
+            expect(() => { emitRpcEvent({}, { durationMs: 1, functionPath: "x:y", ok: true }); }).not.toThrow();
+        });
+
+        test("swallows sink callback errors", () => {
+            const sink: ObservabilitySink = {
+                onRpc: () => {
+                    throw new Error("sink exploded");
+                },
+            };
+
+            expect(() => { emitRpcEvent(sink, { durationMs: 1, functionPath: "x:y", ok: true }); }).not.toThrow();
+        });
+
+        test("forwards the event when onRpc is set", () => {
+            const { events, sink } = collectEvents();
+
+            emitRpcEvent(sink, { durationMs: 42, functionPath: "messages:list", ok: true, shardKey: "channel-1" });
+
+            expect(events).toEqual([{ durationMs: 42, functionPath: "messages:list", ok: true, shardKey: "channel-1" }]);
+        });
+    });
+
+    describe("createWorker integration", () => {
+        let shard: ShardSpy;
+
+        beforeEach(() => {
+            shard = createShardSpy();
+        });
+
+        test("emits one onRpc event per single-shard dispatch", async () => {
+            const { events, sink } = collectEvents();
+            const worker = createWorker({ observability: sink, shardDO: shard.namespace });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_cirrus/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                    method: "POST",
+                }),
+                {},
+                fakeCtx,
+            );
+
+            expect(response.status).toBe(200);
+            expect(events).toHaveLength(1);
+            expect(events[0]!.functionPath).toBe("messages:list");
+            expect(events[0]!.ok).toBe(true);
+            expect(events[0]!.shardKey).toBe("__root__");
+            expect(events[0]!.durationMs).toBeGreaterThanOrEqual(0);
+            expect(events[0]!.fanOut).toBeUndefined();
+            expect(events[0]!.error).toBeUndefined();
+        });
+
+        test("includes envelope shardKey in event", async () => {
+            const { events, sink } = collectEvents();
+            const worker = createWorker({ observability: sink, shardDO: shard.namespace });
+
+            await worker.fetch(
+                new Request("https://app.example/_cirrus/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "x:y", shardKey: "tenant-7" }),
+                    method: "POST",
+                }),
+                {},
+                fakeCtx,
+            );
+
+            expect(events[0]!.shardKey).toBe("tenant-7");
+        });
+
+        test("reports ok=false when the shard returns a non-2xx", async () => {
+            const { events, sink } = collectEvents();
+
+            shard.response = new Response("nope", { status: 500 });
+            const worker = createWorker({ observability: sink, shardDO: shard.namespace });
+
+            await worker.fetch(
+                new Request("https://app.example/_cirrus/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                    method: "POST",
+                }),
+                {},
+                fakeCtx,
+            );
+
+            expect(events[0]!.ok).toBe(false);
+            expect(events[0]!.error?.status).toBe(500);
+            expect(events[0]!.error?.code).toBe("SHARD_ERROR");
+        });
+
+        test("reports ok=false with the thrown error when the fetch throws", async () => {
+            const { events, sink } = collectEvents();
+
+            shard.throwOnFetch = new Error("connection refused");
+            const worker = createWorker({ observability: sink, shardDO: shard.namespace });
+
+            // The outer worker catches throws and maps them via toErrorResponse,
+            // so the caller sees a 500 — but the sink must still see the
+            // original error captured before the response was built.
+            const response = await worker.fetch(
+                new Request("https://app.example/_cirrus/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                    method: "POST",
+                }),
+                {},
+                fakeCtx,
+            );
+
+            expect(response.status).toBe(500);
+            expect(events[0]!.ok).toBe(false);
+            expect(events[0]!.error?.message).toBe("connection refused");
+            expect(events[0]!.error?.status).toBe(500);
+            expect(events[0]!.error?.code).toBe("INTERNAL_SERVER_ERROR");
+            expect(events[0]!.shardKey).toBe("__root__");
+        });
+
+        test("emits a fanOut event for cross-shard dispatch", async () => {
+            const { events, sink } = collectEvents();
+            const coordinator: QueryCoordinator = {
+                fanOut: async () => ({ data: 42, errors: [], failed: 0, ok: 3 }),
+                orchestrateExport: async () => ({ errors: [], failed: 0, ok: 0, shards: [], tables: [] }),
+                orchestrateImport: async () => ({ conflicts: 0, errors: [], failed: 0, inserted: {}, ok: 0, shards: [] }),
+                orchestrateMigration: async () => ({ errors: [], failed: 0, ok: 0, shards: [] }),
+                registry: { listShardKeys: () => [] },
+            };
+            const worker = createWorker({ observability: sink, queryCoordinator: coordinator, shardDO: shard.namespace });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_cirrus/rpc", {
+                    body: JSON.stringify({
+                        args: {},
+                        fanOut: { merge: { kind: "sum" }, table: "messages" },
+                        functionPath: "messages:count",
+                    }),
+                    method: "POST",
+                }),
+                {},
+                fakeCtx,
+            );
+
+            expect(response.status).toBe(200);
+            expect(events).toHaveLength(1);
+            expect(events[0]!.ok).toBe(true);
+            expect(events[0]!.fanOut).toEqual({ failed: 0, shards: 3, table: "messages" });
+            expect(events[0]!.shardKey).toBeUndefined();
+        });
+
+        test("does not fail user dispatch when the sink throws", async () => {
+            const sink: ObservabilitySink = {
+                onRpc: () => {
+                    throw new Error("sink down");
+                },
+            };
+            const worker = createWorker({ observability: sink, shardDO: shard.namespace });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_cirrus/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "x:y" }),
+                    method: "POST",
+                }),
+                {},
+                fakeCtx,
+            );
+
+            expect(response.status).toBe(200);
+        });
+    });
+});

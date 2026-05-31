@@ -1,4 +1,6 @@
 import { CirrusError, toErrorResponse } from "./errors.js";
+import type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
+import { emitRpcEvent } from "./observability.js";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator.js";
 import type { ShardNamespaceLike } from "./resolve-shard.js";
 import { resolveShard } from "./resolve-shard.js";
@@ -148,6 +150,14 @@ export interface WorkerOptions {
      */
     importGlobals?: GlobalImportFn;
     /**
+     * Optional telemetry sink. When supplied, the worker emits one
+     * `onRpc` event per dispatched RPC (single-shard forward or fan-out)
+     * with duration / ok / error / shardKey or fanOut metadata. Sink
+     * throws are swallowed so a faulty adapter cannot break user-facing
+     * dispatch. See {@link ObservabilitySink}.
+     */
+    observability?: ObservabilitySink;
+    /**
      * When true, the runtime calls `ctx.passThroughOnException()` at the top
      * of the fetch handler. Forwards uncaught exceptions to the origin
      * instead of returning a synthetic 500.
@@ -260,20 +270,46 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             // honour auth, sessions, and D1 read-your-writes consistency.
             const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
 
+            // Timing wraps the dispatch only — envelope parse + coordinator
+            // gate + identity resolution happen above and are not part of
+            // the user-observable RPC duration we report.
+            const rpcStartedAt = Date.now();
+            const { observability } = options;
+
             if (envelope.fanOut) {
                 // Coordinator presence was checked above.
                 const coordinator = options.queryCoordinator!;
-                const result = await coordinator.fanOut(options.shardDO, {
-                    args: envelope.args ?? {},
-                    fanOut: envelope.fanOut,
-                    functionPath: envelope.functionPath,
-                    headers: forwardedHeaders,
-                });
 
-                return Response.json(result, {
-                    headers: { "content-type": "application/json" },
-                    status: 200,
-                });
+                try {
+                    const result = await coordinator.fanOut(options.shardDO, {
+                        args: envelope.args ?? {},
+                        fanOut: envelope.fanOut,
+                        functionPath: envelope.functionPath,
+                        headers: forwardedHeaders,
+                    });
+
+                    emitRpcEvent(observability, {
+                        durationMs: Date.now() - rpcStartedAt,
+                        fanOut: {
+                            failed: result.failed,
+                            shards: result.ok + result.failed,
+                            table: envelope.fanOut.table,
+                        },
+                        functionPath: envelope.functionPath,
+                        ok: true,
+                    });
+
+                    return Response.json(result, {
+                        headers: { "content-type": "application/json" },
+                        status: 200,
+                    });
+                } catch (error) {
+                    emitRpcEvent(
+                        observability,
+                        buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { fanOut: { table: envelope.fanOut.table } }),
+                    );
+                    throw error;
+                }
             }
 
             const shardKey = envelope.shardKey ?? defaultShard;
@@ -285,21 +321,37 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                 method: "POST",
             });
 
-            const response = await forwardToShard(options.shardDO, shardKey, forwarded);
+            try {
+                const response = await forwardToShard(options.shardDO, shardKey, forwarded);
 
-            // Propagate the DO's bookmark header so the client can pin reads
-            // after a write.
-            const responseBookmark = response.headers.get("x-d1-bookmark");
+                // A non-2xx from the shard is reported as ok=false even though no
+                // exception was thrown — the user-visible result is still an error
+                // surface, just one the shard chose to encode in the status code.
+                emitRpcEvent(observability, {
+                    durationMs: Date.now() - rpcStartedAt,
+                    functionPath: envelope.functionPath,
+                    ok: response.ok,
+                    shardKey,
+                    ...response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${response.status}`, status: response.status } },
+                });
 
-            if (responseBookmark) {
-                const headers = new Headers(response.headers);
+                // Propagate the DO's bookmark header so the client can pin reads
+                // after a write.
+                const responseBookmark = response.headers.get("x-d1-bookmark");
 
-                headers.set("x-d1-bookmark", responseBookmark);
+                if (responseBookmark) {
+                    const headers = new Headers(response.headers);
 
-                return new Response(response.body, { status: response.status, headers });
+                    headers.set("x-d1-bookmark", responseBookmark);
+
+                    return new Response(response.body, { status: response.status, headers });
+                }
+
+                return response;
+            } catch (error) {
+                emitRpcEvent(observability, buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { shardKey }));
+                throw error;
             }
-
-            return response;
         }
 
         if (url.pathname === MIGRATE_PATH) {
@@ -554,6 +606,35 @@ interface ForwardContext {
     /** Resolved stable user id, or `null` when anonymous. */
     userId: null | string;
 }
+
+/**
+ * Build an `ObservabilityEvent` for a failed RPC dispatch. Extracts code /
+ * status / message from a {@link CirrusError} when present; otherwise reports
+ * `INTERNAL_SERVER_ERROR` / 500 with the thrown value's message. Used by
+ * both the single-shard and fan-out error branches so they emit a uniform
+ * shape.
+ */
+const buildErrorEvent = (
+    functionPath: string,
+    durationMs: number,
+    error: unknown,
+    extra: { fanOut?: { table: string }; shardKey?: string },
+): ObservabilityEvent => {
+    const isCirrus = error instanceof Error && error.name === "CirrusError";
+    const errorRecord = error as unknown as Record<string, unknown>;
+    const code = isCirrus && typeof errorRecord["code"] === "string" ? (errorRecord["code"] as string) : "INTERNAL_SERVER_ERROR";
+    const status = isCirrus && typeof errorRecord["status"] === "number" ? (errorRecord["status"] as number) : 500;
+    const message = error instanceof Error ? error.message : String(error);
+
+    return {
+        durationMs,
+        error: { code, message, status },
+        functionPath,
+        ok: false,
+        ...extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {},
+        ...extra.shardKey ? { shardKey: extra.shardKey } : {},
+    };
+};
 
 /**
  * Build the headers forwarded to the shard and the resolved identity, shared by

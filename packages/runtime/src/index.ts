@@ -15,6 +15,8 @@ export type {
 export { createWorker, defineRpcEnvelope } from "./create-worker.js";
 export type { CirrusErrorBody } from "./errors.js";
 export { CirrusError, toErrorResponse } from "./errors.js";
+export type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
+export { emitRpcEvent } from "./observability.js";
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,
