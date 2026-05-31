@@ -108,3 +108,14 @@ saveWorkspaceProtocol: true
 sharedWorkspaceLockfile: true
 
 strictPeerDependencies: false
+
+# pnpm v11 refuses to install when transitive deps want to run post-install
+# scripts unless the workspace explicitly approves them. Re-run
+# `pnpm approve-builds` to repopulate this list when a new package joins.
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: true
+  rs-module-lexer: true
+  sharp: true
+  unrs-resolver: true
+  workerd: true
