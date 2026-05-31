@@ -123,6 +123,14 @@ export const cirrusQueryKey = (fn: FunctionReference, args: Record<string, unkno
     return ["cirrus", fn.__cirrusRef, args, shardKey ?? null];
 };
 
+/**
+ * Stringify a queryKey for use in a React effect's dep list. TanStack hashes
+ * queryKeys structurally, so the dep list mirrors that — two args objects with
+ * the same contents but different identity hash to the same string and won't
+ * trigger a re-attach.
+ */
+export const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
+
 const registryByClient = new WeakMap<CirrusClient, CirrusSubscriptionRegistry>();
 
 /** Returns the shared subscription registry for `client`, creating it on first access. */

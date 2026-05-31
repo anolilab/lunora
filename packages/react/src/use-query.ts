@@ -2,7 +2,7 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
-import { cirrusQueryKey, getSubscriptionRegistry } from "./cache.js";
+import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache.js";
 import { useCirrus } from "./cirrus-provider.js";
 import type { UseQueryOptions } from "./types.js";
 
@@ -48,14 +48,7 @@ export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "
         const registry = getSubscriptionRegistry(client);
 
         return registry.attach(queryClient, queryKey, fn, argsRecord, shardKey);
-    }, [client, queryClient, registry_key(queryKey), skipped]);
+    }, [client, queryClient, serializeQueryKey(queryKey), skipped]);
 
     return data;
 }
-
-/**
- * Stringify the queryKey for the effect's dependency array. TanStack hashes
- * queryKeys structurally, so we use the same shape here to avoid re-attaching
- * on every render when the args object identity changes but its contents don't.
- */
-const registry_key = (queryKey: ReturnType<typeof cirrusQueryKey>): string => JSON.stringify(queryKey);
