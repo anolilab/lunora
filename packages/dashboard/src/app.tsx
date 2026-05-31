@@ -25,6 +25,12 @@ export interface DashboardAppProps {
     readonly dashboard?: Omit<DashboardProps, "children">;
 }
 
+const TOKEN_WARNING_STYLE = {
+    color: "var(--c-danger)",
+    fontSize: "12px",
+    width: "100%",
+} as const;
+
 const resolveBaseUrl = (explicit: string | undefined): string => {
     if (explicit !== undefined && explicit !== "") {
         return explicit;
@@ -72,12 +78,24 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
         return created;
     }, [baseUrl, token]);
 
+    // Close the previous client when `token`/`baseUrl` changes (and on unmount)
+    // so we don't leak sockets, in-flight streams, or reconnect timers each
+    // time the admin pastes a new token.
+    useEffect(() => {
+        return (): void => {
+            client.close();
+        };
+    }, [client]);
+
     return (
         <div className={DASHBOARD_ROOT_CLASS} data-testid="cirrus-dashboard-app">
             <DashboardStyles />
             <CirrusProvider client={client}>
                 <header data-testid="dash-app-header">
                     <strong>Cirrus Dashboard</strong>
+                    <div data-testid="dash-app-token-warning" role="note" style={TOKEN_WARNING_STYLE}>
+                        This token is sent in the WebSocket URL and may appear in browser DevTools and server logs. Use a development-only token.
+                    </div>
                     <label htmlFor="dash-app-token">
                         {" admin token "}
                         <input

@@ -9,6 +9,7 @@ export interface MockClientHooks {
     emit: (ref: string, value: unknown) => void;
     getAuthToken: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
+    onAuthTokenChange: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
     setAuthToken: ReturnType<typeof vi.fn>;
     subscribe: ReturnType<typeof vi.fn>;
@@ -37,10 +38,26 @@ export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unk
             subs.delete(entry);
         };
     });
+    const authListeners = new Set<(token: string | null) => void>();
     const setAuthTokenFn = vi.fn((token: string | null) => {
+        if (authToken === token) {
+            return;
+        }
+
         authToken = token;
+
+        for (const listener of authListeners) {
+            listener(token);
+        }
     });
     const getAuthTokenFn = vi.fn(() => authToken);
+    const onAuthTokenChangeFn = vi.fn((listener: (token: string | null) => void): Unsubscribe => {
+        authListeners.add(listener);
+
+        return () => {
+            authListeners.delete(listener);
+        };
+    });
     const closeFn = vi.fn();
 
     const emit = (ref: string, value: unknown): void => {
@@ -58,6 +75,7 @@ export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unk
         subscribe: subscribeFn,
         setAuthToken: setAuthTokenFn,
         getAuthToken: getAuthTokenFn,
+        onAuthTokenChange: onAuthTokenChangeFn,
         close: closeFn,
     } as unknown as CirrusClient;
 
@@ -68,6 +86,7 @@ export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unk
         subscribe: subscribeFn,
         setAuthToken: setAuthTokenFn,
         getAuthToken: getAuthTokenFn,
+        onAuthTokenChange: onAuthTokenChangeFn,
         close: closeFn,
         emit,
         asClient,

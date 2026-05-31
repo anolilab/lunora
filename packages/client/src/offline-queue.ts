@@ -39,12 +39,16 @@ const nextId = (): string => {
 export class OfflineQueue {
     private readonly maxItems: number;
 
+    /** Opt-in to queueing mutations before the targeted shard's first connect. */
+    public readonly queueBeforeFirstConnect: boolean;
+
     private readonly persistence: PersistenceAdapter | undefined;
 
     private readonly items: QueuedMutation[] = [];
 
     public constructor(options: OfflineQueueOptions = {}, persistence?: PersistenceAdapter) {
         this.maxItems = options.maxItems ?? 1000;
+        this.queueBeforeFirstConnect = options.queueBeforeFirstConnect ?? false;
         this.persistence = persistence;
     }
 

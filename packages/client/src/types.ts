@@ -51,6 +51,15 @@ export interface ReconnectOptions {
 
 export interface OfflineQueueOptions {
     maxItems?: number;
+    /**
+     * Queue mutations issued before a shard's first successful WebSocket
+     * connect (defaults to `false`). The standard behaviour ({@link CirrusClient}'s
+     * `mutation()`) queues only when the targeted shard has been connected at
+     * least once (`wasEverConnected`), so the registry / resubscribe handshake
+     * has run. Set this to `true` for offline-first apps that want to enqueue
+     * writes on the very first session before the WS is up.
+     */
+    queueBeforeFirstConnect?: boolean;
 }
 
 /**
