@@ -69,11 +69,31 @@ export const dashboardPlugin = (): Plugin => {
         name: "cirrus:dashboard",
         apply: "serve",
         configureServer(server: ViteDevServer) {
+            // Refuse to serve the dashboard route when Vite is bound to a
+            // non-loopback host (e.g. `--host`, or `server.host` set to an
+            // external interface). The dashboard ships admin tooling that
+            // assumes the developer is the only consumer.
+            const configuredHost = server.config.server?.host;
+            const isNonLoopbackBind =
+                configuredHost !== undefined &&
+                configuredHost !== false &&
+                configuredHost !== "localhost" &&
+                configuredHost !== "127.0.0.1" &&
+                configuredHost !== "::1";
+
             server.middlewares.use((request, response, next) => {
                 const url = request.url ?? "";
 
                 if (url !== DASHBOARD_PATH && !url.startsWith(`${DASHBOARD_PATH}?`) && url !== `${DASHBOARD_PATH}/`) {
                     next();
+
+                    return;
+                }
+
+                if (isNonLoopbackBind) {
+                    response.statusCode = 403;
+                    response.setHeader("Content-Type", "text/plain");
+                    response.end("Cirrus dashboard is only available on loopback hosts in dev.");
 
                     return;
                 }

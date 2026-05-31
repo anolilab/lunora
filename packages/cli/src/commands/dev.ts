@@ -87,10 +87,14 @@ export const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     return buildPlan(options.cwd ?? process.cwd(), options);
 };
 
+/** Grace period after the first SIGINT before we force-kill children. */
+const SIGINT_GRACE_MS = 5000;
+
 /**
  * Spawn two children concurrently, pipe their stdout/stderr through the
  * provided logger (tagged by descriptor.tag), and resolve once both have
- * exited. SIGINT/SIGTERM in the parent is fanned out to both children.
+ * exited. SIGINT/SIGTERM in the parent is fanned out to both children;
+ * a second SIGINT escalates to SIGKILL so a hung child can't trap the user.
  */
 const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?: string }>, logger: Logger): Promise<{ code: number }> => {
     const children: ChildProcess[] = [];
@@ -107,8 +111,30 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
         }
     };
 
+    let sigintCount = 0;
+    let escalationTimer: NodeJS.Timeout | undefined;
+
     const onSigint = () => {
-        cleanup("SIGTERM");
+        sigintCount += 1;
+
+        if (sigintCount === 1) {
+            logger.info("received SIGINT — forwarding SIGTERM (press Ctrl-C again to force-kill)");
+            cleanup("SIGTERM");
+            escalationTimer = setTimeout(() => {
+                logger.warn(`children did not exit within ${SIGINT_GRACE_MS}ms — sending SIGKILL`);
+                cleanup("SIGKILL");
+            }, SIGINT_GRACE_MS);
+            escalationTimer.unref?.();
+        } else {
+            logger.warn("received second SIGINT — sending SIGKILL");
+
+            if (escalationTimer) {
+                clearTimeout(escalationTimer);
+                escalationTimer = undefined;
+            }
+
+            cleanup("SIGKILL");
+        }
     };
     const onSigterm = () => {
         cleanup("SIGTERM");
@@ -172,6 +198,10 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
 
         return { code: worst };
     } finally {
+        if (escalationTimer) {
+            clearTimeout(escalationTimer);
+        }
+
         process.off("SIGINT", onSigint);
         process.off("SIGTERM", onSigterm);
     }

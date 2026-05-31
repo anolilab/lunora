@@ -209,6 +209,11 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 type: String,
                 description: "Override the remote template source (e.g. gh:owner/repo/sub#ref)",
             },
+            {
+                name: "allow-unsafe-source",
+                type: Boolean,
+                description: "Permit --source values outside gh:/github:/https:// (e.g. local file://)",
+            },
         ],
         execute: async ({ argument, options: parsed }) => {
             const name = argument[0];
@@ -217,7 +222,15 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             const from = typeof parsed.from === "string" && parsed.from.length > 0 ? parsed.from : undefined;
             const source = typeof parsed.source === "string" && parsed.source.length > 0 ? parsed.source : undefined;
 
-            const result = await runInitCommand({ cwd, from, logger, name, source, templateType: template });
+            const result = await runInitCommand({
+                allowUnsafeSource: parsed.allowUnsafeSource === true,
+                cwd,
+                from,
+                logger,
+                name,
+                source,
+                templateType: template,
+            });
 
             exitCode.value = result.code;
         },
@@ -313,15 +326,19 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     cli.addCommand({
         name: "reset",
         description: "Clear local Miniflare state (and .cirrus-cache with --all)",
-        options: [{ name: "all", type: Boolean, description: "Also remove .cirrus-cache" }],
-        execute: ({ options: parsed }) => {
-            runResetCommand({
+        options: [
+            { name: "all", type: Boolean, description: "Also remove .cirrus-cache" },
+            { name: "yes", type: Boolean, description: "Skip the confirmation prompt (required when stdin is not a TTY)" },
+        ],
+        execute: async ({ options: parsed }) => {
+            const result = await runResetCommand({
                 all: parsed.all === true,
                 cwd,
                 logger,
+                yes: parsed.yes === true,
             });
 
-            exitCode.value = 0;
+            exitCode.value = result.code;
         },
     });
 
@@ -338,6 +355,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             { name: "prod", type: Boolean, description: "Target production — requires an explicit --url" },
             { name: "url", type: String, description: "Worker URL (default http://localhost:8787)" },
             { name: "token", type: String, description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)" },
+            { name: "yes", type: Boolean, description: "Required with --prod for up/down — confirms running against production" },
         ],
         execute: async ({ argument, options: parsed }) => {
             const sub = argument[0];
@@ -389,6 +407,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                         subcommand: sub,
                         token: toStringOrUndefined(parsed.token),
                         url: toStringOrUndefined(parsed.url),
+                        yes: parsed.yes === true,
                     });
 
                     exitCode.value = result.code;
@@ -603,14 +622,14 @@ Commands:
   migrate create <name>         Scaffold a defineMigration block in cirrus/migrations.ts
           [--table <table>]
   migrate up|down <id>          Run a data migration across shards (forward/reverse)
-          [--dry-run] [--batch-size <n>] [--steps <n>] [--prod] [--url <url>] [--token <t>]
+          [--dry-run] [--batch-size <n>] [--steps <n>] [--prod --yes] [--url <url>] [--token <t>]
   migrate status <id>           Report a data migration's per-shard status
           [--url <url>] [--token <t>]
   export [--out <path>]         Stream NDJSON of every table from the worker
           [--tables <t1,t2,...>] [--prod] [--url <url>] [--token <t>]
   import <path> [--table <n>]   Bulk-insert NDJSON rows via the admin endpoint
           [--batch-size <n>] [--prod] [--url <url>] [--token <t>]
-  reset [--all]                 Clear local Miniflare state (and .cirrus-cache with --all)
+  reset [--all] [--yes]         Clear local Miniflare state (and .cirrus-cache with --all)
   verify                        Validate wrangler.jsonc + run codegen in dry-run mode
   info [--json]                 Print resolved project config (packages, wrangler, schema)
   env <sub> [args]              Manage .dev.vars (list | get <K> | set <K> <V> | unset <K> | push --yes [--prod])

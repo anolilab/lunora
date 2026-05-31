@@ -47,8 +47,19 @@ const platformOpener = (url: string): Promise<void> => {
  * Open a URL in the user's default browser. Cross-platform: uses `open`,
  * `xdg-open`, or `cmd /c start` depending on the host OS. Tests pass an
  * `opener` to record the URL without spawning anything.
+ *
+ * The URL is parsed before any spawning so a malformed value (or a Windows
+ * `cmd.exe`-meaningful payload) is rejected at the caller rather than handed
+ * to the platform opener.
  */
 export const openUrl = async (url: string, options: OpenUrlOptions = {}): Promise<void> => {
+    try {
+        // eslint-disable-next-line no-new -- URL throws on invalid input; we only need the parse side-effect.
+        new URL(url);
+    } catch {
+        throw new Error(`Invalid URL: ${url}`);
+    }
+
     const opener = options.opener ?? platformOpener;
 
     await opener(url);

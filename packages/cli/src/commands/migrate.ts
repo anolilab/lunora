@@ -242,6 +242,8 @@ export interface MigrateDataCommandOptions {
     token?: string;
     /** Worker URL (default `http://localhost:8787`). */
     url?: string;
+    /** Required alongside `--prod` for `up`/`down` — confirms running against production. */
+    yes?: boolean;
 }
 
 export interface MigrateDataCommandResult {
@@ -269,6 +271,12 @@ export const runMigrateDataCommand = async (options: MigrateDataCommandOptions):
 
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to migrate the implicit localhost worker)");
+
+        return { body: undefined, code: 1, requestUrl: "" };
+    }
+
+    if (options.prod && (options.subcommand === "up" || options.subcommand === "down") && !options.yes) {
+        options.logger.error(`migrate ${options.subcommand} --prod runs the migration against production. Re-run with --yes to confirm.`);
 
         return { body: undefined, code: 1, requestUrl: "" };
     }

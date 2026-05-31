@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 import { walkSync } from "@visulima/fs";
 import { dirname, join, relative, resolve } from "@visulima/path";
@@ -10,6 +11,13 @@ import type { Logger } from "../util/logger.js";
 export type Template = "next" | "standalone" | "tanstack-start" | "vite";
 
 export interface InitCommandOptions {
+    /**
+     * When true, accept `--source` values that don't start with `gh:` /
+     * `github:` / `https://` or that contain `..`. Defaults to false; the CLI
+     * gate exists to stop arbitrary filesystem / scheme sources from being
+     * pulled without the caller opting in.
+     */
+    allowUnsafeSource?: boolean;
     cwd?: string;
     /**
      * Local directory containing the template subdirs (e.g. `vite/`,
@@ -21,8 +29,8 @@ export interface InitCommandOptions {
     name?: string;
     /**
      * Override the remote source giget downloads from. Default:
-     * `gh:anolilab/cirrus/templates/<templateType>#alpha`. Tests typically
-     * use `from` instead to skip the network.
+     * `gh:anolilab/cirrus/templates/<templateType>#v<cliVersion>`. Tests
+     * typically use `from` instead to skip the network.
      */
     source?: string;
     templateType?: Template;
@@ -37,7 +45,51 @@ export interface InitCommandResult {
 const TEXT_EXTENSIONS = new Set([".gitignore", ".html", ".js", ".json", ".jsonc", ".md", ".mjs", ".ts", ".tsx"]);
 
 const DEFAULT_SOURCE_BASE = "gh:anolilab/cirrus/templates";
-const DEFAULT_SOURCE_REF = "alpha";
+const DEFAULT_SOURCE_REF_FALLBACK = "alpha";
+
+/**
+ * Pin the default template ref to the CLI's own published version (`vX.Y.Z`)
+ * so a given CLI release always fetches the matching template snapshot.
+ * Falls back to the alpha channel when the CLI is running unpublished
+ * (version `"0.0.0"`) or its package.json can't be read.
+ */
+const resolveCliVersion = (): string => {
+    try {
+        // Walk up from this module's directory to find @cirrus/cli's package.json.
+        // Works whether the file is the built `dist/index.mjs` or the source under `src/`.
+        let directory = dirname(fileURLToPath(import.meta.url));
+
+        for (let index = 0; index < 5; index += 1) {
+            const candidate = join(directory, "package.json");
+
+            if (existsSync(candidate)) {
+                const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { name?: string; version?: string };
+
+                if (parsed.name === "@cirrus/cli" && typeof parsed.version === "string") {
+                    return parsed.version;
+                }
+            }
+
+            const parent = dirname(directory);
+
+            if (parent === directory) {
+                break;
+            }
+
+            directory = parent;
+        }
+    } catch {
+        // Fall through to the fallback.
+    }
+
+    return "0.0.0";
+};
+
+const resolveDefaultSourceRef = (): string => {
+    const version = resolveCliVersion();
+
+    return version === "0.0.0" ? DEFAULT_SOURCE_REF_FALLBACK : `v${version}`;
+};
 
 const isTextFile = (filePath: string): boolean => {
     const lastDot = filePath.lastIndexOf(".");
@@ -93,7 +145,21 @@ const resolveTemplateSource = (templateType: Template, source: string | undefine
         return source;
     }
 
-    return `${DEFAULT_SOURCE_BASE}/${templateType}#${DEFAULT_SOURCE_REF}`;
+    return `${DEFAULT_SOURCE_BASE}/${templateType}#${resolveDefaultSourceRef()}`;
+};
+
+/**
+ * Defence-in-depth gate over `--source`. Refuses sources containing `..`
+ * (path traversal) or sources that don't start with one of the supported
+ * provider schemes. `--allow-unsafe-source` exists for users who genuinely
+ * need a local-disk or custom-scheme source.
+ */
+const isSafeSource = (source: string): boolean => {
+    if (source.includes("..")) {
+        return false;
+    }
+
+    return source.startsWith("gh:") || source.startsWith("github:") || source.startsWith("https://");
 };
 
 const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, target: string, name: string): void => {
@@ -142,13 +208,23 @@ const scaffoldFromRemote = async (
 
         logger.info(`fetching template from ${remote}`);
 
-        await downloadTemplate(remote, {
+        const downloaded = (await downloadTemplate(remote, {
             cwd: stagingRoot,
             dir: stagingDir,
             force: true,
             install: false,
             silent: true,
-        });
+        })) as { commit?: string; dir: string; source: string };
+
+        // Surface the resolved provenance so the user can audit what was
+        // fetched before any files are copied into the project tree.
+        const staged = collectFiles(stagingDir);
+
+        if (downloaded.commit) {
+            logger.info(`resolved ${downloaded.source} @ ${downloaded.commit} (${staged.length} file(s))`);
+        } else {
+            logger.info(`resolved ${downloaded.source} (${staged.length} file(s))`);
+        }
 
         const written = copyTemplate(stagingDir, target, name);
 
@@ -195,6 +271,15 @@ export const runInitCommand = async (options: InitCommandOptions): Promise<InitC
     // template tree.
     if (options.from !== undefined) {
         return scaffoldFromLocal(options.from, templateType, target, name, options.logger);
+    }
+
+    if (options.source !== undefined && options.source.length > 0 && !options.allowUnsafeSource && !isSafeSource(options.source)) {
+        options.logger.error(
+            `init: refusing --source ${options.source} — only gh:, github:, or https:// sources are allowed (and may not contain "..").` +
+            " Re-run with --allow-unsafe-source if you really want this.",
+        );
+
+        return { code: 1, files: [], target };
     }
 
     return scaffoldFromRemote(options.source, templateType, target, name, options.logger);

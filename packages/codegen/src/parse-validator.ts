@@ -3,6 +3,8 @@ import { Node } from "ts-morph";
 
 import type { ColumnMetaIR, ValidatorIR } from "./ir.js";
 
+const FIELD_NAME_RE = /^[A-Za-z_$][\w$]*$/u;
+
 /**
  * Column-modifier methods that hang off a base `v.*` validator inside
  * `defineTable`. They unwrap to the base validator's IR with the constraint
@@ -71,13 +73,27 @@ export const parseObjectShape = (object: ObjectLiteralExpression): Record<string
             continue;
         }
 
+        // Skip computed property names (`[expr]: ...`) — we can't derive a stable
+        // identifier from them and they can't be emitted safely.
+        const nameNode = property.getNameNode();
+
+        if (Node.isComputedPropertyName(nameNode)) {
+            continue;
+        }
+
         const initializer = property.getInitializer();
 
         if (!initializer) {
             continue;
         }
 
-        out[property.getName()] = parseValidator(initializer);
+        const fieldName = property.getName();
+
+        if (!FIELD_NAME_RE.test(fieldName)) {
+            throw new Error(`@cirrus/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);
+        }
+
+        out[fieldName] = parseValidator(initializer);
     }
 
     return out;

@@ -1,4 +1,5 @@
 import { existsSync, rmSync } from "node:fs";
+import { createInterface } from "node:readline";
 
 import { join } from "@visulima/path";
 
@@ -6,20 +7,62 @@ import type { Logger } from "../util/logger.js";
 
 export interface ResetCommandOptions {
     all?: boolean;
+    /** Inject a custom confirmer (tests, non-TTY callers). Returns `true` on confirmation. */
+    confirm?: (prompt: string) => Promise<boolean>;
     cwd?: string;
     logger: Logger;
+    /** Skip confirmation. Required when stdin is not a TTY. */
+    yes?: boolean;
 }
 
 export interface ResetCommandResult {
+    code: number;
     removed: ReadonlyArray<string>;
 }
 
-export const runResetCommand = (options: ResetCommandOptions): ResetCommandResult => {
+const promptYesNo = async (prompt: string): Promise<boolean> => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+    try {
+        const answer = await new Promise<string>((resolveAnswer) => {
+            rl.question(prompt, (input) => {
+                resolveAnswer(input);
+            });
+        });
+
+        const normalised = answer.trim().toLowerCase();
+
+        return normalised === "y" || normalised === "yes";
+    } finally {
+        rl.close();
+    }
+};
+
+export const runResetCommand = async (options: ResetCommandOptions): Promise<ResetCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const targets: string[] = [join(cwd, ".wrangler", "state")];
 
     if (options.all) {
         targets.push(join(cwd, ".cirrus-cache"));
+    }
+
+    if (!options.yes) {
+        const isTty = process.stdin.isTTY;
+
+        if (!isTty && options.confirm === undefined) {
+            options.logger.error("reset: stdin is not a TTY — re-run with --yes to confirm deleting .wrangler/state");
+
+            return { code: 1, removed: [] };
+        }
+
+        const confirmer = options.confirm ?? promptYesNo;
+        const confirmed = await confirmer("This will delete .wrangler/state. Continue? [y/N] ");
+
+        if (!confirmed) {
+            options.logger.info("reset: aborted");
+
+            return { code: 1, removed: [] };
+        }
     }
 
     const removed: string[] = [];
@@ -34,5 +77,5 @@ export const runResetCommand = (options: ResetCommandOptions): ResetCommandResul
         }
     }
 
-    return { removed };
+    return { code: 0, removed };
 };
