@@ -22,6 +22,11 @@
             "import": "./dist/plugins.mjs",
             "require": "./dist/plugins.cjs"
         },
+        "./middleware": {
+            "types": "./dist/middleware.d.ts",
+            "import": "./dist/middleware.mjs",
+            "require": "./dist/middleware.cjs"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {
