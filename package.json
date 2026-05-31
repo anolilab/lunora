@@ -64,7 +64,7 @@
         "eslint-plugin-react-you-might-not-need-an-effect": "catalog:lint",
         "eslint-plugin-validate-jsx-nesting": "catalog:lint",
         "prettier": "catalog:lint",
-        "react-doctor": "0.2.10",
+        "react-doctor": "0.2.14",
         "rimraf": "catalog:node",
         "ts-morph": "catalog:tooling",
         "tsx": "catalog:dev",

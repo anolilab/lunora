@@ -17,22 +17,22 @@ catalogs:
     "@anolilab/semantic-release-pnpm": ^8.1.15
     "@anolilab/semantic-release-preset": ^13.4.16
     "@total-typescript/ts-reset": ^0.6.1
-    "@tsconfig/node24": ^24.0.0
+    "@tsconfig/node24": ^24.0.4
     cross-env: ^10.1.0
-    tsx: ^4.22.3
+    tsx: ^4.22.4
   lint:
     "@anolilab/eslint-config": 27.0.2
     "@anolilab/prettier-config": 10.0.1
-    "@eslint-react/eslint-plugin": 5.7.1
+    "@eslint-react/eslint-plugin": 5.8.8
     "@ospm/eslint-plugin-react-unhookify": ^1.0.2
-    eslint: 10.4.0
+    eslint: 10.4.1
     eslint-plugin-jsx-a11y: ^6.10.2
     eslint-plugin-react: ^7.37.5
     eslint-plugin-react-compiler: ^19.1.0-rc.2
     eslint-plugin-react-hooks: 7.1.1
     eslint-plugin-react-perf: ^3.3.3
     eslint-plugin-react-refresh: 0.5.2
-    eslint-plugin-react-you-might-not-need-an-effect: 0.10.0
+    eslint-plugin-react-you-might-not-need-an-effect: 1.0.0
     eslint-plugin-validate-jsx-nesting: ^0.1.1
     husky: ^9.1.7
     prettier: 3.8.3
@@ -43,8 +43,8 @@ catalogs:
     "@anolilab/commitlint-config": 10.0.1
     "@anolilab/multi-semantic-release": ^4.4.4
     "@anolilab/textlint-config": 13.0.1
-    "@commitlint/cli": ^21.0.1
-    "@commitlint/config-conventional": ^21.0.1
+    "@commitlint/cli": ^21.0.2
+    "@commitlint/config-conventional": ^21.0.2
     cz-conventional-changelog: ^3.3.0
     "@visulima/vis": 1.0.0-alpha.25
     "@visulima/tabular": 4.0.0-alpha.11
@@ -59,7 +59,7 @@ catalogs:
     "@types/node": 25.9.1
   cloudflare:
     "@cloudflare/vitest-pool-workers": ^0.16.10
-    "@cloudflare/workers-types": ^4.20260528.1
+    "@cloudflare/workers-types": ^4.20260531.1
     miniflare: ^4.20260526.0
     wrangler: ^4.95.0
   e2e:
@@ -73,7 +73,7 @@ catalogs:
     jsonc-parser: ^3.3.1
     vite: ^8.0.14
   frontend:
-    "@tanstack/react-query": ^5.93.0
+    "@tanstack/react-query": ^5.100.14
     "@tanstack/react-table": ^8.21.3
     "@tanstack/react-virtual": ^3.13.26
     "@testing-library/dom": ^10.4.1
@@ -87,17 +87,17 @@ catalogs:
     "@visulima/email": 1.0.0-alpha.32
     "@react-email/render": 2.0.8
   docs:
-    "fumadocs-core": ^16.9.2
-    "fumadocs-ui": ^16.9.2
-    "fumadocs-mdx": ^15.0.9
+    "fumadocs-core": ^16.9.3
+    "fumadocs-ui": ^16.9.3
+    "fumadocs-mdx": ^15.0.10
     "next": ^16.2.6
     "tailwindcss": ^4.3.0
   auth:
-    "better-auth": ^1.6.11
+    "better-auth": ^1.6.13
   drizzle:
     drizzle-orm: ^0.45.2
   http:
-    hono: ^4.12.19
+    hono: ^4.12.23
 
 preferWorkspacePackages: true
 
@@ -119,3 +119,29 @@ allowBuilds:
   sharp: true
   unrs-resolver: true
   workerd: true
+
+minimumReleaseAgeExclude:
+  - '@better-auth/core@1.6.13'
+  - '@better-auth/drizzle-adapter@1.6.13'
+  - '@better-auth/kysely-adapter@1.6.13'
+  - '@better-auth/memory-adapter@1.6.13'
+  - '@better-auth/mongo-adapter@1.6.13'
+  - '@better-auth/prisma-adapter@1.6.13'
+  - '@better-auth/telemetry@1.6.13'
+  - '@cloudflare/workers-types@4.20260531.1'
+  - '@eslint-react/ast@5.8.8'
+  - '@eslint-react/core@5.8.8'
+  - '@eslint-react/eslint-plugin@5.8.8'
+  - '@eslint-react/eslint@5.8.8'
+  - '@eslint-react/jsx@5.8.8'
+  - '@eslint-react/shared@5.8.8'
+  - '@eslint-react/var@5.8.8'
+  - better-auth@1.6.13
+  - eslint-plugin-react-dom@5.8.8
+  - eslint-plugin-react-jsx@5.8.8
+  - eslint-plugin-react-naming-convention@5.8.8
+  - eslint-plugin-react-rsc@5.8.8
+  - eslint-plugin-react-web-api@5.8.8
+  - eslint-plugin-react-x@5.8.8
+  - eslint-plugin-react-you-might-not-need-an-effect@1.0.0
+  - tsx@4.22.4
