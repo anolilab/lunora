@@ -13,6 +13,7 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
+import { resolveAdminBaseUrl } from "../util/admin-url.js";
 import type { Logger } from "../util/logger.js";
 import type { FetchLike } from "./run.js";
 
@@ -94,7 +95,12 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
         return { bytes: 0, code: 1, rows: 0 };
     }
 
-    const baseUrl = (options.url ?? "http://localhost:8787").replace(/\/$/u, "");
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+
+    if (baseUrl === null) {
+        return { bytes: 0, code: 1, rows: 0 };
+    }
+
     const requestUrl = `${baseUrl}${EXPORT_ENDPOINT_PATH}`;
     const tables = resolveTables(options.tables);
 
@@ -254,7 +260,12 @@ export const runImportCommand = async (options: ImportCommandOptions): Promise<I
         return { body: undefined, code: 1, inserted: 0 };
     }
 
-    const baseUrl = (options.url ?? "http://localhost:8787").replace(/\/$/u, "");
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+
+    if (baseUrl === null) {
+        return { body: undefined, code: 1, inserted: 0 };
+    }
+
     const requestUrl = `${baseUrl}${IMPORT_ENDPOINT_PATH}`;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
 

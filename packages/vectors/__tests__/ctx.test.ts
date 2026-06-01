@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createVectors } from "../src/create-vectors.js";
-import { createCtxVectors, createVectorSyncHook } from "../src/ctx.js";
 import type { SchemaLike, VectorSearchLike } from "../src/ctx.js";
+import { createCtxVectors, createVectorSyncHook } from "../src/ctx.js";
 import type { VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
 
 const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => ({
@@ -51,7 +51,9 @@ describe("createCtxVectors", () => {
 
         await ctx.query("docs", { vector: [0.1] });
 
-        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ returnMetadata: "all" }));
+        // Default is "indexed" (not "all"): indexed metadata still surfaces on
+        // matches without leaking every stored field by default.
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ returnMetadata: "indexed" }));
     });
 
     it("getByIds maps Vectorize vectors to the server record shape", async () => {
@@ -148,7 +150,7 @@ describe("createVectorSyncHook", () => {
         ]);
     });
 
-    it("skips Shape A indexes when the source field is nullish", async () => {
+    it("purges Shape A indexes when the source field is nullish (clear-field)", async () => {
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
             tables: { messages: { vectorIndexes: [{ name: "messages-body", field: "body", embed }] } },
@@ -156,9 +158,25 @@ describe("createVectorSyncHook", () => {
         };
         const hook = createVectorSyncHook({ schema, vectors });
 
-        await hook({ op: "insert", table: "messages", id: "m1", doc: { body: null } });
+        await hook({ op: "update", table: "messages", id: "m1", doc: { body: null } });
 
+        // No upsert, and the stale vector is deleted rather than silently left
+        // searchable (Finding 50).
         expect(vectors.upserts).toEqual([]);
+        expect(vectors.deletes).toEqual([["messages-body", ["m1"]]]);
+    });
+
+    it("threads the namespace onto upserts for tenant isolation", async () => {
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ name: "messages-body", field: "body", embed }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ namespace: "tenant-acme", schema, vectors });
+
+        await hook({ op: "insert", table: "messages", id: "m1", doc: { body: "hi" } });
+
+        expect(vectors.upserts).toEqual([["messages-body", { id: "m1", input: "hi", embed, metadata: undefined, namespace: "tenant-acme" }]]);
     });
 
     it("no-ops for tables without any vector index", async () => {

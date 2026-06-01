@@ -22,6 +22,18 @@ const assertSafeAddressField = (field: "email" | "name", value: string): void =>
     }
 };
 
+/**
+ * Reject CR/LF in a free-form header value (subject, custom header keys/values).
+ * Same header-injection vector as the address fields, but commas are legal here
+ * so only the line terminators are forbidden — a smuggled CR/LF would split the
+ * value into attacker-controlled extra headers.
+ */
+const assertSafeHeaderValue = (label: string, value: string): void => {
+    if (value.includes("\r") || value.includes("\n")) {
+        throw new Error(`@cirrus/mail: ${label} must not contain CR or LF`);
+    }
+};
+
 /** `@visulima/email` models addresses as `{ email, name? }`. Accept either shape. */
 const toAddress = (input: string): { email: string; name?: string } => {
     const match = ADDRESS_PATTERN.exec(input);
@@ -98,7 +110,12 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
             if (!result.success || !result.data) {
                 const reason = result.error instanceof Error ? result.error.message : String(result.error ?? "send failed");
 
-                throw new Error(`@cirrus/mail: send failed: ${reason}`);
+                // Keep the raw provider detail in server logs only — surfacing
+                // it to callers can disclose provider internals. Throw a stable,
+                // generic message.
+                console.error(`@cirrus/mail: send failed: ${reason}`);
+
+                throw new Error("@cirrus/mail: send failed");
             }
 
             return { id: result.data.messageId };
@@ -130,6 +147,18 @@ export const createMailer = (options: CirrusMailOptions): Mailer => {
 
             html = html ?? rendered.html;
             text = text ?? rendered.text;
+        }
+
+        // The subject and any custom headers flow straight into the provider's
+        // header block, so they need the same CR/LF rejection the address
+        // fields get. Validated here so both send() and queue() are covered.
+        assertSafeHeaderValue("subject", opts.subject);
+
+        if (opts.headers) {
+            for (const [name, value] of Object.entries(opts.headers)) {
+                assertSafeHeaderValue(`header name "${name}"`, name);
+                assertSafeHeaderValue(`header "${name}" value`, value);
+            }
         }
 
         return {

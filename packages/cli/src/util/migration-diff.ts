@@ -205,9 +205,11 @@ const diffIndexes = (
         const fieldsEqual = old.fields.length === index.fields.length && old.fields.every((field, i) => field === index.fields[i]);
 
         if (!fieldsEqual || old.unique !== index.unique) {
-            // Renaming indexes / changing their fields means drop+create. We
-            // emit that pair when only the unique flag flips or fields shift,
-            // but we surface it through unsupported so the user can review.
+            // Renaming an index / changing its fields or unique flag would mean
+            // a drop+create, but we do NOT emit that SQL automatically: index
+            // changes are surfaced through `unsupported` so the user reviews and
+            // writes the drop+create by hand (avoids silently rebuilding an
+            // index — potentially expensive or lock-heavy — under their feet).
             unsupported.push({
                 kind: "indexRename",
                 summary: `index ${indexName} changed on ${tableName} — drop+create manually if intentional`,

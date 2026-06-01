@@ -42,7 +42,7 @@ const syntheticHandler = async (): Promise<number> => {
 // Setup inline (vitest bench doesn't await beforeAll cleanly — same shape as
 // the existing dispatch/broadcast-delta benches).
 const primedCache = new ReactiveCache({ maxEntries: 1024 });
-const primedKey = reactiveCacheKey("primed:handler", { id: "p1" });
+const primedKey = reactiveCacheKey("primed:handler", { id: "p1" }, null);
 
 await primedCache.run(primedKey, createDependencyTracker().collect(), syntheticHandler);
 
@@ -57,7 +57,7 @@ describe("ReactiveCache.run — hit vs miss vs no-cache", () => {
 
     bench("miss: cache.run runs handler + stores result (eviction-forced)", async () => {
         missCounter += 1;
-        const key = reactiveCacheKey("miss:handler", { n: missCounter });
+        const key = reactiveCacheKey("miss:handler", { n: missCounter }, null);
 
         await missCache.run(key, createDependencyTracker().collect(), syntheticHandler);
     });

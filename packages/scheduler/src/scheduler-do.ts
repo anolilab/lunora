@@ -26,11 +26,24 @@ export interface SchedulerDOState {
 export interface SchedulerEnv {
     [key: string]: unknown;
     /**
+     * Fallback bearer token attached to the dispatch when
+     * {@link SchedulerEnv.CIRRUS_SCHEDULER_SECRET} is not configured. Sent as
+     * `authorization: Bearer <token>`.
+     */
+    CIRRUS_ADMIN_TOKEN?: string;
+    /**
      * Base URL where the Worker is mounted. SchedulerDO uses this at dispatch
      * time to call back into the Worker. Read at fire time (NOT taken from the
      * request body) to prevent SSRF via a forged `originUrl` field.
      */
     CIRRUS_ORIGIN_URL?: string;
+    /**
+     * Shared secret used to HMAC-sign the dispatch body so the runtime receiver
+     * can authenticate the call (header `x-cirrus-scheduler-signature`). Without
+     * it the dispatch is sent unsigned (optionally bearer-authenticated via
+     * {@link SchedulerEnv.CIRRUS_ADMIN_TOKEN}).
+     */
+    CIRRUS_SCHEDULER_SECRET?: string;
 }
 
 const HEADER_PREFIX = "id:";
@@ -38,6 +51,10 @@ const RETRY_PREFIX = "retry:";
 const DEAD_PREFIX = "dead:";
 const MAX_RETRY_ATTEMPTS = 5;
 const RETRY_BASE_DELAY_MS = 30_000;
+// Maximum valid `Date` in epoch milliseconds (per ECMAScript). Past this,
+// `String(scheduledFor)` would switch to exponential notation and corrupt the
+// zero-padded time index — see indexKey() and handleSchedule().
+const MAX_SCHEDULED_FOR_MS = 8_640_000_000_000_000;
 // Zero-padded to 15 digits so lexical order matches numeric order — see indexKey().
 const TIME_PAD = 15;
 const padTime = (n: number): string => String(n).padStart(TIME_PAD, "0");
@@ -230,9 +247,14 @@ export class SchedulerDO {
 
     /**
      * Internal dispatch hook; overridden in unit tests to capture the outgoing
-     * request. Returns `true` when the dispatch is considered successful (any
-     * HTTP response), `false` if the fetch threw or returned a 5xx — those
-     * cases enter the retry pipeline via {@link recordRetry}.
+     * request. Returns `true` ONLY on an explicit 2xx response (`response.ok`).
+     * Anything else — a network failure, a 5xx, OR a non-2xx such as 404
+     * (receiver route not mounted) / 401 / 403 / 4xx — returns `false` and
+     * enters the retry pipeline via {@link recordRetry}. Treating 4xx as
+     * success used to permanently delete the job; since the receiver may simply
+     * be missing (404) or transiently failing, we retry rather than silently
+     * drop. After {@link MAX_RETRY_ATTEMPTS} the record is parked under a
+     * `dead:` key for inspection — never silently deleted.
      *
      * The dispatch target is taken from `env.CIRRUS_ORIGIN_URL` (NOT from the
      * stored record) to prevent SSRF via a forged `originUrl` on the schedule
@@ -245,25 +267,77 @@ export class SchedulerDO {
             return true;
         }
 
+        const body = JSON.stringify({
+            functionPath: record.functionPath,
+            args: record.args,
+            shardKey: record.shardKey,
+            scheduledFor: record.scheduledFor,
+            id: record.id,
+        });
+
+        const headers: Record<string, string> = { "content-type": "application/json" };
+
+        // Authenticate the dispatch so the receiver route can reject anonymous
+        // callers (an unauthenticated receiver would execute arbitrary
+        // functions for anyone who can reach the origin). We HMAC-sign the
+        // exact JSON body with a shared secret and send it as a header; the
+        // runtime-side receiver re-derives the HMAC and compares.
+        //
+        // Env vars (read at fire time, never from the request body):
+        //   CIRRUS_SCHEDULER_SECRET — shared HMAC secret. Preferred.
+        //   CIRRUS_ADMIN_TOKEN      — fallback bearer if no HMAC secret is set.
+        // With neither configured the body is sent unsigned (current behaviour);
+        // the receiver should then refuse to run in that posture.
+        const signature = await this.signDispatch(body);
+
+        if (signature !== undefined) {
+            headers["x-cirrus-scheduler-signature"] = signature;
+        } else if (typeof this.env.CIRRUS_ADMIN_TOKEN === "string" && this.env.CIRRUS_ADMIN_TOKEN.length > 0) {
+            headers.authorization = `Bearer ${this.env.CIRRUS_ADMIN_TOKEN}`;
+        }
+
         try {
             const response = await fetch(`${originUrl}/_cirrus/scheduler/dispatch`, {
                 method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({
-                    functionPath: record.functionPath,
-                    args: record.args,
-                    shardKey: record.shardKey,
-                    scheduledFor: record.scheduledFor,
-                    id: record.id,
-                }),
+                headers,
+                body,
             });
 
-            // Treat 5xx as transient and retry; 4xx is the caller's problem
-            // and won't be improved by a retry, so we consider it "done".
-            return response.status < 500;
+            // Success is an explicit 2xx only. A 404 (receiver route missing),
+            // any other 4xx, or a 5xx is NOT treated as done — the caller
+            // (alarm()) keeps the record and routes it through recordRetry()
+            // rather than deleting it. Idempotent dispatch keyed by record id
+            // makes a re-fire safe.
+            return response.ok;
         } catch {
             return false;
         }
+    }
+
+    /**
+     * HMAC-SHA-256 sign the dispatch body with `env.CIRRUS_SCHEDULER_SECRET`,
+     * returning a base64url signature, or `undefined` when no secret is
+     * configured. Mirrors `@cirrus/storage`'s signed-URL HMAC pattern (WebCrypto
+     * `crypto.subtle`, available in workerd).
+     */
+    private async signDispatch(body: string): Promise<string | undefined> {
+        const secret = typeof this.env.CIRRUS_SCHEDULER_SECRET === "string" ? this.env.CIRRUS_SCHEDULER_SECRET : undefined;
+
+        if (!secret || secret.length === 0) {
+            return undefined;
+        }
+
+        const encoder = new TextEncoder();
+        const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+        const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+        const bytes = new Uint8Array(signature);
+        let binary = "";
+
+        for (const byte of bytes) {
+            binary += String.fromCodePoint(byte);
+        }
+
+        return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
     }
 
     /**
@@ -306,8 +380,19 @@ export class SchedulerDO {
         // Reject NaN, +/-Infinity and non-positive timestamps. A finite
         // positive number is a precondition for the time-index padding to
         // sort correctly.
-        if (typeof body.scheduledFor !== "number" || !Number.isFinite(body.scheduledFor) || body.scheduledFor <= 0) {
-            return this.error(400, "INVALID_INPUT", "scheduledFor must be a finite positive epoch-millisecond number");
+        //
+        // Cap at the maximum valid `Date` (8.64e15 ms) and require an integer:
+        // for values >= 1e21 `String()` switches to exponential notation
+        // ('1e+21'), which breaks `indexKey()`'s zero-padding and the
+        // `Number.parseInt()` recovery in alarm()/rescheduleAlarm() (it stops
+        // at the 'e'), corrupting the sort order so jobs fire immediately.
+        if (
+            typeof body.scheduledFor !== "number" ||
+            !Number.isInteger(body.scheduledFor) ||
+            body.scheduledFor <= 0 ||
+            body.scheduledFor > MAX_SCHEDULED_FOR_MS
+        ) {
+            return this.error(400, "INVALID_INPUT", "scheduledFor must be a positive integer epoch-millisecond number no greater than 8640000000000000");
         }
 
         // Dispatch target lives only in env — never trust an `originUrl` from

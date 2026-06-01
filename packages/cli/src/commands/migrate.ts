@@ -13,6 +13,7 @@ import { discoverMigrations, discoverSchema } from "@cirrus/codegen";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
+import { resolveAdminBaseUrl } from "../util/admin-url.js";
 import type { Logger } from "../util/logger.js";
 import type { SchemaSnapshot } from "../util/migration-diff.js";
 import { diffSnapshots, renderMigrationFile } from "../util/migration-diff.js";
@@ -188,6 +189,16 @@ export const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): M
 
     const exportName = camelCase(slug);
     const table = options.table ?? "TODO_table";
+
+    // `table` is written verbatim into generated TypeScript (`table: "..."`),
+    // so it must be a bare identifier — otherwise a crafted `--table` value can
+    // inject arbitrary source into cirrus/migrations.ts.
+    if (!/^[A-Za-z_]\w*$/u.test(table)) {
+        options.logger.error(`invalid --table: "${table}" — must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)`);
+
+        return { code: 1, file: "" };
+    }
+
     const cirrusDirectory = join(cwd, "cirrus");
     const file = join(cirrusDirectory, DATA_MIGRATIONS_FILENAME);
 
@@ -311,7 +322,12 @@ export const runMigrateDataCommand = async (options: MigrateDataCommandOptions):
         return { body: undefined, code: 1, requestUrl: "" };
     }
 
-    const baseUrl = (options.url ?? "http://localhost:8787").replace(/\/$/u, "");
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+
+    if (baseUrl === null) {
+        return { body: undefined, code: 1, requestUrl: "" };
+    }
+
     const requestUrl = `${baseUrl}${MIGRATE_ENDPOINT_PATH}`;
 
     const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;

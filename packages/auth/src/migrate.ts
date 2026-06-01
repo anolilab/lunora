@@ -2,7 +2,14 @@ import { getMigrations } from "better-auth/db/migration";
 
 import type { CirrusAuth, CirrusAuthOptions } from "./create-auth.js";
 
-const migrated = new WeakSet<object>();
+/**
+ * Single-flight cache of in-flight (and completed) migration runs, keyed by the
+ * `options` reference. Storing the *promise* — rather than a post-completion
+ * flag — closes a TOCTOU race: concurrent callers that arrive before the first
+ * run resolves all await the same promise instead of each launching the DDL
+ * runner. A rejected run is evicted (below) so a transient failure can retry.
+ */
+const migrating = new WeakMap<object, Promise<void>>();
 
 /**
  * Apply better-auth's required schema (`user`, `session`, `account`,
@@ -22,15 +29,30 @@ const migrated = new WeakSet<object>();
 export const ensureMigrated = async (auth: CirrusAuth | { options: CirrusAuthOptions }): Promise<void> => {
     const { options } = auth;
 
-    if (migrated.has(options)) {
-        return;
+    const inFlight = migrating.get(options);
+
+    if (inFlight) {
+        return inFlight;
     }
 
-    const { runMigrations } = await getMigrations(options);
+    const run = (async (): Promise<void> => {
+        const { runMigrations } = await getMigrations(options);
 
-    await runMigrations();
+        await runMigrations();
+    })();
 
-    migrated.add(options);
+    // Record the promise synchronously (before the first await above resolves)
+    // so concurrent callers single-flight onto this run. On failure, evict the
+    // cached promise so the next call can retry instead of replaying the error.
+    migrating.set(options, run);
+
+    try {
+        await run;
+    } catch (error) {
+        migrating.delete(options);
+
+        throw error;
+    }
 };
 
 /**

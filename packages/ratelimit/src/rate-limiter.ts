@@ -97,7 +97,9 @@ export class RateLimiter<Names extends string = string> {
      * Read the current config and the units admittable right now for a
      * `(name, key)` pair. The value is projected forward to the current clock
      * (token-bucket refill, fixed-window rollover, sliding-window decay), not
-     * the last persisted figure. For a sharded limit it aggregates every shard.
+     * the last persisted figure. For a sharded limit it reads only the single
+     * shard `limit()`/`run()` would route this key to — the sibling shards are
+     * never touched by this key, so summing them would over-report.
      */
     public async getValue(name: Names, args: { key?: string } = {}): Promise<{ config: RateLimitConfig; ts: number; value: number }> {
         const config = this.resolve(name);
@@ -106,11 +108,13 @@ export class RateLimiter<Names extends string = string> {
         const normalizedKey = args.key === undefined ? undefined : this.normalize(args.key);
 
         if (shards > 1) {
-            const shardConfig = perShardConfig(config, shards);
-            const stored = await Promise.all(this.shardKeys(name, normalizedKey, shards).map((storageKey) => Promise.resolve(this.store.get(storageKey))));
-            const value = stored.reduce((total, prior) => total + availableAt(shardConfig, prior ?? undefined, now).value, 0);
+            // Mirror the exact routing run() uses so getValue reflects the one
+            // bucket this key actually consumes from.
+            const base = storageKeyFor(name, normalizedKey);
+            const storageKey = `${base}#${hashToShard(base, shards)}`;
+            const current = availableAt(perShardConfig(config, shards), (await this.store.get(storageKey)) ?? undefined, now);
 
-            return { config, ts: now, value };
+            return { config, ts: current.ts, value: current.value };
         }
 
         const current = availableAt(config, await this.store.get(storageKeyFor(name, normalizedKey)), now);
@@ -166,6 +170,15 @@ export class RateLimiter<Names extends string = string> {
             return status;
         }
 
+        const count = args.count ?? 1;
+
+        // A zero/negative/NaN/fractional count would distort or refill the
+        // bucket, so reject anything that isn't a positive integer before it
+        // reaches the accounting layer.
+        if (!Number.isInteger(count) || count <= 0) {
+            throw new Error(`rate limit "${name}": count must be a positive integer`);
+        }
+
         const shards = config.shards ?? 1;
         const base = storageKeyFor(name, normalizedKey);
         // Deterministic hash routes a given (name, key) to a fixed shard. Per
@@ -177,7 +190,7 @@ export class RateLimiter<Names extends string = string> {
         const prior = await this.store.get(storageKey);
         const { status, value } = evaluate(perShardConfig(config, shards), prior, {
             consume,
-            count: args.count ?? 1,
+            count,
             now: this.now(),
             reserve: args.reserve ?? false,
         });

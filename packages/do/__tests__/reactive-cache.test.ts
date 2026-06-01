@@ -61,7 +61,19 @@ describe("stableStringify", () => {
 
 describe("reactiveCacheKey", () => {
     test("combines function path with stable args encoding", () => {
-        expect(reactiveCacheKey("messages:list", { channelId: "A", limit: 10 })).toBe(reactiveCacheKey("messages:list", { limit: 10, channelId: "A" }));
+        expect(reactiveCacheKey("messages:list", { channelId: "A", limit: 10 }, null)).toBe(
+            reactiveCacheKey("messages:list", { limit: 10, channelId: "A" }, null),
+        );
+    });
+
+    test("scopes the key to caller identity so users never collide", () => {
+        const a = reactiveCacheKey("profile:me", {}, "user_a");
+        const b = reactiveCacheKey("profile:me", {}, "user_b");
+        const anon = reactiveCacheKey("profile:me", {}, null);
+
+        expect(a).not.toBe(b);
+        expect(a).not.toBe(anon);
+        expect(b).not.toBe(anon);
     });
 });
 
@@ -266,16 +278,16 @@ describe("reactiveCache", () => {
         const cache = new ReactiveCache();
         const spy = spyCounter();
 
-        await cache.run(reactiveCacheKey("messages:list", { channelId: "A" }), new Set([depKey("messages", SCAN_DEP)]), spy.run);
-        await cache.run(reactiveCacheKey("messages:list", { channelId: "B" }), new Set([depKey("messages", SCAN_DEP)]), spy.run);
+        await cache.run(reactiveCacheKey("messages:list", { channelId: "A" }, null), new Set([depKey("messages", SCAN_DEP)]), spy.run);
+        await cache.run(reactiveCacheKey("messages:list", { channelId: "B" }, null), new Set([depKey("messages", SCAN_DEP)]), spy.run);
 
         expect(spy.calls).toBe(2);
         expect(cache.size().entries).toBe(2);
     });
 
     test("rLS interaction: restrictsCounts/baseWhere bake into the cache key via argsHash", () => {
-        const restricted = reactiveCacheKey("messages:count", { restrictsCounts: true, baseWhere: { ownerId: "u1" } });
-        const unrestricted = reactiveCacheKey("messages:count", {});
+        const restricted = reactiveCacheKey("messages:count", { restrictsCounts: true, baseWhere: { ownerId: "u1" } }, null);
+        const unrestricted = reactiveCacheKey("messages:count", {}, null);
 
         expect(restricted).not.toBe(unrestricted);
     });

@@ -32,6 +32,16 @@
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              # SECURITY TODO: this job holds NPM_TOKEN + a GitHub PAT, so a compromised
+              # dependency could exfiltrate them. `audit` only logs egress. A maintainer
+              # should switch to `egress-policy: block` with a verified allowlist once the
+              # full set of endpoints is confirmed from an audit run. Known-required hosts:
+              #   - registry.npmjs.org      (npm publish)
+              #   - github.com              (git push tags/commits)
+              #   - api.github.com          (GitHub releases / issue + PR comments)
+              #   - objects.githubusercontent.com (release asset/object downloads)
+              # Not switched to `block` here because the complete allowlist cannot be
+              # verified offline and an incomplete allowlist would break the release.
               "with":
                   "egress-policy": "audit"
 

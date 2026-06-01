@@ -12,7 +12,20 @@
     "react-doctor":
         "runs-on": "ubuntu-latest"
         "steps":
-            - "uses": "actions/checkout@v4"
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "with":
+                  "persist-credentials": false
+            # TODO(security): pin `millionco/react-doctor` to a commit SHA (with a
+            # `# vX.Y.Z` comment) instead of the mutable `@main` branch, matching the
+            # SHA-pinning convention used by every other workflow in this repo.
+            # A SHA could not be resolved offline; resolve the latest tagged release
+            # commit and replace `@main` below.
             - "uses": "millionco/react-doctor@main"
               "with":
                   "github-token": "${{ secrets.GITHUB_TOKEN }}"

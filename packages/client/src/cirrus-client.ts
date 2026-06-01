@@ -1,5 +1,5 @@
 import { createInMemoryBookmarkStorage } from "./bookmark.js";
-import { OfflineQueue } from "./offline-queue.js";
+import { OfflineQueue, type QueuedMutation } from "./offline-queue.js";
 import { createReconnect, type ReconnectCalculator } from "./reconnect.js";
 import { createStream, type StreamHandle, type StreamIterable } from "./stream.js";
 import { type SubscriptionCallback, type SubscriptionErrorCallback, SubscriptionRegistry, type SubscriptionState } from "./subscription.js";
@@ -152,6 +152,15 @@ export class CirrusClient {
 
     private authToken: string | null = null;
 
+    /**
+     * Identity stamp recorded against each queued offline mutation, keyed by
+     * the queue-assigned mutation id. Captured at enqueue from the auth token
+     * in effect at the time, and re-checked at flush so a queued write can
+     * never replay under a different identity than the one that issued it.
+     * See {@link identityFingerprint} for the fingerprint shape.
+     */
+    private readonly queuedIdentities = new Map<string, string | null>();
+
     private closed = false;
 
     /** Subscribers to auth-token changes (see {@link onAuthTokenChange}). */
@@ -231,6 +240,12 @@ export class CirrusClient {
         }
 
         this.authToken = token;
+
+        // Identity changed — drain and reject any in-memory offline writes
+        // queued under the previous identity so they can never replay as the
+        // new user. (Flush also re-checks each item's stamp; this is the eager
+        // path so a token swap doesn't leave another user's writes lingering.)
+        this.rejectQueuedForIdentityChange();
 
         for (const listener of this.authTokenListeners) {
             try {
@@ -415,7 +430,11 @@ export class CirrusClient {
                 state.lastValue = next;
 
                 for (const callback of state.callbacks) {
-                    callback(next);
+                    try {
+                        callback(next);
+                    } catch {
+                        /* user callback threw — ignore */
+                    }
                 }
 
                 // Bind `state` (and `previous`, `versionAtApply`) into locals
@@ -439,7 +458,11 @@ export class CirrusClient {
                     boundState.lastValue = boundPrevious;
 
                     for (const callback of boundState.callbacks) {
-                        callback(boundPrevious);
+                        try {
+                            callback(boundPrevious);
+                        } catch {
+                            /* user callback threw — ignore */
+                        }
                     }
                 });
             }
@@ -460,8 +483,12 @@ export class CirrusClient {
         const midReconnect = wsState === "connecting" && connectedGate;
 
         if ((wsState !== "open" && !hasSocket && shouldQueueOffline) || midReconnect) {
+            // Bind the issuing identity at enqueue time so the write can only
+            // replay under the same identity (see flushOfflineQueue).
+            const issuingIdentity = this.identityFingerprint();
+
             return new Promise<ReturnOf<F>>((resolve, reject) => {
-                this.offlineQueue.enqueue<ReturnOf<F>>({
+                const entry: QueuedMutation<ReturnOf<F>> = {
                     functionPath: fn.__cirrusRef,
                     args: argsRecord,
                     shardKey: opts.shardKey,
@@ -473,7 +500,15 @@ export class CirrusClient {
 
                         reject(error);
                     },
-                });
+                };
+
+                this.offlineQueue.enqueue<ReturnOf<F>>(entry);
+
+                // `enqueue` assigns `entry.id` when absent; stamp the captured
+                // identity against it for the flush-time check.
+                if (entry.id !== undefined) {
+                    this.queuedIdentities.set(entry.id, issuingIdentity);
+                }
             });
         }
 
@@ -947,6 +982,7 @@ export class CirrusClient {
         }
 
         this.offlineQueue.clear();
+        this.queuedIdentities.clear();
     }
 
     // --- Internals ----------------------------------------------------------
@@ -1391,14 +1427,82 @@ export class CirrusClient {
         }
     }
 
+    /**
+     * Stable, non-reversible fingerprint of the current auth identity used to
+     * stamp queued offline writes. `null` (signed out) is its own identity and
+     * never matches a bearer-token fingerprint. The raw token is never stored;
+     * a length-prefixed FNV-1a hash is enough to detect an identity *change*
+     * without keeping the credential around in the queue map.
+     */
+    private identityFingerprint(): string | null {
+        const token = this.authToken;
+
+        if (token === null) {
+            return null;
+        }
+
+        let hash = 0x81_1c_9d_c5;
+
+        for (let index = 0; index < token.length; index += 1) {
+            hash ^= token.charCodeAt(index);
+            hash = Math.imul(hash, 0x01_00_01_93);
+        }
+
+        return `${token.length.toString(36)}:${(hash >>> 0).toString(36)}`;
+    }
+
+    /**
+     * Drain every in-memory offline write and reject it because the auth
+     * identity changed. Durable entries are also dropped from persistence so a
+     * later `hydrate` can't resurrect another user's writes. Stamps are cleared
+     * alongside. Persisted entries restored without a live awaiter still get
+     * unpersisted here.
+     */
+    private rejectQueuedForIdentityChange(): void {
+        const drained = this.offlineQueue.drain();
+
+        for (const item of drained) {
+            this.queuedIdentities.delete(item.id ?? "");
+            this.unpersist(item.id);
+
+            const error = new Error("offline mutation discarded: auth identity changed before replay");
+
+            (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
+            item.reject(error);
+        }
+    }
+
     private async flushOfflineQueue(shardKey: string | undefined): Promise<void> {
         const key = this.connectionKey(shardKey);
         const drained = this.offlineQueue.drain((item) => this.connectionKey(item.shardKey) === key);
+        const currentIdentity = this.identityFingerprint();
 
         // Sequential replay — parallel `.then()` chains would race and break
         // the FIFO ordering callers rely on, particularly when replayed
         // mutations depend on each other.
         for (const item of drained) {
+            // Identity guard: a write stamped under one identity must never
+            // replay under another (an unstamped/hydrated write — `undefined` —
+            // replays under whatever identity is current, matching the prior
+            // ambient behaviour for restored sessions). Mismatches are rejected,
+            // not silently dropped, so awaiting callers see a deterministic
+            // failure.
+            const stamped = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
+
+            if (stamped !== undefined && stamped !== currentIdentity) {
+                this.queuedIdentities.delete(item.id ?? "");
+                this.unpersist(item.id);
+
+                const error = new Error("offline mutation skipped: auth identity changed before replay");
+
+                (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
+                item.reject(error);
+
+                continue;
+            }
+
+            this.queuedIdentities.delete(item.id ?? "");
+
             try {
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, { captureBookmark: true });
 

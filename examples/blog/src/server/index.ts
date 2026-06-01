@@ -54,6 +54,7 @@ export const ShardDO = createShardDO({
 
 let worker: ReturnType<typeof createWorker> | null = null;
 let auth: CirrusAuth | null = null;
+let authReady: Promise<CirrusAuth> | null = null;
 
 /**
  * Compose the full v0.1 add-on stack: better-auth for email/password sign-in
@@ -91,12 +92,19 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
 
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
-        if (!auth) {
+        // Memoize init+migration as a single promise so concurrent cold-start
+        // requests await the same initialization instead of racing — without this,
+        // a second request could see `auth` truthy while the first request's
+        // migration is still in flight.
+        authReady ??= (async () => {
             auth = buildAuth(env);
             await ensureMigrated(auth);
-        }
 
-        const authResponse = await handleAuthRequest(auth, request);
+            return auth;
+        })();
+        const readyAuth = await authReady;
+
+        const authResponse = await handleAuthRequest(readyAuth, request);
 
         if (authResponse) {
             return authResponse;

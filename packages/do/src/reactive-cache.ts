@@ -421,8 +421,16 @@ export const stableStringify = (value: unknown): string => {
 };
 
 /**
- * Compose a cache key from a function path and a stably-encoded args object.
- * Exported so the wiring layer and tests build identical keys without each
- * side reinventing the format.
+ * Compose a cache key from a function path, a stably-encoded args object, and
+ * the caller's identity discriminator. Exported so the wiring layer and tests
+ * build identical keys without each side reinventing the format.
+ *
+ * The identity discriminator is REQUIRED: the reactive cache is per-DO and, on
+ * the default single-`__root__`-DO topology, every user shares it. A query
+ * whose result depends on `ctx.auth.userId` / `getIdentity()` (e.g. an
+ * RLS-filtered list, or `getMyProfile()` with no args) would otherwise memoize
+ * the first caller's result under an identity-independent key and serve it to
+ * everyone. Anonymous/subscription callers pass `null` (their own bucket).
  */
-export const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>): string => `${functionPath}:${stableStringify(args)}`;
+export const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>, identity: null | string): string =>
+    `${identity ?? " anon"} ${functionPath}:${stableStringify(args)}`;

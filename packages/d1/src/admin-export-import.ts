@@ -234,7 +234,9 @@ export const importGlobalRows = async (writer: DatabaseWriterLike, schema: Schem
         }
 
         try {
-            await writer.insert(table, doc);
+            // Trusted admin import path: preserve the pinned `_id` from the
+            // snapshot (the default insert path now strips client-chosen ids).
+            await writer.insert(table, doc, { allowExplicitId: true });
             inserted[table] = (inserted[table] ?? 0) + 1;
         } catch (error: unknown) {
             const code = (error as { code?: string }).code ?? "INSERT_FAILED";

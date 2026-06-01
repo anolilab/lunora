@@ -163,12 +163,29 @@ export const validateImportRow = (schema: SchemaLike, table: string, doc: Record
         return `unknown table: ${table}`;
     }
 
+    // Globals live in D1, not the shard — refuse them here so a crafted row
+    // can't smuggle a `.global()` table through the shard import path. Mirror
+    // `selectExportTables`' shard-local check exactly.
+    if (definition.shardMode?.kind === "global") {
+        return `table "${table}" is a global (.global()) table and is not importable through the shard import path`;
+    }
+
     // Strip framework-managed fields before validating against the user shape.
     // Both are reapplied verbatim on insert so the round-trip is byte-identical.
     const { _creationTime, _id, ...payload } = doc;
 
     void _creationTime;
     void _id;
+
+    // Reject keys that aren't declared in the table's shape (nor the
+    // framework-managed `_id`/`_creationTime` already stripped above).
+    // Otherwise an undeclared field passes validation untouched and gets
+    // persisted verbatim by the writer.
+    for (const key of Object.keys(payload)) {
+        if (!(key in definition.shape)) {
+            return `unexpected field "${key}": not declared in table "${table}"`;
+        }
+    }
 
     for (const [field, validator] of Object.entries(definition.shape) as Array<[string, ValidatorLike]>) {
         const candidate = (payload as Record<string, unknown>)[field];
@@ -256,7 +273,10 @@ export const importShardRows = async (writer: DatabaseWriterLike, schema: Schema
         }
 
         try {
-            await writer.insert(table, doc);
+            // Trusted import path: this is a snapshot round-trip, so a
+            // `_id` carried on the row is intentional and must be preserved
+            // (the default mutation path drops client-chosen ids).
+            await writer.insert(table, doc, { allowExplicitId: true });
             inserted[table] = (inserted[table] ?? 0) + 1;
         } catch (error: unknown) {
             const code = (error as { code?: string }).code ?? "INSERT_FAILED";

@@ -576,6 +576,35 @@ export abstract class ShardDO {
     }
 
     /**
+     * Run a subscription query body with the per-request identity forced to
+     * anonymous, then restore the prior values.
+     *
+     * Subscriptions are established over the WS handshake, which does NOT
+     * resolve identity, so a subscription query must never observe a
+     * `currentRequestUserId` left behind by — or interleaved with — an
+     * authenticated `fetch` RPC. Reading the shared identity field from a
+     * deferred/cross-request context (subscribe SEED + write-driven REFRESH)
+     * would otherwise leak one user's identity-scoped view to every
+     * subscriber. The generated `buildCtx` reads identity via
+     * {@link getCurrentUserId}, so we pin it to anonymous around the call
+     * rather than threading it through the generated signature.
+     */
+    private async withAnonymousIdentity<R>(run: () => Promise<R> | R): Promise<R> {
+        const previousUserId = this.currentRequestUserId;
+        const previousIdentity = this.currentRequestIdentity;
+
+        this.currentRequestUserId = undefined;
+        this.currentRequestIdentity = undefined;
+
+        try {
+            return await run();
+        } finally {
+            this.currentRequestUserId = previousUserId;
+            this.currentRequestIdentity = previousIdentity;
+        }
+    }
+
+    /**
      * Emit a one-shot console warning when the `__root__` DO's SQLite file
      * crosses {@link ROOT_DO_SIZE_WARN_BYTES} (1 GiB = 10% of the per-DO
      * ceiling). We deliberately avoid throwing — apps should keep working;
@@ -947,9 +976,10 @@ export abstract class ShardDO {
             // subclass doesn't support re-execution (base default), this is a
             // no-op and the subscriber relies on its initial HTTP query.
             if (functionPath) {
+                const seedArgs = envelope.query.args ?? {};
                 const outcome = isAdmin
-                    ? this.executeAdminSubscription(functionPath, envelope.query.args ?? {})
-                    : await this.executeSubscription(functionPath, envelope.query.args ?? {});
+                    ? this.executeAdminSubscription(functionPath, seedArgs)
+                    : await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, seedArgs));
 
                 if (outcome) {
                     this.pushSubscriptionData(ws, envelope.id, outcome);
@@ -1319,7 +1349,9 @@ export abstract class ShardDO {
         this.currentTracker = tracker;
 
         try {
-            return await this.reactiveCache.run(reactiveCacheKey(functionPath, args), tracker.collect(), run);
+            // Scope the cache entry to the caller's identity so a per-user /
+            // RLS-filtered result is never served across users on a shared DO.
+            return await this.reactiveCache.run(reactiveCacheKey(functionPath, args, this.getCurrentUserId() ?? null), tracker.collect(), run);
         } finally {
             this.currentTracker = previous;
         }
@@ -1383,12 +1415,12 @@ export abstract class ShardDO {
             return;
         }
 
-        // Subscriptions are established over the WS handshake, which doesn't
-        // resolve identity — they're anonymous. Re-running their queries with
-        // the *mutating* request's identity would leak that user's view to
-        // every subscriber, so we drop the request identity before re-running.
-        this.currentRequestUserId = undefined;
-        this.currentRequestIdentity = undefined;
+        // Subscription re-execution runs anonymously (see
+        // {@link withAnonymousIdentity}, applied around every executeSubscription
+        // call below). The shared identity field is no longer cleared here —
+        // clobbering it without restore could disturb an interleaved fetch RPC;
+        // the per-call wrapper pins anonymous identity for exactly the
+        // subscription body instead.
 
         if (typeof this.state.waitUntil === "function") {
             this.state.waitUntil(this.refreshSubscriptions(changed));
@@ -1437,7 +1469,7 @@ export abstract class ShardDO {
 
                 const outcome = isAdmin
                     ? this.executeAdminSubscription(functionPath, query.args ?? {})
-                    : await this.executeSubscription(functionPath, query.args ?? {});
+                    : await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, query.args ?? {}));
 
                 if (!outcome) {
                     continue;
