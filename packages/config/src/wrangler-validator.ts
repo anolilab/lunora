@@ -18,7 +18,7 @@ import type { ParseError } from "jsonc-parser";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
-import { join } from "./path.js";
+import join from "./path.js";
 
 const REQUIRED_COMPATIBILITY_DATE: string = "2026-04-07";
 
@@ -53,6 +53,26 @@ interface WranglerValidationReport {
     valid: boolean;
     warnings: string[];
 }
+
+/**
+ * Schema-declared vector indexes must each have a matching `vectorize` binding.
+ * Extracted from {@link validateWranglerConfig} to keep its cognitive complexity
+ * within bounds; pushes any mismatches onto the shared `errors` array.
+ */
+const validateVectorizeBindings = (wrangler: WranglerConfig, vectorIndexNames: ReadonlyArray<string>, errors: string[]): void => {
+    if (vectorIndexNames.length === 0) {
+        return;
+    }
+
+    const vectorizeBindings = wrangler.vectorize ?? [];
+    const declaredIndexNames = new Set(vectorizeBindings.map((binding) => binding.index_name));
+
+    for (const indexName of vectorIndexNames) {
+        if (!declaredIndexNames.has(indexName)) {
+            errors.push(`schema declares vector index "${indexName}"; wrangler "vectorize" must include a binding with index_name "${indexName}"`);
+        }
+    }
+};
 
 /**
  * Pure validator: given a parsed `WranglerConfig` object and an optional
@@ -106,18 +126,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
         }
     }
 
-    const vectorIndexNames = schema?.vectorIndexNames ?? [];
-
-    if (vectorIndexNames.length > 0) {
-        const vectorizeBindings = wrangler.vectorize ?? [];
-        const declaredIndexNames = new Set(vectorizeBindings.map((binding) => binding.index_name));
-
-        for (const indexName of vectorIndexNames) {
-            if (!declaredIndexNames.has(indexName)) {
-                errors.push(`schema declares vector index "${indexName}"; wrangler "vectorize" must include a binding with index_name "${indexName}"`);
-            }
-        }
-    }
+    validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
 
     return { errors, valid: errors.length === 0, warnings };
 };
@@ -161,7 +170,7 @@ const findWranglerFile = (projectRoot: string): string | undefined => {
  * `{ problems, wranglerPath }` shape plus the structured `report`.
  */
 const validateWranglerProject = (options: WranglerProjectValidationOptions): WranglerProjectValidationResult => {
-    const schemaDir = options.schemaDir ?? "cirrus";
+    const schemaDirectory = options.schemaDir ?? "cirrus";
     const wranglerPath = findWranglerFile(options.projectRoot);
 
     if (!wranglerPath) {
@@ -188,7 +197,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
         };
     }
 
-    const schemaPath = join(options.projectRoot, schemaDir, "schema.ts");
+    const schemaPath = join(options.projectRoot, schemaDirectory, "schema.ts");
     const warnings: string[] = [];
     let schemaInfo: SchemaInfo | undefined;
 
