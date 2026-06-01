@@ -25,8 +25,10 @@ export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
     const queryClient = useQueryClient();
 
     const { args, functionPath, shardKey, value } = preloaded;
-    const fn = useMemo<FunctionReference>(() => { return { __cirrusRef: functionPath }; }, [functionPath]);
-    const queryKey = useMemo(() => cirrusQueryKey(fn, args, shardKey), [fn.__cirrusRef, JSON.stringify(args), shardKey]);
+    const function_ = useMemo<FunctionReference>(() => {
+        return { __cirrusRef: functionPath };
+    }, [functionPath]);
+    const queryKey = useMemo(() => cirrusQueryKey(function_, args, shardKey), [function_.__cirrusRef, JSON.stringify(args), shardKey]);
 
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<T>({
@@ -34,7 +36,7 @@ export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
         // re-fetch. TanStack treats `initialData` as fresh — the WS push from
         // the registry is what supplies subsequent updates.
         initialData: value,
-        queryFn: () => client.query(fn, args, { shardKey }) as Promise<T>,
+        queryFn: () => client.query(function_, args, { shardKey }) as Promise<T>,
         queryKey,
         staleTime: Number.POSITIVE_INFINITY,
     });
@@ -42,7 +44,7 @@ export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
     useEffect(() => {
         const registry = getSubscriptionRegistry(client);
 
-        return registry.attach(queryClient, queryKey, fn, args, shardKey);
+        return registry.attach(queryClient, queryKey, function_, args, shardKey);
     }, [client, queryClient, serializeQueryKey(queryKey)]);
 
     // TanStack types `data` as `T | undefined` even with `initialData` because

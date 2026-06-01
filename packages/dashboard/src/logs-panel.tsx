@@ -60,8 +60,10 @@ interface LogRowProps {
  * offset) is a `useMemo`-stable reference — keeping the hot map body free of
  * fresh inline objects.
  */
-function LogRow({ entry, index, measureRef, start }: LogRowProps): ReactElement {
-    const style = useMemo<CSSProperties>(() => { return { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` }; }, [start]);
+const LogRow = ({ entry, index, measureRef, start }: LogRowProps): ReactElement => {
+    const style = useMemo<CSSProperties>(() => {
+        return { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` };
+    }, [start]);
 
     return (
         <div data-index={index} data-testid="lg-row" ref={measureRef} role="row" style={style}>
@@ -71,7 +73,7 @@ function LogRow({ entry, index, measureRef, start }: LogRowProps): ReactElement 
             <span role="gridcell">{entry.message}</span>
         </div>
     );
-}
+};
 
 interface LogsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -90,7 +92,7 @@ const GET_LOGS = adminRef(ADMIN_FUNCTIONS.getLogs);
  * and the buffer is in-memory so it resets when the DO hibernates or restarts.
  * Treat it as a "what's been failing on this instance lately" feed.
  */
-export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
+export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => {
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -183,7 +185,9 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
 
     const virtualRows = virtualizer.getVirtualItems();
     const totalSize = virtualizer.getTotalSize();
-    const gridStyle = useMemo<CSSProperties>(() => { return { height: totalSize, position: "relative", width: "100%" }; }, [totalSize]);
+    const gridStyle = useMemo<CSSProperties>(() => {
+        return { height: totalSize, position: "relative", width: "100%" };
+    }, [totalSize]);
 
     return (
         <div data-testid="cirrus-logs">
@@ -250,6 +254,6 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
             )}
         </div>
     );
-}
+};
 
 export type { LogsPanelProps };

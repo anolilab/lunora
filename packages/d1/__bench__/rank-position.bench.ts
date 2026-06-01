@@ -2,7 +2,7 @@ import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, Validator
 import { bench, describe } from "vitest";
 
 import { createD1Exec } from "../__tests__/_helpers/node-sqlite-d1.js";
-import { createD1CtxDb, runD1RankMigrations } from "../src/d1-ctx-db.js";
+import { createD1CtxDb as createD1ContextDatabase, runD1RankMigrations } from "../src/d1-ctx-db.js";
 
 /**
  * D1 column-dialect twin of `@cirrus/do/rank-position`. `rank()` over a
@@ -17,7 +17,9 @@ const ROWS_PER_CHANNEL = 1000;
 const CHANNEL_COUNT = 10;
 const CLOCK = 1_700_000_000_000;
 
-const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
+const col = (kind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true } }, kind };
+};
 
 const byChannel: RankIndexDefinitionLike = {
     name: "byChannel",
@@ -61,7 +63,7 @@ const createWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => 
         await runD1RankMigrations(harness.exec, schema);
     }
 
-    return createD1CtxDb({ clock: () => CLOCK, exec: harness.exec, schema });
+    return createD1ContextDatabase({ clock: () => CLOCK, exec: harness.exec, schema });
 };
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
@@ -97,7 +99,7 @@ describe("d1 rank() — indexed vs emulated scan", () => {
         let cursor: null | string = null;
         let position: null | number = null;
         let total = 0;
-        let cursorAcc = 0;
+        let cursorAccumulator = 0;
 
         while (true) {
             const page = await scanWriter.findMany("messages", {
@@ -113,7 +115,7 @@ describe("d1 rank() — indexed vs emulated scan", () => {
                 const found = page.page.findIndex((document) => document["_id"] === TARGET_ID);
 
                 if (found !== -1) {
-                    position = cursorAcc + found + 1;
+                    position = cursorAccumulator + found + 1;
                 }
             }
 
@@ -122,7 +124,7 @@ describe("d1 rank() — indexed vs emulated scan", () => {
             }
 
             cursor = page.continueCursor;
-            cursorAcc += page.page.length;
+            cursorAccumulator += page.page.length;
         }
 
         if (position === null || total === 0) {

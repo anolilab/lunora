@@ -1,7 +1,7 @@
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createD1CtxDb, runD1AggregateMigrations } from "../src/d1-ctx-db.js";
+import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
 
 /**
@@ -11,7 +11,9 @@ import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
  * tables.
  */
 
-const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
+const col = (kind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true } }, kind };
+};
 
 const byProject: AggregateIndexDefinitionLike = {
     by: ["projectId"],
@@ -21,19 +23,19 @@ const byProject: AggregateIndexDefinitionLike = {
 };
 
 const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
- return {
-    tables: {
-        todos: {
-            aggregateIndexes: indexes,
-            indexes: [],
-            shape: {
-                archived: col("boolean"),
-                projectId: col("string"),
-                seq: col("number"),
+    return {
+        tables: {
+            todos: {
+                aggregateIndexes: indexes,
+                indexes: [],
+                shape: {
+                    archived: col("boolean"),
+                    projectId: col("string"),
+                    seq: col("number"),
+                },
             },
         },
-    },
-};
+    };
 };
 
 let harness: ReturnType<typeof createD1Exec>;
@@ -51,7 +53,7 @@ const setupWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => {
 
     await runD1AggregateMigrations(harness.exec, schema);
 
-    return createD1CtxDb({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
+    return createD1ContextDatabase({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
 };
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
@@ -101,7 +103,7 @@ describe("d1 aggregateIndex parity", () => {
         );
 
         const schema = makeSchema(byProject);
-        const writer = createD1CtxDb({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
+        const writer = createD1ContextDatabase({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
 
         await seed(writer);
 

@@ -26,18 +26,20 @@ interface ShardStub {
 
 const makeShardStub = (responses: Map<string, unknown>): ShardStub => {
     const stubFor = (shardKey: string) => {
- return {
-        async fetch(): Promise<Response> {
-            return Response.json(responses.get(shardKey) ?? null, { status: 200 });
-        },
+        return {
+            async fetch(): Promise<Response> {
+                return Response.json(responses.get(shardKey) ?? null, { status: 200 });
+            },
+        };
     };
-};
 
     return {
         namespace: {
             get: (id) => stubFor((id as { __name: string }).__name),
             getByName: (name) => stubFor(name),
-            idFromName: (name) => { return { __name: name }; },
+            idFromName: (name) => {
+                return { __name: name };
+            },
         },
     };
 };
@@ -45,12 +47,12 @@ const makeShardStub = (responses: Map<string, unknown>): ShardStub => {
 const makeShardKeys = (count: number): string[] => Array.from({ length: count }, (_, index) => `s${String(index)}`);
 
 const buildRequest = (overrides: Partial<FanOutRequest>): FanOutRequest => {
- return {
-    args: {},
-    fanOut: { merge: { kind: "sum" }, table: "messages" },
-    functionPath: "messages:list",
-    ...overrides,
-};
+    return {
+        args: {},
+        fanOut: { merge: { kind: "sum" }, table: "messages" },
+        functionPath: "messages:list",
+        ...overrides,
+    };
 };
 
 /**
@@ -59,7 +61,9 @@ const buildRequest = (overrides: Partial<FanOutRequest>): FanOutRequest => {
  * each" workload.
  */
 const buildGroupByPayload = (entriesPerShard: number): { key: Record<string, unknown>; value: number }[] =>
-    Array.from({ length: entriesPerShard }, (_, index) => { return { key: { category: `cat-${String(index)}` }, value: 1 }; });
+    Array.from({ length: entriesPerShard }, (_, index) => {
+        return { key: { category: `cat-${String(index)}` }, value: 1 };
+    });
 
 // Per-shard-count setup. Done at module load (vitest bench doesn't honour
 // beforeAll the same way the test runner does — see existing benches).
@@ -77,17 +81,22 @@ const buildSetup = (count: number): Setup => {
     const registry = createStaticShardRegistry({ messages: shardKeys });
     const sumResponses = new Map<string, unknown>(shardKeys.map((key) => [key, 1]));
     const topKResponses = new Map<string, unknown>(
-        shardKeys.map((key) => [key, Array.from({ length: 50 }, (_, index) => { return { by: `m-${key}-${String(index)}`, value: index }; })]),
+        shardKeys.map((key) => [
+            key,
+            Array.from({ length: 50 }, (_, index) => {
+                return { by: `m-${key}-${String(index)}`, value: index };
+            }),
+        ]),
     );
     const groupResponses = new Map<string, unknown>(shardKeys.map((key) => [key, buildGroupByPayload(10)]));
 
     return {
-        sumStub: makeShardStub(sumResponses),
-        topKStub: makeShardStub(topKResponses),
-        groupStub: makeShardStub(groupResponses),
+        coordinatorGroup: createQueryCoordinator({ registry }),
         coordinatorSum: createQueryCoordinator({ registry }),
         coordinatorTopK: createQueryCoordinator({ registry }),
-        coordinatorGroup: createQueryCoordinator({ registry }),
+        groupStub: makeShardStub(groupResponses),
+        sumStub: makeShardStub(sumResponses),
+        topKStub: makeShardStub(topKResponses),
     };
 };
 

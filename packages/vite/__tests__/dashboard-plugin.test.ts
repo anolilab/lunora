@@ -1,7 +1,7 @@
 import type { ServerResponse } from "node:http";
 
 import type { ViteDevServer } from "vite";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin } from "../src/dashboard-plugin.js";
 
@@ -46,14 +46,15 @@ describe("buildDashboardUrl", () => {
 
 describe("dashboardPlugin", () => {
     it("is a dev-only plugin with a configureServer hook", () => {
-        expect.assertions(3);
+        // 2 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
+        expect.assertions(2);
 
         const plugin = dashboardPlugin();
 
         expect(plugin.name).toBe("cirrus:dashboard");
         expect(plugin.apply).toBe("serve");
 
-        expect(typeof plugin.configureServer).toBe("function");
+        expectTypeOf(plugin.configureServer).toBeFunction();
     });
 
     it("serves the dashboard HTML at /__cirrus and passes other paths through", async () => {
@@ -64,10 +65,16 @@ describe("dashboardPlugin", () => {
 
         const server = {
             config: { base: "/", logger: { info: vi.fn<(message: string) => void>() } },
-            httpServer: { address: () => { return { address: "127.0.0.1", family: "IPv4", port: 5173 }; }, listening: true, once: vi.fn<() => void>() },
+            httpServer: {
+                address: () => {
+                    return { address: "127.0.0.1", family: "IPv4", port: 5173 };
+                },
+                listening: true,
+                once: vi.fn<() => void>(),
+            },
             middlewares: {
-                use: (fn: typeof middleware) => {
-                    middleware = fn;
+                use: (function_: typeof middleware) => {
+                    middleware = function_;
                 },
             },
             resolvedUrls: { local: ["http://localhost:5173/"], network: [] },

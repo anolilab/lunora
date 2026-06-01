@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { recordShard } from "../src/shard-history.js";
 import { ShardInput } from "../src/shard-input.js";
 
-function Harness(): React.ReactElement {
+const Harness = (): React.ReactElement => {
     const [value, setValue] = useState("");
 
     return <ShardInput onChange={setValue} testId="x-shard" value={value} />;
-}
+};
 
 describe("shardInput", () => {
     afterEach(() => {
@@ -43,7 +43,7 @@ describe("shardInput", () => {
         // Most-recent-first.
         expect(options).toEqual(["room-9", "room-7"]);
         // The input is wired to the datalist for native autocomplete.
-        expect((screen.getByTestId("x-shard")).getAttribute("list")).toBe(datalist.id);
+        expect(screen.getByTestId("x-shard").getAttribute("list")).toBe(datalist.id);
     });
 
     it("propagates typed input through onChange", () => {

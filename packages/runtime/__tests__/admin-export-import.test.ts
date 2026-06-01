@@ -4,14 +4,18 @@ import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker.js
 import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
-const fakeCtx: ExecutionContextLike = {
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
-    idFromName: (name) => { return { __name: name }; },
+    get: () => {
+        return { fetch: async () => new Response("not used", { status: 200 }) };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
 };
 
 const ADMIN_TOKEN = "admin-bear";
@@ -38,7 +42,7 @@ describe("createWorker — admin export endpoint", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(403);
@@ -59,7 +63,7 @@ describe("createWorker — admin export endpoint", () => {
             shardDO: noopNamespace,
         });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/export", { method: "POST" }), {}, fakeCtx);
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/export", { method: "POST" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -79,7 +83,7 @@ describe("createWorker — admin export endpoint", () => {
             shardDO: noopNamespace,
         });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/export"), {}, fakeCtx);
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/export"), {}, fakeContext);
 
         expect(response.status).toBe(405);
     });
@@ -88,20 +92,20 @@ describe("createWorker — admin export endpoint", () => {
         expect.assertions(4);
 
         const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
- return {
-            failed: 0,
-            ok: 1,
-            shards: [
-                {
-                    rows: [
-                        { doc: { _id: "u1", email: "a@b.com" }, table: "users" },
-                        { doc: { _id: "u2", email: "c@d.com" }, table: "users" },
-                    ],
-                    shardKey: "__root__",
-                },
-            ],
-        };
-});
+            return {
+                failed: 0,
+                ok: 1,
+                shards: [
+                    {
+                        rows: [
+                            { doc: { _id: "u1", email: "a@b.com" }, table: "users" },
+                            { doc: { _id: "u2", email: "c@d.com" }, table: "users" },
+                        ],
+                        shardKey: "__root__",
+                    },
+                ],
+            };
+        });
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
@@ -122,7 +126,7 @@ describe("createWorker — admin export endpoint", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(200);
@@ -139,12 +143,12 @@ describe("createWorker — admin export endpoint", () => {
         expect.assertions(2);
 
         const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
- return {
-            failed: 0,
-            ok: 0,
-            shards: [],
-        };
-});
+            return {
+                failed: 0,
+                ok: 0,
+                shards: [],
+            };
+        });
 
         const exportGlobals = vi.fn<() => AsyncGenerator<{ doc: Record<string, unknown>; table: string }>>(async function* globalsIter() {
             yield { doc: { _id: "g1" }, table: "settings" };
@@ -162,7 +166,7 @@ describe("createWorker — admin export endpoint", () => {
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                (table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } }),
+                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
             shardDO: noopNamespace,
         });
 
@@ -173,7 +177,7 @@ describe("createWorker — admin export endpoint", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         const text = await response.text();
@@ -208,7 +212,9 @@ describe("createWorker — admin import endpoint", () => {
                     failed: 0,
                     inserted,
                     ok: request.batches.length,
-                    shards: request.batches.map((batch) => { return { result: { conflicts: 0, errors: [], inserted: {} }, shardKey: batch.shardKey }; }),
+                    shards: request.batches.map((batch) => {
+                        return { result: { conflicts: 0, errors: [], inserted: {} }, shardKey: batch.shardKey };
+                    }),
                 };
             },
         );
@@ -229,7 +235,7 @@ describe("createWorker — admin import endpoint", () => {
             shardDO: noopNamespace,
         });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/import", { method: "POST" }), {}, fakeCtx);
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/import", { method: "POST" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -247,7 +253,7 @@ describe("createWorker — admin import endpoint", () => {
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                (table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : { mode: { kind: "root" } }),
+                table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : { mode: { kind: "root" } },
             shardDO: noopNamespace,
         });
 
@@ -265,7 +271,7 @@ describe("createWorker — admin import endpoint", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(200);
@@ -311,7 +317,7 @@ describe("createWorker — admin import endpoint", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         const body: { errors: { code: string; line: number }[]; inserted: Record<string, number> } = await response.json();
@@ -325,12 +331,12 @@ describe("createWorker — admin import endpoint", () => {
         expect.assertions(3);
 
         const importGlobals = vi.fn<(request: { rows: { doc: Record<string, unknown>; table: string }[] }) => Promise<unknown>>(async (request) => {
- return {
-            conflicts: 0,
-            errors: [],
-            inserted: { settings: request.rows.length },
-        };
-});
+            return {
+                conflicts: 0,
+                errors: [],
+                inserted: { settings: request.rows.length },
+            };
+        });
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
@@ -343,7 +349,7 @@ describe("createWorker — admin import endpoint", () => {
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                (table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } }),
+                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
             shardDO: noopNamespace,
         });
 
@@ -359,7 +365,7 @@ describe("createWorker — admin import endpoint", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         const body: { inserted: Record<string, number> } = await response.json();
@@ -382,7 +388,7 @@ describe("createWorker — admin import endpoint", () => {
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                (table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } }),
+                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
             shardDO: noopNamespace,
         });
 
@@ -395,7 +401,7 @@ describe("createWorker — admin import endpoint", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         const body: { errors: { code: string }[] } = await response.json();
@@ -455,7 +461,7 @@ describe("import streaming — large body", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         const body: { inserted: Record<string, number> } = await response.json();
@@ -473,12 +479,12 @@ describe("import streaming — large body", () => {
         }
 
         const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
- return {
-            failed: 0,
-            ok: 1,
-            shards: [{ rows, shardKey: "__root__" }],
-        };
-});
+            return {
+                failed: 0,
+                ok: 1,
+                shards: [{ rows, shardKey: "__root__" }],
+            };
+        });
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
@@ -499,7 +505,7 @@ describe("import streaming — large body", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         // Read the body incrementally — the test crashes if the runtime

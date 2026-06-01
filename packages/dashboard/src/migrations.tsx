@@ -30,7 +30,7 @@ const RUN_MIGRATION = adminRef(ADMIN_FUNCTIONS.runMigration);
  * the server's `CIRRUS_ADMIN_TOKEN` — this component issues no credentials of
  * its own.
  */
-export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): ReactElement {
+export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): ReactElement => {
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -229,11 +229,16 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
             {runResult !== null && (
                 <p data-testid="mg-run-result">
                     {runResult.dryRun ? "Dry run: " : ""}
-                    {runResult.status} — processed {runResult.processed}, changed {runResult.changed}
+                    {runResult.status}
+{" "}
+— processed
+{runResult.processed}
+, changed
+{runResult.changed}
                 </p>
             )}
         </div>
     );
-}
+};
 
 export type { MigrationsPanelProps };

@@ -1,38 +1,38 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ActionCtx, MutationCtx, QueryCtx } from "../src/index.js";
+import type { ActionCtx as ActionContext, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../src/index.js";
 import { action, internalAction, internalMutation, internalQuery, mutation, query, v, ValidationError } from "../src/index.js";
 
-const makeQueryCtx = (): QueryCtx => {
+const makeQueryContext = (): QueryContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
-        db: {} as QueryCtx["db"],
-        storage: {} as QueryCtx["storage"],
-        vectors: {} as QueryCtx["vectors"],
+        db: {} as QueryContext["db"],
+        storage: {} as QueryContext["storage"],
+        vectors: {} as QueryContext["vectors"],
     };
 };
 
-const makeMutationCtx = (): MutationCtx => {
+const makeMutationContext = (): MutationContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
-        db: {} as MutationCtx["db"],
-        scheduler: {} as MutationCtx["scheduler"],
-        storage: {} as MutationCtx["storage"],
-        vectors: {} as MutationCtx["vectors"],
+        db: {} as MutationContext["db"],
+        scheduler: {} as MutationContext["scheduler"],
+        storage: {} as MutationContext["storage"],
+        vectors: {} as MutationContext["vectors"],
     };
 };
 
-const makeActionCtx = (): ActionCtx => {
+const makeActionContext = (): ActionContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
-        db: {} as ActionCtx["db"],
+        db: {} as ActionContext["db"],
         fetch: globalThis.fetch,
-        runAction: vi.fn<ActionCtx["runAction"]>() as ActionCtx["runAction"],
-        runMutation: vi.fn<ActionCtx["runMutation"]>() as ActionCtx["runMutation"],
-        runQuery: vi.fn<ActionCtx["runQuery"]>() as ActionCtx["runQuery"],
-        scheduler: {} as ActionCtx["scheduler"],
-        storage: {} as ActionCtx["storage"],
-        vectors: {} as ActionCtx["vectors"],
+        runAction: vi.fn<ActionContext["runAction"]>() as ActionContext["runAction"],
+        runMutation: vi.fn<ActionContext["runMutation"]>() as ActionContext["runMutation"],
+        runQuery: vi.fn<ActionContext["runQuery"]>() as ActionContext["runQuery"],
+        scheduler: {} as ActionContext["scheduler"],
+        storage: {} as ActionContext["storage"],
+        vectors: {} as ActionContext["vectors"],
     };
 };
 
@@ -40,8 +40,8 @@ describe("query", () => {
     it("preserves args validator and runs handler with parsed args", async () => {
         expect.assertions(4);
 
-        const handler = vi.fn<(context: QueryCtx, args: { limit: number }) => Promise<number>>(
-            async (_context: QueryCtx, args: { limit: number }) => args.limit * 2,
+        const handler = vi.fn<(context: QueryContext, args: { limit: number }) => Promise<number>>(
+            async (_context: QueryContext, args: { limit: number }) => args.limit * 2,
         );
 
         const list = query({
@@ -52,7 +52,7 @@ describe("query", () => {
         expect(list.kind).toBe("query");
         expect(list.args.limit.kind).toBe("number");
 
-        const result = await list.handler(makeQueryCtx(), { limit: 5 });
+        const result = await list.handler(makeQueryContext(), { limit: 5 });
 
         expect(result).toBe(10);
         expect(handler).toHaveBeenCalledTimes(1);
@@ -68,7 +68,7 @@ describe("query", () => {
             handler,
         });
 
-        await expect(async () => list.handler(makeQueryCtx(), { limit: "five" } as unknown as { limit: number })).rejects.toBeInstanceOf(ValidationError);
+        await expect(async () => list.handler(makeQueryContext(), { limit: "five" } as unknown as { limit: number })).rejects.toBeInstanceOf(ValidationError);
         expect(handler).not.toHaveBeenCalled();
     });
 });
@@ -85,7 +85,7 @@ describe("mutation", () => {
         });
 
         expect(send.kind).toBe("mutation");
-        await expect(send.handler(makeMutationCtx(), { text: "hi" })).resolves.toEqual({ ok: true, text: "hi" });
+        await expect(send.handler(makeMutationContext(), { text: "hi" })).resolves.toEqual({ ok: true, text: "hi" });
     });
 
     it("optional args may be omitted", async () => {
@@ -96,7 +96,7 @@ describe("mutation", () => {
             handler: async (_context, args) => args.tag ?? "untagged",
         });
 
-        await expect(send.handler(makeMutationCtx(), { text: "hi" })).resolves.toBe("untagged");
+        await expect(send.handler(makeMutationContext(), { text: "hi" })).resolves.toBe("untagged");
     });
 });
 
@@ -110,7 +110,7 @@ describe("action", () => {
         });
 
         expect(ping.kind).toBe("action");
-        await expect(ping.handler(makeActionCtx(), { url: "https://x" })).resolves.toBe("https://x");
+        await expect(ping.handler(makeActionContext(), { url: "https://x" })).resolves.toBe("https://x");
     });
 
     it("bad args bubble up before handler", async () => {
@@ -119,7 +119,7 @@ describe("action", () => {
         const handler = vi.fn<(context: unknown, args: { url: string }) => unknown>();
         const ping = action({ args: { url: v.string() }, handler });
 
-        await expect(async () => ping.handler(makeActionCtx(), { url: 42 } as unknown as { url: string })).rejects.toBeInstanceOf(ValidationError);
+        await expect(async () => ping.handler(makeActionContext(), { url: 42 } as unknown as { url: string })).rejects.toBeInstanceOf(ValidationError);
         expect(handler).not.toHaveBeenCalled();
     });
 });
@@ -148,12 +148,12 @@ describe("visibility", () => {
     it("internal factories still validate and run their handler", async () => {
         expect.assertions(2);
 
-        const handler = vi.fn<(context: MutationCtx, args: { text: string }) => Promise<string>>(
-            async (_context: MutationCtx, args: { text: string }) => args.text,
+        const handler = vi.fn<(context: MutationContext, args: { text: string }) => Promise<string>>(
+            async (_context: MutationContext, args: { text: string }) => args.text,
         );
         const purge = internalMutation({ args: { text: v.string() }, handler });
 
-        await expect(purge.handler(makeMutationCtx(), { text: "hi" })).resolves.toBe("hi");
-        await expect(async () => purge.handler(makeMutationCtx(), { text: 1 } as unknown as { text: string })).rejects.toBeInstanceOf(ValidationError);
+        await expect(purge.handler(makeMutationContext(), { text: "hi" })).resolves.toBe("hi");
+        await expect(async () => purge.handler(makeMutationContext(), { text: 1 } as unknown as { text: string })).rejects.toBeInstanceOf(ValidationError);
     });
 });

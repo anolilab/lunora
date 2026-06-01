@@ -73,7 +73,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
  * gated server-side by `CIRRUS_ADMIN_TOKEN`; this shell adds no credentials of
  * its own.
  */
-export function Dashboard({ dataEditable = false, functions, initialShardKey, scheduledCancel, scheduledLoad }: DashboardProps): ReactElement {
+export const Dashboard = ({ dataEditable = false, functions, initialShardKey, scheduledCancel, scheduledLoad }: DashboardProps): ReactElement => {
     // Every tab is always shown: the function runner auto-discovers its list
     // from the worker when no `functions` prop is passed, so it's never empty.
     const tabs: DashboardTab[] = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics", "logs"];
@@ -119,6 +119,6 @@ export function Dashboard({ dataEditable = false, functions, initialShardKey, sc
             </div>
         </div>
     );
-}
+};
 
 export type { DashboardProps, DashboardTab };

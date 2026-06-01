@@ -2,29 +2,34 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createVectors } from "../src/create-vectors.js";
 import type { SchemaLike, VectorSearchLike } from "../src/ctx.js";
-import { createCtxVectors, createVectorSyncHook } from "../src/ctx.js";
+import { createCtxVectors as createContextVectors, createVectorSyncHook } from "../src/ctx.js";
 import type { VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
 
 const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => {
- return {
-    upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => { return { mutationId: `upsert-${vectors.length}` }; }),
-    insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => { return { mutationId: `insert-${vectors.length}` }; }),
-    query: vi.fn<VectorizeIndexLike["query"]>(
-        async (): Promise<VectorizeMatches> => {
- return {
-            matches: [{ id: "row-1", score: 0.9, values: [0.1], metadata: { title: "Hi" } }],
-            count: 1,
-        };
-},
-    ),
-    getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
-        async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => ids.map((id) => { return { id, values: [1, 2], metadata: { k: id } }; }),
-    ),
-    deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(
-        async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => { return { mutationId: `delete-${ids.length}`, count: ids.length }; },
-    ),
-    ...overrides,
-};
+    return {
+        deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => {
+            return { count: ids.length, mutationId: `delete-${ids.length}` };
+        }),
+        getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
+            async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, metadata: { k: id }, values: [1, 2] };
+                }),
+        ),
+        insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
+            return { mutationId: `insert-${vectors.length}` };
+        }),
+        query: vi.fn<VectorizeIndexLike["query"]>(async (): Promise<VectorizeMatches> => {
+            return {
+                count: 1,
+                matches: [{ id: "row-1", metadata: { title: "Hi" }, score: 0.9, values: [0.1] }],
+            };
+        }),
+        upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
+            return { mutationId: `upsert-${vectors.length}` };
+        }),
+        ...overrides,
+    };
 };
 
 describe("createCtxVectors", () => {
@@ -33,25 +38,25 @@ describe("createCtxVectors", () => {
 
         const index = fakeIndex();
         const cirrus = createVectors({ indexes: { docs: index } });
-        const ctx = createCtxVectors(cirrus);
+        const context = createContextVectors(cirrus);
         const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
 
-        await expect(ctx.upsert("docs", { id: "a", input: "hello", embed, metadata: { t: 1 } })).resolves.toBeUndefined();
-        await expect(ctx.upsertNow("docs", { id: "b", input: "yo", embed })).resolves.toBeUndefined();
+        await expect(context.upsert("docs", { embed, id: "a", input: "hello", metadata: { t: 1 } })).resolves.toBeUndefined();
+        await expect(context.upsertNow("docs", { embed, id: "b", input: "yo" })).resolves.toBeUndefined();
 
         expect(index.upsert).toHaveBeenCalledTimes(2);
-        expect(index.upsert).toHaveBeenNthCalledWith(1, [{ id: "a", values: [5], metadata: { t: 1 }, namespace: undefined }]);
+        expect(index.upsert).toHaveBeenNthCalledWith(1, [{ id: "a", metadata: { t: 1 }, namespace: undefined, values: [5] }]);
     });
 
     it("query maps Vectorize matches to the server match shape", async () => {
         expect.assertions(1);
 
         const cirrus = createVectors({ indexes: { docs: fakeIndex() } });
-        const ctx = createCtxVectors(cirrus);
+        const context = createContextVectors(cirrus);
 
-        const result = await ctx.query("docs", { vector: [0.1, 0.2] });
+        const result = await context.query("docs", { vector: [0.1, 0.2] });
 
-        expect(result).toEqual({ count: 1, matches: [{ id: "row-1", score: 0.9, metadata: { title: "Hi" } }] });
+        expect(result).toEqual({ count: 1, matches: [{ id: "row-1", metadata: { title: "Hi" }, score: 0.9 }] });
     });
 
     it("query requests metadata so it surfaces on matches", async () => {
@@ -59,9 +64,9 @@ describe("createCtxVectors", () => {
 
         const index = fakeIndex();
         const cirrus = createVectors({ indexes: { docs: index } });
-        const ctx = createCtxVectors(cirrus);
+        const context = createContextVectors(cirrus);
 
-        await ctx.query("docs", { vector: [0.1] });
+        await context.query("docs", { vector: [0.1] });
 
         // Default is "indexed" (not "all"): indexed metadata still surfaces on
         // matches without leaking every stored field by default.
@@ -72,11 +77,11 @@ describe("createCtxVectors", () => {
         expect.assertions(1);
 
         const cirrus = createVectors({ indexes: { docs: fakeIndex() } });
-        const ctx = createCtxVectors(cirrus);
+        const context = createContextVectors(cirrus);
 
-        const records = await ctx.getByIds("docs", ["a"]);
+        const records = await context.getByIds("docs", ["a"]);
 
-        expect(records).toEqual([{ id: "a", values: [1, 2], metadata: { k: "a" } }]);
+        expect(records).toEqual([{ id: "a", metadata: { k: "a" }, values: [1, 2] }]);
     });
 
     it("deleteByIds forwards and returns void", async () => {
@@ -84,9 +89,9 @@ describe("createCtxVectors", () => {
 
         const index = fakeIndex();
         const cirrus = createVectors({ indexes: { docs: index } });
-        const ctx = createCtxVectors(cirrus);
+        const context = createContextVectors(cirrus);
 
-        await expect(ctx.deleteByIds("docs", ["a", "b"])).resolves.toBeUndefined();
+        await expect(context.deleteByIds("docs", ["a", "b"])).resolves.toBeUndefined();
         expect(index.deleteByIds).toHaveBeenCalledWith(["a", "b"]);
     });
 });
@@ -96,19 +101,21 @@ const fakeVectorSearch = (): VectorSearchLike & { deletes: [string, ReadonlyArra
     const deletes: [string, ReadonlyArray<string>][] = [];
 
     return {
-        upserts,
+        deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => {
+            deletes.push([indexName, ids]);
+        }),
         deletes,
+        getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
+        query: vi.fn<VectorSearchLike["query"]>(async () => {
+            return { count: 0, matches: [] };
+        }),
         upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName, input) => {
             upserts.push([indexName, input]);
         }),
         upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async (indexName, input) => {
             upserts.push([indexName, input]);
         }),
-        deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => {
-            deletes.push([indexName, ids]);
-        }),
-        query: vi.fn<VectorSearchLike["query"]>(async () => { return { count: 0, matches: [] }; }),
-        getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
+        upserts,
     };
 };
 
@@ -121,15 +128,15 @@ describe("createVectorSyncHook", () => {
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
             tables: {
-                messages: { vectorIndexes: [{ name: "messages-body", field: "body", embed, metadata: ["author"] }] },
+                messages: { vectorIndexes: [{ embed, field: "body", metadata: ["author"], name: "messages-body" }] },
             },
             vectorIndexes: {},
         };
         const hook = createVectorSyncHook({ schema, vectors });
 
-        await hook({ op: "insert", table: "messages", id: "m1", doc: { body: "hi there", author: "ann", ignored: 1 } });
+        await hook({ doc: { author: "ann", body: "hi there", ignored: 1 }, id: "m1", op: "insert", table: "messages" });
 
-        expect(vectors.upserts).toEqual([["messages-body", { id: "m1", input: "hi there", embed, metadata: { author: "ann" } }]]);
+        expect(vectors.upserts).toEqual([["messages-body", { embed, id: "m1", input: "hi there", metadata: { author: "ann" } }]]);
     });
 
     it("uses Shape B select(row) and metadata(row) on update", async () => {
@@ -140,18 +147,20 @@ describe("createVectorSyncHook", () => {
             tables: { docs: {} },
             vectorIndexes: {
                 "docs-fulltext": {
-                    table: "docs",
                     embed,
+                    metadata: (row) => {
+                        return { title: row.title };
+                    },
                     select: (row) => `${row.title as string} ${row.body as string}`,
-                    metadata: (row) => { return { title: row.title }; },
+                    table: "docs",
                 },
             },
         };
         const hook = createVectorSyncHook({ schema, vectors });
 
-        await hook({ op: "update", table: "docs", id: "d1", doc: { title: "T", body: "B" } });
+        await hook({ doc: { body: "B", title: "T" }, id: "d1", op: "update", table: "docs" });
 
-        expect(vectors.upserts).toEqual([["docs-fulltext", { id: "d1", input: "T B", embed, metadata: { title: "T" } }]]);
+        expect(vectors.upserts).toEqual([["docs-fulltext", { embed, id: "d1", input: "T B", metadata: { title: "T" } }]]);
     });
 
     it("deletes the row id from every index sourced from the table", async () => {
@@ -159,12 +168,12 @@ describe("createVectorSyncHook", () => {
 
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
-            tables: { docs: { vectorIndexes: [{ name: "docs-body", field: "body", embed }] } },
-            vectorIndexes: { "docs-fulltext": { table: "docs", embed, select: (row) => String(row.body) } },
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-fulltext": { embed, select: (row) => String(row.body), table: "docs" } },
         };
         const hook = createVectorSyncHook({ schema, vectors });
 
-        await hook({ op: "delete", table: "docs", id: "d1" });
+        await hook({ id: "d1", op: "delete", table: "docs" });
 
         expect(vectors.deletes).toEqual([
             ["docs-body", ["d1"]],
@@ -177,12 +186,12 @@ describe("createVectorSyncHook", () => {
 
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
-            tables: { messages: { vectorIndexes: [{ name: "messages-body", field: "body", embed }] } },
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", name: "messages-body" }] } },
             vectorIndexes: {},
         };
         const hook = createVectorSyncHook({ schema, vectors });
 
-        await hook({ op: "update", table: "messages", id: "m1", doc: { body: null } });
+        await hook({ doc: { body: null }, id: "m1", op: "update", table: "messages" });
 
         // No upsert, and the stale vector is deleted rather than silently left
         // searchable (Finding 50).
@@ -195,14 +204,14 @@ describe("createVectorSyncHook", () => {
 
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
-            tables: { messages: { vectorIndexes: [{ name: "messages-body", field: "body", embed }] } },
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", name: "messages-body" }] } },
             vectorIndexes: {},
         };
         const hook = createVectorSyncHook({ namespace: "tenant-acme", schema, vectors });
 
-        await hook({ op: "insert", table: "messages", id: "m1", doc: { body: "hi" } });
+        await hook({ doc: { body: "hi" }, id: "m1", op: "insert", table: "messages" });
 
-        expect(vectors.upserts).toEqual([["messages-body", { id: "m1", input: "hi", embed, metadata: undefined, namespace: "tenant-acme" }]]);
+        expect(vectors.upserts).toEqual([["messages-body", { embed, id: "m1", input: "hi", metadata: undefined, namespace: "tenant-acme" }]]);
     });
 
     it("no-ops for tables without any vector index", async () => {
@@ -212,7 +221,7 @@ describe("createVectorSyncHook", () => {
         const schema: SchemaLike = { tables: { plain: {} }, vectorIndexes: {} };
         const hook = createVectorSyncHook({ schema, vectors });
 
-        await hook({ op: "insert", table: "plain", id: "x", doc: { a: 1 } });
+        await hook({ doc: { a: 1 }, id: "x", op: "insert", table: "plain" });
 
         expect(vectors.upserts).toEqual([]);
         expect(vectors.deletes).toEqual([]);

@@ -7,13 +7,15 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useQuery } from "../src/use-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
+const function_ = (ref: string): FunctionReference => {
+    return { __cirrusRef: ref };
+};
 
 const DEFAULT_ARGS: Record<string, unknown> = {};
 const SHARED_ARGS: Record<string, unknown> = { a: 1 };
 
 const Display = ({ args = DEFAULT_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
-    const data = useQuery(fn("posts:list"), args);
+    const data = useQuery(function_("posts:list"), args);
 
     return <div data-testid="display">{data === undefined ? "loading" : JSON.stringify(data)}</div>;
 };
@@ -22,7 +24,9 @@ describe("useQuery", () => {
     it("returns undefined initially, then the resolved value", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient(() => { return { count: 1 }; });
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -39,10 +43,12 @@ describe("useQuery", () => {
         expect(mock.query).toHaveBeenCalledTimes(1);
     });
 
-    it('"skip" short-circuits the query — no client call', () => {
+    it("\"skip\" short-circuits the query — no client call", () => {
         expect.assertions(3);
 
-        const mock = createMockClient(() => { return { count: 1 }; });
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -58,7 +64,9 @@ describe("useQuery", () => {
     it("two components sharing args share a single network call", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient(() => { return { count: 2 }; });
+        const mock = createMockClient(() => {
+            return { count: 2 };
+        });
 
         render(
             <CirrusProvider client={mock.asClient}>

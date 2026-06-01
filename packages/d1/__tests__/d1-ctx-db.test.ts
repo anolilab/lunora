@@ -2,7 +2,7 @@ import type { ColumnMetaLike, DatabaseWriterLike, SchedulerLike, SchemaLike, Tri
 import { ConflictError } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createD1CtxDb } from "../src/d1-ctx-db.js";
+import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
 
 /**
@@ -20,10 +20,10 @@ const CROSS_BACKEND_CASCADE_RE = /cross-backend cascade.*shardBy/u;
 const NO_SCHEDULER_RE = /no scheduler configured/;
 
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
- return {
-    _meta: { column: { notNull: true, ...column } },
-    kind,
-};
+    return {
+        _meta: { column: { notNull: true, ...column } },
+        kind,
+    };
 };
 
 const todosSchema: SchemaLike = {
@@ -54,7 +54,7 @@ const setupTodos = (): DatabaseWriterLike => {
         )`,
     );
 
-    return createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: todosSchema });
+    return createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: todosSchema });
 };
 
 /** Seed four todos under p1 (t5,t1,t2,t3 by seq) and one under p2. */
@@ -66,7 +66,7 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     await writer.insert("todos", { _id: "t5", archived: false, priority: "high", projectId: "p1", seq: 0 }, { allowExplicitId: true });
 };
 
-const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((doc) => doc["_id"]);
+const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((document_) => document_["_id"]);
 
 describe("d1 ctx-db", () => {
     beforeEach(() => {
@@ -426,7 +426,7 @@ describe("d1 ctx-db", () => {
         )`,
         );
 
-        return { revCalls, writer: createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema }) };
+        return { revCalls, writer: createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema }) };
     };
 
     describe("insert defaults", () => {
@@ -436,10 +436,10 @@ describe("d1 ctx-db", () => {
             const { writer } = setupItems();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const document_ = await writer.get(id);
 
-            expect(doc?.["status"]).toBe("todo");
-            expect(doc?.["seq"]).toBe(7);
+            expect(document_?.["status"]).toBe("todo");
+            expect(document_?.["seq"]).toBe(7);
         });
 
         it("a provided value overrides the default", async () => {
@@ -448,10 +448,10 @@ describe("d1 ctx-db", () => {
             const { writer } = setupItems();
 
             const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const document_ = await writer.get(id);
 
-            expect(doc?.["status"]).toBe("done");
-            expect(doc?.["seq"]).toBe(99);
+            expect(document_?.["status"]).toBe("done");
+            expect(document_?.["seq"]).toBe(99);
         });
 
         it("does not run `$onUpdateFn` on insert", async () => {
@@ -460,9 +460,9 @@ describe("d1 ctx-db", () => {
             const { revCalls, writer } = setupItems();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const document_ = await writer.get(id);
 
-            expect(doc?.["rev"]).toBeNull();
+            expect(document_?.["rev"]).toBeNull();
             expect(revCalls()).toBe(0);
         });
     });
@@ -564,29 +564,29 @@ describe("d1 ctx-db", () => {
 
     describe("relations", () => {
         const buildRelSchema = (action?: "cascade" | "restrict" | "set null"): SchemaLike => {
- return {
-            tables: {
-                messages: {
-                    indexes: [],
-                    relationMap: {
-                        author: { field: "authorId", kind: "one", onDelete: action, references: "_id", table: "users" },
-                        reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" },
+            return {
+                tables: {
+                    messages: {
+                        indexes: [],
+                        relationMap: {
+                            author: { field: "authorId", kind: "one", onDelete: action, references: "_id", table: "users" },
+                            reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" },
+                        },
+                        shape: { authorId: col("string"), body: col("string") },
                     },
-                    shape: { authorId: col("string"), body: col("string") },
+                    reactions: {
+                        indexes: [],
+                        relationMap: { message: { field: "messageId", kind: "one", onDelete: "cascade", references: "_id", table: "messages" } },
+                        shape: { emoji: col("string"), messageId: col("string") },
+                    },
+                    users: {
+                        indexes: [],
+                        relationMap: { messages: { field: "authorId", kind: "many", references: "_id", table: "messages" } },
+                        shape: { name: col("string") },
+                    },
                 },
-                reactions: {
-                    indexes: [],
-                    relationMap: { message: { field: "messageId", kind: "one", onDelete: "cascade", references: "_id", table: "messages" } },
-                    shape: { emoji: col("string"), messageId: col("string") },
-                },
-                users: {
-                    indexes: [],
-                    relationMap: { messages: { field: "authorId", kind: "many", references: "_id", table: "messages" } },
-                    shape: { name: col("string") },
-                },
-            },
+            };
         };
-};
 
         const setupRelations = (action?: "cascade" | "restrict" | "set null"): DatabaseWriterLike => {
             // FK columns stay nullable so `set null` can clear them.
@@ -594,7 +594,7 @@ describe("d1 ctx-db", () => {
             harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "authorId" TEXT, "body" TEXT)`);
             harness.ddl(`CREATE TABLE "reactions" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "messageId" TEXT, "emoji" TEXT)`);
 
-            return createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: buildRelSchema(action) });
+            return createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: buildRelSchema(action) });
         };
 
         const seedRelations = async (writer: DatabaseWriterLike): Promise<void> => {
@@ -739,7 +739,7 @@ describe("d1 ctx-db", () => {
             // No D1 messages table — they live on shards in the real topology;
             // the cascade must refuse before we'd reach the missing table.
 
-            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
             await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
 
@@ -763,14 +763,14 @@ describe("d1 ctx-db", () => {
                         shape: { body: col("string"), locked: col("boolean") },
                         triggerMap: {
                             a: {
-                                handler: (_ctx, event) => {
+                                handler: (_context, event) => {
                                     events.push({ doc: event.doc, phase: "after" });
                                 },
                                 op: "insert",
                                 timing: "after",
                             },
                             b: {
-                                handler: (_ctx, event) => {
+                                handler: (_context, event) => {
                                     events.push({ doc: event.doc, phase: "before" });
                                 },
                                 op: "insert",
@@ -783,7 +783,7 @@ describe("d1 ctx-db", () => {
 
             messagesDdl();
 
-            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
             await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
 
@@ -802,7 +802,7 @@ describe("d1 ctx-db", () => {
                         shape: { body: col("string"), locked: col("boolean") },
                         triggerMap: {
                             a: {
-                                handler: (_ctx, event) => {
+                                handler: (_context, event) => {
                                     captured = event;
                                 },
                                 op: "update",
@@ -815,7 +815,7 @@ describe("d1 ctx-db", () => {
 
             messagesDdl();
 
-            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
             await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
             await writer.patch("m1", { body: "bye" });
@@ -834,7 +834,7 @@ describe("d1 ctx-db", () => {
                         shape: { body: col("string"), locked: col("boolean") },
                         triggerMap: {
                             guard: {
-                                handler: (_ctx, event) => {
+                                handler: (_context, event) => {
                                     if ((event.previous as Record<string, unknown>)["locked"]) {
                                         throw new ConflictError("row is locked");
                                     }
@@ -849,7 +849,7 @@ describe("d1 ctx-db", () => {
 
             messagesDdl();
 
-            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
             await writer.insert("messages", { _id: "m1", body: "hi", locked: true }, { allowExplicitId: true });
 
@@ -868,8 +868,8 @@ describe("d1 ctx-db", () => {
                         shape: { body: col("string"), locked: col("boolean") },
                         triggerMap: {
                             audit: {
-                                handler: async (ctx, event) => {
-                                    await ctx.db.insert("audit", { row: event.id, table: event.table });
+                                handler: async (context, event) => {
+                                    await context.db.insert("audit", { row: event.id, table: event.table });
                                 },
                                 op: "insert",
                                 timing: "after",
@@ -882,7 +882,7 @@ describe("d1 ctx-db", () => {
             messagesDdl();
             harness.ddl(`CREATE TABLE "audit" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "row" TEXT, "table" TEXT)`);
 
-            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
             await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
 
@@ -904,8 +904,8 @@ describe("d1 ctx-db", () => {
                         shape: { body: col("string"), locked: col("boolean") },
                         triggerMap: {
                             bump: {
-                                handler: async (ctx, event) => {
-                                    await ctx.scheduler.runAfter(0, "counters:recount", { id: event.id });
+                                handler: async (context, event) => {
+                                    await context.scheduler.runAfter(0, "counters:recount", { id: event.id });
                                 },
                                 op: "insert",
                                 timing: "after",
@@ -917,7 +917,7 @@ describe("d1 ctx-db", () => {
 
             messagesDdl();
 
-            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, scheduler, schema });
+            const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, scheduler, schema });
 
             await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
 
@@ -934,8 +934,8 @@ describe("d1 ctx-db", () => {
                         shape: { body: col("string"), locked: col("boolean") },
                         triggerMap: {
                             bump: {
-                                handler: async (ctx) => {
-                                    await ctx.scheduler.runAfter(0, "noop");
+                                handler: async (context) => {
+                                    await context.scheduler.runAfter(0, "noop");
                                 },
                                 op: "insert",
                                 timing: "after",
@@ -947,7 +947,7 @@ describe("d1 ctx-db", () => {
 
             messagesDdl();
 
-            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
             await expect(writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true })).rejects.toThrow(NO_SCHEDULER_RE);
         });
@@ -1003,7 +1003,7 @@ describe("d1 ctx-db", () => {
             )`,
             );
 
-            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
             await writer.insert("todos", { _id: "t1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
 

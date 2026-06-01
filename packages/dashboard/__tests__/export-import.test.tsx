@@ -75,7 +75,7 @@ describe("exportImportPanel", () => {
         render(renderPanel(createClient()));
 
         fireEvent.change(screen.getByTestId("ei-ndjson"), {
-            target: { value: '{"table":"messages","doc":{"__id__":"m3","text":"again"}}' },
+            target: { value: "{\"table\":\"messages\",\"doc\":{\"__id__\":\"m3\",\"text\":\"again\"}}" },
         });
         fireEvent.click(screen.getByTestId("ei-import"));
         fireEvent.click(screen.getByTestId("ei-import-confirm"));

@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import type { HttpActionCtx } from "../src/index.js";
+import type { HttpActionCtx as HttpActionContext } from "../src/index.js";
 import { httpAction, httpRoute, httpRouter, v } from "../src/index.js";
 
 /**
@@ -22,8 +22,8 @@ import { httpAction, httpRoute, httpRouter, v } from "../src/index.js";
  * cost of the typed builder pieces.
  */
 
-const ctx = {} as HttpActionCtx;
-const ctxEnv = { __cirrusCtx: ctx };
+const context = {} as HttpActionContext;
+const contextEnv = { __cirrusCtx: context };
 
 // httpAction — raw adapter.
 const rawApp = httpRouter();
@@ -76,22 +76,22 @@ outputApp.get("/output", outputRoute);
 
 describe("hono dispatch — httpAction vs httpRoute (no validators) vs validators", () => {
     bench("httpAction (raw adapter)", async () => {
-        await rawApp.fetch(new Request("https://x/raw"), ctxEnv);
+        await rawApp.fetch(new Request("https://x/raw"), contextEnv);
     });
 
     bench("httpRoute plain (no validators)", async () => {
-        await plainApp.fetch(new Request("https://x/plain"), ctxEnv);
+        await plainApp.fetch(new Request("https://x/plain"), contextEnv);
     });
 
     bench("httpRoute + searchParams (?limit=5&active=true)", async () => {
-        await searchApp.fetch(new Request("https://x/search?limit=5&active=true"), ctxEnv);
+        await searchApp.fetch(new Request("https://x/search?limit=5&active=true"), contextEnv);
     });
 
     bench("httpRoute + body (POST JSON {text})", async () => {
-        await bodyApp.fetch(new Request("https://x/body", { body: JSON.stringify({ text: "hi" }), method: "POST" }), ctxEnv);
+        await bodyApp.fetch(new Request("https://x/body", { body: JSON.stringify({ text: "hi" }), method: "POST" }), contextEnv);
     });
 
     bench("httpRoute + output (parse + validate return)", async () => {
-        await outputApp.fetch(new Request("https://x/output"), ctxEnv);
+        await outputApp.fetch(new Request("https://x/output"), contextEnv);
     });
 });

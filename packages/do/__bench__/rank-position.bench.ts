@@ -2,7 +2,7 @@ import { bench, describe } from "vitest";
 
 import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { RankIndexDefinitionLike } from "../src/rank.js";
 
 /**
@@ -67,14 +67,14 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
 const indexedHarness = createSqliteExec();
 
 runShardMigrations(indexedHarness.sql, indexedSchema);
-const indexedWriter = createShardCtxDb({ schema: indexedSchema, sql: indexedHarness.sql });
+const indexedWriter = createShardContextDatabase({ schema: indexedSchema, sql: indexedHarness.sql });
 
 await seed(indexedWriter);
 
 const scanHarness = createSqliteExec();
 
 runShardMigrations(scanHarness.sql, scanSchema);
-const scanWriter = createShardCtxDb({ schema: scanSchema, sql: scanHarness.sql });
+const scanWriter = createShardContextDatabase({ schema: scanSchema, sql: scanHarness.sql });
 
 await seed(scanWriter);
 
@@ -93,7 +93,7 @@ describe("rank() — indexed vs emulated scan", () => {
         let cursor: null | string = null;
         let position: null | number = null;
         let total = 0;
-        let cursorAcc = 0;
+        let cursorAccumulator = 0;
 
         while (true) {
             const page = await scanWriter.findMany("messages", {
@@ -109,7 +109,7 @@ describe("rank() — indexed vs emulated scan", () => {
                 const found = page.page.findIndex((document) => document["_id"] === TARGET_ID);
 
                 if (found !== -1) {
-                    position = cursorAcc + found + 1;
+                    position = cursorAccumulator + found + 1;
                 }
             }
 
@@ -118,7 +118,7 @@ describe("rank() — indexed vs emulated scan", () => {
             }
 
             cursor = page.continueCursor;
-            cursorAcc += page.page.length;
+            cursorAccumulator += page.page.length;
         }
 
         // Defeat dead-store elimination so the loop's work is observable.

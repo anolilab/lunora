@@ -13,17 +13,17 @@ import type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "./types.js"
  */
 export const preloadQuery = async <F extends FunctionReference>(
     client: CirrusClient,
-    fn: F,
+    function_: F,
     args: ArgsOf<F>,
-    opts: { shardKey?: string } = {},
+    options: { shardKey?: string } = {},
 ): Promise<Preloaded<ReturnOf<F>>> => {
-    const value = await client.query(fn, args, opts);
+    const value = await client.query(function_, args, options);
 
     return {
         __cirrusPreloaded: true,
         args: args ?? {},
-        functionPath: fn.__cirrusRef,
-        shardKey: opts.shardKey,
+        functionPath: function_.__cirrusRef,
+        shardKey: options.shardKey,
         value,
     };
 };

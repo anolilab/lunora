@@ -32,9 +32,9 @@ export class TestShardDO extends DurableObject<Env> {
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
 
-    public constructor(ctx: DurableObjectState, env: Env) {
-        super(ctx, env);
-        this.shard = new ConcreteShard(ctx as unknown as ShardDOState, env, this);
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.shard = new ConcreteShard(context as unknown as ShardDOState, env, this);
     }
 
     public override fetch(request: Request): Promise<Response> {
@@ -64,7 +64,7 @@ class ConcreteShard extends ShardDO {
     }
 
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-        this.outer.lastRpcCall = { functionPath, args };
+        this.outer.lastRpcCall = { args, functionPath };
 
         return this.outer.rpcResult;
     }
@@ -77,9 +77,9 @@ class ConcreteShard extends ShardDO {
 export class TestSessionDO extends DurableObject<Env> {
     private readonly session: SessionDO;
 
-    public constructor(ctx: DurableObjectState, env: Env) {
-        super(ctx, env);
-        this.session = new SessionDO(ctx, env);
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.session = new SessionDO(context, env);
     }
 
     public override fetch(request: Request): Promise<Response> {

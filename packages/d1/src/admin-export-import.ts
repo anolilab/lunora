@@ -31,7 +31,7 @@ interface ImportResult {
 
 const DEFAULT_BATCH_SIZE = 200;
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
 
 /**
  * Return every `.global()` table in the schema, optionally narrowed by an
@@ -55,7 +55,7 @@ const selectGlobalTables = (schema: SchemaLike, requested?: ReadonlyArray<string
  */
 const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknown>): Record<string, unknown> => {
     const definition = schema.tables[table];
-    const doc: Record<string, unknown> = {};
+    const document_: Record<string, unknown> = {};
 
     if (definition) {
         for (const [field, validator] of Object.entries(definition.shape)) {
@@ -65,14 +65,14 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
                 continue;
             }
 
-            doc[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
+            document_[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
         }
     }
 
-    doc["_id"] = row["id"];
-    doc["_creationTime"] = row["_creationTime"];
+    document_["_id"] = row["id"];
+    document_["_creationTime"] = row["_creationTime"];
 
-    return doc;
+    return document_;
 };
 
 interface ExportGlobalArgs {
@@ -114,7 +114,7 @@ const exportGlobalRows = async function* (exec: D1Exec, schema: SchemaLike, args
     }
 };
 
-const validateRow = (schema: SchemaLike, table: string, doc: Record<string, unknown>): null | string => {
+const validateRow = (schema: SchemaLike, table: string, document_: Record<string, unknown>): null | string => {
     const definition = schema.tables[table];
 
     if (!definition) {
@@ -123,7 +123,7 @@ const validateRow = (schema: SchemaLike, table: string, doc: Record<string, unkn
 
     // Strip the system fields (`_id`, `_creationTime`) so only declared
     // schema fields are validated; the rest spread holds the payload.
-    const { _creationTime: _ignoredCreationTime, _id: _ignoredId, ...payload } = doc;
+    const { _creationTime: _ignoredCreationTime, _id: _ignoredId, ...payload } = document_;
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         const candidate = (payload as Record<string, unknown>)[field];

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { backfillRankIndexes, createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { backfillRankIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { RankIndexDefinitionLike } from "../src/rank.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
@@ -33,19 +33,19 @@ const activeByChannel: RankIndexDefinitionLike = {
 };
 
 const makeSchema = (...indexes: RankIndexDefinitionLike[]): SchemaLike => {
- return {
-    tables: {
-        messages: {
-            indexes: [],
-            rankIndexes: indexes,
-            shape: {
-                archived: { kind: "boolean" },
-                channelId: { kind: "string" },
-                score: { kind: "number" },
+    return {
+        tables: {
+            messages: {
+                indexes: [],
+                rankIndexes: indexes,
+                shape: {
+                    archived: { kind: "boolean" },
+                    channelId: { kind: "string" },
+                    score: { kind: "number" },
+                },
             },
         },
-    },
-};
+    };
 };
 
 let harness: ReturnType<typeof createSqliteExec>;
@@ -53,7 +53,7 @@ let harness: ReturnType<typeof createSqliteExec>;
 const setupWriter = (schema: SchemaLike): DatabaseWriterLike => {
     runShardMigrations(harness.sql, schema);
 
-    return createShardCtxDb({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    return createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
 };
 
 describe("ctx-db rank", () => {
@@ -90,9 +90,9 @@ describe("ctx-db rank", () => {
             await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 50 }, { allowExplicitId: true });
             await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 100 }, { allowExplicitId: true });
 
-            const doc = await writer.get("m2");
+            const document_ = await writer.get("m2");
 
-            await expect(writer.rank("messages", "leaderboard", { row: doc! })).resolves.toEqual({ position: 1, total: 2 });
+            await expect(writer.rank("messages", "leaderboard", { row: document_! })).resolves.toEqual({ position: 1, total: 2 });
         });
 
         it("rank() returns null when the row isn't in the index", async () => {
@@ -213,7 +213,7 @@ describe("ctx-db rank", () => {
 
             runShardMigrations(harness.sql, schemaWithRank);
 
-            const writer2 = createShardCtxDb({ clock: () => 1_700_000_000_000, schema: schemaWithRank, sql: harness.sql });
+            const writer2 = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithRank, sql: harness.sql });
 
             await expect(writer2.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 2 });
             await expect(writer2.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 2, total: 2 });
@@ -232,7 +232,7 @@ describe("ctx-db rank", () => {
             backfillRankIndexes(harness.sql, schemaWithRank);
             backfillRankIndexes(harness.sql, schemaWithRank); // idempotent
 
-            const writer2 = createShardCtxDb({ clock: () => 1_700_000_000_000, schema: schemaWithRank, sql: harness.sql });
+            const writer2 = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithRank, sql: harness.sql });
 
             await expect(writer2.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
         });
@@ -248,7 +248,7 @@ describe("ctx-db rank", () => {
 
             const page = await writer.rankPage("messages", "leaderboard", { take: 10 });
 
-            expect(page.page.map((doc) => doc["_id"])).toEqual(["m2", "m3", "m1"]);
+            expect(page.page.map((document_) => document_["_id"])).toEqual(["m2", "m3", "m1"]);
             expect(page.isDone).toBe(true);
             expect(page.continueCursor).toBeNull();
         });
@@ -264,13 +264,13 @@ describe("ctx-db rank", () => {
 
             const first = await writer.rankPage("messages", "leaderboard", { take: 2 });
 
-            expect(first.page.map((doc) => doc["_id"])).toEqual(["m4", "m3"]);
+            expect(first.page.map((document_) => document_["_id"])).toEqual(["m4", "m3"]);
             expect(first.isDone).toBe(false);
             expect(first.continueCursor).not.toBeNull();
 
             const second = await writer.rankPage("messages", "leaderboard", { cursor: first.continueCursor, take: 2 });
 
-            expect(second.page.map((doc) => doc["_id"])).toEqual(["m2", "m1"]);
+            expect(second.page.map((document_) => document_["_id"])).toEqual(["m2", "m1"]);
             expect(second.isDone).toBe(false);
         });
 
@@ -285,7 +285,7 @@ describe("ctx-db rank", () => {
 
             const page = await writer.rankPage("messages", "byChannel", { take: 10, where: { channelId: "c1" } });
 
-            expect(page.page.map((doc) => doc["_id"])).toEqual(["m1", "m3"]);
+            expect(page.page.map((document_) => document_["_id"])).toEqual(["m1", "m3"]);
         });
 
         it("unknown rankIndex name throws", async () => {

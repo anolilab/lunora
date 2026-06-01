@@ -236,7 +236,7 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
     const id = typeof args["id"] === "string" ? args["id"] : "";
 
     if (id.trim() === "") {
-        throw Object.assign(new Error("runMigration: `id` is required"), { name: "CirrusError", code: "MIGRATION_ID_REQUIRED", status: 400 });
+        throw Object.assign(new Error("runMigration: `id` is required"), { code: "MIGRATION_ID_REQUIRED", name: "CirrusError", status: 400 });
     }
 
     return {
@@ -259,25 +259,25 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
     const table = typeof args["table"] === "string" ? args["table"] : "";
 
     if (op !== "insert" && op !== "patch" && op !== "replace" && op !== "delete") {
-        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
     }
 
     if (table.trim() === "") {
-        throw Object.assign(new Error("writeRow: `table` is required"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+        throw Object.assign(new Error("writeRow: `table` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
     }
 
     const id = typeof args["id"] === "string" ? args["id"] : undefined;
-    const doc = typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
+    const document_ = typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
 
     if (op !== "insert" && (id === undefined || id === "")) {
-        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
     }
 
-    if (op !== "delete" && doc === undefined) {
-        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    if (op !== "delete" && document_ === undefined) {
+        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
     }
 
-    return { doc, id, op, table };
+    return { doc: document_, id, op, table };
 };
 
 const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
@@ -287,7 +287,7 @@ const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response 
         headers["x-d1-bookmark"] = bookmark;
     }
 
-    return Response.json(body, { status, headers });
+    return Response.json(body, { headers, status });
 };
 
 /**
@@ -346,9 +346,9 @@ const constantTimeEqual = (a: string, b: string): boolean => {
         // charCodeAt returns NaN past the end of the string; coerce to 0
         // so the XOR still folds into `diff` without poisoning it.
         const ca = index < a.length ? a.charCodeAt(index) : 0;
-        const cb = index < b.length ? b.charCodeAt(index) : 0;
+        const callback = index < b.length ? b.charCodeAt(index) : 0;
 
-        diff |= ca ^ cb;
+        diff |= ca ^ callback;
     }
 
     return diff === 0;
@@ -565,8 +565,8 @@ export abstract class ShardDO {
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
         if (this.transactionDepth > 0) {
             throw Object.assign(new Error("nested transactions are not supported in SQLite-in-DO"), {
-                name: "CirrusError",
                 code: "NESTED_TRANSACTION",
+                name: "CirrusError",
                 status: 500,
             });
         }
@@ -575,8 +575,8 @@ export abstract class ShardDO {
 
         if (!sqlHandle || typeof sqlHandle.exec !== "function") {
             throw Object.assign(new Error("storage.sql is not available on this ShardDO state"), {
-                name: "CirrusError",
                 code: "SQL_UNAVAILABLE",
+                name: "CirrusError",
                 status: 500,
             });
         }
@@ -650,7 +650,7 @@ export abstract class ShardDO {
             let payload: RpcRequest;
 
             try {
-                payload = (await request.json());
+                payload = await request.json();
             } catch {
                 return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
             }
@@ -1016,7 +1016,7 @@ export abstract class ShardDO {
      */
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
         return Promise.reject(
-            Object.assign(new Error(`data migration "${args.id}" is not registered`), { name: "CirrusError", code: "MIGRATION_NOT_FOUND", status: 404 }),
+            Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "CirrusError", status: 404 }),
         );
     }
 
@@ -1064,7 +1064,7 @@ export abstract class ShardDO {
      * maintains the FTS/aggregate/rank shadow tables and runs validators).
      */
     protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { name: "CirrusError", code: "UNKNOWN_TABLE", status: 404 }));
+        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 }));
     }
 
     /**
@@ -1097,7 +1097,7 @@ export abstract class ShardDO {
         try {
             envelope = JSON.parse(text) as SubscriptionEnvelope;
         } catch {
-            ws.send(JSON.stringify({ type: "error", message: "invalid envelope" }));
+            ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
 
             return;
         }
@@ -1112,7 +1112,7 @@ export abstract class ShardDO {
             // socket that only cleared the user-subscription gate must never be
             // able to read admin data by naming a reserved functionPath.
             if (isAdmin && this.readAttachment(ws).admin !== true) {
-                ws.send(JSON.stringify({ type: "error", id: envelope.id, message: "admin subscription requires admin authorization" }));
+                ws.send(JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
 
                 return;
             }
@@ -1121,13 +1121,13 @@ export abstract class ShardDO {
 
             if (status !== "ok") {
                 const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-                const errorMessage =
-                    status === "too_many"
+                const errorMessage
+                    = status === "too_many"
                         ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
                         : "failed to persist subscription attachment";
 
                 try {
-                    ws.send(JSON.stringify({ type: "error", id: envelope.id, code, error: { code, message: errorMessage } }));
+                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
                 } catch {
                     // Socket may already be closed; nothing else we can do —
                     // never let the webSocketMessage handler throw.
@@ -1136,7 +1136,7 @@ export abstract class ShardDO {
                 return;
             }
 
-            ws.send(JSON.stringify({ type: "ack", id: envelope.id }));
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
 
             // Seed the subscriber with the query's current result so the first
             // value arrives over the same channel as later updates. When the
@@ -1161,7 +1161,7 @@ export abstract class ShardDO {
             // anything matching the admin prefix is rejected up front rather
             // than allowed to slip through executeStream().
             if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                ws.send(JSON.stringify({ type: "error", id: envelope.id, message: "streams must be public" }));
+                ws.send(JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
 
                 return;
             }
@@ -1191,7 +1191,7 @@ export abstract class ShardDO {
             }
 
             this.unsubscribe(ws, envelope.id);
-            ws.send(JSON.stringify({ type: "ack", id: envelope.id }));
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
         }
     }
 
@@ -1221,7 +1221,7 @@ export abstract class ShardDO {
         const iterable = this.executeStream(functionPath, args);
 
         if (!iterable) {
-            ws.send(JSON.stringify({ type: "error", id, error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` } }));
+            ws.send(JSON.stringify({ error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` }, id, type: "error" }));
 
             return;
         }
@@ -1241,9 +1241,9 @@ export abstract class ShardDO {
             try {
                 ws.send(
                     JSON.stringify({
-                        type: "error",
-                        id,
                         error: { code: "TOO_MANY_STREAMS", message: `stream cap of ${String(ShardDO.MAX_STREAMS_PER_SOCKET)} reached on this socket` },
+                        id,
+                        type: "error",
                     }),
                 );
             } catch {
@@ -1256,7 +1256,7 @@ export abstract class ShardDO {
         const controller = new AbortController();
 
         cancellers.set(id, controller);
-        ws.send(JSON.stringify({ type: "ack", id }));
+        ws.send(JSON.stringify({ id, type: "ack" }));
 
         try {
             for await (const chunk of iterable.iterator(controller.signal)) {
@@ -1271,11 +1271,11 @@ export abstract class ShardDO {
                 // while we keep pumping `ws.send` calls.
                 await awaitWsDrain(ws);
 
-                ws.send(JSON.stringify({ type: "chunk", id, data: chunk }));
+                ws.send(JSON.stringify({ data: chunk, id, type: "chunk" }));
             }
 
             if (!controller.signal.aborted) {
-                ws.send(JSON.stringify({ type: "complete", id }));
+                ws.send(JSON.stringify({ id, type: "complete" }));
             }
         } catch (error: unknown) {
             const { code } = error as { code?: string };
@@ -1283,9 +1283,9 @@ export abstract class ShardDO {
 
             ws.send(
                 JSON.stringify({
-                    type: "error",
-                    id,
                     error: { code: typeof code === "string" ? code : "INTERNAL_SERVER_ERROR", message },
+                    id,
+                    type: "error",
                 }),
             );
         } finally {

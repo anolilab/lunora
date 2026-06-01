@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SchemaLike, SqlExec } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { ReactiveCache, reactiveCacheKey } from "../src/reactive-cache.js";
 import type { ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
@@ -30,8 +30,8 @@ const makeSql = (): SqlExec & { __raw: DatabaseSync } => {
             const rows = stmt.all(...params) as unknown as Row[];
 
             return {
-                [Symbol.iterator]: () => rows[Symbol.iterator](),
                 one: () => rows[0] as Row,
+                [Symbol.iterator]: () => rows[Symbol.iterator](),
                 toArray: () => rows,
             };
         },
@@ -40,23 +40,23 @@ const makeSql = (): SqlExec & { __raw: DatabaseSync } => {
 
 const schema: SchemaLike = {
     tables: {
+        messages: {
+            indexes: [],
+            shape: {
+                ownerId: { kind: "string" },
+                text: { kind: "string" },
+            },
+        },
         users: {
             indexes: [],
             shape: {
                 name: { kind: "string" },
             },
         },
-        messages: {
-            indexes: [],
-            shape: {
-                text: { kind: "string" },
-                ownerId: { kind: "string" },
-            },
-        },
     },
 };
 
-const newDb = () => {
+const newDatabase = () => {
     const sql = makeSql();
 
     runShardMigrations(sql, schema);
@@ -68,9 +68,9 @@ describe("ctx-db + reactiveCache integration", () => {
     it("insert invalidates the inserted row id AND the table's *scan deps", async () => {
         expect.assertions(3);
 
-        const sql = newDb();
+        const sql = newDatabase();
         const cache = new ReactiveCache();
-        const writer = createShardCtxDb({ sql, schema, cache });
+        const writer = createShardContextDatabase({ cache, schema, sql });
 
         // Seed a row so we have something to read.
         const u1 = await writer.insert("users", { name: "alice" });
@@ -79,7 +79,9 @@ describe("ctx-db + reactiveCache integration", () => {
         const tracker = new Set([`users:${u1}`]);
         const scanTracker = new Set(["users:*scan"]);
 
-        await cache.run("byId", tracker, async () => { return { name: "alice" }; });
+        await cache.run("byId", tracker, async () => {
+            return { name: "alice" };
+        });
         await cache.run("listAll", scanTracker, async () => [{ name: "alice" }]);
 
         expect(cache.size().entries).toBe(2);
@@ -103,12 +105,14 @@ describe("ctx-db + reactiveCache integration", () => {
     it("patch invalidates the row's per-id deps AND *scan entries", async () => {
         expect.assertions(1);
 
-        const sql = newDb();
+        const sql = newDatabase();
         const cache = new ReactiveCache();
-        const writer = createShardCtxDb({ sql, schema, cache });
+        const writer = createShardContextDatabase({ cache, schema, sql });
         const u1 = await writer.insert("users", { name: "alice" });
 
-        await cache.run("byId", new Set([`users:${u1}`]), async () => { return { name: "alice" }; });
+        await cache.run("byId", new Set([`users:${u1}`]), async () => {
+            return { name: "alice" };
+        });
         await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
 
         await writer.patch(u1, { name: "ALICE" });
@@ -120,12 +124,14 @@ describe("ctx-db + reactiveCache integration", () => {
     it("delete invalidates the row's per-id deps AND *scan entries", async () => {
         expect.assertions(1);
 
-        const sql = newDb();
+        const sql = newDatabase();
         const cache = new ReactiveCache();
-        const writer = createShardCtxDb({ sql, schema, cache });
+        const writer = createShardContextDatabase({ cache, schema, sql });
         const u1 = await writer.insert("users", { name: "alice" });
 
-        await cache.run("byId", new Set([`users:${u1}`]), async () => { return { name: "alice" }; });
+        await cache.run("byId", new Set([`users:${u1}`]), async () => {
+            return { name: "alice" };
+        });
         await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
 
         await writer.delete(u1);
@@ -136,9 +142,9 @@ describe("ctx-db + reactiveCache integration", () => {
     it("writes to one table do not blow cache entries on another table", async () => {
         expect.assertions(2);
 
-        const sql = newDb();
+        const sql = newDatabase();
         const cache = new ReactiveCache();
-        const writer = createShardCtxDb({ sql, schema, cache });
+        const writer = createShardContextDatabase({ cache, schema, sql });
 
         await cache.run("messagesScan", new Set(["messages:*scan"]), async () => []);
         await cache.run("usersScan", new Set(["users:*scan"]), async () => []);
@@ -158,34 +164,34 @@ describe("ctx-db + reactiveCache integration", () => {
     it("reads via writer.get stamp per-id deps on the configured ReadHook", async () => {
         expect.assertions(1);
 
-        const sql = newDb();
+        const sql = newDatabase();
         const reads: { idOrScan?: string; table: string }[] = [];
-        const writer = createShardCtxDb({
-            sql,
-            schema,
+        const writer = createShardContextDatabase({
             onRead: (table, idOrScan) => {
-                reads.push({ table, idOrScan });
+                reads.push({ idOrScan, table });
             },
+            schema,
+            sql,
         });
         const u1 = await writer.insert("users", { name: "alice" });
 
         reads.length = 0;
         await writer.get(u1);
 
-        expect(reads).toEqual([{ table: "users", idOrScan: u1 }]);
+        expect(reads).toEqual([{ idOrScan: u1, table: "users" }]);
     });
 
     it("findMany without where stamps *scan, with where stamps per-row ids", async () => {
         expect.assertions(3);
 
-        const sql = newDb();
+        const sql = newDatabase();
         const reads: { idOrScan?: string; table: string }[] = [];
-        const writer = createShardCtxDb({
-            sql,
-            schema,
+        const writer = createShardContextDatabase({
             onRead: (table, idOrScan) => {
-                reads.push({ table, idOrScan });
+                reads.push({ idOrScan, table });
             },
+            schema,
+            sql,
         });
         const a = await writer.insert("users", { name: "alice" });
         const b = await writer.insert("users", { name: "bob" });
@@ -194,27 +200,27 @@ describe("ctx-db + reactiveCache integration", () => {
         await writer.findMany("users");
 
         // Full scan: one *scan stamp, no per-row stamps.
-        expect(reads).toEqual([{ table: "users", idOrScan: "*scan" }]);
+        expect(reads).toEqual([{ idOrScan: "*scan", table: "users" }]);
 
         reads.length = 0;
         await writer.findMany("users", { where: { name: "alice" } });
 
         // Predicated scan: leading bare-table stamp (legacy), plus per-row id stamp.
-        expect(reads).toContainEqual({ table: "users", idOrScan: a });
-        expect(reads).not.toContainEqual({ table: "users", idOrScan: b });
+        expect(reads).toContainEqual({ idOrScan: a, table: "users" });
+        expect(reads).not.toContainEqual({ idOrScan: b, table: "users" });
     });
 
     it("count() registers *scan deps so any write to the table invalidates the cached count", async () => {
         expect.assertions(1);
 
-        const sql = newDb();
+        const sql = newDatabase();
         const reads: { idOrScan?: string; table: string }[] = [];
-        const writer = createShardCtxDb({
-            sql,
-            schema,
+        const writer = createShardContextDatabase({
             onRead: (table, idOrScan) => {
-                reads.push({ table, idOrScan });
+                reads.push({ idOrScan, table });
             },
+            schema,
+            sql,
         });
 
         await writer.insert("users", { name: "alice" });
@@ -222,7 +228,7 @@ describe("ctx-db + reactiveCache integration", () => {
         reads.length = 0;
         await writer.count("users");
 
-        expect(reads).toEqual([{ table: "users", idOrScan: "*scan" }]);
+        expect(reads).toEqual([{ idOrScan: "*scan", table: "users" }]);
     });
 
     it("rank() and rankPage() register *scan deps so any write shifts the cached position", async () => {
@@ -256,12 +262,12 @@ describe("ctx-db + reactiveCache integration", () => {
         runShardMigrations(sql, rankSchema);
 
         const reads: { idOrScan?: string; table: string }[] = [];
-        const writer = createShardCtxDb({
-            sql,
-            schema: rankSchema,
+        const writer = createShardContextDatabase({
             onRead: (table, idOrScan) => {
-                reads.push({ table, idOrScan });
+                reads.push({ idOrScan, table });
             },
+            schema: rankSchema,
+            sql,
         });
 
         await writer.insert("messages", { _id: "m1", channelId: "c1", text: "hi" });
@@ -269,12 +275,12 @@ describe("ctx-db + reactiveCache integration", () => {
         reads.length = 0;
         await writer.rank("messages", "byChannel", { row: "m1" });
 
-        expect(reads).toEqual([{ table: "messages", idOrScan: "*scan" }]);
+        expect(reads).toEqual([{ idOrScan: "*scan", table: "messages" }]);
 
         reads.length = 0;
         await writer.rankPage("messages", "byChannel", { take: 10 });
 
-        expect(reads).toEqual([{ table: "messages", idOrScan: "*scan" }]);
+        expect(reads).toEqual([{ idOrScan: "*scan", table: "messages" }]);
     });
 });
 
@@ -288,34 +294,34 @@ interface FakeWebSocket {
 }
 
 const createFakeWebSocket = (): FakeWebSocket => {
- return {
-    sent: [],
-    attachment: undefined,
-    send(data: string) {
-        this.sent.push(data);
-    },
-    close() {},
-    serializeAttachment(value: unknown) {
-        this.attachment = value as SocketAttachment | undefined;
-    },
-    deserializeAttachment() {
-        return this.attachment;
-    },
-};
+    return {
+        attachment: undefined,
+        close() {},
+        deserializeAttachment() {
+            return this.attachment;
+        },
+        send(data: string) {
+            this.sent.push(data);
+        },
+        sent: [],
+        serializeAttachment(value: unknown) {
+            this.attachment = value as SocketAttachment | undefined;
+        },
+    };
 };
 
 const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
     const sockets: FakeWebSocket[] = [];
 
     return {
-        sockets,
-        storage: { sql: { exec: vi.fn<(query: string) => unknown>() } },
         acceptWebSocket(ws) {
             sockets.push(ws as unknown as FakeWebSocket);
         },
         getWebSockets() {
             return sockets as unknown as WebSocket[];
         },
+        sockets,
+        storage: { sql: { exec: vi.fn<(query: string) => unknown>() } },
     };
 };
 
@@ -340,7 +346,7 @@ class CachingShard extends ShardDO {
         // Mutations advertise a table they wrote; the test fixture invalidates
         // through the cache directly so we don't need a real ctx-db here.
         if (functionPath.startsWith("mutation:")) {
-            for (const { table, id } of this.mutationTablesToInvalidate) {
+            for (const { id, table } of this.mutationTablesToInvalidate) {
                 this.reactiveCache?.invalidate(table, id);
                 this.recordChangedTable(table);
             }
@@ -372,7 +378,9 @@ class CachingShard extends ShardDO {
             this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
 
             return handler(args);
-        }).then((result) => { return { result, tables: new Set(["users"]) }; });
+        }).then((result) => {
+            return { result, tables: new Set(["users"]) };
+        });
     }
 
     public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment = { subs: {} }): void {
@@ -462,7 +470,7 @@ describe("shardDO + reactiveCache: dispatch path", () => {
         shard.handlers.set("users:count", async () => 1);
 
         await shard.handleRpc("users:count", {});
-        await shard.handleRpc("users:count", { restrictsCounts: true, baseWhere: { ownerId: "u1" } });
+        await shard.handleRpc("users:count", { baseWhere: { ownerId: "u1" }, restrictsCounts: true });
         await shard.handleRpc("users:count", {});
 
         // 2 slots: unrestricted (hit twice) and restricted (hit once).
@@ -502,18 +510,18 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws);
-        await shard.driveMessage(ws, { type: "subscribe", id: "sub-a", query: { functionPath: "users:list", args: {} } });
+        await shard.driveMessage(ws, { id: "sub-a", query: { args: {}, functionPath: "users:list" }, type: "subscribe" });
 
         const sentBefore = ws.sent.length;
 
         // Mutate: invalidate the *scan entry + record changed table to
         // trigger the bridge.
-        shard.mutationTablesToInvalidate = [{ table: "users", id: "irrelevant" }];
+        shard.mutationTablesToInvalidate = [{ id: "irrelevant", table: "users" }];
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "mutation:write", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "mutation:write" }),
                 headers: { "content-type": "application/json" },
+                method: "POST",
             }),
         );
 
@@ -547,19 +555,19 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws);
-        await shard.driveMessage(ws, { type: "subscribe", id: "sub-a", query: { functionPath: "users:list", args: {} } });
+        await shard.driveMessage(ws, { id: "sub-a", query: { args: {}, functionPath: "users:list" }, type: "subscribe" });
 
         // Mutation invalidates + records changed table; the bridge MUST see
         // the cleared cache when it re-runs (otherwise the subscriber gets
         // a stale memoized result).
-        shard.mutationTablesToInvalidate = [{ table: "users", id: "irrelevant" }];
+        shard.mutationTablesToInvalidate = [{ id: "irrelevant", table: "users" }];
         sequence.length = 0;
 
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "mutation:write", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "mutation:write" }),
                 headers: { "content-type": "application/json" },
+                method: "POST",
             }),
         );
 

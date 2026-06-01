@@ -87,8 +87,8 @@ const assertSingleStatement = (migration: Migration): void => {
         }
 
         if (inDouble) {
-            if (character === '"') {
-                if (next === '"') {
+            if (character === "\"") {
+                if (next === "\"") {
                     index += 1;
                 } else {
                     inDouble = false;
@@ -103,7 +103,7 @@ const assertSingleStatement = (migration: Migration): void => {
             continue;
         }
 
-        if (character === '"') {
+        if (character === "\"") {
             inDouble = true;
             continue;
         }
@@ -199,8 +199,8 @@ class MigrationRunner {
      * drizzle handle for free) or a raw `D1DatabaseLike` binding (wrapped on
      * the caller's behalf so existing `@cirrus/cli` callers keep working).
      */
-    public constructor(db: D1Client | D1DatabaseLike, migrations: Migration[]) {
-        this.client = db instanceof D1Client ? db : new D1Client(db);
+    public constructor(database: D1Client | D1DatabaseLike, migrations: Migration[]) {
+        this.client = database instanceof D1Client ? database : new D1Client(database);
         this.migrations = [...migrations].toSorted((a, b) => a.version - b.version);
         this.assertUniqueVersions();
         this.assertUniqueSql();

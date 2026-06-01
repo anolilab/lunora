@@ -78,7 +78,7 @@ const stableStringify = (value: unknown): string => {
  * Pass `"skip"` for `args` to keep the hook mounted without opening a stream
  * (mirrors `useQuery` / `useSubscription`).
  */
-export function useStream<F extends FunctionReference>(fn: F, args: "skip" | ArgsOf<F>, options: UseStreamOptions = {}): UseStreamResult<ReturnOf<F>> {
+export function useStream<F extends FunctionReference>(function_: F, args: "skip" | ArgsOf<F>, options: UseStreamOptions = {}): UseStreamResult<ReturnOf<F>> {
     const client = useCirrus();
     const [state, dispatch] = useReducer<State<ReturnOf<F>>, [Action<ReturnOf<F>>]>(reducer<ReturnOf<F>>, { chunks: [], error: undefined, status: "idle" });
 
@@ -100,7 +100,7 @@ export function useStream<F extends FunctionReference>(fn: F, args: "skip" | Arg
 
         let stillMounted = true;
         let cancelled = false;
-        const iterable = client.stream(fn, args, { maxBuffer: options.maxBuffer, shardKey: options.shardKey });
+        const iterable = client.stream(function_, args, { maxBuffer: options.maxBuffer, shardKey: options.shardKey });
         const cancel = (): void => {
             if (cancelled) {
                 return;
@@ -123,7 +123,7 @@ export function useStream<F extends FunctionReference>(fn: F, args: "skip" | Arg
                         return;
                     }
 
-                    dispatch({ type: "chunk", chunk });
+                    dispatch({ chunk, type: "chunk" });
                 }
 
                 if (stillMounted) {
@@ -136,7 +136,7 @@ export function useStream<F extends FunctionReference>(fn: F, args: "skip" | Arg
 
                 const normalized = error instanceof Error ? error : new Error(String(error));
 
-                dispatch({ type: "error", error: normalized });
+                dispatch({ error: normalized, type: "error" });
             }
         })();
 
@@ -145,7 +145,7 @@ export function useStream<F extends FunctionReference>(fn: F, args: "skip" | Arg
             cancel();
             cancelRef.current = undefined;
         };
-    }, [client, fn.__cirrusRef, serialized, skipped, options.shardKey, options.maxBuffer]);
+    }, [client, function_.__cirrusRef, serialized, skipped, options.shardKey, options.maxBuffer]);
 
     return {
         cancel: () => {

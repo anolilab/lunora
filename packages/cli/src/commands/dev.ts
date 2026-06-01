@@ -24,9 +24,11 @@ export interface DevCommandPlan {
     mode: DevMode;
 }
 
-const findWranglerConfig = (cwd: string): boolean => existsSync(join(cwd, "wrangler.jsonc")) || existsSync(join(cwd, "wrangler.json")) || existsSync(join(cwd, "wrangler.toml"));
+const findWranglerConfig = (cwd: string): boolean =>
+    existsSync(join(cwd, "wrangler.jsonc")) || existsSync(join(cwd, "wrangler.json")) || existsSync(join(cwd, "wrangler.toml"));
 
-const findViteConfig = (cwd: string): boolean => existsSync(join(cwd, "vite.config.ts")) || existsSync(join(cwd, "vite.config.js")) || existsSync(join(cwd, "vite.config.mjs"));
+const findViteConfig = (cwd: string): boolean =>
+    existsSync(join(cwd, "vite.config.ts")) || existsSync(join(cwd, "vite.config.js")) || existsSync(join(cwd, "vite.config.mjs"));
 
 const buildPlan = (cwd: string, options: DevCommandOptions): DevCommandPlan => {
     const viteConfigPresent = findViteConfig(cwd);
@@ -137,50 +139,53 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
     process.on("SIGINT", onSigint);
     process.on("SIGTERM", onSigterm);
 
-    const promises = descriptors.map(async (descriptor) => new Promise<number>((resolve) => {
-            const tag = descriptor.tag ?? "child";
-            const child = nodeSpawn(descriptor.command, [...descriptor.args], {
-                cwd: descriptor.cwd ?? process.cwd(),
-                env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
-                stdio: ["inherit", "pipe", "pipe"],
-            });
+    const promises = descriptors.map(
+        async (descriptor) =>
+            new Promise<number>((resolve) => {
+                const tag = descriptor.tag ?? "child";
+                const child = nodeSpawn(descriptor.command, [...descriptor.args], {
+                    cwd: descriptor.cwd ?? process.cwd(),
+                    env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
+                    stdio: ["inherit", "pipe", "pipe"],
+                });
 
-            children.push(child);
+                children.push(child);
 
-            const onLine = (chunk: Buffer | string, kind: "stdout" | "stderr") => {
-                const text = (typeof chunk === "string" ? chunk : chunk.toString("utf8")).trimEnd();
+                const onLine = (chunk: Buffer | string, kind: "stdout" | "stderr") => {
+                    const text = (typeof chunk === "string" ? chunk : chunk.toString("utf8")).trimEnd();
 
-                if (text.length === 0) {
-                    return;
-                }
-
-                for (const line of text.split("\n")) {
-                    const prefixed = `[${tag}] ${line}`;
-
-                    if (kind === "stderr") {
-                        logger.warn(prefixed);
-                    } else {
-                        logger.info(prefixed);
+                    if (text.length === 0) {
+                        return;
                     }
-                }
-            };
 
-            child.stdout?.on("data", (chunk: Buffer) => {
-                onLine(chunk, "stdout");
-            });
-            child.stderr?.on("data", (chunk: Buffer) => {
-                onLine(chunk, "stderr");
-            });
+                    for (const line of text.split("\n")) {
+                        const prefixed = `[${tag}] ${line}`;
 
-            child.on("error", (error) => {
-                logger.error(`[${tag}] failed to start: ${error.message}`);
-                resolve(1);
-            });
+                        if (kind === "stderr") {
+                            logger.warn(prefixed);
+                        } else {
+                            logger.info(prefixed);
+                        }
+                    }
+                };
 
-            child.on("exit", (code) => {
-                resolve(code ?? 0);
-            });
-        }));
+                child.stdout?.on("data", (chunk: Buffer) => {
+                    onLine(chunk, "stdout");
+                });
+                child.stderr?.on("data", (chunk: Buffer) => {
+                    onLine(chunk, "stderr");
+                });
+
+                child.on("error", (error) => {
+                    logger.error(`[${tag}] failed to start: ${error.message}`);
+                    resolve(1);
+                });
+
+                child.on("exit", (code) => {
+                    resolve(code ?? 0);
+                });
+            }),
+    );
 
     try {
         const codes = await Promise.all(promises);

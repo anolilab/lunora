@@ -26,9 +26,9 @@ const toVector = async <TInput>(input: UpsertInput<TInput>): Promise<VectorizeVe
 
     return {
         id: input.id,
-        values,
         metadata: input.metadata,
         namespace: input.namespace,
+        values,
     };
 };
 
@@ -49,7 +49,7 @@ const UPSERT_EMBED_CONCURRENCY = 8;
  * flight at once. Preserves input order in the output. Written inline to avoid
  * a `p-limit` dependency.
  */
-const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number, fn: (item: T, index: number) => Promise<U>): Promise<U[]> => {
+const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number, function_: (item: T, index: number) => Promise<U>): Promise<U[]> => {
     if (items.length === 0) {
         return [];
     }
@@ -74,7 +74,7 @@ const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number, fn: (
             // populated array here, so the cast restores the element type.
             const item = items.at(index) as T;
 
-            results[index] = await fn(item, index);
+            results[index] = await function_(item, index);
         }
     });
 
@@ -130,11 +130,11 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
         }
 
         return index.query(values, {
-            topK: input.topK,
-            returnValues: input.returnValues,
-            returnMetadata: input.returnMetadata,
-            namespace: input.namespace,
             filter: input.filter,
+            namespace: input.namespace,
+            returnMetadata: input.returnMetadata,
+            returnValues: input.returnValues,
+            topK: input.topK,
         });
     };
 
@@ -168,5 +168,5 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
         return index.describe();
     };
 
-    return { upsert, upsertMany, query, getByIds, deleteByIds, describe };
+    return { deleteByIds, describe, getByIds, query, upsert, upsertMany };
 };

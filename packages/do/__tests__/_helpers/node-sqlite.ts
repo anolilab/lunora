@@ -17,28 +17,28 @@ import type { SqlCursor, SqlExec } from "../../src/ctx-db.js";
  * executes DDL/DML and returns rows for `SELECT`.
  */
 export const createSqliteExec = (): { close: () => void; raw: (query: string, ...params: unknown[]) => Record<string, unknown>[]; sql: SqlExec } => {
-    const db = new DatabaseSync(":memory:");
+    const database = new DatabaseSync(":memory:");
 
     const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
- return {
-        [Symbol.iterator]() {
-            return rows[Symbol.iterator]();
-        },
-        one() {
-            if (rows.length !== 1) {
-                throw new Error(`expected exactly one row, received ${String(rows.length)}`);
-            }
+        return {
+            one() {
+                if (rows.length !== 1) {
+                    throw new Error(`expected exactly one row, received ${String(rows.length)}`);
+                }
 
-            return rows[0]!;
-        },
-        toArray() {
-            return rows;
-        },
+                return rows[0]!;
+            },
+            [Symbol.iterator]() {
+                return rows[Symbol.iterator]();
+            },
+            toArray() {
+                return rows;
+            },
+        };
     };
-};
 
     const run = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<Row> => {
-        const statement = db.prepare(query);
+        const statement = database.prepare(query);
         const rows = statement.all(...(params as never[])) as Row[];
 
         return cursor(rows);
@@ -46,7 +46,7 @@ export const createSqliteExec = (): { close: () => void; raw: (query: string, ..
 
     return {
         close: () => {
-            db.close();
+            database.close();
         },
         raw: (query, ...params) => run(query, ...params).toArray(),
         sql: { exec: run },

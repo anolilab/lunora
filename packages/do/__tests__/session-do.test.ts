@@ -22,25 +22,25 @@ const createFakeStorage = (): {
 
     return {
         storage: {
+            async delete(key) {
+                return map.delete(key);
+            },
             async get(key) {
                 return map.get(key);
             },
             async put(key, value) {
                 map.set(key, value);
             },
-            async delete(key) {
-                return map.delete(key);
-            },
         },
     };
 };
 
 const authHeaders = (extra: Record<string, string> = {}): Record<string, string> => {
- return {
-    "content-type": "application/json",
-    "x-cirrus-session-do-secret": TEST_SECRET,
-    ...extra,
-};
+    return {
+        "content-type": "application/json",
+        "x-cirrus-session-do-secret": TEST_SECRET,
+        ...extra,
+    };
 };
 
 describe("sessionDO", () => {
@@ -52,9 +52,9 @@ describe("sessionDO", () => {
 
         const response = await session.fetch(
             new Request("https://session.internal/create", {
-                method: "POST",
+                body: JSON.stringify({ token: TOK_1, ttlSeconds: 60, userId: "u1" }),
                 headers: authHeaders(),
-                body: JSON.stringify({ token: TOK_1, userId: "u1", ttlSeconds: 60 }),
+                method: "POST",
             }),
         );
 
@@ -74,9 +74,9 @@ describe("sessionDO", () => {
 
         await session.fetch(
             new Request("https://session.internal/create", {
-                method: "POST",
+                body: JSON.stringify({ token: TOK_2, ttlSeconds: 60, userId: "u-A" }),
                 headers: authHeaders(),
-                body: JSON.stringify({ token: TOK_2, userId: "u-A", ttlSeconds: 60 }),
+                method: "POST",
             }),
         );
 
@@ -97,7 +97,7 @@ describe("sessionDO", () => {
         const state = createFakeStorage();
 
         // Inject an already-expired record so the lazy-expire branch runs.
-        await state.storage.put(`s:${TOK_DEAD}`, { userId: "u", createdAt: Date.now() - 10_000, expiresAt: Date.now() - 1 });
+        await state.storage.put(`s:${TOK_DEAD}`, { createdAt: Date.now() - 10_000, expiresAt: Date.now() - 1, userId: "u" });
 
         const session = new SessionDO(state as any, TEST_ENV);
         const response = await session.fetch(new Request("https://session.internal/get", { headers: authHeaders({ "x-cirrus-session-token": TOK_DEAD }) }));
@@ -114,16 +114,16 @@ describe("sessionDO", () => {
 
         await session.fetch(
             new Request("https://session.internal/create", {
-                method: "POST",
-                headers: authHeaders(),
                 body: JSON.stringify({ token: TOK_DOOMED, userId: "u" }),
+                headers: authHeaders(),
+                method: "POST",
             }),
         );
 
         const first = await session.fetch(
             new Request("https://session.internal/revoke", {
-                method: "DELETE",
                 headers: authHeaders({ "x-cirrus-session-token": TOK_DOOMED }),
+                method: "DELETE",
             }),
         );
 
@@ -132,8 +132,8 @@ describe("sessionDO", () => {
         // Idempotent — revoking a missing token still succeeds.
         const second = await session.fetch(
             new Request("https://session.internal/revoke", {
-                method: "DELETE",
                 headers: authHeaders({ "x-cirrus-session-token": TOK_DOOMED }),
+                method: "DELETE",
             }),
         );
 
@@ -148,9 +148,9 @@ describe("sessionDO", () => {
 
         const noToken = await session.fetch(
             new Request("https://session.internal/create", {
-                method: "POST",
-                headers: authHeaders(),
                 body: JSON.stringify({ userId: "u" }),
+                headers: authHeaders(),
+                method: "POST",
             }),
         );
 
@@ -158,9 +158,9 @@ describe("sessionDO", () => {
 
         const noJson = await session.fetch(
             new Request("https://session.internal/create", {
-                method: "POST",
-                headers: authHeaders(),
                 body: "not json",
+                headers: authHeaders(),
+                method: "POST",
             }),
         );
 
@@ -175,9 +175,9 @@ describe("sessionDO", () => {
 
         const response = await session.fetch(
             new Request("https://session.internal/create", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
                 body: JSON.stringify({ token: TOK_1, userId: "u" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
             }),
         );
 
@@ -192,9 +192,9 @@ describe("sessionDO", () => {
 
         const response = await session.fetch(
             new Request("https://session.internal/create", {
-                method: "POST",
-                headers: authHeaders(),
                 body: JSON.stringify({ token: TOK_1, userId: "u" }),
+                headers: authHeaders(),
+                method: "POST",
             }),
         );
         const body = await response.json<{ createdAt: number; expiresAt: number }>();

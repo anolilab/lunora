@@ -7,31 +7,33 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useInfiniteQuery } from "../src/use-infinite-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
+const function_ = (ref: string): FunctionReference => {
+    return { __cirrusRef: ref };
+};
 
 /** Keyset-style backend over a fixed list, cursor = next offset as a string. */
-const makePaginator =
-    (items: string[]) =>
-    (_ref: string, args: unknown): { continueCursor: null | string; isDone: boolean; page: string[] } => {
-        const { paginationOpts } = args as { paginationOpts: { cursor: null | string; numItems: number } };
-        const offset = paginationOpts.cursor ? Number(paginationOpts.cursor) : 0;
-        const end = offset + paginationOpts.numItems;
-        const page = items.slice(offset, end);
-        const isDone = end >= items.length;
+const makePaginator
+    = (items: string[]) =>
+        (_ref: string, args: unknown): { continueCursor: null | string; isDone: boolean; page: string[] } => {
+            const { paginationOpts } = args as { paginationOpts: { cursor: null | string; numItems: number } };
+            const offset = paginationOpts.cursor ? Number(paginationOpts.cursor) : 0;
+            const end = offset + paginationOpts.numItems;
+            const page = items.slice(offset, end);
+            const isDone = end >= items.length;
 
-        return { continueCursor: isDone ? null : String(end), isDone, page };
-    };
+            return { continueCursor: isDone ? null : String(end), isDone, page };
+        };
 
-const wrapper =
-    (client: ReturnType<typeof createMockClient>["asClient"]) =>
-    ({ children }: PropsWithChildren): ReactElement => <CirrusProvider client={client}>{children}</CirrusProvider>;
+const wrapper
+    = (client: ReturnType<typeof createMockClient>["asClient"]) =>
+        ({ children }: PropsWithChildren): ReactElement => <CirrusProvider client={client}>{children}</CirrusProvider>;
 
 describe("useInfiniteQuery", () => {
     it("loads the first page into pages[0]", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
-        const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {}, { initialNumItems: 2 }), {
+        const { result } = renderHook(() => useInfiniteQuery(function_("items:list"), {}, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
         });
 
@@ -53,7 +55,7 @@ describe("useInfiniteQuery", () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
-        const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {}, { initialNumItems: 2 }), {
+        const { result } = renderHook(() => useInfiniteQuery(function_("items:list"), {}, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
         });
 
@@ -80,7 +82,7 @@ describe("useInfiniteQuery", () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b"]));
-        const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {}, { initialNumItems: 2 }), {
+        const { result } = renderHook(() => useInfiniteQuery(function_("items:list"), {}, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
         });
 
@@ -97,7 +99,7 @@ describe("useInfiniteQuery", () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b"]));
-        const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {}, { initialNumItems: 2 }), {
+        const { result } = renderHook(() => useInfiniteQuery(function_("items:list"), {}, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
         });
 
@@ -115,11 +117,11 @@ describe("useInfiniteQuery", () => {
         expect(result.current.pages).toEqual([["a", "b"]]);
     });
 
-    it('"skip" yields empty pages and is not loading', () => {
+    it("\"skip\" yields empty pages and is not loading", () => {
         expect.assertions(6);
 
         const mock = createMockClient(makePaginator(["a", "b"]));
-        const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), "skip", { initialNumItems: 2 }), {
+        const { result } = renderHook(() => useInfiniteQuery(function_("items:list"), "skip", { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
         });
 
@@ -135,7 +137,7 @@ describe("useInfiniteQuery", () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
-        const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {}, { initialNumItems: 2 }), {
+        const { result } = renderHook(() => useInfiniteQuery(function_("items:list"), {}, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
         });
 
@@ -171,7 +173,7 @@ describe("useInfiniteQuery", () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
-        const { rerender, result } = renderHook(({ kind }: { kind: string }) => useInfiniteQuery(fn("items:list"), { kind }, { initialNumItems: 2 }), {
+        const { rerender, result } = renderHook(({ kind }: { kind: string }) => useInfiniteQuery(function_("items:list"), { kind }, { initialNumItems: 2 }), {
             initialProps: { kind: "first" },
             wrapper: wrapper(mock.asClient),
         });

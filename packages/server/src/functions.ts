@@ -1,12 +1,12 @@
 import { ValidationError } from "@cirrus/values";
 
 import type {
-    ActionCtx,
+    ActionCtx as ActionContext,
     ArgsValidator,
     FunctionVisibility,
     InferArgs,
-    MutationCtx,
-    QueryCtx,
+    MutationCtx as MutationContext,
+    QueryCtx as QueryContext,
     RegisteredAction,
     RegisteredMutation,
     RegisteredQuery,
@@ -55,17 +55,17 @@ export const validateArgs = <A extends ArgsValidator>(validators: A, args: Recor
 
 export interface QueryDefinition<A extends ArgsValidator, R> {
     args: A;
-    handler: (context: QueryCtx, args: InferArgs<A>) => Promise<R> | R;
+    handler: (context: QueryContext, args: InferArgs<A>) => Promise<R> | R;
 }
 
 export interface MutationDefinition<A extends ArgsValidator, R> {
     args: A;
-    handler: (context: MutationCtx, args: InferArgs<A>) => Promise<R> | R;
+    handler: (context: MutationContext, args: InferArgs<A>) => Promise<R> | R;
 }
 
 export interface ActionDefinition<A extends ArgsValidator, R> {
     args: A;
-    handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
+    handler: (context: ActionContext, args: InferArgs<A>) => Promise<R> | R;
 }
 
 const wrap = <A extends ArgsValidator, R, Kind extends "action" | "mutation" | "query">(
@@ -83,7 +83,7 @@ const wrap = <A extends ArgsValidator, R, Kind extends "action" | "mutation" | "
         kind,
         // Only attach the key when internal so public registrations keep emitting
         // the bare `{ args, handler, kind }` shape (absence === public).
-        ...(visibility ? { visibility } : {}),
+        ...visibility ? { visibility } : {},
     };
 };
 

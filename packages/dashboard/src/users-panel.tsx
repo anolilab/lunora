@@ -20,7 +20,7 @@ const DEFAULT_PAGE_SIZE = 50;
  * Gated by the server's `CIRRUS_ADMIN_TOKEN` and an `authIntrospector` on the
  * worker. Surfaces identity metadata only — no password hashes or tokens.
  */
-export function UsersPanel({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {}): ReactElement {
+export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {}): ReactElement => {
     const client = useCirrus();
 
     const [users, setUsers] = useState<AuthUser[] | null>(null);
@@ -152,7 +152,10 @@ export function UsersPanel({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
 
             {sessions !== null && (
                 <div data-testid="us-sessions">
-                    <h3>Sessions for {selectedUser}</h3>
+                    <h3>
+Sessions for
+{selectedUser}
+                    </h3>
 
                     {sessions.length === 0 && <p data-testid="us-sessions-empty">No active sessions.</p>}
 
@@ -182,6 +185,6 @@ export function UsersPanel({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
             )}
         </div>
     );
-}
+};
 
 export type { UsersPanelProps };

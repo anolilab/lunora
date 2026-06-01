@@ -1,4 +1,4 @@
-import type { Mailer, SendOpts } from "./types.js";
+import type { Mailer, SendOpts as SendOptions } from "./types.js";
 
 /** Serializable representation of a `SendOpts` payload — drops the `react` field. */
 export interface QueuedSend {
@@ -13,18 +13,18 @@ export interface QueuedSend {
     to: string | string[];
 }
 
-export const toQueuedPayload = (opts: QueuedSend): QueuedSend => {
- return {
-    bcc: opts.bcc,
-    cc: opts.cc,
-    from: opts.from,
-    headers: opts.headers,
-    html: opts.html,
-    replyTo: opts.replyTo,
-    subject: opts.subject,
-    text: opts.text,
-    to: opts.to,
-};
+export const toQueuedPayload = (options: QueuedSend): QueuedSend => {
+    return {
+        bcc: options.bcc,
+        cc: options.cc,
+        from: options.from,
+        headers: options.headers,
+        html: options.html,
+        replyTo: options.replyTo,
+        subject: options.subject,
+        text: options.text,
+        to: options.to,
+    };
 };
 
 /**
@@ -65,7 +65,7 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
         throw new Error("@cirrus/mail: queue message `to` must be a string or string[]");
     }
 
-    return mailer.send(candidate as unknown as SendOpts);
+    return mailer.send(candidate as unknown as SendOptions);
 };
 
 export { type QueueLike } from "./types.js";

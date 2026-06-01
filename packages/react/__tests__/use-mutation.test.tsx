@@ -7,14 +7,16 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useMutation } from "../src/use-mutation.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
+const function_ = (ref: string): FunctionReference => {
+    return { __cirrusRef: ref };
+};
 
 interface HarnessProps {
     onCall: (call: () => Promise<unknown>, pending: () => boolean) => void;
 }
 
 const Harness = ({ onCall }: HarnessProps): ReactElement => {
-    const { mutate, pending } = useMutation(fn("posts:create"));
+    const { mutate, pending } = useMutation(function_("posts:create"));
 
     onCall(
         () => mutate({ title: "hello" }),
@@ -82,7 +84,7 @@ describe("useMutation", () => {
 
         const optimistic = vi.fn<() => number>(() => 5);
         const Probe = (): ReactElement => {
-            const { mutate } = useMutation(fn("counter:inc"));
+            const { mutate } = useMutation(function_("counter:inc"));
 
             return (
                 <button

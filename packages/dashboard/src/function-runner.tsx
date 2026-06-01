@@ -54,7 +54,7 @@ const formatResult = (value: unknown): string => {
  * skip discovery (a query/mutation/action's `kind` is compile-time-only, so it
  * must be named).
  */
-export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps = {}): ReactElement {
+export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps = {}): ReactElement => {
     const client = useCirrus();
 
     const [discovered, setDiscovered] = useState<FunctionDescriptor[] | null>(null);
@@ -105,7 +105,7 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
     // The selection defaults to the first function until the user picks one.
     // Derived (not synced via an effect) so there's no extra render and the
     // value is always consistent with the current list.
-    const effectivePath = selectedPath === "" ? (functions[0]?.path ?? "") : selectedPath;
+    const effectivePath = selectedPath === "" ? functions[0]?.path ?? "" : selectedPath;
 
     const selected = useMemo(() => functions.find((descriptor) => descriptor.path === effectivePath), [functions, effectivePath]);
 
@@ -205,7 +205,11 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
             >
                 {functions.map((descriptor) => (
                     <option key={descriptor.path} value={descriptor.path}>
-                        {descriptor.path} ({descriptor.kind})
+                        {descriptor.path}
+{" "}
+(
+{descriptor.kind}
+)
                     </option>
                 ))}
             </select>
@@ -244,11 +248,18 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
                 <ul data-testid="fn-history">
                     {runs.map((entry, index) => (
                         <li data-testid="fn-history-row" key={entry.id}>
-                            <span data-testid={`fn-history-status-${index.toString()}`}>{entry.status === "success" ? "✓" : "✗"}</span>{" "}
+                            <span data-testid={`fn-history-status-${index.toString()}`}>{entry.status === "success" ? "✓" : "✗"}</span>
+{" "}
                             <span>
-                                {entry.path} ({entry.kind})
-                            </span>{" "}
-                            <time>{formatTimestamp(entry.at)}</time>{" "}
+                                {entry.path}
+{" "}
+(
+{entry.kind}
+)
+                            </span>
+{" "}
+                            <time>{formatTimestamp(entry.at)}</time>
+{" "}
                             <button
                                 data-testid={`fn-history-load-${index.toString()}`}
                                 onClick={() => {
@@ -264,6 +275,6 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
             )}
         </div>
     );
-}
+};
 
 export type { FunctionRunnerProps };

@@ -18,7 +18,7 @@ export interface ShardInputProps {
  * Durable Objects don't support. Panels remain responsible for recording a shard
  * as used (via `recordShard`) when they actually query it.
  */
-export function ShardInput({ onChange, testId, value }: ShardInputProps): ReactElement {
+export const ShardInput = ({ onChange, testId, value }: ShardInputProps): ReactElement => {
     const listId = useId();
     // Snapshot once per render; the menu only needs to be fresh on (re)mount and
     // when the panel re-renders after recording a shard.
@@ -45,4 +45,4 @@ export function ShardInput({ onChange, testId, value }: ShardInputProps): ReactE
             )}
         </>
     );
-}
+};

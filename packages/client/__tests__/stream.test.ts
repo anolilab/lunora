@@ -95,7 +95,9 @@ const latestSocket = (): MockSocket => {
     return last;
 };
 
-const fn = <T = unknown>(reference: string): FunctionReference<"stream", Record<string, never>, T> => { return { __cirrusRef: reference }; };
+const function_ = <T = unknown>(reference: string): FunctionReference<"stream", Record<string, never>, T> => {
+    return { __cirrusRef: reference };
+};
 
 describe("stream", () => {
     beforeEach(() => {
@@ -233,7 +235,7 @@ describe("stream", () => {
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-            const iterable = client.stream(fn<{ tick: number }>("metrics:tick"), {});
+            const iterable = client.stream(function_<{ tick: number }>("metrics:tick"), {});
 
             // Drive the socket to "open" so the stream frame flushes.
             latestSocket().open();
@@ -243,16 +245,16 @@ describe("stream", () => {
 
             expect(streamFrame).toBeDefined();
             expect(streamFrame).toMatchObject({
+                query: { args: {}, functionPath: "metrics:tick" },
                 type: "stream",
-                query: { functionPath: "metrics:tick", args: {} },
             });
 
             const id = streamFrame?.id as string;
 
             // Server sends chunks.
-            latestSocket().receive({ type: "chunk", id, data: { tick: 1 } });
-            latestSocket().receive({ type: "chunk", id, data: { tick: 2 } });
-            latestSocket().receive({ type: "complete", id });
+            latestSocket().receive({ data: { tick: 1 }, id, type: "chunk" });
+            latestSocket().receive({ data: { tick: 2 }, id, type: "chunk" });
+            latestSocket().receive({ id, type: "complete" });
 
             const collected: { tick: number }[] = [];
 
@@ -270,20 +272,20 @@ describe("stream", () => {
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-            const iterable = client.stream(fn<number>("metrics:loop"), {});
+            const iterable = client.stream(function_<number>("metrics:loop"), {});
 
             latestSocket().open();
             const sent = latestSocket().sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
             const id = sent.find((f) => f.type === "stream")?.id as string;
 
             // Push a value, then cancel before consuming all.
-            latestSocket().receive({ type: "chunk", id, data: 1 });
+            latestSocket().receive({ data: 1, id, type: "chunk" });
 
             iterable.cancel();
 
             const cancelFrame = latestSocket()
                 .sent
-.map((raw) => JSON.parse(raw) as Record<string, unknown>)
+                .map((raw) => JSON.parse(raw) as Record<string, unknown>)
                 .find((f) => f.type === "unsubscribe" && f.id === id);
 
             expect(cancelFrame).toBeDefined();
@@ -306,12 +308,12 @@ describe("stream", () => {
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-            const iterable = client.stream(fn<number>("metrics:boom"), {});
+            const iterable = client.stream(function_<number>("metrics:boom"), {});
 
             latestSocket().open();
             const id = (JSON.parse(latestSocket().sent[0] as string) as Record<string, unknown>).id as string;
 
-            latestSocket().receive({ type: "error", id, error: { code: "FORBIDDEN", message: "nope" } });
+            latestSocket().receive({ error: { code: "FORBIDDEN", message: "nope" }, id, type: "error" });
 
             const consumer = (async () => {
                 for await (const _chunk of iterable) {
@@ -319,7 +321,7 @@ describe("stream", () => {
                 }
             })();
 
-            await expect(consumer).rejects.toMatchObject({ message: "nope", code: "FORBIDDEN" });
+            await expect(consumer).rejects.toMatchObject({ code: "FORBIDDEN", message: "nope" });
 
             client.close();
         });
@@ -329,7 +331,7 @@ describe("stream", () => {
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-            const iterable = client.stream(fn<number>("metrics:keepalive"), {});
+            const iterable = client.stream(function_<number>("metrics:keepalive"), {});
 
             latestSocket().open();
 
@@ -348,7 +350,7 @@ describe("stream", () => {
             expect.assertions(2);
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
-            const iterable = client.stream(fn<number>("metrics:tick"), {});
+            const iterable = client.stream(function_<number>("metrics:tick"), {});
 
             // Before open: nothing has gone over the wire yet.
             expect(latestSocket().sent).toHaveLength(0);

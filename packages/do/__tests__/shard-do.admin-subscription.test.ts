@@ -22,19 +22,19 @@ interface FakeWebSocket {
 }
 
 const createFakeWebSocket = (): FakeWebSocket => {
- return {
-    attachment: undefined,
-    sent: [],
-    send(data: string) {
-        this.sent.push(data);
-    },
-    serializeAttachment(value: unknown) {
-        this.attachment = value as SocketAttachment | undefined;
-    },
-    deserializeAttachment() {
-        return this.attachment;
-    },
-};
+    return {
+        attachment: undefined,
+        deserializeAttachment() {
+            return this.attachment;
+        },
+        send(data: string) {
+            this.sent.push(data);
+        },
+        sent: [],
+        serializeAttachment(value: unknown) {
+            this.attachment = value as SocketAttachment | undefined;
+        },
+    };
 };
 
 /** Parse every `{type:"data"}` envelope the socket received, newest last. */
@@ -85,39 +85,39 @@ class AdminSubShard extends ShardDO {
 }
 
 describe("shardDO admin subscriptions", () => {
-    let db: ReturnType<typeof createSqliteExec>;
+    let database: ReturnType<typeof createSqliteExec>;
     let sockets: FakeWebSocket[];
     let state: ShardDOState;
 
     beforeEach(() => {
-        db = createSqliteExec();
-        db.raw(`CREATE TABLE "messages" ("__id__" TEXT PRIMARY KEY, "text" TEXT)`);
-        db.raw(`INSERT INTO "messages" VALUES ('m1', 'hello')`);
+        database = createSqliteExec();
+        database.raw(`CREATE TABLE "messages" ("__id__" TEXT PRIMARY KEY, "text" TEXT)`);
+        database.raw(`INSERT INTO "messages" VALUES ('m1', 'hello')`);
 
         sockets = [];
         state = {
-            id: { name: "shard-a" },
-            storage: { sql: db.sql as unknown as ShardDOState["storage"]["sql"] },
             acceptWebSocket(ws) {
                 sockets.push(ws as unknown as FakeWebSocket);
             },
             getWebSockets() {
                 return sockets as unknown as WebSocket[];
             },
+            id: { name: "shard-a" },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
         };
     });
 
     afterEach(() => {
-        db.close();
+        database.close();
     });
 
     const adminSub = (id: string, functionPath: string, args: Record<string, unknown> = {}): SubscriptionEnvelope => {
- return {
-        id,
-        query: { args, functionPath },
-        type: "subscribe",
+        return {
+            id,
+            query: { args, functionPath },
+            type: "subscribe",
+        };
     };
-};
 
     it("rejects an admin subscription on a non-admin socket without registering it", async () => {
         expect.assertions(3);
@@ -168,7 +168,7 @@ describe("shardDO admin subscriptions", () => {
 
         // A write to messages re-runs it and pushes the grown page.
         shard.mutate = () => {
-            db.raw(`INSERT INTO "messages" VALUES ('m2', 'world')`);
+            database.raw(`INSERT INTO "messages" VALUES ('m2', 'world')`);
         };
         shard.changedTable = "messages";
         await shard.writeRpc();
@@ -206,14 +206,14 @@ describe("shardDO admin-socket upgrade flagging", () => {
     const sql = createSqliteExec();
 
     const baseState = (): ShardDOState => {
- return {
-        storage: { sql: sql.sql as unknown as ShardDOState["storage"]["sql"] },
-        acceptWebSocket() {},
-        getWebSockets() {
-            return [];
-        },
+        return {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: sql.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
     };
-};
 
     /** Capture the attachment the upgrade stamps onto the accepted socket. */
     const upgradeAndCaptureAttachment = async (

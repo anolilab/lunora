@@ -72,32 +72,32 @@ describe("builder input accumulation", () => {
     it("merges args across multiple .input() calls", () => {
         expect.assertions(1);
 
-        const fn = c.query
+        const function_ = c.query
             .input({ a: v.number() })
             .input({ b: v.string() })
             .query(() => null);
 
-        expect(Object.keys(fn.args).sort()).toEqual(["a", "b"]);
+        expect(Object.keys(function_.args).sort()).toEqual(["a", "b"]);
     });
 
     it("a later .input() wins on key collision", () => {
         expect.assertions(1);
 
-        const fn = c.query
+        const function_ = c.query
             .input({ value: v.number() })
             .input({ value: v.string() })
             .query(() => null);
 
-        expect(fn.args.value.kind).toBe("string");
+        expect(function_.args.value.kind).toBe("string");
     });
 
     it("validates args before the handler runs", async () => {
         expect.assertions(2);
 
         const handler = vi.fn<() => string>(() => "ok");
-        const fn = c.query.input({ limit: v.number() }).query(handler);
+        const function_ = c.query.input({ limit: v.number() }).query(handler);
 
-        await expect(fn.handler({}, { limit: "five" } as unknown as { limit: number })).rejects.toBeInstanceOf(ValidationError);
+        await expect(function_.handler({}, { limit: "five" } as unknown as { limit: number })).rejects.toBeInstanceOf(ValidationError);
         expect(handler).not.toHaveBeenCalled();
     });
 });
@@ -106,9 +106,9 @@ describe("builder middleware", () => {
     it("next({ ctx }) widens the context the handler receives", async () => {
         expect.assertions(1);
 
-        const fn = c.query.use(async ({ next }) => next({ ctx: { userId: "u1" } })).query(({ ctx }) => ctx.userId);
+        const function_ = c.query.use(async ({ next }) => next({ ctx: { userId: "u1" } })).query(({ ctx }) => ctx.userId);
 
-        await expect(fn.handler({ base: true }, {})).resolves.toBe("u1");
+        await expect(function_.handler({ base: true }, {})).resolves.toBe("u1");
     });
 
     it("middlewares run in chain order and the handler sees the final ctx", async () => {
@@ -116,7 +116,7 @@ describe("builder middleware", () => {
 
         const order: string[] = [];
 
-        const fn = c.query
+        const function_ = c.query
             .use(async ({ next }) => {
                 order.push("a");
 
@@ -133,14 +133,14 @@ describe("builder middleware", () => {
                 return ctx.a + ctx.b;
             });
 
-        await expect(fn.handler({}, {})).resolves.toBe(3);
+        await expect(function_.handler({}, {})).resolves.toBe(3);
         expect(order).toEqual(["a", "b", "handler"]);
     });
 
     it("calling next() twice throws", async () => {
         expect.assertions(1);
 
-        const fn = c.query
+        const function_ = c.query
             .use(async ({ next }) => {
                 await next();
 
@@ -148,7 +148,7 @@ describe("builder middleware", () => {
             })
             .query(() => "ok");
 
-        await expect(fn.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
+        await expect(function_.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
     });
 
     it("a middleware that throws aborts before the handler runs", async () => {
@@ -156,7 +156,7 @@ describe("builder middleware", () => {
 
         const handler = vi.fn<() => string>(() => "secret");
 
-        const fn = c.query
+        const function_ = c.query
             .use(async ({ ctx, next }) => {
                 if (!(ctx as { user?: string }).user) {
                     throw new CirrusError("UNAUTHORIZED");
@@ -166,7 +166,7 @@ describe("builder middleware", () => {
             })
             .query(handler);
 
-        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(CirrusError);
+        await expect(function_.handler({}, {})).rejects.toBeInstanceOf(CirrusError);
         expect(handler).not.toHaveBeenCalled();
     });
 });
@@ -175,23 +175,23 @@ describe("builder output", () => {
     it("parses the handler result through the .output() validator, stripping undeclared keys", async () => {
         expect.assertions(1);
 
-        const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: 1, extra: "stripped" }) as { count: number });
+        const function_ = c.query.output(v.object({ count: v.number() })).query(() => ({ count: 1, extra: "stripped" }) as { count: number });
 
-        await expect(fn.handler({}, {})).resolves.toEqual({ count: 1 });
+        await expect(function_.handler({}, {})).resolves.toEqual({ count: 1 });
     });
 
     it("rejects when the handler result violates .output()", async () => {
         expect.assertions(1);
 
-        const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: "nope" }) as unknown as { count: number });
+        const function_ = c.query.output(v.object({ count: v.number() })).query(() => ({ count: "nope" }) as unknown as { count: number });
 
-        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(ValidationError);
+        await expect(function_.handler({}, {})).rejects.toBeInstanceOf(ValidationError);
     });
 
     it(".output() composes with .input() and middleware regardless of chain order", async () => {
         expect.assertions(1);
 
-        const fn = c.mutation
+        const function_ = c.mutation
             .input({ text: v.string() })
             .use(async ({ next }) => next({ ctx: { tag: "m" } }))
             .output(v.object({ echoed: v.string() }))
@@ -199,6 +199,6 @@ describe("builder output", () => {
                 return { echoed: args.text };
             });
 
-        await expect(fn.handler({}, { text: "hi" })).resolves.toEqual({ echoed: "hi" });
+        await expect(function_.handler({}, { text: "hi" })).resolves.toEqual({ echoed: "hi" });
     });
 });

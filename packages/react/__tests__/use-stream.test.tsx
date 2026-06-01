@@ -7,7 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useStream } from "../src/use-stream.js";
 
-const fn = (reference: string): FunctionReference => { return { __cirrusRef: reference }; };
+const function_ = (reference: string): FunctionReference => {
+    return { __cirrusRef: reference };
+};
 
 interface MockEntry {
     handle: StreamHandle;
@@ -17,7 +19,7 @@ interface MockEntry {
 
 const buildClientWithStream = (): { client: CirrusClient; opened: MockEntry[]; openStream: () => MockEntry } => {
     const opened: MockEntry[] = [];
-    const streamFn = vi.fn<(fn: FunctionReference, args: unknown) => StreamIterable<unknown>>((_fn: FunctionReference, _args: unknown) => {
+    const streamFunction = vi.fn<(function__: FunctionReference, args: unknown) => StreamIterable<unknown>>((_function: FunctionReference, _args: unknown) => {
         const onCancel = vi.fn<() => void>();
         const { handle, iterable } = createStream<unknown>({ onCancel });
         const entry: MockEntry = { handle, iterable, onCancel };
@@ -27,10 +29,11 @@ const buildClientWithStream = (): { client: CirrusClient; opened: MockEntry[]; o
         return iterable;
     });
 
-    const client = { stream: streamFn } as unknown as CirrusClient;
+    const client = { stream: streamFunction } as unknown as CirrusClient;
 
     return {
         client,
+        opened,
         openStream: () => {
             const entry = opened.at(-1);
 
@@ -40,12 +43,11 @@ const buildClientWithStream = (): { client: CirrusClient; opened: MockEntry[]; o
 
             return entry;
         },
-        opened,
     };
 };
 
 const Display = ({ args = {} }: { args?: Record<string, unknown> | "skip" } = {}): ReactElement => {
-    const { chunks, error, status } = useStream(fn("metrics:tick"), args);
+    const { chunks, error, status } = useStream(function_("metrics:tick"), args);
 
     return (
         <div>
@@ -97,7 +99,7 @@ describe("useStream", () => {
         });
     });
 
-    it('"skip" leaves the stream un-opened', () => {
+    it("\"skip\" leaves the stream un-opened", () => {
         expect.assertions(2);
 
         const { client, opened } = buildClientWithStream();

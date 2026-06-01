@@ -12,10 +12,10 @@ describe("offlineQueue", () => {
 
         for (const path of ["a", "b", "c"]) {
             queue.enqueue({
-                functionPath: path,
                 args: {},
-                resolve: () => order.push(`done:${path}`),
+                functionPath: path,
                 reject: () => order.push(`fail:${path}`),
+                resolve: () => order.push(`done:${path}`),
             });
         }
 
@@ -32,13 +32,13 @@ describe("offlineQueue", () => {
         const rejected = vi.fn<(error: unknown) => void>();
 
         queue.enqueue({
-            functionPath: "old",
             args: {},
-            resolve: () => undefined,
+            functionPath: "old",
             reject: rejected,
+            resolve: () => undefined,
         });
-        queue.enqueue({ functionPath: "mid", args: {}, resolve: () => undefined, reject: () => undefined });
-        queue.enqueue({ functionPath: "new", args: {}, resolve: () => undefined, reject: () => undefined });
+        queue.enqueue({ args: {}, functionPath: "mid", reject: () => undefined, resolve: () => undefined });
+        queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
 
         expect(queue.size).toBe(2);
         expect(rejected).toHaveBeenCalledTimes(1);
@@ -58,7 +58,7 @@ describe("offlineQueue", () => {
         const queue = new OfflineQueue();
         const rejected = vi.fn<(error: unknown) => void>();
 
-        queue.enqueue({ functionPath: "a", args: {}, resolve: () => undefined, reject: rejected });
+        queue.enqueue({ args: {}, functionPath: "a", reject: rejected, resolve: () => undefined });
         queue.clear();
 
         expect(queue.size).toBe(0);
@@ -78,12 +78,12 @@ describe("offlineQueue — persistence", () => {
         const persistence = createInMemoryPersistence();
         const queue = new OfflineQueue({}, persistence);
 
-        queue.enqueue({ functionPath: "posts:create", args: { title: "hi" }, shardKey: "room-1", resolve: () => undefined, reject: () => undefined });
+        queue.enqueue({ args: { title: "hi" }, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined, shardKey: "room-1" });
 
         const persisted = await persistence.load();
 
         expect(persisted).toHaveLength(1);
-        expect(persisted[0]).toMatchObject({ functionPath: "posts:create", args: { title: "hi" }, shardKey: "room-1" });
+        expect(persisted[0]).toMatchObject({ args: { title: "hi" }, functionPath: "posts:create", shardKey: "room-1" });
         // Runtime check that enqueue minted a non-empty string id. `toBeTypeOf`
         // (not `expectTypeOf`) is deliberate: the field is statically
         // `string | undefined`, so a compile-time type assertion would verify
@@ -98,8 +98,8 @@ describe("offlineQueue — persistence", () => {
         const persistence = createInMemoryPersistence();
         const queue = new OfflineQueue({ maxItems: 1 }, persistence);
 
-        queue.enqueue({ functionPath: "old", args: {}, resolve: () => undefined, reject: () => undefined });
-        queue.enqueue({ functionPath: "new", args: {}, resolve: () => undefined, reject: () => undefined });
+        queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
+        queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
 
         const persisted = await persistence.load();
 
@@ -111,9 +111,9 @@ describe("offlineQueue — persistence", () => {
 
         const persistence = createInMemoryPersistence();
 
-        await persistence.append({ functionPath: "a", args: {}, id: "1", shardKey: "room-1" });
-        await persistence.append({ functionPath: "b", args: {}, id: "2", shardKey: "room-2" });
-        await persistence.append({ functionPath: "c", args: {}, id: "3", shardKey: "room-1" });
+        await persistence.append({ args: {}, functionPath: "a", id: "1", shardKey: "room-1" });
+        await persistence.append({ args: {}, functionPath: "b", id: "2", shardKey: "room-2" });
+        await persistence.append({ args: {}, functionPath: "c", id: "3", shardKey: "room-1" });
 
         const queue = new OfflineQueue({}, persistence);
         const shardKeys = await queue.hydrate();
@@ -131,7 +131,7 @@ describe("offlineQueue — persistence", () => {
 
         const persistence = createInMemoryPersistence();
 
-        await persistence.append({ functionPath: "a", args: {}, id: "1" });
+        await persistence.append({ args: {}, functionPath: "a", id: "1" });
 
         const queue = new OfflineQueue({}, persistence);
 
@@ -148,7 +148,7 @@ describe("offlineQueue — persistence", () => {
 
         const persistence = createInMemoryPersistence();
 
-        await persistence.append({ functionPath: "a", args: {}, id: "1" });
+        await persistence.append({ args: {}, functionPath: "a", id: "1" });
 
         const queue = new OfflineQueue({}, persistence);
 
@@ -168,7 +168,7 @@ describe("offlineQueue — persistence", () => {
         const persistence = createInMemoryPersistence();
         const queue = new OfflineQueue({}, persistence);
 
-        queue.enqueue({ functionPath: "a", args: {}, resolve: () => undefined, reject: () => undefined });
+        queue.enqueue({ args: {}, functionPath: "a", reject: () => undefined, resolve: () => undefined });
         queue.clear();
 
         expect(queue.size).toBe(0);

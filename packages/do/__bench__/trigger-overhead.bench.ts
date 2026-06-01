@@ -2,7 +2,7 @@ import { bench, describe } from "vitest";
 
 import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
 import type { SchemaLike, TriggerDefinitionLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 
 /**
  * Per-write trigger-runner cost. Every aggregateIndex / rankIndex update
@@ -34,15 +34,15 @@ const triggerMap = (count: number): Record<string, TriggerDefinitionLike> => {
 };
 
 const schemaWithTriggers = (count: number): SchemaLike => {
- return {
-    tables: {
-        todos: {
-            indexes: [],
-            shape: { projectId: { kind: "string" } },
-            triggerMap: count === 0 ? undefined : triggerMap(count),
+    return {
+        tables: {
+            todos: {
+                indexes: [],
+                shape: { projectId: { kind: "string" } },
+                triggerMap: count === 0 ? undefined : triggerMap(count),
+            },
         },
-    },
-};
+    };
 };
 
 const makeWriter = (count: number) => {
@@ -51,7 +51,7 @@ const makeWriter = (count: number) => {
 
     runShardMigrations(harness.sql, schema);
 
-    return createShardCtxDb({ schema, sql: harness.sql });
+    return createShardContextDatabase({ schema, sql: harness.sql });
 };
 
 const writer0 = makeWriter(0);

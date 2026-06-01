@@ -33,32 +33,32 @@ export const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
 
     const runAt = async <F extends FunctionReference>(
         date: Date | number,
-        fn: F,
+        function_: F,
         args: ArgsOf<F>,
-        opts: RunOptions = {},
+        options_: RunOptions = {},
     ): Promise<{ id: string; scheduledFor: number }> => {
         const scheduledFor = date instanceof Date ? date.getTime() : date;
 
         return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
             args,
-            functionPath: fn.__cirrusRef,
+            functionPath: function_.__cirrusRef,
             originUrl: options.originUrl,
             scheduledFor,
-            shardKey: opts.shardKey,
+            shardKey: options_.shardKey,
         });
     };
 
     const runAfter = async <F extends FunctionReference>(
         delayMs: number,
-        fn: F,
+        function_: F,
         args: ArgsOf<F>,
-        opts: RunOptions = {},
+        options_: RunOptions = {},
     ): Promise<{ id: string; scheduledFor: number }> => {
         if (!Number.isFinite(delayMs) || delayMs < 0) {
             throw new Error("@cirrus/scheduler: `delayMs` must be a non-negative finite number");
         }
 
-        return runAt(Date.now() + delayMs, fn, args, opts);
+        return runAt(Date.now() + delayMs, function_, args, options_);
     };
 
     const cancel = async (id: string): Promise<{ cancelled: boolean }> => callDO<{ cancelled: boolean }>(options, "/cancel", { id });

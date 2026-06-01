@@ -7,14 +7,16 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useSubscription } from "../src/use-subscription.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
+const function_ = (ref: string): FunctionReference => {
+    return { __cirrusRef: ref };
+};
 
 // Module-level stable default so it isn't recreated as an inline `as` expression
 // on every render (react-x/no-unstable-default-props).
 const EMPTY_ARGS: Record<string, unknown> = {};
 
 const Display = ({ args = EMPTY_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
-    const { data, error } = useSubscription(fn("messages:list"), args);
+    const { data, error } = useSubscription(function_("messages:list"), args);
 
     if (error) {
         return <div data-testid="display">error: {error.message}</div>;
@@ -51,7 +53,7 @@ describe("useSubscription", () => {
         expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 7 }));
     });
 
-    it('"skip" short-circuits — no subscribe call', () => {
+    it("\"skip\" short-circuits — no subscribe call", () => {
         expect.assertions(2);
 
         const mock = createMockClient();
@@ -74,13 +76,13 @@ describe("useSubscription", () => {
 
         // Wrap the mock's subscribe so we can observe the unsubscribe call.
         const originalSubscribe = mock.subscribe.getMockImplementation() as (
-            fnRef: FunctionReference,
+            functionRef: FunctionReference,
             args: unknown,
-            cb: (value: unknown) => void,
+            callback: (value: unknown) => void,
         ) => () => void;
 
-        mock.subscribe.mockImplementation((fnRef, args, cb) => {
-            const realUnsubscribe = originalSubscribe(fnRef, args, cb);
+        mock.subscribe.mockImplementation((functionRef, args, callback) => {
+            const realUnsubscribe = originalSubscribe(functionRef, args, callback);
 
             return () => {
                 unsubscribeSpy();

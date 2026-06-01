@@ -160,7 +160,11 @@ const collectCirrusPackages = (projectRoot: string): ReadonlyArray<CirrusPackage
         }
     }
 
-    return [...seen.entries()].toSorted(([a], [b]) => a.localeCompare(b)).map(([name, version]) => { return { name, version }; });
+    return [...seen.entries()]
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([name, version]) => {
+            return { name, version };
+        });
 };
 
 export const collectInfo = (projectRoot: string): InfoSnapshot => {

@@ -8,12 +8,12 @@ import { runResetCommand } from "../../src/commands/reset.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => {
- return {
-    error: () => {},
-    info: () => {},
-    success: () => {},
-    warn: () => {},
-};
+    return {
+        error: () => {},
+        info: () => {},
+        success: () => {},
+        warn: () => {},
+    };
 };
 
 let workdir: string;
@@ -66,7 +66,7 @@ describe("cirrus reset", () => {
 
             const result = await runResetCommand({
                 cwd: workdir,
-                logger: { ...silentLogger(), info: (msg) => infos.push(msg) },
+                logger: { ...silentLogger(), info: (message) => infos.push(message) },
                 yes: true,
             });
 
@@ -102,7 +102,7 @@ describe("cirrus reset", () => {
 
             const result = await runResetCommand({
                 cwd: workdir,
-                logger: { ...silentLogger(), error: (msg) => errors.push(msg) },
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
             });
 
             expect(result.code).toBe(1);

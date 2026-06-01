@@ -40,12 +40,12 @@ describe("c.query.stream() terminal", () => {
     it("middleware ctx narrows for the streaming handler", async () => {
         expect.assertions(2);
 
-        let observedCtx: unknown;
+        let observedContext: unknown;
 
         const authedStream = c.query
             .use(async ({ next }) => next({ ctx: { userId: "u_42" } }))
             .stream(async function* authedGen({ ctx }) {
-                observedCtx = ctx;
+                observedContext = ctx;
                 yield ctx.userId;
             });
 
@@ -53,7 +53,7 @@ describe("c.query.stream() terminal", () => {
         const chunks = await collect(authedStream.handler({}, {}, signal));
 
         expect(chunks).toEqual(["u_42"]);
-        expect(observedCtx).toMatchObject({ userId: "u_42" });
+        expect(observedContext).toMatchObject({ userId: "u_42" });
     });
 
     it("aborting the signal stops further yields", async () => {

@@ -121,7 +121,7 @@ class RateLimiter<Names extends string = string> {
             // bucket this key actually consumes from.
             const base = storageKeyFor(name, normalizedKey);
             const storageKey = `${base}#${String(hashToShard(base, shards))}`;
-            const current = availableAt(perShardConfig(config, shards), (await this.store.get(storageKey)) ?? undefined, now);
+            const current = availableAt(perShardConfig(config, shards), await this.store.get(storageKey) ?? undefined, now);
 
             return { config, ts: current.ts, value: current.value };
         }

@@ -18,7 +18,7 @@ export interface MutationHook<F extends FunctionReference> {
  * overlapping `mutate(...)` calls compose correctly — `pending` only flips
  * back to `false` once every concurrent call has settled.
  */
-export function useMutation<F extends FunctionReference>(fn: F): MutationHook<F> {
+export function useMutation<F extends FunctionReference>(function_: F): MutationHook<F> {
     const client = useCirrus();
     const [pending, setPending] = useState(false);
     const pendingCountRef = useRef(0);
@@ -29,13 +29,13 @@ export function useMutation<F extends FunctionReference>(fn: F): MutationHook<F>
             setPending(pendingCountRef.current > 0);
 
             try {
-                return await client.mutation(fn, args, options);
+                return await client.mutation(function_, args, options);
             } finally {
                 pendingCountRef.current -= 1;
                 setPending(pendingCountRef.current > 0);
             }
         },
-        [client, fn],
+        [client, function_],
     );
 
     return { mutate, pending };

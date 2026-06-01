@@ -50,15 +50,15 @@ const VALID_WRANGLER = `{
 `;
 
 const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => {
- return {
-    cloudflare: false,
-    dashboard: false,
-    generatedDir: "cirrus/_generated",
-    overlay: false,
-    projectRoot,
-    schemaDir: "cirrus",
-    validateWrangler: true,
-};
+    return {
+        cloudflare: false,
+        dashboard: false,
+        generatedDir: "cirrus/_generated",
+        overlay: false,
+        projectRoot,
+        schemaDir: "cirrus",
+        validateWrangler: true,
+    };
 };
 
 let workdir: string;

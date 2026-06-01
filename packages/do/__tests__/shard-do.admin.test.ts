@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration.js";
 import { runDataMigration } from "../src/data-migration.js";
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
@@ -44,25 +44,25 @@ const userRequest = (functionPath: string): Request =>
     });
 
 describe("shardDO admin introspection", () => {
-    let db: ReturnType<typeof createSqliteExec>;
+    let database: ReturnType<typeof createSqliteExec>;
     let state: ShardDOState;
 
     beforeEach(() => {
-        db = createSqliteExec();
-        db.raw(`CREATE TABLE "messages" ("__id__" TEXT PRIMARY KEY, "text" TEXT)`);
-        db.raw(`INSERT INTO "messages" VALUES ('m1', 'hello'), ('m2', 'world')`);
+        database = createSqliteExec();
+        database.raw(`CREATE TABLE "messages" ("__id__" TEXT PRIMARY KEY, "text" TEXT)`);
+        database.raw(`INSERT INTO "messages" VALUES ('m1', 'hello'), ('m2', 'world')`);
 
         state = {
-            storage: { sql: db.sql as unknown as ShardDOState["storage"]["sql"] },
             acceptWebSocket() {},
             getWebSockets() {
                 return [];
             },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
         };
     });
 
     afterEach(() => {
-        db.close();
+        database.close();
     });
 
     const adminRequest = (functionPath: string, args: Record<string, unknown>, token?: string): Request => {
@@ -73,9 +73,9 @@ describe("shardDO admin introspection", () => {
         }
 
         return new Request("https://shard.internal/rpc", {
-            method: "POST",
-            body: JSON.stringify({ functionPath, args }),
+            body: JSON.stringify({ args, functionPath }),
             headers,
+            method: "POST",
         });
     };
 
@@ -95,7 +95,7 @@ describe("shardDO admin introspection", () => {
 
         const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
-        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { table: "messages", limit: 1 }, ADMIN_TOKEN));
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { limit: 1, table: "messages" }, ADMIN_TOKEN));
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({
@@ -165,7 +165,9 @@ const usersSchema: SchemaLike = {
 const bumpVersion: DataMigrationLike = {
     id: "bump-version",
     table: "users",
-    up: (document) => { return { ...document, version: Number(document["version"] ?? 0) + 1 }; },
+    up: (document) => {
+        return { ...document, version: Number(document["version"] ?? 0) + 1 };
+    },
 };
 
 const MIGRATIONS: Record<string, DataMigrationLike> = { [bumpVersion.id]: bumpVersion };
@@ -185,11 +187,11 @@ class MigrationShard extends ShardDO {
 
         if (!migration) {
             return Promise.reject(
-                Object.assign(new Error(`data migration "${args.id}" is not registered`), { name: "CirrusError", code: "MIGRATION_NOT_FOUND", status: 404 }),
+                Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "CirrusError", status: 404 }),
             );
         }
 
-        const writer = createShardCtxDb({
+        const writer = createShardContextDatabase({
             broadcast: (delta) => {
                 this.recordChangedTable(delta.table);
             },
@@ -210,14 +212,14 @@ class MigrationShard extends ShardDO {
 }
 
 describe("shardDO admin data migrations", () => {
-    let db: ReturnType<typeof createSqliteExec>;
+    let database: ReturnType<typeof createSqliteExec>;
     let state: ShardDOState;
 
     beforeEach(async () => {
-        db = createSqliteExec();
-        runShardMigrations(db.sql, usersSchema);
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema);
 
-        const writer: DatabaseWriterLike = createShardCtxDb({ schema: usersSchema, sql: db.sql });
+        const writer: DatabaseWriterLike = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
 
         for (let index = 1; index <= 3; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- inserts share one SQLite handle; sequential keeps ids deterministic.
@@ -225,26 +227,26 @@ describe("shardDO admin data migrations", () => {
         }
 
         state = {
-            storage: { sql: db.sql as unknown as ShardDOState["storage"]["sql"] },
             acceptWebSocket() {},
             getWebSockets() {
                 return [];
             },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
         };
     });
 
     afterEach(() => {
-        db.close();
+        database.close();
     });
 
     const adminRequest = (functionPath: string, args: Record<string, unknown>): Request =>
         new Request("https://shard.internal/rpc", {
-            method: "POST",
-            body: JSON.stringify({ functionPath, args }),
+            body: JSON.stringify({ args, functionPath }),
             headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
         });
 
-    const versions = (): unknown[] => db.raw(`SELECT json_extract("__doc__", '$.version') AS version FROM "users" ORDER BY id`).map((row) => row["version"]);
+    const versions = (): unknown[] => database.raw(`SELECT json_extract("__doc__", '$.version') AS version FROM "users" ORDER BY id`).map((row) => row["version"]);
 
     it("runs a registered migration and reports completed counts", async () => {
         expect.assertions(3);
@@ -367,7 +369,7 @@ class EditableShard extends ShardDO {
     }
 
     protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        const writer = createShardCtxDb({
+        const writer = createShardContextDatabase({
             broadcast: (delta) => {
                 this.recordChangedTable(delta.table);
             },
@@ -398,24 +400,24 @@ class EditableShard extends ShardDO {
 }
 
 describe("shardDO admin row writes", () => {
-    let db: ReturnType<typeof createSqliteExec>;
+    let database: ReturnType<typeof createSqliteExec>;
     let state: ShardDOState;
 
     beforeEach(() => {
-        db = createSqliteExec();
-        runShardMigrations(db.sql, usersSchema);
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema);
 
         state = {
-            storage: { sql: db.sql as unknown as ShardDOState["storage"]["sql"] },
             acceptWebSocket() {},
             getWebSockets() {
                 return [];
             },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
         };
     });
 
     afterEach(() => {
-        db.close();
+        database.close();
     });
 
     const writeRequest = (args: Record<string, unknown>): Request =>
@@ -425,10 +427,11 @@ describe("shardDO admin row writes", () => {
             method: "POST",
         });
 
-    const rowCount = (): number => Number(db.raw(`SELECT COUNT(*) AS c FROM "users"`)[0]?.["c"] ?? 0);
+    const rowCount = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "users"`)[0]?.["c"] ?? 0);
 
     it("inserts a row and returns its assigned id", async () => {
-        expect.assertions(4);
+        // 3 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
+        expect.assertions(3);
 
         const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
@@ -440,7 +443,7 @@ describe("shardDO admin row writes", () => {
 
         expect(body.result.op).toBe("insert");
 
-        expect(typeof body.result.id).toBe("string");
+        expectTypeOf(body.result.id).toBeString();
 
         expect(rowCount()).toBe(1);
     });
@@ -448,7 +451,7 @@ describe("shardDO admin row writes", () => {
     it("patches an existing row", async () => {
         expect.assertions(2);
 
-        const seed = createShardCtxDb({ schema: usersSchema, sql: db.sql });
+        const seed = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
         const id = await seed.insert("users", { name: "old", version: 1 });
 
         const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -457,7 +460,7 @@ describe("shardDO admin row writes", () => {
 
         expect(response.status).toBe(200);
 
-        const name = db.raw(`SELECT json_extract("__doc__", '$.name') AS name FROM "users" WHERE id = ?`, id)[0]?.["name"];
+        const name = database.raw(`SELECT json_extract("__doc__", '$.name') AS name FROM "users" WHERE id = ?`, id)[0]?.["name"];
 
         expect(name).toBe("new");
     });
@@ -465,7 +468,7 @@ describe("shardDO admin row writes", () => {
     it("deletes a row", async () => {
         expect.assertions(2);
 
-        const seed = createShardCtxDb({ schema: usersSchema, sql: db.sql });
+        const seed = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
         const id = await seed.insert("users", { name: "doomed", version: 1 });
 
         const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });

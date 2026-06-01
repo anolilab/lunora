@@ -40,10 +40,11 @@ const escapeForCmd = (url: string): string =>
         .replaceAll(">", "%3E")
         .replaceAll("(", "%28")
         .replaceAll(")", "%29")
-        .replaceAll('"', "%22")
+        .replaceAll("\"", "%22")
         .replaceAll("!", "%21");
 
-const platformOpener = (url: string): Promise<void> => new Promise<void>((resolveOpen, rejectOpen) => {
+const platformOpener = (url: string): Promise<void> =>
+    new Promise<void>((resolveOpen, rejectOpen) => {
         const { args, command } = platformCommand();
         const safeUrl = platform() === "win32" ? escapeForCmd(url) : url;
         const child = spawn(command, [...args, safeUrl], { detached: true, stdio: "ignore" });

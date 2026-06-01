@@ -1,12 +1,12 @@
 import type { Infer, Validator } from "@cirrus/values";
 
 import type {
-    ActionCtx,
+    ActionCtx as ActionContext,
     ArgsValidator,
     FunctionKind,
     InferArgs,
-    MutationCtx,
-    QueryCtx,
+    MutationCtx as MutationContext,
+    QueryCtx as QueryContext,
     RegisteredAction,
     RegisteredMutation,
     RegisteredQuery,
@@ -24,9 +24,9 @@ export type EmptyArgs = Record<never, never>;
  * the current context unchanged; called with `{ ctx }` it shallow-merges the
  * extension, and the result type reflects the widened context.
  */
-export interface MiddlewareNext<CtxIn> {
-    (): Promise<CtxIn>;
-    <Extension extends Record<string, unknown>>(options: { ctx: Extension }): Promise<CtxIn & Extension>;
+export interface MiddlewareNext<ContextIn> {
+    (): Promise<ContextIn>;
+    <Extension extends Record<string, unknown>>(options: { ctx: Extension }): Promise<ContextIn & Extension>;
 }
 
 /**
@@ -34,7 +34,7 @@ export interface MiddlewareNext<CtxIn> {
  * return type becomes the builder's new context, so `return next({ ctx })`
  * propagates the extension into every downstream `.use()` and the handler.
  */
-export type Middleware<CtxIn, CtxOut> = (options: { ctx: CtxIn; next: MiddlewareNext<CtxIn> }) => CtxOut | Promise<CtxOut>;
+export type Middleware<ContextIn, ContextOut> = (options: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }) => ContextOut | Promise<ContextOut>;
 
 /** Options accepted by `initCirrus.dataModel&lt;DM>().create(...)`. Reserved for transformer/error-formatter wiring. */
 export type CreateOptions = Record<never, never>;
@@ -48,13 +48,13 @@ export type CreateOptions = Record<never, never>;
  * validator). `[Output] extends [undefined]` is wrapped in a tuple so a union
  * `Output` doesn't distribute and so the test is for the exact sentinel.
  */
-export interface QueryBuilder<Ctx, Args extends ArgsValidator, Output = undefined> {
+export interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __cirrusProcedure: "query";
-    input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Ctx, A & Args, Output>;
-    output: <V extends Validator>(validator: V) => QueryBuilder<Ctx, Args, Infer<V>>;
+    input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Context, A & Args, Output>;
+    output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
     query: [Output] extends [undefined]
-        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
-        : (handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
+        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
+        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
 
     /**
      * Terminal: declare this procedure as a streaming query. The handler is an
@@ -65,29 +65,29 @@ export interface QueryBuilder<Ctx, Args extends ArgsValidator, Output = undefine
      * validation is opt-in via the handler itself.
      */
     stream: <R>(
-        handler: (options: { args: InferArgs<Args>; ctx: Ctx; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+        handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
     ) => RegisteredStream<Args, R>;
-    use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => QueryBuilder<CtxOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
 }
 
-export interface MutationBuilder<Ctx, Args extends ArgsValidator, Output = undefined> {
+export interface MutationBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __cirrusProcedure: "mutation";
-    input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Ctx, A & Args, Output>;
+    input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Context, A & Args, Output>;
     mutation: [Output] extends [undefined]
-        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
-        : (handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
-    output: <V extends Validator>(validator: V) => MutationBuilder<Ctx, Args, Infer<V>>;
-    use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => MutationBuilder<CtxOut, Args, Output>;
+        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
+        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
+    output: <V extends Validator>(validator: V) => MutationBuilder<Context, Args, Infer<V>>;
+    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
 }
 
-export interface ActionBuilder<Ctx, Args extends ArgsValidator, Output = undefined> {
+export interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __cirrusProcedure: "action";
     action: [Output] extends [undefined]
-        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>
-        : (handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
-    input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Ctx, A & Args, Output>;
-    output: <V extends Validator>(validator: V) => ActionBuilder<Ctx, Args, Infer<V>>;
-    use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => ActionBuilder<CtxOut, Args, Output>;
+        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>
+        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
+    input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
+    output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
+    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
 }
 
 /**
@@ -96,51 +96,51 @@ export interface ActionBuilder<Ctx, Args extends ArgsValidator, Output = undefin
  * registration into the `internal` object (and keep it off `api`). `input`/`use`
  * return the internal builder type so the brand survives the whole chain.
  */
-export interface InternalQueryBuilder<Ctx, Args extends ArgsValidator, Output = undefined> {
+export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __cirrusProcedure: "query";
     readonly __cirrusVisibility: "internal";
-    input: <A extends ArgsValidator>(validators: A) => InternalQueryBuilder<Ctx, A & Args, Output>;
-    output: <V extends Validator>(validator: V) => InternalQueryBuilder<Ctx, Args, Infer<V>>;
+    input: <A extends ArgsValidator>(validators: A) => InternalQueryBuilder<Context, A & Args, Output>;
+    output: <V extends Validator>(validator: V) => InternalQueryBuilder<Context, Args, Infer<V>>;
     query: [Output] extends [undefined]
-        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
-        : (handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
+        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
+        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
     /** See {@link QueryBuilder.stream}; the internal variant routes the registration into `internal` instead of `api`. */
     stream: <R>(
-        handler: (options: { args: InferArgs<Args>; ctx: Ctx; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+        handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
     ) => RegisteredStream<Args, R>;
-    use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => InternalQueryBuilder<CtxOut, Args, Output>;
+    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 
-export interface InternalMutationBuilder<Ctx, Args extends ArgsValidator, Output = undefined> {
+export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __cirrusProcedure: "mutation";
     readonly __cirrusVisibility: "internal";
-    input: <A extends ArgsValidator>(validators: A) => InternalMutationBuilder<Ctx, A & Args, Output>;
+    input: <A extends ArgsValidator>(validators: A) => InternalMutationBuilder<Context, A & Args, Output>;
     mutation: [Output] extends [undefined]
-        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
-        : (handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
-    output: <V extends Validator>(validator: V) => InternalMutationBuilder<Ctx, Args, Infer<V>>;
-    use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => InternalMutationBuilder<CtxOut, Args, Output>;
+        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
+        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
+    output: <V extends Validator>(validator: V) => InternalMutationBuilder<Context, Args, Infer<V>>;
+    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
 }
 
-export interface InternalActionBuilder<Ctx, Args extends ArgsValidator, Output = undefined> {
+export interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = undefined> {
     readonly __cirrusProcedure: "action";
     readonly __cirrusVisibility: "internal";
     action: [Output] extends [undefined]
-        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>
-        : (handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
-    input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Ctx, A & Args, Output>;
-    output: <V extends Validator>(validator: V) => InternalActionBuilder<Ctx, Args, Infer<V>>;
-    use: <CtxOut>(middleware: Middleware<Ctx, CtxOut>) => InternalActionBuilder<CtxOut, Args, Output>;
+        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>
+        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
+    input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
+    output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
+    use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalActionBuilder<ContextOut, Args, Output>;
 }
 
 /** The public root builders plus their `internal*` counterparts, returned by `.create()`. */
 export interface CirrusBuilders {
-    action: ActionBuilder<ActionCtx, EmptyArgs>;
-    internalAction: InternalActionBuilder<ActionCtx, EmptyArgs>;
-    internalMutation: InternalMutationBuilder<MutationCtx, EmptyArgs>;
-    internalQuery: InternalQueryBuilder<QueryCtx, EmptyArgs>;
-    mutation: MutationBuilder<MutationCtx, EmptyArgs>;
-    query: QueryBuilder<QueryCtx, EmptyArgs>;
+    action: ActionBuilder<ActionContext, EmptyArgs>;
+    internalAction: InternalActionBuilder<ActionContext, EmptyArgs>;
+    internalMutation: InternalMutationBuilder<MutationContext, EmptyArgs>;
+    internalQuery: InternalQueryBuilder<QueryContext, EmptyArgs>;
+    mutation: MutationBuilder<MutationContext, EmptyArgs>;
+    query: QueryBuilder<QueryContext, EmptyArgs>;
 }
 
 export interface DataModelInit<DataModel> {

@@ -28,7 +28,7 @@ interface PageRequest {
  * feed to its first page.
  */
 export function useInfiniteQuery<F extends FunctionReference>(
-    fn: F,
+    function_: F,
     args: "skip" | PaginatedArgs<F>,
     options: UseInfiniteQueryOptions,
 ): UseInfiniteQueryResult<PageItemOf<F>> {
@@ -43,7 +43,7 @@ export function useInfiniteQuery<F extends FunctionReference>(
     const [, forceRender] = useReducer((tick: number) => tick + 1, 0);
     const [pages, setPages] = useState<PageRequest[]>(() => [{ cursor: null, numItems: initialNumItems }]);
 
-    const resetKey = `${fn.__cirrusRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
+    const resetKey = `${function_.__cirrusRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
     const resetKeyRef = useRef(resetKey);
 
     if (resetKeyRef.current !== resetKey) {
@@ -53,15 +53,15 @@ export function useInfiniteQuery<F extends FunctionReference>(
 
     const pageEntries = pages.map((page) => {
         const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.cursor, numItems: page.numItems } };
-        const key: QueryKey = cirrusQueryKey(fn, pageArgs, shardKey);
+        const key: QueryKey = cirrusQueryKey(function_, pageArgs, shardKey);
 
         return { args: pageArgs, key };
     });
     const pageKeysHash = pageEntries.map(({ key }) => serializeQueryKey(key)).join("|");
 
-    const desiredRef = useRef<{ entries: typeof pageEntries; fn: F; shardKey: string | undefined }>({ entries: [], fn, shardKey });
+    const desiredRef = useRef<{ entries: typeof pageEntries; fn: F; shardKey: string | undefined }>({ entries: [], fn: function_, shardKey });
 
-    desiredRef.current = { entries: pageEntries, fn, shardKey };
+    desiredRef.current = { entries: pageEntries, fn: function_, shardKey };
 
     const detachesRef = useRef(new Map<string, () => void>());
 
@@ -117,7 +117,7 @@ export function useInfiniteQuery<F extends FunctionReference>(
             // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above.
             void queryClient.fetchQuery({
                 queryFn: () =>
-                    (client.query as (fn: F, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(desired.fn, entry.args, {
+                    (client.query as (function_: F, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(desired.fn, entry.args, {
                         shardKey: desired.shardKey,
                     }),
                 queryKey: entry.key,
@@ -186,14 +186,14 @@ export function useInfiniteQuery<F extends FunctionReference>(
 
     nextRef.current = { cursor: status === "CanLoadMore" ? nextCursor : undefined, defaultNumItems: initialNumItems };
 
-    const fetchNextPage = useCallback((numItems?: number) => {
+    const fetchNextPage = useCallback((numberItems?: number) => {
         const { cursor, defaultNumItems } = nextRef.current;
 
         if (cursor === undefined) {
             return;
         }
 
-        setPages((current) => [...current, { cursor, numItems: numItems ?? defaultNumItems }]);
+        setPages((current) => [...current, { cursor, numItems: numberItems ?? defaultNumItems }]);
     }, []);
 
     return {

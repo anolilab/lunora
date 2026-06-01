@@ -38,7 +38,7 @@ const formatScheduledFor = (value: number): string => (Number.isFinite(value) ? 
  * admin methods; pass {@link ScheduledJobsProps.loadJobs} /
  * {@link ScheduledJobsProps.cancelJob} to override the transport.
  */
-export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}): ReactElement {
+export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}): ReactElement => {
     const client = useCirrus();
 
     const [jobs, setJobs] = useState<ScheduleRecord[] | null>(null);
@@ -195,6 +195,6 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
             )}
         </div>
     );
-}
+};
 
 export type { ScheduledJobsProps };

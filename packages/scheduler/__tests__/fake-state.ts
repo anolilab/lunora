@@ -8,7 +8,6 @@ export const createFakeState = (): SchedulerDOState & {
     let alarm: number | null = null;
 
     const state: SchedulerDOState & { alarm: number | null; storageMap: Map<string, unknown> } = {
-        storageMap,
         get alarm() {
             return alarm;
         },
@@ -16,18 +15,6 @@ export const createFakeState = (): SchedulerDOState & {
             alarm = value;
         },
         storage: {
-            get: async <T = unknown>(key: string) => storageMap.get(key) as T | undefined,
-            put: async <T = unknown>(entries: Record<string, T> | string, value?: T) => {
-                if (typeof entries === "string") {
-                    storageMap.set(entries, value);
-
-                    return;
-                }
-
-                for (const [key, val] of Object.entries(entries)) {
-                    storageMap.set(key, val);
-                }
-            },
             delete: async (keyOrKeys: string | string[]) => {
                 const keys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
                 let count = 0;
@@ -40,13 +27,18 @@ export const createFakeState = (): SchedulerDOState & {
 
                 return count;
             },
+            deleteAlarm: async () => {
+                alarm = null;
+            },
+            get: async <T = unknown>(key: string) => storageMap.get(key) as T | undefined,
+            getAlarm: async () => alarm,
             list: async <T = unknown>(options: { limit?: number; prefix?: string } = {}) => {
                 const result = new Map<string, T>();
                 const prefix = options.prefix ?? "";
                 // Code-unit ordering (NOT locale-aware): the time index relies on
                 // lexical byte order matching numeric order, so keep the default
                 // string comparison rather than `localeCompare`.
-                const keys = [...storageMap.keys()].filter((key) => key.startsWith(prefix)).toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+                const keys = [...storageMap.keys()].filter((key) => key.startsWith(prefix)).toSorted((a, b) => a < b ? -1 : a > b ? 1 : 0);
 
                 for (const key of keys.slice(0, options.limit ?? keys.length)) {
                     result.set(key, storageMap.get(key) as T);
@@ -54,14 +46,22 @@ export const createFakeState = (): SchedulerDOState & {
 
                 return result;
             },
+            put: async <T = unknown>(entries: Record<string, T> | string, value?: T) => {
+                if (typeof entries === "string") {
+                    storageMap.set(entries, value);
+
+                    return;
+                }
+
+                for (const [key, value_] of Object.entries(entries)) {
+                    storageMap.set(key, value_);
+                }
+            },
             setAlarm: async (time: number | Date) => {
                 alarm = time instanceof Date ? time.getTime() : time;
             },
-            getAlarm: async () => alarm,
-            deleteAlarm: async () => {
-                alarm = null;
-            },
         },
+        storageMap,
     };
 
     return state;
@@ -78,11 +78,11 @@ export const createFakeSocket = (): FakeSocket => {
     const sent: string[] = [];
 
     return {
-        sent,
         close: () => undefined,
         send: (data: string) => {
             sent.push(data);
         },
+        sent,
     };
 };
 
@@ -96,10 +96,10 @@ export const createFakeStateWithSockets = (): ReturnType<typeof createFakeState>
     const sockets: FakeSocket[] = [];
 
     return Object.assign(base, {
-        sockets,
         acceptWebSocket: (ws: WebSocket) => {
             sockets.push(ws as unknown as FakeSocket);
         },
         getWebSockets: () => sockets as unknown as WebSocket[],
+        sockets,
     });
 };

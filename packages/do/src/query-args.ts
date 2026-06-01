@@ -124,10 +124,10 @@ const fromBase64 = (encoded: string): string => {
  * id) as an opaque base64 cursor. The id is always included so the seek has a
  * unique terminal column.
  */
-export const encodeCursor = (doc: Record<string, unknown>, keys: OrderKey[]): string => {
-    const values = keys.map((key) => doc[key.field]);
+export const encodeCursor = (document_: Record<string, unknown>, keys: OrderKey[]): string => {
+    const values = keys.map((key) => document_[key.field]);
 
-    values.push(doc["_id"]);
+    values.push(document_["_id"]);
 
     return toBase64(JSON.stringify(values));
 };

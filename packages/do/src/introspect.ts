@@ -94,7 +94,7 @@ const safeParseObject = (text: string): Record<string, unknown> | null => {
  * object — otherwise (or for non-doc tables, e.g. the synthetic test fixtures)
  * it returns the rows untouched, so this is fully backward-compatible.
  */
-const expandDocRows = (columns: string[], rows: Record<string, unknown>[]): { columns: string[]; rows: Record<string, unknown>[] } => {
+const expandDocumentRows = (columns: string[], rows: Record<string, unknown>[]): { columns: string[]; rows: Record<string, unknown>[] } => {
     if (!columns.includes(DOC_COLUMN)) {
         return { columns, rows };
     }
@@ -103,9 +103,9 @@ const expandDocRows = (columns: string[], rows: Record<string, unknown>[]): { co
 
     for (const row of rows) {
         const raw = row[DOC_COLUMN];
-        const doc = typeof raw === "string" ? safeParseObject(raw) : null;
+        const document_ = typeof raw === "string" ? safeParseObject(raw) : null;
 
-        if (doc === null) {
+        if (document_ === null) {
             // A row whose doc isn't a JSON object — bail on expansion entirely
             // rather than emit a ragged, half-expanded page.
             return { columns, rows };
@@ -113,23 +113,23 @@ const expandDocRows = (columns: string[], rows: Record<string, unknown>[]): { co
 
         const { [DOC_COLUMN]: _omit, ...meta } = row;
 
-        parsed.push({ ...meta, ...doc });
+        parsed.push({ ...meta, ...document_ });
     }
 
     const metaColumns = columns.filter((name) => name !== DOC_COLUMN);
-    const docKeys: string[] = [];
+    const documentKeys: string[] = [];
     const seen = new Set<string>(metaColumns);
 
-    for (const doc of parsed) {
-        for (const key of Object.keys(doc)) {
+    for (const document_ of parsed) {
+        for (const key of Object.keys(document_)) {
             if (!seen.has(key)) {
                 seen.add(key);
-                docKeys.push(key);
+                documentKeys.push(key);
             }
         }
     }
 
-    return { columns: [...metaColumns, ...docKeys], rows: parsed };
+    return { columns: [...metaColumns, ...documentKeys], rows: parsed };
 };
 
 /** Escape LIKE wildcards so a user's literal `%`/`_`/`\` match themselves (paired with `ESCAPE '\'`). */
@@ -146,7 +146,7 @@ const isInternalTable = (name: string): boolean =>
     name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__cirrus") || name.includes("__fts_");
 
 /** Double-quote a SQL identifier, escaping any embedded double quotes. */
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
@@ -190,7 +190,7 @@ export const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): Tabl
     const { table } = options;
 
     if (isInternalTable(table) || !tableExists(sql, table)) {
-        throw Object.assign(new Error(`unknown table: ${table}`), { name: "CirrusError", code: "UNKNOWN_TABLE", status: 404 });
+        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
     }
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
@@ -205,22 +205,22 @@ export const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): Tabl
     const needle = options.search?.trim() ?? "";
 
     // Echo only the refs whose column actually surfaces (a UI links those cells).
-    const withRefs = (page: { columns: string[]; rows: Record<string, unknown>[]; total: number }): TablePage => {
+    const withReferences = (page: { columns: string[]; rows: Record<string, unknown>[]; total: number }): TablePage => {
         if (options.refs === undefined) {
             return page;
         }
 
-        const refs: Record<string, string> = {};
+        const references: Record<string, string> = {};
 
         for (const column of page.columns) {
             const target = options.refs[column];
 
             if (target !== undefined) {
-                refs[column] = target;
+                references[column] = target;
             }
         }
 
-        return Object.keys(refs).length > 0 ? { ...page, refs } : page;
+        return Object.keys(references).length > 0 ? { ...page, refs: references } : page;
     };
 
     // No filter: a plain windowed read against the full row count. Rows are
@@ -229,9 +229,9 @@ export const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): Tabl
     if (needle === "" || columns.length === 0) {
         const total = countRows(sql, quoted);
         const rawRows = sql.exec(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`, limit, offset).toArray();
-        const expanded = expandDocRows(columns, rawRows);
+        const expanded = expandDocumentRows(columns, rawRows);
 
-        return withRefs({ ...expanded, total });
+        return withReferences({ ...expanded, total });
     }
 
     // Server-side search: OR a case-insensitive LIKE across every PHYSICAL column.
@@ -245,7 +245,7 @@ export const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): Tabl
 
     const total = Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted} WHERE ${where}`, ...matchParams).one().c);
     const rawRows = sql.exec(`SELECT * FROM ${quoted} WHERE ${where} LIMIT ? OFFSET ?`, ...matchParams, limit, offset).toArray();
-    const expanded = expandDocRows(columns, rawRows);
+    const expanded = expandDocumentRows(columns, rawRows);
 
-    return withRefs({ ...expanded, total });
+    return withReferences({ ...expanded, total });
 };

@@ -5,12 +5,12 @@ import { runRpcCommand } from "../../src/commands/run.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => {
- return {
-    error: () => {},
-    info: () => {},
-    success: () => {},
-    warn: () => {},
-};
+    return {
+        error: () => {},
+        info: () => {},
+        success: () => {},
+        warn: () => {},
+    };
 };
 
 describe("cirrus run", () => {
@@ -23,7 +23,9 @@ describe("cirrus run", () => {
             calls.push({ body: init?.body ? JSON.parse(init.body) : undefined, url });
 
             return {
-                json: async () => { return { ok: true, result: 42 }; },
+                json: async () => {
+                    return { ok: true, result: 42 };
+                },
                 ok: true,
                 status: 200,
                 text: async () => "",
@@ -56,7 +58,9 @@ describe("cirrus run", () => {
             calls.push({ body: init?.body ? JSON.parse(init.body) : undefined });
 
             return {
-                json: async () => { return { ok: true }; },
+                json: async () => {
+                    return { ok: true };
+                },
                 ok: true,
                 status: 200,
                 text: async () => "",
@@ -77,13 +81,15 @@ describe("cirrus run", () => {
         expect.assertions(1);
 
         const fetchImpl: FetchLike = async () => {
- return {
-            json: async () => { return { error: "boom" }; },
-            ok: false,
-            status: 500,
-            text: async () => "",
+            return {
+                json: async () => {
+                    return { error: "boom" };
+                },
+                ok: false,
+                status: 500,
+                text: async () => "",
+            };
         };
-};
 
         const result = await runRpcCommand({
             fetchImpl,
@@ -100,19 +106,21 @@ describe("cirrus run", () => {
         const errors: string[] = [];
 
         const fetchImpl: FetchLike = async () => {
- return {
-            json: async () => { return {}; },
-            ok: true,
-            status: 200,
-            text: async () => "",
+            return {
+                json: async () => {
+                    return {};
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
         };
-};
 
         const result = await runRpcCommand({
             args: "not json",
             fetchImpl,
             functionPath: "x:y",
-            logger: { ...silentLogger(), error: (msg) => errors.push(msg) },
+            logger: { ...silentLogger(), error: (message) => errors.push(message) },
         });
 
         expect(result.code).toBe(1);

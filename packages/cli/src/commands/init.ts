@@ -121,20 +121,20 @@ const copyTemplate = (sourceDir: string, target: string, name: string): Readonly
 
     for (const source of files) {
         const rel = relative(sourceDir, source);
-        const dest = join(target, rel);
+        const destination = join(target, rel);
 
-        mkdirSync(dirname(dest), { recursive: true });
+        mkdirSync(dirname(destination), { recursive: true });
 
         const raw = readFileSync(source);
         const text = isTextFile(source) ? substitute(raw.toString("utf8"), name) : undefined;
 
         if (text === undefined) {
-            writeFileSync(dest, raw);
+            writeFileSync(destination, raw);
         } else {
-            writeFileSync(dest, text, "utf8");
+            writeFileSync(destination, text, "utf8");
         }
 
-        written.push(dest);
+        written.push(destination);
     }
 
     return written;
@@ -248,7 +248,7 @@ export const runInitCommand = async (options: InitCommandOptions): Promise<InitC
     const templateType: Template = options.templateType ?? "vite";
 
     if (templateType === "next") {
-        options.logger.warn('template "next" is not yet available — re-run with `-t vite` or `-t standalone`.');
+        options.logger.warn("template \"next\" is not yet available — re-run with `-t vite` or `-t standalone`.");
 
         return { code: 1, files: [], target: "" };
     }
@@ -275,8 +275,8 @@ export const runInitCommand = async (options: InitCommandOptions): Promise<InitC
 
     if (options.source !== undefined && options.source.length > 0 && !options.allowUnsafeSource && !isSafeSource(options.source)) {
         options.logger.error(
-            `init: refusing --source ${options.source} — only gh:, github:, or https:// sources are allowed (and may not contain "..").` +
-            " Re-run with --allow-unsafe-source if you really want this.",
+            `init: refusing --source ${options.source} — only gh:, github:, or https:// sources are allowed (and may not contain "..").`
+            + " Re-run with --allow-unsafe-source if you really want this.",
         );
 
         return { code: 1, files: [], target };

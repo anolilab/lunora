@@ -1,28 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createVectors } from "../src/create-vectors.js";
-import type { EmbedFn, VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
+import type { EmbedFn as EmbedFunction, VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
 
 const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => {
- return {
-    upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => { return { mutationId: `upsert-${vectors.length}` }; }),
-    insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => { return { mutationId: `insert-${vectors.length}` }; }),
-    query: vi.fn<VectorizeIndexLike["query"]>(
-        async (): Promise<VectorizeMatches> => {
- return {
-            matches: [{ id: "row-1", score: 0.9 }],
-            count: 1,
-        };
-},
-    ),
-    getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
-        async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => ids.map((id) => { return { id, values: [0, 0, 0] }; }),
-    ),
-    deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(
-        async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => { return { mutationId: `delete-${ids.length}`, count: ids.length }; },
-    ),
-    ...overrides,
-};
+    return {
+        deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => {
+            return { count: ids.length, mutationId: `delete-${ids.length}` };
+        }),
+        getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
+            async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, values: [0, 0, 0] };
+                }),
+        ),
+        insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
+            return { mutationId: `insert-${vectors.length}` };
+        }),
+        query: vi.fn<VectorizeIndexLike["query"]>(async (): Promise<VectorizeMatches> => {
+            return {
+                count: 1,
+                matches: [{ id: "row-1", score: 0.9 }],
+            };
+        }),
+        upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
+            return { mutationId: `upsert-${vectors.length}` };
+        }),
+        ...overrides,
+    };
 };
 
 describe("createVectors", () => {
@@ -46,12 +51,12 @@ describe("createVectors", () => {
 
         const index = fakeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
-        const embed = vi.fn<EmbedFn<string>>(async (value: string) => [value.length, value.length + 1, value.length + 2]);
+        const embed = vi.fn<EmbedFunction<string>>(async (value: string) => [value.length, value.length + 1, value.length + 2]);
 
         await vectors.upsert("docs", {
+            embed,
             id: "doc-42",
             input: "hello",
-            embed,
             metadata: { title: "Hello" },
             namespace: "tenant-1",
         });
@@ -60,9 +65,9 @@ describe("createVectors", () => {
         expect(index.upsert).toHaveBeenCalledWith([
             {
                 id: "doc-42",
-                values: [5, 6, 7],
                 metadata: { title: "Hello" },
                 namespace: "tenant-1",
+                values: [5, 6, 7],
             },
         ]);
     });
@@ -75,16 +80,16 @@ describe("createVectors", () => {
         const embed = async (text: string): Promise<ReadonlyArray<number>> => [text.length];
 
         const result = await vectors.upsertMany("docs", [
-            { id: "a", input: "x", embed },
-            { id: "b", input: "yy", embed },
-            { id: "c", input: "zzz", embed },
+            { embed, id: "a", input: "x" },
+            { embed, id: "b", input: "yy" },
+            { embed, id: "c", input: "zzz" },
         ]);
 
         expect(index.upsert).toHaveBeenCalledTimes(1);
         expect(index.upsert).toHaveBeenCalledWith([
-            { id: "a", values: [1], metadata: undefined, namespace: undefined },
-            { id: "b", values: [2], metadata: undefined, namespace: undefined },
-            { id: "c", values: [3], metadata: undefined, namespace: undefined },
+            { id: "a", metadata: undefined, namespace: undefined, values: [1] },
+            { id: "b", metadata: undefined, namespace: undefined, values: [2] },
+            { id: "c", metadata: undefined, namespace: undefined, values: [3] },
         ]);
         expect(result.mutationId).toBe("upsert-3");
     });
@@ -94,9 +99,9 @@ describe("createVectors", () => {
 
         const index = fakeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
-        const embed = vi.fn<EmbedFn<string>>();
+        const embed = vi.fn<EmbedFunction<string>>();
 
-        const result = await vectors.query("docs", { vector: [0.1, 0.2, 0.3], topK: 5, embed });
+        const result = await vectors.query("docs", { embed, topK: 5, vector: [0.1, 0.2, 0.3] });
 
         expect(embed).not.toHaveBeenCalled();
         expect(index.query).toHaveBeenCalledWith([0.1, 0.2, 0.3], expect.objectContaining({ topK: 5 }));
@@ -108,12 +113,12 @@ describe("createVectors", () => {
 
         const index = fakeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
-        const embed = vi.fn<EmbedFn<string>>(async (text: string) => [text.length, text.length]);
+        const embed = vi.fn<EmbedFunction<string>>(async (text: string) => [text.length, text.length]);
 
-        await vectors.query("docs", { input: "wide", embed, topK: 3, filter: { tenant: "t-1" } });
+        await vectors.query("docs", { embed, filter: { tenant: "t-1" }, input: "wide", topK: 3 });
 
         expect(embed).toHaveBeenCalledWith("wide");
-        expect(index.query).toHaveBeenCalledWith([4, 4], expect.objectContaining({ topK: 3, filter: { tenant: "t-1" } }));
+        expect(index.query).toHaveBeenCalledWith([4, 4], expect.objectContaining({ filter: { tenant: "t-1" }, topK: 3 }));
     });
 
     it("errors when query has neither vector nor input+embed", async () => {
@@ -155,7 +160,9 @@ describe("createVectors", () => {
         expect.assertions(1);
 
         const index = fakeIndex({
-            describe: vi.fn<NonNullable<VectorizeIndexLike["describe"]>>(async () => { return { dimensions: 1024, vectorsCount: 99 }; }),
+            describe: vi.fn<NonNullable<VectorizeIndexLike["describe"]>>(async () => {
+                return { dimensions: 1024, vectorsCount: 99 };
+            }),
         });
         const vectors = createVectors({ indexes: { docs: index } });
 
@@ -171,8 +178,8 @@ describe("createVectors", () => {
         const vectors = createVectors({ indexes: { docs: index } });
         const embed = (text: string): ReadonlyArray<number> => [text.length];
 
-        await vectors.upsert("docs", { id: "row", input: "abc", embed });
+        await vectors.upsert("docs", { embed, id: "row", input: "abc" });
 
-        expect(index.upsert).toHaveBeenCalledWith([{ id: "row", values: [3], metadata: undefined, namespace: undefined }]);
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "row", metadata: undefined, namespace: undefined, values: [3] }]);
     });
 });

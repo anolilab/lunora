@@ -4,14 +4,18 @@ import type { ExecutionContextLike } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
-const fakeCtx: ExecutionContextLike = {
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
-    idFromName: (name) => { return { __name: name }; },
+    get: () => {
+        return { fetch: async () => new Response("not used", { status: 200 }) };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
 };
 
 const ADMIN_TOKEN = "admin-bear";
@@ -57,7 +61,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const { namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/scheduled", { method: "GET" }), {}, fakeCtx);
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/scheduled", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -70,7 +74,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(400);
@@ -89,7 +93,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(200);
@@ -110,7 +114,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         await worker.fetch(
             new Request("https://app.example/_cirrus/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(idArgs).toEqual(["tenant-a"]);
@@ -125,7 +129,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(405);
@@ -144,7 +148,7 @@ describe("createWorker — scheduled admin endpoints", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(200);
@@ -168,7 +172,7 @@ describe("createWorker — scheduled admin endpoints", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(400);
@@ -184,7 +188,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         await worker.fetch(
             new Request("https://app.example/_cirrus/admin/scheduled/ws", { headers: { authorization: `Bearer ${ADMIN_TOKEN}`, Upgrade: "websocket" } }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(calls).toEqual([{ body: "", method: "GET", pathname: "/ws" }]);
@@ -199,7 +203,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         await worker.fetch(
             new Request(`https://app.example/_cirrus/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(calls).toEqual([{ body: "", method: "GET", pathname: "/ws" }]);
@@ -211,7 +215,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const { calls, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/scheduled/ws", { headers: { Upgrade: "websocket" } }), {}, fakeCtx);
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/scheduled/ws", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
 
         expect(response.status).toBe(403);
         expect(calls).toEqual([]);
@@ -223,7 +227,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const { namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request(`https://app.example/_cirrus/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { method: "GET" }), {}, fakeCtx);
+        const response = await worker.fetch(new Request(`https://app.example/_cirrus/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(426);
     });

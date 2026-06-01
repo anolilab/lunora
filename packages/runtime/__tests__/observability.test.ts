@@ -16,20 +16,22 @@ interface ShardSpy {
 
 const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSpy => {
     const stubFor = () => {
- return {
-        fetch: async () => {
-            if (spy.throwOnFetch) {
-                throw spy.throwOnFetch;
-            }
+        return {
+            fetch: async () => {
+                if (spy.throwOnFetch) {
+                    throw spy.throwOnFetch;
+                }
 
-            return spy.response;
-        },
+                return spy.response;
+            },
+        };
     };
-};
 
     const namespace: ShardNamespaceLike = {
-        idFromName: (name) => { return { __name: name }; },
         get: () => stubFor(),
+        idFromName: (name) => {
+            return { __name: name };
+        },
     };
 
     const spy: ShardSpy = { namespace, response };
@@ -37,7 +39,7 @@ const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSp
     return spy;
 };
 
-const fakeCtx: ExecutionContextLike = {
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
 };
@@ -117,7 +119,7 @@ describe("observabilitySink", () => {
                     method: "POST",
                 }),
                 {},
-                fakeCtx,
+                fakeContext,
             );
 
             expect(response.status).toBe(200);
@@ -142,7 +144,7 @@ describe("observabilitySink", () => {
                     method: "POST",
                 }),
                 {},
-                fakeCtx,
+                fakeContext,
             );
 
             expect(events[0]!.shardKey).toBe("tenant-7");
@@ -162,7 +164,7 @@ describe("observabilitySink", () => {
                     method: "POST",
                 }),
                 {},
-                fakeCtx,
+                fakeContext,
             );
 
             expect(events[0]!.ok).toBe(false);
@@ -187,7 +189,7 @@ describe("observabilitySink", () => {
                     method: "POST",
                 }),
                 {},
-                fakeCtx,
+                fakeContext,
             );
 
             expect(response.status).toBe(500);
@@ -205,7 +207,9 @@ describe("observabilitySink", () => {
             // Use a permissive cast — observability events read only
             // `result.ok` and `result.failed`, so a partial stub is fine.
             const coordinator = {
-                fanOut: async () => { return { data: 42, errors: [], failed: 0, ok: 3 }; },
+                fanOut: async () => {
+                    return { data: 42, errors: [], failed: 0, ok: 3 };
+                },
             } as unknown as QueryCoordinator;
             const worker = createWorker({ observability: sink, queryCoordinator: coordinator, shardDO: shard.namespace });
 
@@ -219,7 +223,7 @@ describe("observabilitySink", () => {
                     method: "POST",
                 }),
                 {},
-                fakeCtx,
+                fakeContext,
             );
 
             expect(response.status).toBe(200);
@@ -245,7 +249,7 @@ describe("observabilitySink", () => {
                     method: "POST",
                 }),
                 {},
-                fakeCtx,
+                fakeContext,
             );
 
             expect(response.status).toBe(200);

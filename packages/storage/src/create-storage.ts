@@ -75,28 +75,28 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         throw new Error("@cirrus/storage: `bucket` is required");
     }
 
-    const upload = async (key: string, body: ReadableStream | ArrayBuffer | Blob, uploadOpts: UploadOptions = {}): Promise<{ etag: string; key: string }> => {
+    const upload = async (key: string, body: ReadableStream | ArrayBuffer | Blob, uploadOptions: UploadOptions = {}): Promise<{ etag: string; key: string }> => {
         validateKey(key);
 
-        if (uploadOpts.allowedContentTypes && uploadOpts.contentType && !uploadOpts.allowedContentTypes.includes(uploadOpts.contentType)) {
-            throw new Error(`@cirrus/storage: contentType "${uploadOpts.contentType}" not in allowedContentTypes`);
+        if (uploadOptions.allowedContentTypes && uploadOptions.contentType && !uploadOptions.allowedContentTypes.includes(uploadOptions.contentType)) {
+            throw new Error(`@cirrus/storage: contentType "${uploadOptions.contentType}" not in allowedContentTypes`);
         }
 
         // `maxSize` is best-effort: enforced for byte sources we can size
         // synchronously (ArrayBuffer/Blob). ReadableStream byte counts aren't
         // known up front; callers streaming uploads must rely on the upstream
         // R2 multipart enforcement or pre-buffer.
-        if (typeof uploadOpts.maxSize === "number") {
+        if (typeof uploadOptions.maxSize === "number") {
             const size = body instanceof ArrayBuffer ? body.byteLength : body instanceof Blob ? body.size : undefined;
 
-            if (size !== undefined && size > uploadOpts.maxSize) {
-                throw new Error(`@cirrus/storage: body exceeds maxSize (${String(size)} > ${String(uploadOpts.maxSize)})`);
+            if (size !== undefined && size > uploadOptions.maxSize) {
+                throw new Error(`@cirrus/storage: body exceeds maxSize (${String(size)} > ${String(uploadOptions.maxSize)})`);
             }
         }
 
         const object = await options.bucket.put(key, body, {
-            customMetadata: uploadOpts.customMetadata,
-            httpMetadata: uploadOpts.contentType ? { contentType: uploadOpts.contentType } : undefined,
+            customMetadata: uploadOptions.customMetadata,
+            httpMetadata: uploadOptions.contentType ? { contentType: uploadOptions.contentType } : undefined,
         });
 
         return { etag: object.etag, key: object.key };
@@ -113,7 +113,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         await options.bucket.delete(key);
     };
 
-    const list = async (prefix?: string, listOpts: ListOptions = {}): Promise<{ cursor?: string; objects: R2ObjectLike[] }> => {
+    const list = async (prefix?: string, listOptions: ListOptions = {}): Promise<{ cursor?: string; objects: R2ObjectLike[] }> => {
         // `prefix` is intentionally permissive: it's read-only and a malformed
         // value just produces an empty result. We still reject NUL bytes since
         // the R2 binding silently truncates at the NUL on some runtimes.
@@ -121,9 +121,9 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
             throw new Error("@cirrus/storage: prefix contains NUL byte");
         }
 
-        const requested = listOpts.limit ?? DEFAULT_LIST_LIMIT;
+        const requested = listOptions.limit ?? DEFAULT_LIST_LIMIT;
         const limit = Math.min(Math.max(1, Math.floor(requested)), MAX_LIST_LIMIT);
-        const result = await options.bucket.list({ cursor: listOpts.cursor, delimiter: listOpts.delimiter, limit, prefix });
+        const result = await options.bucket.list({ cursor: listOptions.cursor, delimiter: listOptions.delimiter, limit, prefix });
 
         return { cursor: result.cursor, objects: result.objects };
     };
@@ -139,12 +139,15 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         // and getSignedUrl agree on the key representation — validateKey permits
         // URL-significant chars (`?`, `#`, space) that would otherwise corrupt
         // the public URL.
-        const safeKey = key.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+        const safeKey = key
+            .split("/")
+            .map((segment) => encodeURIComponent(segment))
+            .join("/");
 
         return `${options.publicBaseUrl.replace(TRAILING_SLASHES_RE, "")}/${safeKey}`;
     };
 
-    const getSignedUrl = async (key: string, signedOpts: SignedUrlOptions = {}): Promise<string> => {
+    const getSignedUrl = async (key: string, signedOptions: SignedUrlOptions = {}): Promise<string> => {
         if (!options.publicBaseUrl) {
             throw new Error("@cirrus/storage: `publicBaseUrl` is required for getSignedUrl()");
         }
@@ -157,9 +160,9 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
 
         return buildSignedUrl({
             baseUrl: options.publicBaseUrl,
-            expiresInSeconds: signedOpts.expiresInSeconds,
+            expiresInSeconds: signedOptions.expiresInSeconds,
             key,
-            method: signedOpts.method,
+            method: signedOptions.method,
             secret: options.signingSecret,
         });
     };

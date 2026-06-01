@@ -246,18 +246,18 @@ export const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusR
     const rows = runSql<FullStateRow>(sql, `SELECT * FROM "${DATA_MIGRATION_STATE_TABLE}"${filter}`, ...params).toArray();
 
     return rows.map((row) => {
- return {
-        changed: row.changed,
-        cursor: typeof row.cursor === "string" ? row.cursor : null,
-        direction: row.direction === "down" ? "down" : "up",
-        error: typeof row.error === "string" ? row.error : null,
-        id: row.id,
-        processed: row.processed,
-        startedAt: typeof row.started_at === "number" ? row.started_at : null,
-        status: row.status === "completed" || row.status === "failed" ? row.status : "in_progress",
-        updatedAt: typeof row.updated_at === "number" ? row.updated_at : null,
-    };
-});
+        return {
+            changed: row.changed,
+            cursor: typeof row.cursor === "string" ? row.cursor : null,
+            direction: row.direction === "down" ? "down" : "up",
+            error: typeof row.error === "string" ? row.error : null,
+            id: row.id,
+            processed: row.processed,
+            startedAt: typeof row.started_at === "number" ? row.started_at : null,
+            status: row.status === "completed" || row.status === "failed" ? row.status : "in_progress",
+            updatedAt: typeof row.updated_at === "number" ? row.updated_at : null,
+        };
+    });
 };
 
 /**

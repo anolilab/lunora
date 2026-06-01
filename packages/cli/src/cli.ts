@@ -51,7 +51,8 @@ export interface RunCliOptions {
 
 const isTemplate = (value: unknown): value is Template => value === "vite" || value === "standalone" || value === "next" || value === "tanstack-start";
 
-const isEnvSubcommand = (value: unknown): value is EnvSubcommand => value === "list" || value === "get" || value === "set" || value === "unset" || value === "push";
+const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
+    value === "list" || value === "get" || value === "set" || value === "unset" || value === "push";
 
 const toStringOrUndefined = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
@@ -75,8 +76,8 @@ const renderBanner = (): string => {
     return boxen(`${title}\n${dim("Cirrus framework CLI")}`, {
         borderColor: (border) => cyan(border),
         borderStyle: "round",
-        padding: { left: 2, right: 2, top: 0, bottom: 0 },
         margin: 0,
+        padding: { bottom: 0, left: 2, right: 2, top: 0 },
     });
 };
 
@@ -177,38 +178,13 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.setCommandSection({
-        header: renderBanner(),
         footer: dim("Run `cirrus help <command>` for details on a specific command."),
+        header: renderBanner(),
     });
 
     cli.addCommand({
-        name: "init",
+        argument: { description: "Project name", name: "name", type: String },
         description: "Scaffold a new Cirrus project",
-        argument: { name: "name", description: "Project name", type: String },
-        options: [
-            {
-                name: "template",
-                alias: "t",
-                type: String,
-                description: "Template to scaffold (vite | standalone | tanstack-start | next)",
-                defaultValue: "vite",
-            },
-            {
-                name: "from",
-                type: String,
-                description: "Local templates root to copy from (offline-friendly; expects <type>/ subdirs)",
-            },
-            {
-                name: "source",
-                type: String,
-                description: "Override the remote template source (e.g. gh:owner/repo/sub#ref)",
-            },
-            {
-                name: "allow-unsafe-source",
-                type: Boolean,
-                description: "Permit --source values outside gh:/github:/https:// (e.g. local file://)",
-            },
-        ],
         execute: async ({ argument, options: parsed }) => {
             const name = argument[0];
             const templateRaw = parsed.template ?? "vite";
@@ -228,15 +204,35 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 
             exitCode.value = result.code;
         },
+        name: "init",
+        options: [
+            {
+                alias: "t",
+                defaultValue: "vite",
+                description: "Template to scaffold (vite | standalone | tanstack-start | next)",
+                name: "template",
+                type: String,
+            },
+            {
+                description: "Local templates root to copy from (offline-friendly; expects <type>/ subdirs)",
+                name: "from",
+                type: String,
+            },
+            {
+                description: "Override the remote template source (e.g. gh:owner/repo/sub#ref)",
+                name: "source",
+                type: String,
+            },
+            {
+                description: "Permit --source values outside gh:/github:/https:// (e.g. local file://)",
+                name: "allow-unsafe-source",
+                type: Boolean,
+            },
+        ],
     });
 
     cli.addCommand({
-        name: "dev",
         description: "Run the dev server (Vite + wrangler, or wrangler alone)",
-        options: [
-            { name: "port", type: Number, description: "Port for the dev server" },
-            { name: "no-vite", type: Boolean, description: "Skip the Vite frontend dev server" },
-        ],
         execute: async ({ options: parsed }) => {
             const port = toNumberOrUndefined(parsed.port);
 
@@ -249,10 +245,14 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 
             exitCode.value = result.code;
         },
+        name: "dev",
+        options: [
+            { description: "Port for the dev server", name: "port", type: Number },
+            { description: "Skip the Vite frontend dev server", name: "no-vite", type: Boolean },
+        ],
     });
 
     cli.addCommand({
-        name: "codegen",
         description: "Run codegen for cirrus/ functions and schema",
         execute: () => {
             try {
@@ -263,12 +263,11 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 exitCode.value = 1;
             }
         },
+        name: "codegen",
     });
 
     cli.addCommand({
-        name: "deploy",
         description: "Codegen, validate wrangler, then wrangler deploy",
-        options: [{ name: "env", type: String, description: "Cloudflare environment name" }],
         execute: async ({ options: parsed }) => {
             const result = await runDeployCommand({
                 cwd,
@@ -278,21 +277,17 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 
             exitCode.value = result.code;
         },
+        name: "deploy",
+        options: [{ description: "Cloudflare environment name", name: "env", type: String }],
     });
 
     cli.addCommand({
-        name: "run",
+        argument: { description: "Function path (e.g. messages:send)", name: "functionPath", type: String },
         description: "Send a single RPC to a running Cirrus Worker",
-        argument: { name: "functionPath", description: "Function path (e.g. messages:send)", type: String },
-        options: [
-            { name: "args", type: String, description: "JSON-encoded args object" },
-            { name: "shard", type: String, description: "Explicit shard key" },
-            { name: "url", type: String, description: "Worker URL (default http://localhost:8787)" },
-        ],
         execute: async ({ argument, options: parsed }) => {
-            const fn = argument[0];
+            const function_ = argument[0];
 
-            if (!fn) {
+            if (!function_) {
                 logger.error("missing function path. Usage: cirrus run <functionPath> [--args <json>]");
                 exitCode.value = 1;
 
@@ -303,7 +298,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 const result = await runRpcCommand({
                     args: toStringOrUndefined(parsed.args),
                     cwd,
-                    functionPath: fn,
+                    functionPath: function_,
                     logger,
                     shard: toStringOrUndefined(parsed.shard),
                     url: toStringOrUndefined(parsed.url),
@@ -315,15 +310,16 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 exitCode.value = 1;
             }
         },
+        name: "run",
+        options: [
+            { description: "JSON-encoded args object", name: "args", type: String },
+            { description: "Explicit shard key", name: "shard", type: String },
+            { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
+        ],
     });
 
     cli.addCommand({
-        name: "reset",
         description: "Clear local Miniflare state (and .cirrus-cache with --all)",
-        options: [
-            { name: "all", type: Boolean, description: "Also remove .cirrus-cache" },
-            { name: "yes", type: Boolean, description: "Skip the confirmation prompt (required when stdin is not a TTY)" },
-        ],
         execute: async ({ options: parsed }) => {
             const result = await runResetCommand({
                 all: parsed.all === true,
@@ -334,23 +330,16 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 
             exitCode.value = result.code;
         },
+        name: "reset",
+        options: [
+            { description: "Also remove .cirrus-cache", name: "all", type: Boolean },
+            { description: "Skip the confirmation prompt (required when stdin is not a TTY)", name: "yes", type: Boolean },
+        ],
     });
 
     cli.addCommand({
-        name: "migrate",
+        argument: { description: "generate | create | up | down | status [name|id]", name: "subcommand", type: String },
         description: "Schema (generate) and online data (create | up | down | status) migrations",
-        argument: { name: "subcommand", description: "generate | create | up | down | status [name|id]", type: String },
-        options: [
-            { name: "name", type: String, description: "Migration name slug (e.g. add_users_email)" },
-            { name: "table", type: String, description: "Target table for `create`" },
-            { name: "dry-run", type: Boolean, description: "Preview a data migration without rewriting rows" },
-            { name: "batch-size", type: Number, description: "Rows per batch for a data migration" },
-            { name: "steps", type: Number, description: "Cap batches processed this run (maps to the runner's maxBatches)" },
-            { name: "prod", type: Boolean, description: "Target production — requires an explicit --url" },
-            { name: "url", type: String, description: "Worker URL (default http://localhost:8787)" },
-            { name: "token", type: String, description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)" },
-            { name: "yes", type: Boolean, description: "Required with --prod for up/down — confirms running against production" },
-        ],
         execute: async ({ argument, options: parsed }) => {
             const sub = argument[0];
 
@@ -416,6 +405,18 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             logger.error(`unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`);
             exitCode.value = 1;
         },
+        name: "migrate",
+        options: [
+            { description: "Migration name slug (e.g. add_users_email)", name: "name", type: String },
+            { description: "Target table for `create`", name: "table", type: String },
+            { description: "Preview a data migration without rewriting rows", name: "dry-run", type: Boolean },
+            { description: "Rows per batch for a data migration", name: "batch-size", type: Number },
+            { description: "Cap batches processed this run (maps to the runner's maxBatches)", name: "steps", type: Number },
+            { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
+            { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
+            { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
+            { description: "Required with --prod for up/down — confirms running against production", name: "yes", type: Boolean },
+        ],
     });
 
     cli.addCommand({
@@ -492,34 +493,29 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.addCommand({
-        name: "verify",
         description: "Validate wrangler.jsonc + run codegen in dry-run mode (no files written)",
         execute: () => {
             const result = runVerifyCommand({ cwd, logger });
 
             exitCode.value = result.code;
         },
+        name: "verify",
     });
 
     cli.addCommand({
-        name: "info",
         description: "Print resolved project config: @cirrus/* versions, wrangler summary, schema overview",
-        options: [{ description: "Emit a JSON snapshot instead of human text", name: "json", type: Boolean }],
         execute: ({ options: parsed }) => {
             const result = runInfoCommand({ cwd, json: parsed.json === true, logger });
 
             exitCode.value = result.code;
         },
+        name: "info",
+        options: [{ description: "Emit a JSON snapshot instead of human text", name: "json", type: Boolean }],
     });
 
     cli.addCommand({
-        name: "env",
-        description: "Manage .dev.vars and push secrets via wrangler (list | get | set | unset | push)",
         argument: { description: "list | get <KEY> | set <KEY> <VALUE> | unset <KEY> | push", name: "subcommand", type: String },
-        options: [
-            { description: "Target production for `push` (passes --env production to wrangler)", name: "prod", type: Boolean },
-            { description: "Required for `push` — confirms uploading secrets to Cloudflare", name: "yes", type: Boolean },
-        ],
+        description: "Manage .dev.vars and push secrets via wrangler (list | get | set | unset | push)",
         execute: async ({ argument, options: parsed }) => {
             const sub = argument[0];
 
@@ -547,12 +543,15 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 exitCode.value = 1;
             }
         },
+        name: "env",
+        options: [
+            { description: "Target production for `push` (passes --env production to wrangler)", name: "prod", type: Boolean },
+            { description: "Required for `push` — confirms uploading secrets to Cloudflare", name: "yes", type: Boolean },
+        ],
     });
 
     cli.addCommand({
-        name: "analyze",
         description: "Run wrangler dry-run and report bundle size, top modules, and _generated files",
-        options: [{ description: "Emit a JSON report instead of human text", name: "json", type: Boolean }],
         execute: async ({ options: parsed }) => {
             try {
                 const result = await runAnalyzeCommand({ cwd, json: parsed.json === true, logger });
@@ -563,12 +562,12 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 exitCode.value = 1;
             }
         },
+        name: "analyze",
+        options: [{ description: "Emit a JSON report instead of human text", name: "json", type: Boolean }],
     });
 
     cli.addCommand({
-        name: "view",
         description: "Open the Cirrus dashboard in your browser (local dev by default, --remote for production)",
-        options: [{ description: "Open the deployed worker URL instead of localhost", name: "remote", type: Boolean }],
         execute: async ({ options: parsed }) => {
             try {
                 const result = await runViewCommand({ cwd, logger, remote: parsed.remote === true });
@@ -579,12 +578,13 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 exitCode.value = 1;
             }
         },
+        name: "view",
+        options: [{ description: "Open the deployed worker URL instead of localhost", name: "remote", type: Boolean }],
     });
 
     cli.addCommand({
-        name: "docs",
-        description: "Open the Cirrus docs in your browser (optional [section] path)",
         argument: { description: "Optional path under the docs site (e.g. addons/dashboard)", name: "section", type: String },
+        description: "Open the Cirrus docs in your browser (optional [section] path)",
         execute: async ({ argument }) => {
             try {
                 const result = await runDocsCommand({ logger, section: argument[0] });
@@ -595,6 +595,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 exitCode.value = 1;
             }
         },
+        name: "docs",
     });
 
     return { cli, exitCode };

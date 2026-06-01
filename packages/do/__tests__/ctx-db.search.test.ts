@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
 /**
@@ -47,7 +47,7 @@ const setupWriter = (): DatabaseWriterLike => {
         return `d${counter}`;
     };
 
-    return createShardCtxDb({
+    return createShardContextDatabase({
         clock,
         idGenerator,
         schema: searchSchema,

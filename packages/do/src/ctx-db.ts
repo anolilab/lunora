@@ -401,26 +401,26 @@ const COUNT_OPTION_KEYS = new Set(["baseWhere", "restrictsCounts", "where"]);
  * otherwise it's a `where` literal. Boolean combinators (`AND`/`OR`/`NOT`)
  * keep it on the `where` side.
  */
-const normalizeCountArg = (arg: RestrictableQueryOptions | undefined | WhereInput): RestrictableQueryOptions => {
-    if (arg === undefined) {
+const normalizeCountArgument = (argument: RestrictableQueryOptions | undefined | WhereInput): RestrictableQueryOptions => {
+    if (argument === undefined) {
         return {};
     }
 
-    if (typeof arg !== "object" || Array.isArray(arg)) {
-        return { where: arg as WhereInput };
+    if (typeof argument !== "object" || Array.isArray(argument)) {
+        return { where: argument as WhereInput };
     }
 
-    const keys = Object.keys(arg);
+    const keys = Object.keys(argument);
 
     if (keys.length === 0) {
         return {};
     }
 
     if (keys.every((key) => COUNT_OPTION_KEYS.has(key))) {
-        return arg as RestrictableQueryOptions;
+        return argument as RestrictableQueryOptions;
     }
 
-    return { where: arg as WhereInput };
+    return { where: argument as WhereInput };
 };
 
 /**
@@ -436,7 +436,7 @@ const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, un
 
     const ordered: Record<string, unknown> = {};
 
-    for (const field of [...by].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+    for (const field of [...by].toSorted((a, b) => a < b ? -1 : a > b ? 1 : 0)) {
         ordered[field] = source[field] ?? null;
     }
 
@@ -454,13 +454,13 @@ const AGGREGATE_SQL_FUNCTION: Record<string, string> = { avg: "AVG", count: "COU
 
 /** Resolve a reducer `op` to its SQL function, throwing on an off-allowlist op. */
 const aggregateSqlFunction = (op: string): string => {
-    const fn = AGGREGATE_SQL_FUNCTION[op];
+    const function_ = AGGREGATE_SQL_FUNCTION[op];
 
-    if (fn === undefined) {
+    if (function_ === undefined) {
         throw new Error(`unknown aggregate op "${op}": expected one of ${Object.keys(AGGREGATE_SQL_FUNCTION).join(", ")}`);
     }
 
-    return fn;
+    return function_;
 };
 
 /** Indirection that lets us call `exec` without typing the literal. */
@@ -470,7 +470,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
     return runner.call(sql, query, ...params);
 };
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
 
 const jsonPath = (field: string): string => {
     // Internal columns live alongside the doc; expose them via the
@@ -508,7 +508,7 @@ const tokenizeSearch = (query: string): string[] => query.toLowerCase().match(/[
  * token must be present — mirroring the fallback scorer's conjunction semantics.
  */
 const buildFtsMatch = (tokens: ReadonlyArray<string>): string =>
-    tokens.map((token, index) => (index === tokens.length - 1 ? `"${token}"*` : `"${token}"`)).join(" AND ");
+    tokens.map((token, index) => index === tokens.length - 1 ? `"${token}"*` : `"${token}"`).join(" AND ");
 
 /** Coerce a search/filter field value to the text FTS indexes and the scorer scans. */
 const stringifySearchText = (value: unknown): string => {
@@ -536,10 +536,10 @@ const stringifySearchText = (value: unknown): string => {
  * of occurrences, giving a coarse term-frequency relevance order for the
  * LIKE-scan fallback used when FTS5 is unavailable.
  */
-const scoreDoc = (text: string, tokens: ReadonlyArray<string>): number => {
-    const docTokens = tokenizeSearch(text);
+const scoreDocument = (text: string, tokens: ReadonlyArray<string>): number => {
+    const documentTokens = tokenizeSearch(text);
 
-    if (docTokens.length === 0) {
+    if (documentTokens.length === 0) {
         return 0;
     }
 
@@ -549,8 +549,8 @@ const scoreDoc = (text: string, tokens: ReadonlyArray<string>): number => {
         const isLast = index === tokens.length - 1;
         let occurrences = 0;
 
-        for (const docToken of docTokens) {
-            if (isLast ? docToken.startsWith(token) : docToken === token) {
+        for (const documentToken of documentTokens) {
+            if (isLast ? documentToken.startsWith(token) : documentToken === token) {
                 occurrences += 1;
             }
         }
@@ -605,7 +605,7 @@ const isFtsAvailable = (sql: SqlExec): boolean => {
     return available;
 };
 
-const rowToDoc = (row: Record<string, unknown> | undefined): Record<string, unknown> | null => {
+const rowToDocument = (row: Record<string, unknown> | undefined): Record<string, unknown> | null => {
     if (!row) {
         return null;
     }
@@ -648,7 +648,7 @@ interface SearchStage {
 interface QueryStage {
     indexFields: ReadonlyArray<string>;
     indexName: string | undefined;
-    inMemoryFilters: ((doc: Record<string, unknown>) => boolean)[];
+    inMemoryFilters: ((document_: Record<string, unknown>) => boolean)[];
     search?: SearchStage;
     sqlConditions: { comparator: string; field: string; value: unknown }[];
 }
@@ -656,27 +656,27 @@ interface QueryStage {
 const createRangeBuilder = (stage: QueryStage): IndexRangeBuilderLike => {
     const builder: IndexRangeBuilderLike = {
         eq: (field, value) => {
-            stage.sqlConditions.push({ field, comparator: "=", value });
+            stage.sqlConditions.push({ comparator: "=", field, value });
 
             return builder;
         },
         gt: (field, value) => {
-            stage.sqlConditions.push({ field, comparator: ">", value });
+            stage.sqlConditions.push({ comparator: ">", field, value });
 
             return builder;
         },
         gte: (field, value) => {
-            stage.sqlConditions.push({ field, comparator: ">=", value });
+            stage.sqlConditions.push({ comparator: ">=", field, value });
 
             return builder;
         },
         lt: (field, value) => {
-            stage.sqlConditions.push({ field, comparator: "<", value });
+            stage.sqlConditions.push({ comparator: "<", field, value });
 
             return builder;
         },
         lte: (field, value) => {
-            stage.sqlConditions.push({ field, comparator: "<=", value });
+            stage.sqlConditions.push({ comparator: "<=", field, value });
 
             return builder;
         },
@@ -770,10 +770,10 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     const docs: Record<string, unknown>[] = [];
 
     for (const row of rows) {
-        const doc = rowToDoc(row);
+        const document_ = rowToDocument(row);
 
-        if (doc) {
-            docs.push(doc);
+        if (document_) {
+            docs.push(document_);
         }
     }
 
@@ -812,16 +812,16 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
     const scored: { creationTime: number; doc: Record<string, unknown>; score: number }[] = [];
 
     for (const row of rows) {
-        const doc = rowToDoc(row);
+        const document_ = rowToDocument(row);
 
-        if (!doc) {
+        if (!document_) {
             continue;
         }
 
-        const score = scoreDoc(stringifySearchText(doc[search.field]), tokens);
+        const score = scoreDocument(stringifySearchText(document_[search.field]), tokens);
 
         if (score > 0) {
-            scored.push({ creationTime: typeof doc["_creationTime"] === "number" ? (doc["_creationTime"]) : 0, doc, score });
+            scored.push({ creationTime: typeof document_["_creationTime"] === "number" ? document_["_creationTime"] : 0, doc: document_, score });
         }
     }
 
@@ -840,9 +840,11 @@ const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte",
 
 /** Order keys for a paginated stage: the staged index, else creation order. */
 const paginateOrderKeys = (stage: QueryStage): OrderKey[] =>
-    (stage.indexFields.length > 0
-        ? stage.indexFields.map((field) => { return { direction: "asc" as const, field }; })
-        : [{ direction: "asc" as const, field: "_creationTime" }]);
+    stage.indexFields.length > 0
+        ? stage.indexFields.map((field) => {
+              return { direction: "asc" as const, field };
+          })
+        : [{ direction: "asc" as const, field: "_creationTime" }];
 
 /**
  * Re-express the staged `.withIndex()` range as a `where` tree and AND the
@@ -850,10 +852,10 @@ const paginateOrderKeys = (stage: QueryStage): OrderKey[] =>
  */
 const paginateWhere = (stage: QueryStage, orderKeys: OrderKey[], cursor: null | string | undefined): undefined | WhereInput => {
     const clauses: WhereInput[] = stage.sqlConditions.map((condition) => {
- return {
-        [condition.field]: { [COMPARATOR_TO_OPERATOR[condition.comparator] ?? "eq"]: condition.value },
-    };
-});
+        return {
+            [condition.field]: { [COMPARATOR_TO_OPERATOR[condition.comparator] ?? "eq"]: condition.value },
+        };
+    });
 
     if (cursor) {
         clauses.push(buildSeekWhere(orderKeys, decodeCursor(cursor)));
@@ -871,10 +873,10 @@ const scanDocs = (rows: Record<string, unknown>[], filters: QueryStage["inMemory
     const docs: Record<string, unknown>[] = [];
 
     for (const row of rows) {
-        const doc = rowToDoc(row);
+        const document_ = rowToDocument(row);
 
-        if (doc && filters.every((predicate) => predicate(doc))) {
-            docs.push(doc);
+        if (document_ && filters.every((predicate) => predicate(document_))) {
+            docs.push(document_);
 
             if (cap !== undefined && docs.length > cap) {
                 break;
@@ -893,7 +895,7 @@ const scanDocs = (rows: Record<string, unknown>[], filters: QueryStage["inMemory
  * than let a `LIMIT` drop rows that pass the predicate.
  */
 const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, options: PaginationOptions): QueryPage => {
-    const numItems = Math.max(0, Math.floor(options.numItems));
+    const numberItems = Math.max(0, Math.floor(options.numItems));
     const orderKeys = paginateOrderKeys(stage);
     const { params, sql: whereSql } = compileWhere(paginateWhere(stage, orderKeys, options.cursor), doWhereStrategy);
 
@@ -908,14 +910,14 @@ const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, optio
     const filtered = stage.inMemoryFilters.length > 0;
 
     if (!filtered) {
-        querySql += ` LIMIT ${String(numItems + 1)}`;
+        querySql += ` LIMIT ${String(numberItems + 1)}`;
     }
 
     const rows = runSql(sql, querySql, ...params).toArray();
-    const docs = scanDocs(rows, stage.inMemoryFilters, filtered ? numItems : undefined);
+    const docs = scanDocs(rows, stage.inMemoryFilters, filtered ? numberItems : undefined);
 
-    const hasMore = docs.length > numItems;
-    const page = hasMore ? docs.slice(0, numItems) : docs;
+    const hasMore = docs.length > numberItems;
+    const page = hasMore ? docs.slice(0, numberItems) : docs;
     const last = page.at(-1);
 
     return {
@@ -956,9 +958,9 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
 
         const result: Record<string, unknown>[] = [];
 
-        for (const doc of docs) {
-            if (stage.inMemoryFilters.every((predicate) => predicate(doc))) {
-                result.push(doc);
+        for (const document_ of docs) {
+            if (stage.inMemoryFilters.every((predicate) => predicate(document_))) {
+                result.push(document_);
 
                 if (typeof limit === "number" && result.length >= limit) {
                     break;
@@ -1001,14 +1003,14 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         const docs: Record<string, unknown>[] = [];
 
         for (const row of rows) {
-            const doc = rowToDoc(row);
+            const document_ = rowToDocument(row);
 
-            if (!doc) {
+            if (!document_) {
                 continue;
             }
 
-            if (stage.inMemoryFilters.every((predicate) => predicate(doc))) {
-                docs.push(doc);
+            if (stage.inMemoryFilters.every((predicate) => predicate(document_))) {
+                docs.push(document_);
 
                 if (typeof limit === "number" && docs.length >= limit) {
                     break;
@@ -1022,6 +1024,11 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
     const reader: TableReaderLike = {
         async collect() {
             return runFetch(undefined);
+        },
+        filter(predicate) {
+            stage.inMemoryFilters.push(predicate);
+
+            return reader;
         },
         async first() {
             const rows = runFetch(stage.inMemoryFilters.length > 0 ? undefined : 1);
@@ -1037,11 +1044,6 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         },
         async take(limit) {
             return runFetch(limit);
-        },
-        filter(predicate) {
-            stage.inMemoryFilters.push(predicate);
-
-            return reader;
         },
         withIndex(indexName, range) {
             const definition = tableDefinition.indexes.find((index) => index.name === indexName);
@@ -1255,7 +1257,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // `triggerCtx` is declared after this helper but only read here while
             // a write is in flight — long after construction wires it up.
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure read of post-construction `triggerCtx`
-            await runTriggers({ ctx: triggerCtx, event, op, schema, tableName: event.table, timing });
+            await runTriggers({ ctx: triggerContext, event, op, schema, tableName: event.table, timing });
         } finally {
             triggerDepth -= 1;
         }
@@ -1291,17 +1293,17 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
 
         for (const row of rows) {
-            const doc = rowToDoc(row);
+            const document_ = rowToDocument(row);
 
-            if (!doc) {
+            if (!document_) {
                 continue;
             }
 
-            if (index.where && !matchesStaticWhere(doc, index.where)) {
+            if (index.where && !matchesStaticWhere(document_, index.where)) {
                 continue;
             }
 
-            const encoded = encodeAggregateKey(by, doc);
+            const encoded = encodeAggregateKey(by, document_);
 
             tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
         }
@@ -1320,13 +1322,13 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * Inserts (`+1`), deletes (`-1`), and updates (`-1` for the previous row's
      * group, `+1` for the new) all share the same maintenance hook.
      */
-    const stepAggregate = (tableName: string, index: AggregateIndexDefinitionLike, doc: Record<string, unknown>, delta: number): void => {
-        if (index.where && !matchesStaticWhere(doc, index.where)) {
+    const stepAggregate = (tableName: string, index: AggregateIndexDefinitionLike, document_: Record<string, unknown>, delta: number): void => {
+        if (index.where && !matchesStaticWhere(document_, index.where)) {
             return;
         }
 
         const aggTable = aggregateTableName(tableName, index.name);
-        const encoded = encodeAggregateKey(index.by ?? [], doc);
+        const encoded = encodeAggregateKey(index.by ?? [], document_);
 
         runSql(
             sql,
@@ -1407,20 +1409,20 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const insertSql = `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`;
 
         for (const row of rows) {
-            const doc = rowToDoc(row);
+            const document_ = rowToDocument(row);
 
-            if (!doc) {
+            if (!document_) {
                 continue;
             }
 
-            if (index.where && !matchesRankStaticWhere(doc, index.where)) {
+            if (index.where && !matchesRankStaticWhere(document_, index.where)) {
                 continue;
             }
 
-            const partitionKey = encodePartitionKey(index.partitionBy ?? [], doc);
-            const sortValues = index.sortBy.map((key) => serializeSqlValue(doc[key.field] ?? null));
+            const partitionKey = encodePartitionKey(index.partitionBy ?? [], document_);
+            const sortValues = index.sortBy.map((key) => serializeSqlValue(document_[key.field] ?? null));
 
-            runSql(sql, insertSql, doc["_id"] as string, partitionKey, ...sortValues);
+            runSql(sql, insertSql, document_["_id"] as string, partitionKey, ...sortValues);
         }
 
         rankBackfilled.add(cacheKey);
@@ -1557,7 +1559,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const [firstRow] = rows;
 
             if (firstRow) {
-                const row = rowToDoc(firstRow);
+                const row = rowToDocument(firstRow);
 
                 if (row) {
                     // Capture the exact stored blob at read time so a
@@ -1565,10 +1567,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // trigger / onDelete cascade) can compare-and-swap on it —
                     // a concurrent write that changed the row flips the blob
                     // and the guarded UPDATE/DELETE matches zero rows.
-                    const rawDoc = firstRow[DOC_COLUMN];
-                    const docJson = typeof rawDoc === "string" ? rawDoc : JSON.stringify(rawDoc ?? {});
+                    const rawDocument = firstRow[DOC_COLUMN];
+                    const documentJson = typeof rawDocument === "string" ? rawDocument : JSON.stringify(rawDocument ?? {});
 
-                    return { docJson, row, tableName };
+                    return { docJson: documentJson, row, tableName };
                 }
             }
         }
@@ -1599,194 +1601,6 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     const writer: DatabaseWriterLike = {
-        async get(id) {
-            const located = lookupById(id);
-
-            if (!located) {
-                return null;
-            }
-
-            onRead(located.tableName, id);
-
-            return located.row;
-        },
-
-        query(tableName) {
-            // Fluent reader chain: we can't tell up front whether the caller
-            // will end with `.withIndex(...)` or a bare scan, so we stamp the
-            // safe upper bound (`*scan`). Future refinement would push the
-            // hook into `buildReader`'s terminal `runFetch` so an indexed read
-            // can record per-id deps.
-            onRead(tableName, SCAN_DEP);
-
-            return buildReader(sql, schema, tableName);
-        },
-
-        async findMany(tableName, args = {}) {
-            if (!schema.tables[tableName]) {
-                throw new Error(`unknown table: ${tableName}`);
-            }
-
-            // A query with no `where` and no `baseWhere` is a true full-table
-            // scan — every write to the table can flip its result, so stamp
-            // the `*scan` marker. Predicated queries fall through to per-row
-            // stamping after the rows resolve below.
-            const isFullScan = !args.where && !args.baseWhere;
-
-            if (isFullScan) {
-                onRead(tableName, SCAN_DEP);
-            } else {
-                onRead(tableName);
-            }
-
-            const orderKeys = normalizeOrderKeys(args.orderBy);
-            const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
-
-            // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
-            // before the keyset seek so policy + cursor compose cleanly.
-            let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
-
-            if (seek) {
-                predicate = predicate ? { AND: [predicate, seek] } : seek;
-            }
-
-            const { params, sql: whereSql } = compileWhere(predicate, doWhereStrategy);
-
-            let querySql = `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`;
-
-            if (whereSql) {
-                querySql += ` WHERE ${whereSql}`;
-            }
-
-            querySql += ` ORDER BY ${compileOrderBy(orderKeys, jsonPath)}`;
-
-            const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
-
-            if (limit !== undefined) {
-                // Over-fetch by one row to learn whether another page exists
-                // without issuing a second query.
-                querySql += ` LIMIT ${String(limit + 1)}`;
-            }
-
-            const rows = runSql(sql, querySql, ...params).toArray();
-            const docs: Record<string, unknown>[] = [];
-
-            for (const row of rows) {
-                const doc = rowToDoc(row);
-
-                if (doc) {
-                    docs.push(doc);
-
-                    // For predicated reads we know exactly which rows matched
-                    // — stamp each so the cache only invalidates when one of
-                    // them actually changes. Full scans already stamped
-                    // `*scan` above (which subsumes per-row deps).
-                    if (!isFullScan && typeof doc["_id"] === "string") {
-                        onRead(tableName, doc["_id"]);
-                    }
-                }
-            }
-
-            if (limit === undefined) {
-                if (args.with) {
-                    await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: docs, schema, tableName, with: args.with });
-                }
-
-                return { continueCursor: null, isDone: true, page: docs };
-            }
-
-            const hasMore = docs.length > limit;
-            const page = hasMore ? docs.slice(0, limit) : docs;
-            const last = page.at(-1);
-
-            if (args.with) {
-                await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: page, schema, tableName, with: args.with });
-            }
-
-            return {
-                continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
-                isDone: !hasMore,
-                page,
-            };
-        },
-
-        async findFirst(tableName, args = {}) {
-            const result = await writer.findMany(tableName, { ...args, limit: 1 });
-
-            return result.page[0] ?? null;
-        },
-
-        async findFirstOrThrow(tableName, args = {}) {
-            const document = await writer.findFirst(tableName, args);
-
-            if (document === null) {
-                throw new NotFoundError(`findFirstOrThrow: no "${tableName}" document matched`);
-            }
-
-            return document;
-        },
-
-        async count(tableName, whereOrOptions) {
-            const definition = schema.tables[tableName];
-
-            if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
-            }
-
-            const opts = normalizeCountArg(whereOrOptions);
-
-            // RLS-restricted contexts can't be trusted to return a correct
-            // count — surface a structural CirrusError so the request fails
-            // loudly rather than silently undercounting. See PLAN2 §3.1
-            // "Coupling seam" and `aggregates.ts` for the seam contract.
-            if (opts.restrictsCounts) {
-                throw new CountRlsUnsupportedError(tableName);
-            }
-
-            // Counts and aggregates depend on every row in the table — a
-            // single insert or delete can shift the answer, so register a
-            // scan dependency regardless of `where`.
-            onRead(tableName, SCAN_DEP);
-
-            const effective = mergeWhere(opts.baseWhere, opts.where);
-
-            // Indexed path: if the user passed a plain conjunction of equality
-            // filters and a declared aggregateIndex covers them, route to the
-            // counter table. The base predicate (when present) is intentionally
-            // left out of the indexed path because we can't trust it to be a
-            // pure equality conjunction; if `baseWhere` is set we fall through
-            // to the scan so SQL handles it uniformly.
-            if (definition.aggregateIndexes && !opts.baseWhere) {
-                const planned = selectIndexForCount(definition.aggregateIndexes, opts.where);
-
-                if (planned) {
-                    ensureBackfilled(tableName, planned.index);
-
-                    const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
-                    const aggTable = aggregateTableName(tableName, planned.index.name);
-                    const row = runSql<{ value: number | null }>(
-                        sql,
-                        `SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
-                        encoded,
-                    ).toArray();
-
-                    return row[0] === undefined ? 0 : (row[0].value ?? 0);
-                }
-            }
-
-            const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
-
-            let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
-
-            if (whereSql) {
-                querySql += ` WHERE ${whereSql}`;
-            }
-
-            const row = runSql<{ count: number }>(sql, querySql, ...params).one();
-
-            return row.count;
-        },
-
         async aggregate(tableName, aggOptions) {
             const definition = schema.tables[tableName];
 
@@ -1844,6 +1658,253 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return value;
         },
 
+        async count(tableName, whereOrOptions) {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            const options_ = normalizeCountArgument(whereOrOptions);
+
+            // RLS-restricted contexts can't be trusted to return a correct
+            // count — surface a structural CirrusError so the request fails
+            // loudly rather than silently undercounting. See PLAN2 §3.1
+            // "Coupling seam" and `aggregates.ts` for the seam contract.
+            if (options_.restrictsCounts) {
+                throw new CountRlsUnsupportedError(tableName);
+            }
+
+            // Counts and aggregates depend on every row in the table — a
+            // single insert or delete can shift the answer, so register a
+            // scan dependency regardless of `where`.
+            onRead(tableName, SCAN_DEP);
+
+            const effective = mergeWhere(options_.baseWhere, options_.where);
+
+            // Indexed path: if the user passed a plain conjunction of equality
+            // filters and a declared aggregateIndex covers them, route to the
+            // counter table. The base predicate (when present) is intentionally
+            // left out of the indexed path because we can't trust it to be a
+            // pure equality conjunction; if `baseWhere` is set we fall through
+            // to the scan so SQL handles it uniformly.
+            if (definition.aggregateIndexes && !options_.baseWhere) {
+                const planned = selectIndexForCount(definition.aggregateIndexes, options_.where);
+
+                if (planned) {
+                    ensureBackfilled(tableName, planned.index);
+
+                    const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
+                    const aggTable = aggregateTableName(tableName, planned.index.name);
+                    const row = runSql<{ value: number | null }>(
+                        sql,
+                        `SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
+                        encoded,
+                    ).toArray();
+
+                    return row[0] === undefined ? 0 : row[0].value ?? 0;
+                }
+            }
+
+            const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
+
+            let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
+
+            if (whereSql) {
+                querySql += ` WHERE ${whereSql}`;
+            }
+
+            const row = runSql<{ count: number }>(sql, querySql, ...params).one();
+
+            return row.count;
+        },
+
+        async delete(id) {
+            // Single probe — get the table + row in one pass instead of
+            // probing twice (`tableNameFromId` + `writer.get`).
+            const located = lookupById(id);
+
+            if (!located) {
+                return;
+            }
+
+            const { docJson: existingJson, row: existing, tableName } = located;
+
+            // `before` fires ahead of cascade resolution so a throwing guard
+            // aborts the delete before any holder rows are touched.
+            if (hasMatchingTrigger(tableName, "before", "delete")) {
+                await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+            }
+
+            // Resolve declared `onDelete` actions on holder rows *before* the
+            // physical delete, so `restrict` can abort and cascaded child
+            // deletes still fire their own broadcast/onWrite per row.
+            //
+            // The callbacks pass through `routeForHolder` so a holder living
+            // on a global (`.global()`) table is reached through the supplied
+            // D1-backed `globalDb` writer, not this DO's local SQLite.
+            // Cross-backend cascade is **not transactional**: the local row
+            // commits below regardless of whether the global cascade succeeds.
+            await applyOnDelete({
+                deletedId: id,
+                deletedReference: (references) => existing?.[references],
+                findHolders: async (holderTable, field, value) => {
+                    const holders = await routeForHolder(holderTable).findMany(holderTable, { where: { [field]: value } });
+
+                    return holders.page;
+                },
+                onCascade: (holderTable, holderId) => routeForHolder(holderTable).delete(holderId),
+                onRestrict: (message) => {
+                    throw new ConflictError(message);
+                },
+                onSetNull: (holderTable, holderId, field) => routeForHolder(holderTable).patch(holderId, { [field]: null }),
+                schema,
+                tableName,
+            });
+
+            ensureBackfilledForTable(tableName);
+            ensureRankBackfilledForTable(tableName);
+
+            // Optimistic-concurrency guard over the (wide) cascade window: the
+            // `applyOnDelete` await above can let a concurrent write commit, so
+            // CAS on the read-time `__doc__` snapshot. A row that was updated
+            // out from under us (blob changed) or already removed matches zero
+            // rows and raises ConflictError rather than clobbering that write —
+            // and keeps `existing` (used for the aggregate/rank -prev steps) in
+            // sync with what was actually on disk.
+            runGuardedWrite(sql, tableName, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ? AND ${DOC_COLUMN} = ?`, id, existingJson);
+
+            syncSearch(tableName, id, undefined);
+            syncAggregates(tableName, existing ?? undefined, undefined);
+            syncRanks(tableName, id, existing ?? undefined, undefined);
+
+            cache?.invalidate(tableName, id);
+
+            broadcast({ key: id, op: "delete", table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "delete")) {
+                await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+            }
+
+            await onWrite({ id, op: "delete", table: tableName });
+        },
+
+        async findFirst(tableName, args = {}) {
+            const result = await writer.findMany(tableName, { ...args, limit: 1 });
+
+            return result.page[0] ?? null;
+        },
+
+        async findFirstOrThrow(tableName, args = {}) {
+            const document = await writer.findFirst(tableName, args);
+
+            if (document === null) {
+                throw new NotFoundError(`findFirstOrThrow: no "${tableName}" document matched`);
+            }
+
+            return document;
+        },
+
+        async findMany(tableName, args = {}) {
+            if (!schema.tables[tableName]) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            // A query with no `where` and no `baseWhere` is a true full-table
+            // scan — every write to the table can flip its result, so stamp
+            // the `*scan` marker. Predicated queries fall through to per-row
+            // stamping after the rows resolve below.
+            const isFullScan = !args.where && !args.baseWhere;
+
+            if (isFullScan) {
+                onRead(tableName, SCAN_DEP);
+            } else {
+                onRead(tableName);
+            }
+
+            const orderKeys = normalizeOrderKeys(args.orderBy);
+            const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+
+            // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
+            // before the keyset seek so policy + cursor compose cleanly.
+            let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
+
+            if (seek) {
+                predicate = predicate ? { AND: [predicate, seek] } : seek;
+            }
+
+            const { params, sql: whereSql } = compileWhere(predicate, doWhereStrategy);
+
+            let querySql = `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`;
+
+            if (whereSql) {
+                querySql += ` WHERE ${whereSql}`;
+            }
+
+            querySql += ` ORDER BY ${compileOrderBy(orderKeys, jsonPath)}`;
+
+            const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
+
+            if (limit !== undefined) {
+                // Over-fetch by one row to learn whether another page exists
+                // without issuing a second query.
+                querySql += ` LIMIT ${String(limit + 1)}`;
+            }
+
+            const rows = runSql(sql, querySql, ...params).toArray();
+            const docs: Record<string, unknown>[] = [];
+
+            for (const row of rows) {
+                const document_ = rowToDocument(row);
+
+                if (document_) {
+                    docs.push(document_);
+
+                    // For predicated reads we know exactly which rows matched
+                    // — stamp each so the cache only invalidates when one of
+                    // them actually changes. Full scans already stamped
+                    // `*scan` above (which subsumes per-row deps).
+                    if (!isFullScan && typeof document_["_id"] === "string") {
+                        onRead(tableName, document_["_id"]);
+                    }
+                }
+            }
+
+            if (limit === undefined) {
+                if (args.with) {
+                    await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: docs, schema, tableName, with: args.with });
+                }
+
+                return { continueCursor: null, isDone: true, page: docs };
+            }
+
+            const hasMore = docs.length > limit;
+            const page = hasMore ? docs.slice(0, limit) : docs;
+            const last = page.at(-1);
+
+            if (args.with) {
+                await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: page, schema, tableName, with: args.with });
+            }
+
+            return {
+                continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
+                isDone: !hasMore,
+                page,
+            };
+        },
+
+        async get(id) {
+            const located = lookupById(id);
+
+            if (!located) {
+                return null;
+            }
+
+            onRead(located.tableName, id);
+
+            return located.row;
+        },
+
         async groupBy(tableName, groupOptions) {
             const definition = schema.tables[tableName];
 
@@ -1874,13 +1935,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // sum/avg/min/max would return counts. Non-count reducers fall
             // through to the correct SQL `GROUP BY` scan below.
             if (agg.op === "count" && definition.aggregateIndexes && !groupOptions.baseWhere) {
-                const planned = selectIndexForGroupBy(
-                    definition.aggregateIndexes,
-                    agg.op,
-                    agg.field,
-                    groupOptions.by,
-                    groupOptions.where,
-                );
+                const planned = selectIndexForGroupBy(definition.aggregateIndexes, agg.op, agg.field, groupOptions.by, groupOptions.where);
 
                 if (planned) {
                     ensureBackfilled(tableName, planned.index);
@@ -1972,6 +2027,153 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             return result;
+        },
+
+        async insert(tableName, document, insertOptions) {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            const withDefaults = applyInsertDefaults(definition, document);
+
+            // Refinements declared via `.check(predicate)` fire here on the
+            // post-default row so a defaulted value still passes its checks.
+            runRowValidators(definition, withDefaults);
+
+            // A client-chosen `_id` is only honored on the trusted dev/admin
+            // import path (`allowExplicitId`); the default mutation path always
+            // generates a fresh id even if a handler forwards a raw payload.
+            const id = insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
+            const creationTime = typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
+
+            const documentWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };
+
+            // `before` sees a shallow copy so an abort-only handler can't reassign
+            // the row's top-level fields before they persist. Nested values are
+            // still shared by reference — before-handlers are abort/side-effect
+            // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
+            if (hasMatchingTrigger(tableName, "before", "insert")) {
+                await fireTriggers("before", "insert", { doc: { ...documentWithMeta }, id, op: "insert", table: tableName });
+            }
+
+            // Backfill counters BEFORE the physical write so the rebuild
+            // scans a pre-insert snapshot — otherwise the row we're about to
+            // INSERT lands in both the rebuild and the +1 step.
+            ensureBackfilledForTable(tableName);
+            ensureRankBackfilledForTable(tableName);
+
+            runWrite(
+                sql,
+                tableName,
+                `INSERT INTO ${quoteIdentifier(tableName)} (id, _creationTime, ${DOC_COLUMN}) VALUES (?, ?, ?)`,
+                id,
+                creationTime,
+                JSON.stringify(documentWithMeta),
+            );
+
+            syncSearch(tableName, id, documentWithMeta);
+            syncAggregates(tableName, undefined, documentWithMeta);
+            syncRanks(tableName, id, undefined, documentWithMeta);
+
+            // Invalidate BEFORE the broadcast so a subscriber that re-runs
+            // its query in response to the broadcast cannot read a stale
+            // cache entry. `ReactiveCache.invalidate(table, id)` clears both
+            // the per-id bucket AND the `table:*scan` bucket — inserts can
+            // flip any scan-shaped result, so the latter MUST go even though
+            // the new row id was never read by anything.
+            cache?.invalidate(tableName, id);
+
+            broadcast({ key: id, op: "insert", row: documentWithMeta, table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "insert")) {
+                await fireTriggers("after", "insert", { doc: documentWithMeta, id, op: "insert", table: tableName });
+            }
+
+            await onWrite({ doc: documentWithMeta, id, op: "insert", table: tableName });
+
+            return id;
+        },
+
+        async patch(id, patch) {
+            // Single probe — eliminates the redundant `tableNameFromId` +
+            // `writer.get` chain that doubled the SQL round-trips per patch
+            // on the prior code path.
+            const located = lookupById(id);
+
+            if (!located) {
+                throw new Error(`document not found: ${id}`);
+            }
+
+            const { docJson: existingJson, row: existing, tableName } = located;
+            const tableDefinition = schema.tables[tableName];
+
+            if (!tableDefinition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            onRead(tableName, id);
+
+            const merged = { ...existing, ...patch, _id: id };
+
+            applyOnUpdate(tableDefinition, patch, merged);
+
+            // Run column refinements on the merged row so a patch that flips a
+            // field to an invalid value (e.g. negative amount) is rejected
+            // before SQLite sees it.
+            runRowValidators(tableDefinition, merged);
+
+            if (hasMatchingTrigger(tableName, "before", "update")) {
+                await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+            }
+
+            ensureBackfilledForTable(tableName);
+            ensureRankBackfilledForTable(tableName);
+
+            // Optimistic-concurrency guard: CAS on the read-time `__doc__`
+            // snapshot. The before-update trigger above spans an `await`, so a
+            // concurrent write could have committed in between; the
+            // `AND ${DOC_COLUMN} = ?` clause makes that write match zero rows
+            // and raise ConflictError instead of silently clobbering it (and
+            // keeps `existing` — used for the aggregate/rank -prev steps — in
+            // sync with what is actually on disk).
+            runGuardedWrite(
+                sql,
+                tableName,
+                `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ? AND ${DOC_COLUMN} = ?`,
+                JSON.stringify(merged),
+                id,
+                existingJson,
+            );
+
+            syncSearch(tableName, id, merged);
+            syncAggregates(tableName, existing, merged);
+            syncRanks(tableName, id, existing, merged);
+
+            // A patch can flip a row from matching to not-matching (or vice
+            // versa) any scan-shaped predicate — `invalidate` blows both the
+            // row's per-id deps AND the `*scan` bucket on this table.
+            cache?.invalidate(tableName, id);
+
+            broadcast({ key: id, op: "update", row: merged, table: tableName });
+
+            if (hasMatchingTrigger(tableName, "after", "update")) {
+                await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
+            }
+
+            await onWrite({ doc: merged, id, op: "update", table: tableName });
+        },
+
+        query(tableName) {
+            // Fluent reader chain: we can't tell up front whether the caller
+            // will end with `.withIndex(...)` or a bare scan, so we stamp the
+            // safe upper bound (`*scan`). Future refinement would push the
+            // hook into `buildReader`'s terminal `runFetch` so an indexed read
+            // can record per-id deps.
+            onRead(tableName, SCAN_DEP);
+
+            return buildReader(sql, schema, tableName);
         },
 
         async rank(tableName, indexName, rankOptions) {
@@ -2188,15 +2390,15 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const docs: Record<string, unknown>[] = [];
 
             for (const rankRow of usable) {
-                const docRows = runSql(
+                const documentRows = runSql(
                     sql,
                     `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`,
                     rankRow[RANK_TIEBREAK] as string,
                 ).toArray();
-                const doc = rowToDoc(docRows[0]);
+                const document_ = rowToDocument(documentRows[0]);
 
-                if (doc) {
-                    docs.push(doc);
+                if (document_) {
+                    docs.push(document_);
                 }
             }
 
@@ -2218,142 +2420,6 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             return { continueCursor, isDone: !hasMore, page: docs };
-        },
-
-        async insert(tableName, document, insertOptions) {
-            const definition = schema.tables[tableName];
-
-            if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
-            }
-
-            const withDefaults = applyInsertDefaults(definition, document);
-
-            // Refinements declared via `.check(predicate)` fire here on the
-            // post-default row so a defaulted value still passes its checks.
-            runRowValidators(definition, withDefaults);
-
-            // A client-chosen `_id` is only honored on the trusted dev/admin
-            // import path (`allowExplicitId`); the default mutation path always
-            // generates a fresh id even if a handler forwards a raw payload.
-            const id = insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string" ? (withDefaults["_id"]) : generateId();
-            const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"]) : clock();
-
-            const docWithMeta: Record<string, unknown> = { ...withDefaults, _id: id, _creationTime: creationTime };
-
-            // `before` sees a shallow copy so an abort-only handler can't reassign
-            // the row's top-level fields before they persist. Nested values are
-            // still shared by reference — before-handlers are abort/side-effect
-            // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
-            if (hasMatchingTrigger(tableName, "before", "insert")) {
-                await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
-            }
-
-            // Backfill counters BEFORE the physical write so the rebuild
-            // scans a pre-insert snapshot — otherwise the row we're about to
-            // INSERT lands in both the rebuild and the +1 step.
-            ensureBackfilledForTable(tableName);
-            ensureRankBackfilledForTable(tableName);
-
-            runWrite(
-                sql,
-                tableName,
-                `INSERT INTO ${quoteIdentifier(tableName)} (id, _creationTime, ${DOC_COLUMN}) VALUES (?, ?, ?)`,
-                id,
-                creationTime,
-                JSON.stringify(docWithMeta),
-            );
-
-            syncSearch(tableName, id, docWithMeta);
-            syncAggregates(tableName, undefined, docWithMeta);
-            syncRanks(tableName, id, undefined, docWithMeta);
-
-            // Invalidate BEFORE the broadcast so a subscriber that re-runs
-            // its query in response to the broadcast cannot read a stale
-            // cache entry. `ReactiveCache.invalidate(table, id)` clears both
-            // the per-id bucket AND the `table:*scan` bucket — inserts can
-            // flip any scan-shaped result, so the latter MUST go even though
-            // the new row id was never read by anything.
-            cache?.invalidate(tableName, id);
-
-            broadcast({ table: tableName, op: "insert", key: id, row: docWithMeta });
-
-            if (hasMatchingTrigger(tableName, "after", "insert")) {
-                await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
-            }
-
-            await onWrite({ op: "insert", table: tableName, id, doc: docWithMeta });
-
-            return id;
-        },
-
-        async patch(id, patch) {
-            // Single probe — eliminates the redundant `tableNameFromId` +
-            // `writer.get` chain that doubled the SQL round-trips per patch
-            // on the prior code path.
-            const located = lookupById(id);
-
-            if (!located) {
-                throw new Error(`document not found: ${id}`);
-            }
-
-            const { docJson: existingJson, row: existing, tableName } = located;
-            const tableDefinition = schema.tables[tableName];
-
-            if (!tableDefinition) {
-                throw new Error(`unknown table: ${tableName}`);
-            }
-
-            onRead(tableName, id);
-
-            const merged = { ...existing, ...patch, _id: id };
-
-            applyOnUpdate(tableDefinition, patch, merged);
-
-            // Run column refinements on the merged row so a patch that flips a
-            // field to an invalid value (e.g. negative amount) is rejected
-            // before SQLite sees it.
-            runRowValidators(tableDefinition, merged);
-
-            if (hasMatchingTrigger(tableName, "before", "update")) {
-                await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
-            }
-
-            ensureBackfilledForTable(tableName);
-            ensureRankBackfilledForTable(tableName);
-
-            // Optimistic-concurrency guard: CAS on the read-time `__doc__`
-            // snapshot. The before-update trigger above spans an `await`, so a
-            // concurrent write could have committed in between; the
-            // `AND ${DOC_COLUMN} = ?` clause makes that write match zero rows
-            // and raise ConflictError instead of silently clobbering it (and
-            // keeps `existing` — used for the aggregate/rank -prev steps — in
-            // sync with what is actually on disk).
-            runGuardedWrite(
-                sql,
-                tableName,
-                `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ? AND ${DOC_COLUMN} = ?`,
-                JSON.stringify(merged),
-                id,
-                existingJson,
-            );
-
-            syncSearch(tableName, id, merged);
-            syncAggregates(tableName, existing, merged);
-            syncRanks(tableName, id, existing, merged);
-
-            // A patch can flip a row from matching to not-matching (or vice
-            // versa) any scan-shaped predicate — `invalidate` blows both the
-            // row's per-id deps AND the `*scan` bucket on this table.
-            cache?.invalidate(tableName, id);
-
-            broadcast({ table: tableName, op: "update", key: id, row: merged });
-
-            if (hasMatchingTrigger(tableName, "after", "update")) {
-                await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
-            }
-
-            await onWrite({ op: "update", table: tableName, id, doc: merged });
         },
 
         async replace(id, document) {
@@ -2378,13 +2444,13 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const needsPrevious =
-                hasTrigger(schema, tableName, "update") ||
-                (tableDefinition.aggregateIndexes ?? []).length > 0 ||
-                (tableDefinition.rankIndexes ?? []).length > 0;
+            const needsPrevious
+                = hasTrigger(schema, tableName, "update")
+                    || (tableDefinition.aggregateIndexes ?? []).length > 0
+                    || (tableDefinition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? lookupById(id)?.row : undefined;
-            const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"]) : clock();
-            const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
+            const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
+            const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
             applyOnUpdate(tableDefinition, document, replaced);
 
@@ -2414,90 +2480,20 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             cache?.invalidate(tableName, id);
 
-            broadcast({ table: tableName, op: "update", key: id, row: replaced });
+            broadcast({ key: id, op: "update", row: replaced, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
             }
 
-            await onWrite({ op: "update", table: tableName, id, doc: replaced });
-        },
-
-        async delete(id) {
-            // Single probe — get the table + row in one pass instead of
-            // probing twice (`tableNameFromId` + `writer.get`).
-            const located = lookupById(id);
-
-            if (!located) {
-                return;
-            }
-
-            const { docJson: existingJson, tableName, row: existing } = located;
-
-            // `before` fires ahead of cascade resolution so a throwing guard
-            // aborts the delete before any holder rows are touched.
-            if (hasMatchingTrigger(tableName, "before", "delete")) {
-                await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
-            }
-
-            // Resolve declared `onDelete` actions on holder rows *before* the
-            // physical delete, so `restrict` can abort and cascaded child
-            // deletes still fire their own broadcast/onWrite per row.
-            //
-            // The callbacks pass through `routeForHolder` so a holder living
-            // on a global (`.global()`) table is reached through the supplied
-            // D1-backed `globalDb` writer, not this DO's local SQLite.
-            // Cross-backend cascade is **not transactional**: the local row
-            // commits below regardless of whether the global cascade succeeds.
-            await applyOnDelete({
-                deletedId: id,
-                deletedReference: (references) => existing?.[references],
-                findHolders: async (holderTable, field, value) => {
-                    const holders = await routeForHolder(holderTable).findMany(holderTable, { where: { [field]: value } });
-
-                    return holders.page;
-                },
-                onCascade: (holderTable, holderId) => routeForHolder(holderTable).delete(holderId),
-                onRestrict: (message) => {
-                    throw new ConflictError(message);
-                },
-                onSetNull: (holderTable, holderId, field) => routeForHolder(holderTable).patch(holderId, { [field]: null }),
-                schema,
-                tableName,
-            });
-
-            ensureBackfilledForTable(tableName);
-            ensureRankBackfilledForTable(tableName);
-
-            // Optimistic-concurrency guard over the (wide) cascade window: the
-            // `applyOnDelete` await above can let a concurrent write commit, so
-            // CAS on the read-time `__doc__` snapshot. A row that was updated
-            // out from under us (blob changed) or already removed matches zero
-            // rows and raises ConflictError rather than clobbering that write —
-            // and keeps `existing` (used for the aggregate/rank -prev steps) in
-            // sync with what was actually on disk.
-            runGuardedWrite(sql, tableName, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ? AND ${DOC_COLUMN} = ?`, id, existingJson);
-
-            syncSearch(tableName, id, undefined);
-            syncAggregates(tableName, existing ?? undefined, undefined);
-            syncRanks(tableName, id, existing ?? undefined, undefined);
-
-            cache?.invalidate(tableName, id);
-
-            broadcast({ table: tableName, op: "delete", key: id });
-
-            if (hasMatchingTrigger(tableName, "after", "delete")) {
-                await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
-            }
-
-            await onWrite({ op: "delete", table: tableName, id });
+            await onWrite({ doc: replaced, id, op: "update", table: tableName });
         },
     };
 
     // Declared after `writer` but closed over by `fireTriggers` (defined above):
     // safe because `fireTriggers` only runs while a write is in flight, long
     // after construction has initialized this binding.
-    const triggerCtx: TriggerContextLike = { db: writer, scheduler };
+    const triggerContext: TriggerContextLike = { db: writer, scheduler };
 
     return writer;
 };
@@ -2600,7 +2596,7 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
                 );
 
                 // Sorted btree: (partition, sortBy ASC/DESC..., __id__ ASC)
-                const orderedColumns = ['"__partition__" ASC'];
+                const orderedColumns = ["\"__partition__\" ASC"];
 
                 for (const [i, column] of sortColumns.entries()) {
                     const direction = index.sortBy[i]?.direction;
@@ -2608,7 +2604,7 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
                     orderedColumns.push(`${quoteIdentifier(column)} ${direction === "desc" ? "DESC" : "ASC"}`);
                 }
 
-                orderedColumns.push('"__id__" ASC');
+                orderedColumns.push("\"__id__\" ASC");
 
                 const btreeName = `${tableName}__rank_${index.name}__btree`;
 
@@ -2652,17 +2648,17 @@ export const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void
             const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
 
             for (const row of rows) {
-                const doc = rowToDoc(row);
+                const document_ = rowToDocument(row);
 
-                if (!doc) {
+                if (!document_) {
                     continue;
                 }
 
-                if (index.where && !matchesStaticWhere(doc, index.where)) {
+                if (index.where && !matchesStaticWhere(document_, index.where)) {
                     continue;
                 }
 
-                const encoded = encodeAggregateKey(by, doc);
+                const encoded = encodeAggregateKey(by, document_);
 
                 tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
             }
@@ -2712,23 +2708,23 @@ export const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
             const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
 
             for (const row of rows) {
-                const doc = rowToDoc(row);
+                const document_ = rowToDocument(row);
 
-                if (!doc) {
+                if (!document_) {
                     continue;
                 }
 
-                if (index.where && !matchesRankStaticWhere(doc, index.where)) {
+                if (index.where && !matchesRankStaticWhere(document_, index.where)) {
                     continue;
                 }
 
-                const partitionKey = encodePartitionKey(index.partitionBy ?? [], doc);
-                const sortValues = index.sortBy.map((key) => serializeSqlValue(doc[key.field] ?? null));
+                const partitionKey = encodePartitionKey(index.partitionBy ?? [], document_);
+                const sortValues = index.sortBy.map((key) => serializeSqlValue(document_[key.field] ?? null));
 
                 runSql(
                     sql,
                     `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`,
-                    doc["_id"] as string,
+                    document_["_id"] as string,
                     partitionKey,
                     ...sortValues,
                 );

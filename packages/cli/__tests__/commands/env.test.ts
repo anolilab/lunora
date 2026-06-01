@@ -82,11 +82,11 @@ describe("cirrus env", () => {
             await runEnvCommand({ cwd: workdir, key: "TOKEN", logger, subcommand: "set", value: "abcd1234" });
 
             const written: string[] = [];
-            const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+            const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
                 written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
 
                 return true;
-            }));
+            });
 
             try {
                 const result = await runEnvCommand({ cwd: workdir, key: "TOKEN", logger, subcommand: "get" });

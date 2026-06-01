@@ -15,7 +15,7 @@ interface CapturedCall {
 }
 
 const fakeNamespace = (
-    responses: Record<string, unknown> = { "/schedule": { id: "id-1", scheduledFor: 12_345 }, "/cancel": { cancelled: true } },
+    responses: Record<string, unknown> = { "/cancel": { cancelled: true }, "/schedule": { id: "id-1", scheduledFor: 12_345 } },
 ): { calls: CapturedCall[]; namespace: DurableObjectNamespaceLike } => {
     const calls: CapturedCall[] = [];
     const stub = {
@@ -24,22 +24,24 @@ const fakeNamespace = (
             const body = init?.body ? JSON.parse(init.body as string) : {};
             const path = new URL(url).pathname;
 
-            calls.push({ url, body });
+            calls.push({ body, url });
 
             const responseBody = responses[path] ?? { ok: true };
 
-            return Response.json(responseBody, { status: 200, headers: { "content-type": "application/json" } });
+            return Response.json(responseBody, { headers: { "content-type": "application/json" }, status: 200 });
         }),
     };
     const namespace: DurableObjectNamespaceLike = {
-        idFromName: vi.fn<DurableObjectNamespaceLike["idFromName"]>((name: string) => { return { toString: () => name }; }),
         get: vi.fn<DurableObjectNamespaceLike["get"]>(() => stub),
+        idFromName: vi.fn<DurableObjectNamespaceLike["idFromName"]>((name: string) => {
+            return { toString: () => name };
+        }),
     };
 
-    return { namespace, calls };
+    return { calls, namespace };
 };
 
-const fn: FunctionReference = { __cirrusRef: "messages.send" };
+const function_: FunctionReference = { __cirrusRef: "messages.send" };
 
 describe("createScheduler", () => {
     it("requires a namespace + originUrl", () => {
@@ -52,20 +54,20 @@ describe("createScheduler", () => {
     it("runAt() forwards the RPC envelope to SchedulerDO", async () => {
         expect.assertions(3);
 
-        const { namespace, calls } = fakeNamespace();
+        const { calls, namespace } = fakeNamespace();
         const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
         const at = new Date("2026-06-01T12:00:00Z");
 
-        const result = await scheduler.runAt(at, fn, { userId: "u-1" });
+        const result = await scheduler.runAt(at, function_, { userId: "u-1" });
 
         expect(result).toEqual({ id: "id-1", scheduledFor: 12_345 });
         expect(calls).toHaveLength(1);
         expect(calls[0]?.body).toEqual({
-            functionPath: "messages.send",
             args: { userId: "u-1" },
+            functionPath: "messages.send",
+            originUrl: "https://app.test",
             scheduledFor: at.getTime(),
             shardKey: undefined,
-            originUrl: "https://app.test",
         });
     });
 
@@ -75,19 +77,19 @@ describe("createScheduler", () => {
         const { namespace } = fakeNamespace();
         const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
 
-        await expect(scheduler.runAfter(-1, fn, {})).rejects.toThrow(DELAY_MS_PATTERN);
-        await expect(scheduler.runAfter(Number.NaN, fn, {})).rejects.toThrow(DELAY_MS_PATTERN);
+        await expect(scheduler.runAfter(-1, function_, {})).rejects.toThrow(DELAY_MS_PATTERN);
+        await expect(scheduler.runAfter(Number.NaN, function_, {})).rejects.toThrow(DELAY_MS_PATTERN);
     });
 
     it("runAfter() computes scheduledFor relative to now()", async () => {
         expect.assertions(3);
 
-        const { namespace, calls } = fakeNamespace();
+        const { calls, namespace } = fakeNamespace();
         const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
 
         const before = Date.now();
 
-        await scheduler.runAfter(5000, fn, { x: 1 }, { shardKey: "u-1" });
+        await scheduler.runAfter(5000, function_, { x: 1 }, { shardKey: "u-1" });
         const after = Date.now();
 
         const scheduledFor = calls[0]?.body.scheduledFor as number;
@@ -100,7 +102,7 @@ describe("createScheduler", () => {
     it("cancel() forwards the id", async () => {
         expect.assertions(3);
 
-        const { namespace, calls } = fakeNamespace();
+        const { calls, namespace } = fakeNamespace();
         const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
 
         const result = await scheduler.cancel("abc");
@@ -117,28 +119,30 @@ describe("createScheduler", () => {
             fetch: vi.fn<DurableObjectStubLike["fetch"]>(async () => new Response("nope", { status: 500 })),
         };
         const namespace: DurableObjectNamespaceLike = {
-            idFromName: () => { return { toString: () => "default" }; },
             get: () => stub,
+            idFromName: () => {
+                return { toString: () => "default" };
+            },
         };
         const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
 
-        await expect(scheduler.runAfter(0, fn, {})).rejects.toThrow(SCHEDULER_DO_PATTERN);
+        await expect(scheduler.runAfter(0, function_, {})).rejects.toThrow(SCHEDULER_DO_PATTERN);
     });
 
     it("createCronTrigger emits a wrangler.jsonc snippet + dispatcher metadata", () => {
         expect.assertions(3);
 
-        const snippet = createCronTrigger({ schedule: "0 * * * *", fn, args: { tenant: "acme" } });
+        const snippet = createCronTrigger({ args: { tenant: "acme" }, fn: function_, schedule: "0 * * * *" });
 
         expect(snippet.crons).toEqual(["0 * * * *"]);
-        expect(snippet.dispatcher).toEqual({ functionPath: "messages.send", args: { tenant: "acme" } });
-        expect(snippet.wranglerJsonc).toContain('"0 * * * *"');
+        expect(snippet.dispatcher).toEqual({ args: { tenant: "acme" }, functionPath: "messages.send" });
+        expect(snippet.wranglerJsonc).toContain("\"0 * * * *\"");
     });
 
     it("createCronTrigger validates inputs", () => {
         expect.assertions(2);
 
-        expect(() => createCronTrigger({ schedule: "", fn })).toThrow();
+        expect(() => createCronTrigger({ fn: function_, schedule: "" })).toThrow();
         // @ts-expect-error - intentional misuse
         expect(() => createCronTrigger({ schedule: "0 * * * *" })).toThrow();
     });

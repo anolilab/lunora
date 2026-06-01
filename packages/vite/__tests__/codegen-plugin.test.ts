@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import { codegenPlugin } from "../src/codegen-plugin.js";
 import type { ResolvedCirrusPluginOptions } from "../src/types.js";
@@ -52,15 +52,15 @@ const writeFixture = (root: string): void => {
 };
 
 const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => {
- return {
-    cloudflare: false,
-    dashboard: false,
-    generatedDir: "cirrus/_generated",
-    overlay: false,
-    projectRoot,
-    schemaDir: "cirrus",
-    validateWrangler: false,
-};
+    return {
+        cloudflare: false,
+        dashboard: false,
+        generatedDir: "cirrus/_generated",
+        overlay: false,
+        projectRoot,
+        schemaDir: "cirrus",
+        validateWrangler: false,
+    };
 };
 
 describe("codegen-plugin", () => {
@@ -74,14 +74,15 @@ describe("codegen-plugin", () => {
 
     describe("codegenPlugin", () => {
         it("buildStart runs codegen and emits the three generated files", () => {
-            expect.assertions(10);
+            // 9 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
+            expect.assertions(9);
 
             writeFixture(workdir);
 
             const plugin = codegenPlugin(makeOptions(workdir));
             const hook = plugin.buildStart;
 
-            expect(typeof hook).toBe("function");
+            expectTypeOf(hook).toBeFunction();
 
             // Vite's buildStart is invoked with a rollup-style context. We pass `undefined`
             // because our implementation doesn't touch it.
@@ -97,8 +98,8 @@ describe("codegen-plugin", () => {
 
             expect(api).toContain("export interface ApiTypes");
             expect(api).toContain("messages:");
-            expect(api).toContain('list: FunctionReference<"query"');
-            expect(api).toContain('send: FunctionReference<"mutation"');
+            expect(api).toContain("list: FunctionReference<\"query\"");
+            expect(api).toContain("send: FunctionReference<\"mutation\"");
 
             const dataModel = readFileSync(join(generatedDirectory, "dataModel.ts"), "utf8");
 
@@ -135,13 +136,14 @@ describe("codegen-plugin", () => {
         });
 
         it("plugin exposes the expected name and configureServer hook", () => {
-            expect.assertions(2);
+            // 1 runtime assertion; the expectTypeOf below is a compile-time check and isn't counted.
+            expect.assertions(1);
 
             const plugin = codegenPlugin(makeOptions(workdir));
 
             expect(plugin.name).toBe("cirrus:codegen");
 
-            expect(typeof plugin.configureServer).toBe("function");
+            expectTypeOf(plugin.configureServer).toBeFunction();
         });
     });
 });

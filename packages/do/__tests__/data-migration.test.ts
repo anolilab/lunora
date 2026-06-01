@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { DataMigrationLike } from "../src/data-migration.js";
 import { DATA_MIGRATION_STATE_TABLE, runDataMigration } from "../src/data-migration.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
@@ -32,7 +32,7 @@ let harness: ReturnType<typeof createSqliteExec>;
 const setupWriter = (): DatabaseWriterLike => {
     runShardMigrations(harness.sql, usersSchema);
 
-    return createShardCtxDb({
+    return createShardContextDatabase({
         clock: () => 1_700_000_000_000,
         schema: usersSchema,
         sql: harness.sql,
@@ -61,7 +61,9 @@ const stateRow = (id: string): Record<string, unknown> | undefined => harness.ra
 const bumpVersion: DataMigrationLike = {
     id: "bump-version",
     table: "users",
-    up: (document) => { return { ...document, version: Number(document["version"] ?? 0) + 1 }; },
+    up: (document) => {
+        return { ...document, version: Number(document["version"] ?? 0) + 1 };
+    },
 };
 
 describe("runDataMigration", () => {
@@ -97,7 +99,7 @@ describe("runDataMigration", () => {
             const flagHighScores: DataMigrationLike = {
                 id: "flag-high",
                 table: "users",
-                up: (document) => (Number(document["score"]) >= 30 ? { ...document, flagged: true } : undefined),
+                up: (document) => Number(document["score"]) >= 30 ? { ...document, flagged: true } : undefined,
             };
 
             const result = await runDataMigration({ migration: flagHighScores, sql: harness.sql, writer });
@@ -247,10 +249,14 @@ describe("runDataMigration", () => {
             await seed(writer);
 
             const migration: DataMigrationLike = {
-                down: (document) => { return { ...document, version: Number(document["version"]) - 1 }; },
+                down: (document) => {
+                    return { ...document, version: Number(document["version"]) - 1 };
+                },
                 id: "versioned",
                 table: "users",
-                up: (document) => { return { ...document, version: Number(document["version"]) + 1 }; },
+                up: (document) => {
+                    return { ...document, version: Number(document["version"]) + 1 };
+                },
             };
 
             await runDataMigration({ migration, sql: harness.sql, writer });

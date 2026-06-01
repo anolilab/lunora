@@ -3,15 +3,15 @@ import type { Id } from "@cirrus/values";
 import { describe, expect, it } from "vitest";
 
 import { RateLimiter } from "../src/rate-limiter.js";
-import type { RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery } from "../src/store.js";
-import { createDbStore } from "../src/store.js";
+import type { RateLimitDb as RateLimitDatabase, RateLimitDbIndexRange as RateLimitDatabaseIndexRange, RateLimitDbQuery as RateLimitDatabaseQuery } from "../src/store.js";
+import { createDbStore as createDatabaseStore } from "../src/store.js";
 
 /**
  * A faithful in-memory stand-in for the Cirrus ORM writer: real row storage and
  * a real `withIndex(...).eq(...).first()` lookup, not a mock. It exercises the
  * adapter's read-then-write logic the same way `ctx.db` would.
  */
-const createFakeDb = (): RateLimitDb => {
+const createFakeDatabase = (): RateLimitDatabase => {
     const rows = new Map<string, Record<string, unknown>>();
     let counter = 0;
 
@@ -36,12 +36,12 @@ const createFakeDb = (): RateLimitDb => {
         }
     };
 
-    const query = (): RateLimitDbQuery => {
+    const query = (): RateLimitDatabaseQuery => {
         const constraints: [string, unknown][] = [];
-        const handle: RateLimitDbQuery = {
-            first: async () => [...rows.values()].find((doc) => constraints.every(([field, value]) => doc[field] === value)) ?? null,
+        const handle: RateLimitDatabaseQuery = {
+            first: async () => [...rows.values()].find((document_) => constraints.every(([field, value]) => document_[field] === value)) ?? null,
             withIndex: (_indexName, range) => {
-                const recorder: RateLimitDbIndexRange = {
+                const recorder: RateLimitDatabaseIndexRange = {
                     eq: (field, value) => {
                         constraints.push([field, value]);
 
@@ -69,7 +69,7 @@ describe("db store", () => {
     it("round-trips, upserts, and deletes values", async () => {
         expect.assertions(4);
 
-        const store = createDbStore({ db: createFakeDb() });
+        const store = createDatabaseStore({ db: createFakeDatabase() });
 
         await expect(store.get("k")).resolves.toBeUndefined();
 
@@ -90,7 +90,7 @@ describe("db store", () => {
     it("round-trips the sliding-window previous-window count", async () => {
         expect.assertions(1);
 
-        const store = createDbStore({ db: createFakeDb() });
+        const store = createDatabaseStore({ db: createFakeDatabase() });
 
         await store.set("hits:bob", { prev: 7, ts: 1000, value: 3 });
 
@@ -100,7 +100,7 @@ describe("db store", () => {
     it("honors a custom table, index, and key field", async () => {
         expect.assertions(1);
 
-        const store = createDbStore({ db: createFakeDb(), index: "by_id", keyField: "k", table: "limits" });
+        const store = createDatabaseStore({ db: createFakeDatabase(), index: "by_id", keyField: "k", table: "limits" });
 
         await store.set("x", { ts: 1, value: 2 });
 
@@ -114,7 +114,7 @@ describe("db store", () => {
         const limiter = new RateLimiter({
             config: { send: { kind: "token bucket", period: 1000, rate: 3 } },
             now: () => clock.now,
-            store: createDbStore({ db: createFakeDb() }),
+            store: createDatabaseStore({ db: createFakeDatabase() }),
         });
 
         await limiter.limit("send", { count: 3, key: "u1" });
@@ -130,7 +130,7 @@ describe("db store", () => {
         expect.assertions(1);
 
         // Compile-time guarantee that `createDbStore({ db: ctx.db })` type-checks.
-        const accept = (db: RateLimitDb): RateLimitDb => db;
+        const accept = (database: RateLimitDatabase): RateLimitDatabase => database;
         const writer = null as unknown as DatabaseWriter;
 
         expect(accept(writer)).toBe(writer);

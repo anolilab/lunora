@@ -23,20 +23,20 @@ interface FakeWebSocket {
 
 const createFakeWebSocket = (): FakeWebSocket => {
     const ws: FakeWebSocket = {
-        sent: [],
-        closed: false,
         attachment: undefined,
-        send(data: string) {
-            this.sent.push(data);
-        },
         close() {
             this.closed = true;
         },
-        serializeAttachment(value: unknown) {
-            this.attachment = value as SocketAttachment | undefined;
-        },
+        closed: false,
         deserializeAttachment() {
             return this.attachment;
+        },
+        send(data: string) {
+            this.sent.push(data);
+        },
+        sent: [],
+        serializeAttachment(value: unknown) {
+            this.attachment = value as SocketAttachment | undefined;
         },
     };
 
@@ -52,15 +52,15 @@ const createFakeState = (options: FakeStateOptions = {}): ShardDOState & { socke
     const sockets: FakeWebSocket[] = [];
 
     return {
-        sockets,
-        storage: { sql: { exec: vi.fn<(query: string) => unknown>(), databaseSize: options.databaseSize } },
-        id: { name: options.idName },
         acceptWebSocket(ws) {
             sockets.push(ws as unknown as FakeWebSocket);
         },
         getWebSockets() {
             return sockets as unknown as WebSocket[];
         },
+        id: { name: options.idName },
+        sockets,
+        storage: { sql: { databaseSize: options.databaseSize, exec: vi.fn<(query: string) => unknown>() } },
     };
 };
 
@@ -82,7 +82,7 @@ class TestShard extends ShardDO {
     public observedIdentity: Record<string, unknown> | undefined;
 
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-        this.rpcCalls.push({ functionPath, args });
+        this.rpcCalls.push({ args, functionPath });
         this.observedInboundBookmark = this.getInboundBookmark();
         this.observedUserId = this.getCurrentUserId();
         this.observedIdentity = this.getCurrentIdentity();
@@ -163,9 +163,9 @@ class ReexecShard extends ShardDO {
     public writeRpc(headers: Record<string, string> = {}): Promise<Response> {
         return this.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "cursors:updateCursor", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "cursors:updateCursor" }),
                 headers: { "content-type": "application/json", ...headers },
+                method: "POST",
             }),
         );
     }
@@ -184,15 +184,15 @@ describe("shardDO", () => {
         expect.assertions(3);
 
         const request = new Request("https://shard.internal/rpc", {
-            method: "POST",
-            body: JSON.stringify({ functionPath: "messages:list", args: { limit: 10 } }),
+            body: JSON.stringify({ args: { limit: 10 }, functionPath: "messages:list" }),
             headers: { "content-type": "application/json" },
+            method: "POST",
         });
 
         const response = await shard.fetch(request);
 
         expect(response.status).toBe(200);
-        expect(shard.rpcCalls).toEqual([{ functionPath: "messages:list", args: { limit: 10 } }]);
+        expect(shard.rpcCalls).toEqual([{ args: { limit: 10 }, functionPath: "messages:list" }]);
         await expect(response.json()).resolves.toEqual({ result: { ok: true } });
     });
 
@@ -200,9 +200,9 @@ describe("shardDO", () => {
         expect.assertions(1);
 
         const request = new Request("https://shard.internal/rpc", {
-            method: "POST",
             body: "{not json",
             headers: { "content-type": "application/json" },
+            method: "POST",
         });
 
         const response = await shard.fetch(request);
@@ -221,8 +221,8 @@ describe("shardDO", () => {
         };
 
         const request = new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args: {}, functionPath: "fail" }),
             method: "POST",
-            body: JSON.stringify({ functionPath: "fail", args: {} }),
         });
 
         const response = await failing.fetch(request);
@@ -238,10 +238,10 @@ describe("shardDO", () => {
 
         shard.registerSocket(ws);
 
-        await shard.driveMessage(ws, { type: "subscribe", id: "sub-1", query: { table: "messages" } });
+        await shard.driveMessage(ws, { id: "sub-1", query: { table: "messages" }, type: "subscribe" });
 
         expect(ws.attachment).toEqual({ subs: { "sub-1": { table: "messages" } } });
-        expect(ws.sent.at(-1)).toBe(JSON.stringify({ type: "ack", id: "sub-1" }));
+        expect(ws.sent.at(-1)).toBe(JSON.stringify({ id: "sub-1", type: "ack" }));
     });
 
     it("unsubscribe clears registered subscription", async () => {
@@ -251,7 +251,7 @@ describe("shardDO", () => {
 
         shard.registerSocket(ws, { subs: { "sub-1": { table: "messages" } } });
 
-        await shard.driveMessage(ws, { type: "unsubscribe", id: "sub-1" });
+        await shard.driveMessage(ws, { id: "sub-1", type: "unsubscribe" });
 
         expect(ws.attachment).toEqual({ subs: {} });
     });
@@ -267,12 +267,12 @@ describe("shardDO", () => {
         shard.registerSocket(other, { subs: { b: { table: "messages" } } });
         shard.registerSocket(unrelated, { subs: { c: { table: "documents" } } });
 
-        shard.emit({ table: "messages", op: "insert", key: "m1", row: { id: "m1" } });
+        shard.emit({ key: "m1", op: "insert", row: { id: "m1" }, table: "messages" });
 
         expect(matching.sent).toHaveLength(1);
         expect(other.sent).toHaveLength(1);
         expect(unrelated.sent).toHaveLength(0);
-        expect(JSON.parse(matching.sent[0]!)).toMatchObject({ type: "delta", id: "a", delta: { table: "messages", op: "insert" } });
+        expect(JSON.parse(matching.sent[0]!)).toMatchObject({ delta: { op: "insert", table: "messages" }, id: "a", type: "delta" });
     });
 
     it("broadcastDelta filters by query.args — same key matches, different value skips", () => {
@@ -282,11 +282,11 @@ describe("shardDO", () => {
         const channelB = createFakeWebSocket();
         const noFilter = createFakeWebSocket();
 
-        shard.registerSocket(channelA, { subs: { "ch-a": { table: "messages", args: { channelId: "A" } } } });
-        shard.registerSocket(channelB, { subs: { "ch-b": { table: "messages", args: { channelId: "B" } } } });
+        shard.registerSocket(channelA, { subs: { "ch-a": { args: { channelId: "A" }, table: "messages" } } });
+        shard.registerSocket(channelB, { subs: { "ch-b": { args: { channelId: "B" }, table: "messages" } } });
         shard.registerSocket(noFilter, { subs: { all: { table: "messages" } } });
 
-        shard.emit({ table: "messages", op: "insert", key: "m1", row: { id: "m1", channelId: "A", text: "hi" } });
+        shard.emit({ key: "m1", op: "insert", row: { channelId: "A", id: "m1", text: "hi" }, table: "messages" });
 
         expect(channelA.sent).toHaveLength(1);
         expect(channelB.sent).toHaveLength(0);
@@ -299,10 +299,10 @@ describe("shardDO", () => {
         const channelA = createFakeWebSocket();
         const channelB = createFakeWebSocket();
 
-        shard.registerSocket(channelA, { subs: { "ch-a": { table: "messages", args: { channelId: "A" } } } });
-        shard.registerSocket(channelB, { subs: { "ch-b": { table: "messages", args: { channelId: "B" } } } });
+        shard.registerSocket(channelA, { subs: { "ch-a": { args: { channelId: "A" }, table: "messages" } } });
+        shard.registerSocket(channelB, { subs: { "ch-b": { args: { channelId: "B" }, table: "messages" } } });
 
-        shard.emit({ table: "messages", op: "delete", key: "m1" });
+        shard.emit({ key: "m1", op: "delete", table: "messages" });
 
         expect(channelA.sent).toHaveLength(1);
         expect(channelB.sent).toHaveLength(1);
@@ -313,11 +313,11 @@ describe("shardDO", () => {
 
         const wsA = createFakeWebSocket();
 
-        shard.registerSocket(wsA, { subs: { "ch-a": { table: "messages", args: { channelId: "A" } } } });
+        shard.registerSocket(wsA, { subs: { "ch-a": { args: { channelId: "A" }, table: "messages" } } });
 
         // `channelId` is missing from the row entirely — strict equality
         // against `undefined` rejects.
-        shard.emit({ table: "messages", op: "insert", key: "m1", row: { id: "m1", text: "hi" } });
+        shard.emit({ key: "m1", op: "insert", row: { id: "m1", text: "hi" }, table: "messages" });
 
         expect(wsA.sent).toHaveLength(0);
     });
@@ -349,22 +349,22 @@ describe("shardDO", () => {
         const custom = new PrefixShard(state, {});
         const ws = createFakeWebSocket();
 
-        custom.registerSocket(ws, { subs: { p: { table: "messages", args: { prefix: "hi" } } } });
+        custom.registerSocket(ws, { subs: { p: { args: { prefix: "hi" }, table: "messages" } } });
 
-        custom.emit({ table: "messages", op: "insert", key: "m1", row: { id: "m1", text: "hi there" } });
-        custom.emit({ table: "messages", op: "insert", key: "m2", row: { id: "m2", text: "bye" } });
+        custom.emit({ key: "m1", op: "insert", row: { id: "m1", text: "hi there" }, table: "messages" });
+        custom.emit({ key: "m2", op: "insert", row: { id: "m2", text: "bye" }, table: "messages" });
 
         expect(ws.sent).toHaveLength(1);
-        expect(JSON.parse(ws.sent[0]!)).toMatchObject({ type: "delta", id: "p" });
+        expect(JSON.parse(ws.sent[0]!)).toMatchObject({ id: "p", type: "delta" });
     });
 
     it("exposes inbound x-d1-bookmark to handleRpc via getInboundBookmark()", async () => {
         expect.assertions(1);
 
         const request = new Request("https://shard.internal/rpc", {
-            method: "POST",
-            body: JSON.stringify({ functionPath: "users:get", args: { id: "u1" } }),
+            body: JSON.stringify({ args: { id: "u1" }, functionPath: "users:get" }),
             headers: { "content-type": "application/json", "x-d1-bookmark": "bm-123" },
+            method: "POST",
         });
 
         await shard.fetch(request);
@@ -377,9 +377,9 @@ describe("shardDO", () => {
 
         shard.bookmarkToEmit = "bm-after-write";
         const request = new Request("https://shard.internal/rpc", {
-            method: "POST",
-            body: JSON.stringify({ functionPath: "users:create", args: {} }),
+            body: JSON.stringify({ args: {}, functionPath: "users:create" }),
             headers: { "content-type": "application/json" },
+            method: "POST",
         });
 
         const response = await shard.fetch(request);
@@ -391,9 +391,9 @@ describe("shardDO", () => {
         expect.assertions(1);
 
         const request = new Request("https://shard.internal/rpc", {
-            method: "POST",
-            body: JSON.stringify({ functionPath: "users:read", args: {} }),
+            body: JSON.stringify({ args: {}, functionPath: "users:read" }),
             headers: { "content-type": "application/json" },
+            method: "POST",
         });
 
         const response = await shard.fetch(request);
@@ -407,9 +407,9 @@ describe("shardDO", () => {
         // First request: bookmark present, handler observes it.
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "users:read", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "users:read" }),
                 headers: { "content-type": "application/json", "x-d1-bookmark": "bm-1" },
+                method: "POST",
             }),
         );
 
@@ -420,9 +420,9 @@ describe("shardDO", () => {
         shard.observedInboundBookmark = "polluted";
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "users:read", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "users:read" }),
                 headers: { "content-type": "application/json" },
+                method: "POST",
             }),
         );
 
@@ -435,9 +435,9 @@ describe("shardDO", () => {
         shard.bookmarkToEmit = "bm-once";
         const first = await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "users:create", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "users:create" }),
                 headers: { "content-type": "application/json" },
+                method: "POST",
             }),
         );
 
@@ -448,9 +448,9 @@ describe("shardDO", () => {
         shard.bookmarkToEmit = undefined;
         const second = await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "users:read", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "users:read" }),
                 headers: { "content-type": "application/json" },
+                method: "POST",
             }),
         );
 
@@ -483,9 +483,9 @@ describe("shardDO __root__ 1 GB warning", () => {
     const driveRpc = async (shard: TestShard): Promise<void> => {
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
+                body: JSON.stringify({ args: {}, functionPath: "noop" }),
                 headers: { "content-type": "application/json" },
-                body: JSON.stringify({ functionPath: "noop", args: {} }),
+                method: "POST",
             }),
         );
     };
@@ -494,7 +494,7 @@ describe("shardDO __root__ 1 GB warning", () => {
         expect.assertions(3);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        const state = createFakeState({ idName: ROOT_SHARD_NAME, databaseSize: ROOT_DO_SIZE_WARN_BYTES });
+        const state = createFakeState({ databaseSize: ROOT_DO_SIZE_WARN_BYTES, idName: ROOT_SHARD_NAME });
         const shard = new TestShard(state, {});
 
         await driveRpc(shard);
@@ -512,7 +512,7 @@ describe("shardDO __root__ 1 GB warning", () => {
         expect.assertions(1);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        const state = createFakeState({ idName: "tenant-42", databaseSize: ROOT_DO_SIZE_WARN_BYTES * 2 });
+        const state = createFakeState({ databaseSize: ROOT_DO_SIZE_WARN_BYTES * 2, idName: "tenant-42" });
         const shard = new TestShard(state, {});
 
         await driveRpc(shard);
@@ -526,7 +526,7 @@ describe("shardDO __root__ 1 GB warning", () => {
         expect.assertions(1);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        const state = createFakeState({ idName: ROOT_SHARD_NAME, databaseSize: ROOT_DO_SIZE_WARN_BYTES - 1 });
+        const state = createFakeState({ databaseSize: ROOT_DO_SIZE_WARN_BYTES - 1, idName: ROOT_SHARD_NAME });
         const shard = new TestShard(state, {});
 
         await driveRpc(shard);
@@ -551,9 +551,9 @@ describe("shardDO identity capture", () => {
 
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 headers: { "content-type": "application/json", "x-cirrus-userid": "user_42" },
+                method: "POST",
             }),
         );
 
@@ -565,13 +565,13 @@ describe("shardDO identity capture", () => {
 
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 headers: {
                     "content-type": "application/json",
-                    "x-cirrus-userid": "user_42",
                     "x-cirrus-identity": JSON.stringify({ email: "user@example.com", roles: ["admin"] }),
+                    "x-cirrus-userid": "user_42",
                 },
+                method: "POST",
             }),
         );
 
@@ -583,9 +583,9 @@ describe("shardDO identity capture", () => {
 
         const response = await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 headers: { "content-type": "application/json", "x-cirrus-identity": "{not json" },
+                method: "POST",
             }),
         );
 
@@ -598,9 +598,9 @@ describe("shardDO identity capture", () => {
 
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 headers: { "content-type": "application/json", "x-cirrus-userid": "user_42" },
+                method: "POST",
             }),
         );
 
@@ -609,9 +609,9 @@ describe("shardDO identity capture", () => {
         shard.observedUserId = "polluted";
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 headers: { "content-type": "application/json" },
+                method: "POST",
             }),
         );
 
@@ -717,9 +717,9 @@ describe("shardDO subscription re-execution", () => {
 
     const subscribe = async (shard: ReexecShard, ws: FakeWebSocket): Promise<void> => {
         await shard.driveMessage(ws, {
-            type: "subscribe",
             id: "sub-1",
-            query: { functionPath: "cursors:listCursors", args: { roomId: "lobby" }, table: "cursors" },
+            query: { args: { roomId: "lobby" }, functionPath: "cursors:listCursors", table: "cursors" },
+            type: "subscribe",
         });
     };
 
@@ -734,8 +734,8 @@ describe("shardDO subscription re-execution", () => {
 
         await subscribe(shard, ws);
 
-        expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "ack", id: "sub-1" });
-        expect(JSON.parse(ws.sent[1]!)).toEqual({ type: "data", id: "sub-1", data: [{ sessionId: "a", x: 0, y: 0 }] });
+        expect(JSON.parse(ws.sent[0]!)).toEqual({ id: "sub-1", type: "ack" });
+        expect(JSON.parse(ws.sent[1]!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
 
         // A write moves the cursor: the next re-execution returns the new view.
         shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 50, y: 80 }], tables: new Set(["cursors"]) });
@@ -743,7 +743,7 @@ describe("shardDO subscription re-execution", () => {
 
         await shard.writeRpc();
 
-        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ type: "data", id: "sub-1", data: [{ sessionId: "a", x: 50, y: 80 }] });
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 50, y: 80 }], id: "sub-1", type: "data" });
     });
 
     it("re-executes but does not re-send when the result is byte-identical", async () => {
@@ -815,10 +815,10 @@ describe("shardDO subscription re-execution", () => {
 
         shard.registerSocket(ws);
 
-        await shard.driveMessage(ws, { type: "subscribe", id: "legacy", query: { table: "messages" } });
+        await shard.driveMessage(ws, { id: "legacy", query: { table: "messages" }, type: "subscribe" });
 
         expect(ws.sent).toHaveLength(1);
-        expect(JSON.parse(ws.sent[0]!)).toEqual({ type: "ack", id: "legacy" });
+        expect(JSON.parse(ws.sent[0]!)).toEqual({ id: "legacy", type: "ack" });
 
         shard.changedTableOnRpc = "messages";
         await shard.writeRpc();
@@ -836,7 +836,7 @@ describe("shardDO subscription re-execution", () => {
         shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
 
         await subscribe(shard, ws);
-        await shard.driveMessage(ws, { type: "unsubscribe", id: "sub-1" });
+        await shard.driveMessage(ws, { id: "sub-1", type: "unsubscribe" });
 
         const sentBefore = ws.sent.length;
 
@@ -844,7 +844,7 @@ describe("shardDO subscription re-execution", () => {
         // is pushed again rather than deduped against the dropped one.
         await subscribe(shard, ws);
 
-        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ type: "data", id: "sub-1", data: [{ sessionId: "a", x: 0, y: 0 }] });
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
         expect(ws.sent.length).toBeGreaterThan(sentBefore);
     });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { MutationCtx, QueryCtx, ReadOnlyStorage, Storage } from "../src/index.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext, ReadOnlyStorage, Storage } from "../src/index.js";
 import { query, v } from "../src/index.js";
 
 /**
@@ -19,17 +19,17 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
         // both `QueryCtx["storage"]` and `MutationCtx["storage"]`.
         const storage: ReadOnlyStorage = {
             download: async (_key) => null,
-            getSignedUrl: async (key, opts) => `signed://${key}?expires=${opts?.expiresInSeconds ?? 60}`,
+            getSignedUrl: async (key, options) => `signed://${key}?expires=${options?.expiresInSeconds ?? 60}`,
             getUrl: (key) => `https://cdn.example.com/${key}`,
         };
 
-        const queryCtx: QueryCtx["storage"] = storage;
-        const mutationCtx: MutationCtx["storage"] = storage;
+        const queryContext: QueryContext["storage"] = storage;
+        const mutationContext: MutationContext["storage"] = storage;
 
-        expectTypeOf(queryCtx.getSignedUrl).toBeFunction();
-        expectTypeOf(queryCtx.getUrl).toBeFunction();
-        expectTypeOf(queryCtx.download).toBeFunction();
-        expectTypeOf(mutationCtx.getSignedUrl).toBeFunction();
+        expectTypeOf(queryContext.getSignedUrl).toBeFunction();
+        expectTypeOf(queryContext.getUrl).toBeFunction();
+        expectTypeOf(queryContext.download).toBeFunction();
+        expectTypeOf(mutationContext.getSignedUrl).toBeFunction();
     });
 
     it("does NOT expose write operations on QueryCtx.storage at the type level", () => {
@@ -39,7 +39,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
         // `ActionCtx`. Asserting at compile-time that `QueryCtx["storage"]`
         // never grows it back guards against accidental regressions where
         // someone widens the type back to the full surface.
-        type QueryStorage = QueryCtx["storage"];
+        type QueryStorage = QueryContext["storage"];
 
         // `upload` must NOT be assignable as a key of `QueryStorage`.
         type NoUpload = Assert<Extends<"upload", keyof QueryStorage> extends true ? false : true>;
@@ -64,8 +64,8 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
 
         const storage: ReadOnlyStorage = {
             download: async () => null,
-            getSignedUrl: async (key, opts) => {
-                calls.push({ key, expiresInSeconds: opts?.expiresInSeconds });
+            getSignedUrl: async (key, options) => {
+                calls.push({ expiresInSeconds: options?.expiresInSeconds, key });
 
                 return `signed://${key}`;
             },
@@ -74,23 +74,23 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
 
         const getAvatar = query({
             args: { userId: v.id("users") },
-            handler: async (ctx, { userId }): Promise<{ url: string }> => {
-                const url = await ctx.storage.getSignedUrl(`avatars/${userId}/profile`, { expiresInSeconds: 300 });
+            handler: async (context, { userId }): Promise<{ url: string }> => {
+                const url = await context.storage.getSignedUrl(`avatars/${userId}/profile`, { expiresInSeconds: 300 });
 
                 return { url };
             },
         });
 
-        const ctx = {
+        const context = {
             auth: { getIdentity: async () => null, userId: null },
-            db: {} as QueryCtx["db"],
+            db: {} as QueryContext["db"],
             storage,
-            vectors: {} as QueryCtx["vectors"],
-        } satisfies QueryCtx;
+            vectors: {} as QueryContext["vectors"],
+        } satisfies QueryContext;
 
-        const result = await getAvatar.handler(ctx, { userId: "u_1" as unknown as Parameters<typeof getAvatar.handler>[1]["userId"] });
+        const result = await getAvatar.handler(context, { userId: "u_1" as unknown as Parameters<typeof getAvatar.handler>[1]["userId"] });
 
         expect(result).toEqual({ url: "signed://avatars/u_1/profile" });
-        expect(calls).toEqual([{ key: "avatars/u_1/profile", expiresInSeconds: 300 }]);
+        expect(calls).toEqual([{ expiresInSeconds: 300, key: "avatars/u_1/profile" }]);
     });
 });

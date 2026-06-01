@@ -28,7 +28,9 @@ const makeShardStub = (payload: unknown): ShardNamespaceLike => {
     return {
         get: () => stub,
         getByName: () => stub,
-        idFromName: (name) => { return { __name: name }; },
+        idFromName: (name) => {
+            return { __name: name };
+        },
     };
 };
 
@@ -54,11 +56,11 @@ interface ExportSetup {
 const buildExportSetup = (count: number, rowsPerShard: number): ExportSetup => {
     const shardKeys = Array.from({ length: count }, (_, index) => `s${String(index)}`);
     const rows = Array.from({ length: rowsPerShard }, (_, index) => {
- return {
-        doc: { _id: `t${String(index)}`, projectId: "p1", seq: index },
-        table: "todos",
-    };
-});
+        return {
+            doc: { _id: `t${String(index)}`, projectId: "p1", seq: index },
+            table: "todos",
+        };
+    });
 
     return {
         coordinator: createQueryCoordinator({ registry: createStaticShardRegistry({ todos: shardKeys }) }),

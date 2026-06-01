@@ -1,9 +1,8 @@
+import type { ScheduleRecord } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-
-import type { ScheduleRecord } from "@cirrus/client";
 
 import { ScheduledJobs } from "../src/scheduled-jobs.js";
 import type { MockClientHooks } from "./mock-client.js";
@@ -58,7 +57,9 @@ describe("scheduledJobs", () => {
         expect.assertions(2);
 
         const loadJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => RECORDS);
-        const cancelJob = vi.fn<() => Promise<{ cancelled: boolean }>>(async () => { return { cancelled: true }; });
+        const cancelJob = vi.fn<() => Promise<{ cancelled: boolean }>>(async () => {
+            return { cancelled: true };
+        });
 
         render(withProvider(createMockClient(), <ScheduledJobs cancelJob={cancelJob} loadJobs={loadJobs} />));
 

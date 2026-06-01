@@ -173,7 +173,7 @@ export const planAggregateLookup = (
             return undefined;
         }
 
-        const value = (requested)[key];
+        const value = requested[key];
 
         // Only literal/`eq` comparators are routable.
         if (value !== null && typeof value === "object" && !Array.isArray(value)) {
@@ -199,7 +199,7 @@ export const planAggregateLookup = (
                     return undefined;
                 }
             } else if (key in requested) {
-                if ((requested)[key] !== value) {
+                if (requested[key] !== value) {
                     return undefined;
                 }
             } else {

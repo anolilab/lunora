@@ -16,11 +16,11 @@ interface FakeState extends ShardDOState {
 
 const createFakeState = (sqlExec: ExecMock = vi.fn<(query: string) => unknown>()): FakeState => {
     const state: FakeState = {
-        sockets: [],
-        storage: { sql: { exec: sqlExec } },
-        id: { name: "test-shard" },
         acceptWebSocket: vi.fn<ShardDOState["acceptWebSocket"]>(),
         getWebSockets: vi.fn<ShardDOState["getWebSockets"]>(() => []),
+        id: { name: "test-shard" },
+        sockets: [],
+        storage: { sql: { exec: sqlExec } },
     };
 
     return state;
@@ -45,8 +45,8 @@ class TestShardDO extends ShardDO {
         } catch (error_) {
             // Reach the private mapper through the public fetch path.
             const request = new Request("https://shard.invalid/rpc", {
-                method: "POST",
                 body: JSON.stringify({ functionPath: "noop" }),
+                method: "POST",
             });
 
             // Override handleRpc for this single call so it raises our error.
@@ -118,7 +118,7 @@ describe("shardDO.runInTransaction", () => {
             shard.callRunInTransaction(async () => {
                 await shard.callRunInTransaction(() => 1);
             }),
-        ).rejects.toMatchObject({ code: "NESTED_TRANSACTION", status: 500, name: "CirrusError" });
+        ).rejects.toMatchObject({ code: "NESTED_TRANSACTION", name: "CirrusError", status: 500 });
     });
 
     it("swallows secondary ROLLBACK errors so the original throw propagates", async () => {

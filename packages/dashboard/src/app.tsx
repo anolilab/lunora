@@ -59,7 +59,7 @@ const resolveBaseUrl = (explicit: string | undefined): string => {
  * yourself. For embedding into an existing admin UI, use the individual panels
  * or `&lt;Dashboard>` under your own provider instead.
  */
-export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppProps = {}): ReactElement {
+export const DashboardApp = ({ adminToken, baseUrl, dashboard }: DashboardAppProps = {}): ReactElement => {
     // Seed from the prop, else a token persisted in a prior session (so a reload
     // doesn't force a re-paste). The prop wins when explicitly provided.
     const [token, setToken] = useState<string>(() => adminToken ?? loadToken());
@@ -73,7 +73,7 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
         // The token doubles as the WS credential (`wsToken`) so live admin
         // subscriptions clear the upgrade's admin gate, mirroring the bearer the
         // HTTP admin RPCs already send.
-        const created = new CirrusClient({ url: resolveBaseUrl(baseUrl), ...(token === "" ? {} : { wsToken: token }) });
+        const created = new CirrusClient({ url: resolveBaseUrl(baseUrl), ...token === "" ? {} : { wsToken: token } });
 
         if (token !== "") {
             created.setAuthToken(token);
@@ -85,9 +85,12 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
     // Close the previous client when `token`/`baseUrl` changes (and on unmount)
     // so we don't leak sockets, in-flight streams, or reconnect timers each
     // time the admin pastes a new token.
-    useEffect(() => (): void => {
+    useEffect(
+        () => (): void => {
             client.close();
-        }, [client]);
+        },
+        [client],
+    );
 
     return (
         <div className={DASHBOARD_ROOT_CLASS} data-testid="cirrus-dashboard-app">
@@ -131,6 +134,6 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
             </CirrusProvider>
         </div>
     );
-}
+};
 
 export type { DashboardAppProps };

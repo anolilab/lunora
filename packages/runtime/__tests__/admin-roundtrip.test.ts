@@ -17,16 +17,16 @@ import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 const ADMIN_TOKEN = "roundtrip-admin";
 
 const minimalParser = (kind: string) => {
- return {
-    kind,
-    parse(value: unknown) {
-        if (kind === "string" && typeof value !== "string") {
-            throw new Error("expected string");
-        }
+    return {
+        kind,
+        parse(value: unknown) {
+            if (kind === "string" && typeof value !== "string") {
+                throw new Error("expected string");
+            }
 
-        return value;
-    },
-};
+            return value;
+        },
+    };
 };
 
 const schema: SchemaLike = {
@@ -46,15 +46,15 @@ const buildSqliteSql = (): { close: () => void; sql: ShardDOState["storage"]["sq
         const rows = statement.all(...(parameters as never[])) as Record<string, unknown>[];
 
         return {
-            [Symbol.iterator]() {
-                return rows[Symbol.iterator]();
-            },
             one() {
                 if (rows.length !== 1) {
                     throw new Error("expected one row");
                 }
 
                 return rows[0]!;
+            },
+            [Symbol.iterator]() {
+                return rows[Symbol.iterator]();
             },
             toArray() {
                 return rows;
@@ -100,7 +100,7 @@ class TestShard extends ShardDO {
     }
 }
 
-const fakeCtx: ExecutionContextLike = {
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
 };
@@ -140,7 +140,9 @@ const buildCluster = (shardKeys: string[]) => {
                 },
             };
         },
-        idFromName: (name) => { return { __name: name }; },
+        idFromName: (name) => {
+            return { __name: name };
+        },
     };
 
     return { namespace, shards };
@@ -172,7 +174,7 @@ describe("admin roundtrip — 3 shards", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: coordinator,
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                (table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : undefined),
+                table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : undefined,
             shardDO: sourceCluster.namespace,
         });
 
@@ -183,7 +185,7 @@ describe("admin roundtrip — 3 shards", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(exportResponse.status).toBe(200);
@@ -200,7 +202,7 @@ describe("admin roundtrip — 3 shards", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: targetCoordinator,
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                (table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : undefined),
+                table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : undefined,
             shardDO: targetCluster.namespace,
         });
 
@@ -211,7 +213,7 @@ describe("admin roundtrip — 3 shards", () => {
                 method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(importResponse.status).toBe(200);
@@ -227,8 +229,8 @@ describe("admin roundtrip — 3 shards", () => {
 
             expect(page.page).toHaveLength(4);
 
-            for (const doc of page.page) {
-                expect(doc["channelId"]).toBe(key);
+            for (const document_ of page.page) {
+                expect(document_["channelId"]).toBe(key);
             }
         }
 

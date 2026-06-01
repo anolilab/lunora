@@ -12,13 +12,13 @@ const Boom = (): ReactElement => {
 // be made to succeed by flipping the flag before re-render.
 let shouldThrow: boolean;
 
-function Toggle(): ReactElement {
+const Toggle = (): ReactElement => {
     if (shouldThrow) {
         throw new Error("toggle boom");
     }
 
     return <p data-testid="recovered-ok">ok</p>;
-}
+};
 
 describe("errorBoundary", () => {
     beforeEach(() => {

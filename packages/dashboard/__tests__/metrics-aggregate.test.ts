@@ -5,20 +5,24 @@ import type { ShardMetricsResult } from "../src/metrics-aggregate.js";
 import { aggregateMetrics, shardsToAggregate } from "../src/metrics-aggregate.js";
 
 const snapshot = (over: Partial<ShardMetrics> = {}): ShardMetrics => {
- return {
-    cache: null,
-    databaseSize: 1000,
-    errors: 1,
-    requests: 10,
-    shard: "s",
-    sinceMs: 0,
-    uptimeMs: 0,
-    ...over,
-};
+    return {
+        cache: null,
+        databaseSize: 1000,
+        errors: 1,
+        requests: 10,
+        shard: "s",
+        sinceMs: 0,
+        uptimeMs: 0,
+        ...over,
+    };
 };
 
-const ok = (shard: string, metrics: ShardMetrics): ShardMetricsResult => { return { error: null, metrics, shard }; };
-const down = (shard: string): ShardMetricsResult => { return { error: "ADMIN_FORBIDDEN", metrics: null, shard }; };
+const ok = (shard: string, metrics: ShardMetrics): ShardMetricsResult => {
+    return { error: null, metrics, shard };
+};
+const down = (shard: string): ShardMetricsResult => {
+    return { error: "ADMIN_FORBIDDEN", metrics: null, shard };
+};
 
 describe("aggregateMetrics", () => {
     it("sums counters and database size across reachable shards", () => {

@@ -68,8 +68,8 @@ export interface SignedUrlOptions {
 export interface Storage {
     delete: (key: string) => Promise<void>;
     download: (key: string) => Promise<R2ObjectBodyLike | null>;
-    getSignedUrl: (key: string, opts?: SignedUrlOptions) => Promise<string>;
+    getSignedUrl: (key: string, options?: SignedUrlOptions) => Promise<string>;
     getUrl: (key: string) => string;
-    list: (prefix?: string, opts?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[] }>;
-    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, opts?: UploadOptions) => Promise<{ etag: string; key: string }>;
+    list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[] }>;
+    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; key: string }>;
 }

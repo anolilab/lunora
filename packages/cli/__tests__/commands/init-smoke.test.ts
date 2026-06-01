@@ -28,12 +28,12 @@ import { runInitCommand } from "../../src/commands/init.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => {
- return {
-    error: () => {},
-    info: () => {},
-    success: () => {},
-    warn: () => {},
-};
+    return {
+        error: () => {},
+        info: () => {},
+        success: () => {},
+        warn: () => {},
+    };
 };
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));

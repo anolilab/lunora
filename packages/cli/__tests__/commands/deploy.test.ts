@@ -30,7 +30,7 @@ const silentLogger = (): { errors: string[]; logger: Logger } => {
     return {
         errors,
         logger: {
-            error: (msg) => errors.push(msg),
+            error: (message) => errors.push(message),
             info: () => {},
             success: () => {},
             warn: () => {},

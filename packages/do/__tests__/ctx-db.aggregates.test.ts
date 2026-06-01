@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { backfillAggregateIndexes, createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { backfillAggregateIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
 /**
@@ -42,19 +42,19 @@ const activeByProject: AggregateIndexDefinitionLike = {
 };
 
 const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
- return {
-    tables: {
-        todos: {
-            aggregateIndexes: indexes,
-            indexes: [{ fields: ["projectId"], name: "by_project" }],
-            shape: {
-                archived: { kind: "boolean" },
-                projectId: { kind: "string" },
-                seq: { kind: "number" },
+    return {
+        tables: {
+            todos: {
+                aggregateIndexes: indexes,
+                indexes: [{ fields: ["projectId"], name: "by_project" }],
+                shape: {
+                    archived: { kind: "boolean" },
+                    projectId: { kind: "string" },
+                    seq: { kind: "number" },
+                },
             },
         },
-    },
-};
+    };
 };
 
 let harness: ReturnType<typeof createSqliteExec>;
@@ -62,7 +62,7 @@ let harness: ReturnType<typeof createSqliteExec>;
 const setupWriter = (schema: SchemaLike): DatabaseWriterLike => {
     runShardMigrations(harness.sql, schema);
 
-    return createShardCtxDb({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    return createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
 };
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
@@ -311,7 +311,7 @@ describe("ctx-db aggregates", () => {
             const schemaWithIndex = makeSchema(byProject);
 
             runShardMigrations(harness.sql, schemaWithIndex);
-            writer = createShardCtxDb({ clock: () => 1_700_000_000_000, schema: schemaWithIndex, sql: harness.sql });
+            writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithIndex, sql: harness.sql });
 
             await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
 
@@ -339,7 +339,7 @@ describe("ctx-db aggregates", () => {
 
             expect(rows).toHaveLength(2);
 
-            writer = createShardCtxDb({ clock: () => 1_700_000_000_000, schema: schemaWithIndex, sql: harness.sql });
+            writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithIndex, sql: harness.sql });
 
             await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
         });

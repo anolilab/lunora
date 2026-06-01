@@ -61,7 +61,7 @@ const parseNdjson = (text: string): ExportRow[] => {
  * Both calls travel over the {@link useCirrus} client transport and are gated by
  * the server's `CIRRUS_ADMIN_TOKEN`.
  */
-export function ExportImportPanel({ initialShardKey }: ExportImportPanelProps): ReactElement {
+export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): ReactElement => {
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -182,6 +182,6 @@ export function ExportImportPanel({ initialShardKey }: ExportImportPanelProps): 
             )}
         </div>
     );
-}
+};
 
 export type { ExportImportPanelProps };

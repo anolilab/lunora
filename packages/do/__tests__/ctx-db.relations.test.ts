@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
 /**
@@ -15,10 +15,10 @@ let harness: ReturnType<typeof createSqliteExec>;
 const makeWriter = (schema: SchemaLike): DatabaseWriterLike => {
     runShardMigrations(harness.sql, schema);
 
-    return createShardCtxDb({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+    return createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
 };
 
-const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((doc) => doc["_id"]);
+const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((document_) => document_["_id"]);
 
 describe("ctx-db relations", () => {
     beforeEach(() => {
@@ -176,27 +176,27 @@ describe("ctx-db relations", () => {
 
     describe("onDelete", () => {
         const buildSchema = (action: "cascade" | "restrict" | "set null"): SchemaLike => {
- return {
-            tables: {
-                messages: {
-                    indexes: [{ fields: ["authorId"], name: "by_author" }],
-                    relationMap: {
-                        author: { field: "authorId", kind: "one", onDelete: action, references: "_id", table: "users" },
-                        reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" },
+            return {
+                tables: {
+                    messages: {
+                        indexes: [{ fields: ["authorId"], name: "by_author" }],
+                        relationMap: {
+                            author: { field: "authorId", kind: "one", onDelete: action, references: "_id", table: "users" },
+                            reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" },
+                        },
+                        shape: { authorId: { kind: "string" }, body: { kind: "string" } },
                     },
-                    shape: { authorId: { kind: "string" }, body: { kind: "string" } },
-                },
-                reactions: {
-                    indexes: [{ fields: ["messageId"], name: "by_message" }],
-                    relationMap: {
-                        message: { field: "messageId", kind: "one", onDelete: "cascade", references: "_id", table: "messages" },
+                    reactions: {
+                        indexes: [{ fields: ["messageId"], name: "by_message" }],
+                        relationMap: {
+                            message: { field: "messageId", kind: "one", onDelete: "cascade", references: "_id", table: "messages" },
+                        },
+                        shape: { emoji: { kind: "string" }, messageId: { kind: "string" } },
                     },
-                    shape: { emoji: { kind: "string" }, messageId: { kind: "string" } },
+                    users: { indexes: [], shape: { name: { kind: "string" } } },
                 },
-                users: { indexes: [], shape: { name: { kind: "string" } } },
-            },
+            };
         };
-};
 
         it("cascade deletes holder rows (and chains recursively)", async () => {
             expect.assertions(2);
@@ -310,7 +310,7 @@ describe("ctx-db relations", () => {
          * by the DO writer's lookup-by-id miss). Only the surface the cascade
          * touches is implemented; everything else throws to surface accidental use.
          */
-        const buildFakeGlobalDb = () => {
+        const buildFakeGlobalDatabase = () => {
             const rows = new Map<string, Record<string, unknown>>();
 
             const writer = {
@@ -323,10 +323,10 @@ describe("ctx-db relations", () => {
 
                     return { continueCursor: null, isDone: true, page };
                 },
-                async insert(_table: string, doc: Record<string, unknown>) {
-                    const id = typeof doc["_id"] === "string" ? doc["_id"] : `m_${rows.size + 1}`;
+                async insert(_table: string, document_: Record<string, unknown>) {
+                    const id = typeof document_["_id"] === "string" ? document_["_id"] : `m_${rows.size + 1}`;
 
-                    rows.set(id, { ...doc, _id: id });
+                    rows.set(id, { ...document_, _id: id });
 
                     return id;
                 },
@@ -347,8 +347,8 @@ describe("ctx-db relations", () => {
 
             runShardMigrations(harness.sql, schema);
 
-            const { rows, writer: fake } = buildFakeGlobalDb();
-            const writer = createShardCtxDb({
+            const { rows, writer: fake } = buildFakeGlobalDatabase();
+            const writer = createShardContextDatabase({
                 clock: () => 1_700_000_000_000,
                 globalDb: fake as unknown as DatabaseWriterLike,
                 schema,
@@ -374,7 +374,7 @@ describe("ctx-db relations", () => {
 
             // No `globalDb` passed in — the cascade should refuse rather than
             // delete the parent while leaving the global holders dangling.
-            const writer = createShardCtxDb({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
 
             await writer.insert("groups", { _id: "g1", name: "Engineering" }, { allowExplicitId: true });
 

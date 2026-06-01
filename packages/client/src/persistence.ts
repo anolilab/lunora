@@ -9,13 +9,13 @@ import type { PersistedMutation, PersistenceAdapter } from "./types.js";
 export const createInMemoryPersistence = (): PersistenceAdapter => {
     const entries = new Map<string, PersistedMutation>();
     const clone = (mutation: PersistedMutation): PersistedMutation => {
- return {
-        args: { ...mutation.args },
-        functionPath: mutation.functionPath,
-        id: mutation.id,
-        shardKey: mutation.shardKey,
+        return {
+            args: { ...mutation.args },
+            functionPath: mutation.functionPath,
+            id: mutation.id,
+            shardKey: mutation.shardKey,
+        };
     };
-};
 
     return {
         append: (mutation) => {
@@ -80,14 +80,14 @@ export const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions 
 
     const databaseName = options.databaseName ?? DEFAULT_DATABASE;
     const storeName = options.storeName ?? DEFAULT_STORE;
-    let dbPromise: Promise<IDBDatabase> | undefined;
+    let databasePromise: Promise<IDBDatabase> | undefined;
 
     const openDatabase = (): Promise<IDBDatabase> => {
-        if (dbPromise) {
-            return dbPromise;
+        if (databasePromise) {
+            return databasePromise;
         }
 
-        dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+        databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
             const request = factory.open(databaseName, 1);
 
             request.addEventListener("upgradeneeded", () => {
@@ -107,7 +107,7 @@ export const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions 
             });
         });
 
-        return dbPromise;
+        return databasePromise;
     };
 
     const withStore = async <T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => Promise<T> | T): Promise<T> => {

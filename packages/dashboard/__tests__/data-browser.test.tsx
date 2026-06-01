@@ -43,8 +43,8 @@ const createBrowserClient = (): MockClientHooks =>
 
             // Mirror the server's whole-table substring filter across all cells.
             const needle = search.trim().toLowerCase();
-            const matched =
-                needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
+            const matched
+                = needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
 
             return { columns: ["__id__", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
         },
@@ -346,7 +346,9 @@ describe("dataBrowser", () => {
         // virtualizer must mount only the visible window plus overscan — never all
         // 250 rows. The fixed viewport height is reported to the virtualizer via a
         // custom `observeElementRect`, so this is deterministic under jsdom.
-        const bigRows = Array.from({ length: 250 }, (_, index) => { return { __id__: `m${index.toString()}`, text: `row-${index.toString()}` }; });
+        const bigRows = Array.from({ length: 250 }, (_, index) => {
+            return { __id__: `m${index.toString()}`, text: `row-${index.toString()}` };
+        });
 
         const mock = createMockClient({
             query: (reference, args): unknown => {
@@ -389,17 +391,15 @@ describe("dataBrowser — editable", () => {
                 if (reference === ADMIN_FUNCTIONS.writeRow) {
                     const { id, op } = args as { id?: string; op: string };
 
-                    const resultId = op === "insert" ? "m4" : (id ?? null);
+                    const resultId = op === "insert" ? "m4" : id ?? null;
 
                     return { id: resultId, op };
                 }
 
                 const { limit = 50, offset = 0, search = "" } = args as PageArgs;
                 const needle = search.trim().toLowerCase();
-                const matched =
-                    needle === ""
-                        ? MESSAGE_ROWS
-                        : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
+                const matched
+                    = needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
 
                 return { columns: ["__id__", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
             },
@@ -465,7 +465,7 @@ describe("dataBrowser — editable", () => {
         await openMessages(mock);
 
         fireEvent.click(screen.getByTestId("db-add-row"));
-        fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: '{ "text": "fresh" }' } });
+        fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: "{ \"text\": \"fresh\" }" } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
@@ -510,7 +510,7 @@ describe("dataBrowser — editable", () => {
 
         expect(JSON.parse(editor.value)).toEqual({ text: "hello" });
 
-        fireEvent.change(editor, { target: { value: '{ "text": "edited" }' } });
+        fireEvent.change(editor, { target: { value: "{ \"text\": \"edited\" }" } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
@@ -558,7 +558,7 @@ describe("dataBrowser — editable", () => {
 
         expect(JSON.parse(editor.value)).toEqual({ text: "world" });
 
-        fireEvent.change(editor, { target: { value: '{ "text": "patched" }' } });
+        fireEvent.change(editor, { target: { value: "{ \"text\": \"patched\" }" } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
@@ -586,9 +586,9 @@ describe("dataBrowser — editable", () => {
 
         // Live opens both a readTablePage and a listTables subscription; assert
         // the page one is among them (order isn't contractual).
-        const refs = mock.subscribe.mock.calls.map((call) => (call[0] as { __cirrusRef: string }).__cirrusRef);
+        const references = mock.subscribe.mock.calls.map((call) => (call[0] as { __cirrusRef: string }).__cirrusRef);
 
-        expect(refs).toContain(ADMIN_FUNCTIONS.readTablePage);
+        expect(references).toContain(ADMIN_FUNCTIONS.readTablePage);
 
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.readTablePage, { columns: ["__id__", "text"], rows: [{ __id__: "m9", text: "LIVE ROW" }], total: 1 });

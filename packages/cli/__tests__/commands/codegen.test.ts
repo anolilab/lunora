@@ -13,12 +13,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
 
 const silentLogger = (): Logger => {
- return {
-    error: () => {},
-    info: () => {},
-    success: () => {},
-    warn: () => {},
-};
+    return {
+        error: () => {},
+        info: () => {},
+        success: () => {},
+        warn: () => {},
+    };
 };
 
 let workdir: string;
@@ -51,7 +51,7 @@ describe("cirrus codegen", () => {
 
             const success: string[] = [];
 
-            runCodegenCommand({ cwd: workdir, logger: { ...silentLogger(), success: (msg) => success.push(msg) } });
+            runCodegenCommand({ cwd: workdir, logger: { ...silentLogger(), success: (message) => success.push(message) } });
 
             expect(success).toHaveLength(1);
             expect(success[0]).toContain("_generated");

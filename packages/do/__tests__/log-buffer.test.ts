@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { LogEntry } from "../src/log-buffer.js";
 import { LogBuffer } from "../src/log-buffer.js";
 
-const entry = (message: string, timestamp: number): LogEntry => { return { level: "error", message, timestamp }; };
+const entry = (message: string, timestamp: number): LogEntry => {
+    return { level: "error", message, timestamp };
+};
 
 describe("logBuffer", () => {
     it("returns entries newest-first", () => {

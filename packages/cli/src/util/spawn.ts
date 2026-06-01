@@ -24,7 +24,8 @@ export interface SpawnResult {
  */
 export type Spawner = (descriptor: SpawnDescriptor) => Promise<SpawnResult>;
 
-export const defaultSpawner: Spawner = (descriptor) => new Promise<SpawnResult>((resolve, reject) => {
+export const defaultSpawner: Spawner = (descriptor) =>
+    new Promise<SpawnResult>((resolve, reject) => {
         const hasInput = typeof descriptor.input === "string";
         const child = nodeSpawn(descriptor.command, [...descriptor.args], {
             cwd: descriptor.cwd ?? process.cwd(),

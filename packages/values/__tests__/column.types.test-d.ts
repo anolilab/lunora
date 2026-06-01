@@ -25,8 +25,8 @@ type _DefaultInsert = Assert<Equal<InferInsert<typeof priority>, string | undefi
 // `.$defaultFn(fn)` behaves like `.default` for optionality.
 const createdAt = v.number().$defaultFn(() => Date.now());
 
-type _DefaultFnSelect = Assert<Equal<InferSelect<typeof createdAt>, number>>;
-type _DefaultFnInsert = Assert<Equal<InferInsert<typeof createdAt>, number | undefined>>;
+type _DefaultFunctionSelect = Assert<Equal<InferSelect<typeof createdAt>, number>>;
+type _DefaultFunctionInsert = Assert<Equal<InferInsert<typeof createdAt>, number | undefined>>;
 
 // `.$onUpdateFn(fn)` does NOT make the field optional on insert.
 const updatedAt = v.number().$onUpdateFn(() => Date.now());
@@ -105,8 +105,8 @@ type _InsertPriorityType = Assert<Equal<NonNullable<InsertShape<typeof shape>["p
 export type {
     _ComposedInsert,
     _DateSelect,
-    _DefaultFnInsert,
-    _DefaultFnSelect,
+    _DefaultFunctionInsert as _DefaultFnInsert,
+    _DefaultFunctionSelect as _DefaultFnSelect,
     _DefaultInsert,
     _DefaultNowInsert,
     _DefaultNowSelect,

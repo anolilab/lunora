@@ -55,6 +55,6 @@ export interface CirrusMailOptions {
 }
 
 export interface Mailer {
-    queue: (opts: SendOpts) => Promise<{ queued: true }>;
-    send: (opts: SendOpts) => Promise<{ id: string }>;
+    queue: (options: SendOpts) => Promise<{ queued: true }>;
+    send: (options: SendOpts) => Promise<{ id: string }>;
 }

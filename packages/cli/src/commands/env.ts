@@ -41,7 +41,7 @@ interface ParsedLine {
     value: string;
 }
 
-const parseDevVars = (content: string): Map<string, ParsedLine> => {
+const parseDevVariables = (content: string): Map<string, ParsedLine> => {
     const map = new Map<string, ParsedLine>();
 
     for (const rawLine of content.split(NEWLINE_SPLIT)) {
@@ -66,7 +66,7 @@ const parseDevVars = (content: string): Map<string, ParsedLine> => {
         let value = line.slice(eq + 1).trim();
         let quoted = false;
 
-        if ((value.startsWith('"') && value.endsWith('"') && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2)) {
+        if ((value.startsWith("\"") && value.endsWith("\"") && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2)) {
             quoted = true;
             value = value.slice(1, -1);
         }
@@ -77,14 +77,14 @@ const parseDevVars = (content: string): Map<string, ParsedLine> => {
     return map;
 };
 
-const serializeDevVars = (map: Map<string, ParsedLine>): string => {
+const serializeDevVariables = (map: Map<string, ParsedLine>): string => {
     const lines: string[] = [];
 
     for (const entry of map.values()) {
         // Always quote to preserve whitespace and special characters round-trip.
         // Newlines are rejected at write time (env set), so single-line escaping
         // of backslash + double-quote is sufficient here.
-        const escaped = entry.value.replaceAll("\\", "\\\\").replaceAll('"', String.raw`\"`);
+        const escaped = entry.value.replaceAll("\\", "\\\\").replaceAll("\"", String.raw`\"`);
 
         lines.push(`${entry.key}="${escaped}"`);
     }
@@ -100,21 +100,21 @@ const redact = (value: string): string => {
     return `${value.slice(0, 4)}${"*".repeat(Math.min(8, value.length - 4))}`;
 };
 
-const loadDevVars = (devVarsPath: string): Map<string, ParsedLine> => {
-    if (!existsSync(devVarsPath)) {
+const loadDevVariables = (devVariablesPath: string): Map<string, ParsedLine> => {
+    if (!existsSync(devVariablesPath)) {
         return new Map();
     }
 
-    return parseDevVars(readFileSync(devVarsPath, "utf8"));
+    return parseDevVariables(readFileSync(devVariablesPath, "utf8"));
 };
 
 export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    const devVarsPath = join(cwd, DEV_VARS_FILE);
+    const devVariablesPath = join(cwd, DEV_VARS_FILE);
     const { logger } = options;
 
     if (options.subcommand === "list") {
-        const map = loadDevVars(devVarsPath);
+        const map = loadDevVariables(devVariablesPath);
 
         if (map.size === 0) {
             logger.info(`${DEV_VARS_FILE}: (empty)`);
@@ -136,7 +136,7 @@ export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvComm
             return { code: 1, descriptors: [] };
         }
 
-        const map = loadDevVars(devVarsPath);
+        const map = loadDevVariables(devVariablesPath);
         const entry = map.get(options.key);
 
         if (!entry) {
@@ -179,10 +179,10 @@ export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvComm
             return { code: 1, descriptors: [] };
         }
 
-        const map = loadDevVars(devVarsPath);
+        const map = loadDevVariables(devVariablesPath);
 
         map.set(options.key, { key: options.key, quoted: true, value: options.value });
-        writeFileSync(devVarsPath, serializeDevVars(map), "utf8");
+        writeFileSync(devVariablesPath, serializeDevVariables(map), "utf8");
         logger.success(`env: set ${options.key} (${redact(options.value)}) in ${DEV_VARS_FILE}`);
 
         return { code: 0, descriptors: [] };
@@ -195,7 +195,7 @@ export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvComm
             return { code: 1, descriptors: [] };
         }
 
-        const map = loadDevVars(devVarsPath);
+        const map = loadDevVariables(devVariablesPath);
 
         if (!map.delete(options.key)) {
             logger.warn(`env: ${options.key} was not set in ${DEV_VARS_FILE}`);
@@ -203,7 +203,7 @@ export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvComm
             return { code: 0, descriptors: [] };
         }
 
-        writeFileSync(devVarsPath, serializeDevVars(map), "utf8");
+        writeFileSync(devVariablesPath, serializeDevVariables(map), "utf8");
         logger.success(`env: unset ${options.key} in ${DEV_VARS_FILE}`);
 
         return { code: 0, descriptors: [] };
@@ -216,7 +216,7 @@ export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvComm
             return { code: 1, descriptors: [] };
         }
 
-        const map = loadDevVars(devVarsPath);
+        const map = loadDevVariables(devVariablesPath);
 
         if (map.size === 0) {
             logger.warn(`${DEV_VARS_FILE}: nothing to push (empty)`);

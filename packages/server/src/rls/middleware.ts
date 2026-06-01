@@ -116,7 +116,7 @@ type AuthLike = {
 };
 
 /** Minimal shape the middleware needs on the incoming ctx. */
-interface RlsCtxIn {
+interface RlsContextIn {
     auth?: AuthLike;
     db: RlsDatabase;
 }
@@ -128,8 +128,8 @@ const FALSE_PREDICATE: WhereInput = { OR: [] };
  * Collect a per-table map from a flat policy list. Order within each table
  * is preserved so the merge below honors author-declared precedence.
  */
-const indexByTable = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Map<string, Policy<Ctx>[]> => {
-    const map = new Map<string, Policy<Ctx>[]>();
+const indexByTable = <Context>(policies: ReadonlyArray<Policy<Context>>): Map<string, Policy<Context>[]> => {
+    const map = new Map<string, Policy<Context>[]>();
 
     for (const policy of policies) {
         const existing = map.get(policy.table) ?? [];
@@ -156,7 +156,7 @@ const indexByTable = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Map<string, Po
  * when the table has at least one read policy (see `readBase`), so abstention
  * by every policy must DENY rather than fall through unrestricted.
  */
-const computeReadBaseWhere = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>, context: PolicyContext<Ctx>): undefined | WhereInput => {
+const computeReadBaseWhere = <Context>(policies: ReadonlyArray<Policy<Context>>, context: PolicyContext<Context>): undefined | WhereInput => {
     const predicates: WhereInput[] = [];
     let sawTrue = false;
 
@@ -251,23 +251,23 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
             continue;
         }
 
-        const docValue = document[key];
+        const documentValue = document[key];
 
         if (isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k))) {
             const operators = value;
 
-            if ("eq" in operators && docValue !== operators["eq"]) {
+            if ("eq" in operators && documentValue !== operators["eq"]) {
                 return false;
             }
 
-            if ("ne" in operators && docValue === operators["ne"]) {
+            if ("ne" in operators && documentValue === operators["ne"]) {
                 return false;
             }
 
             if ("in" in operators) {
                 const list = operators["in"];
 
-                if (!Array.isArray(list) || !list.includes(docValue)) {
+                if (!Array.isArray(list) || !list.includes(documentValue)) {
                     return false;
                 }
             }
@@ -275,31 +275,31 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
             if ("notIn" in operators) {
                 const list = operators["notIn"];
 
-                if (Array.isArray(list) && list.includes(docValue)) {
+                if (Array.isArray(list) && list.includes(documentValue)) {
                     return false;
                 }
             }
 
-            if ("lt" in operators && (!isOrderable(docValue) || !isOrderable(operators["lt"]) || (docValue as number) >= (operators["lt"] as number))) {
+            if ("lt" in operators && (!isOrderable(documentValue) || !isOrderable(operators["lt"]) || (documentValue as number) >= (operators["lt"] as number))) {
                 return false;
             }
 
-            if ("lte" in operators && (!isOrderable(docValue) || !isOrderable(operators["lte"]) || (docValue as number) > (operators["lte"] as number))) {
+            if ("lte" in operators && (!isOrderable(documentValue) || !isOrderable(operators["lte"]) || (documentValue as number) > (operators["lte"] as number))) {
                 return false;
             }
 
-            if ("gt" in operators && (!isOrderable(docValue) || !isOrderable(operators["gt"]) || (docValue as number) <= (operators["gt"] as number))) {
+            if ("gt" in operators && (!isOrderable(documentValue) || !isOrderable(operators["gt"]) || (documentValue as number) <= (operators["gt"] as number))) {
                 return false;
             }
 
-            if ("gte" in operators && (!isOrderable(docValue) || !isOrderable(operators["gte"]) || (docValue as number) < (operators["gte"] as number))) {
+            if ("gte" in operators && (!isOrderable(documentValue) || !isOrderable(operators["gte"]) || (documentValue as number) < (operators["gte"] as number))) {
                 return false;
             }
 
             if ("contains" in operators) {
                 const needle = operators["contains"];
 
-                if (typeof docValue !== "string" || typeof needle !== "string" || !docValue.includes(needle)) {
+                if (typeof documentValue !== "string" || typeof needle !== "string" || !documentValue.includes(needle)) {
                     return false;
                 }
             }
@@ -307,7 +307,7 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
             if ("isNull" in operators) {
                 const expectsNull = operators["isNull"] === true;
 
-                if (expectsNull !== (docValue === null || docValue === undefined)) {
+                if (expectsNull !== (documentValue === null || documentValue === undefined)) {
                     return false;
                 }
             }
@@ -315,7 +315,7 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
             continue;
         }
 
-        if (docValue !== value) {
+        if (documentValue !== value) {
             return false;
         }
     }
@@ -352,10 +352,10 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
  * CHECK) so a policy cannot be satisfied by the old row while the patch
  * reassigns the row to another tenant.
  */
-const evaluateWrite = <Ctx>(
-    policies: ReadonlyArray<Policy<Ctx>>,
+const evaluateWrite = <Context>(
+    policies: ReadonlyArray<Policy<Context>>,
     op: Exclude<Policy["on"], "read">,
-    context: PolicyContext<Ctx>,
+    context: PolicyContext<Context>,
     nextRow?: Record<string, unknown>,
 ): boolean => {
     let sawWritePolicy = false;
@@ -407,16 +407,16 @@ const intoQueryArgs = (args: QueryArgs | undefined): QueryArgs => args ?? {};
  * `CountArgs` options bag. We never strip caller-supplied `baseWhere`; we
  * AND-merge the RLS one on top.
  */
-const intoCountArgs = (arg: CountArgs | undefined | WhereInput): CountArgs => {
-    if (arg === undefined) {
+const intoCountArgs = (argument: CountArgs | undefined | WhereInput): CountArgs => {
+    if (argument === undefined) {
         return {};
     }
 
-    if (isPlainObject(arg) && ("baseWhere" in arg || "restrictsCounts" in arg || "where" in arg)) {
-        return arg as CountArgs;
+    if (isPlainObject(argument) && ("baseWhere" in argument || "restrictsCounts" in argument || "where" in argument)) {
+        return argument as CountArgs;
     }
 
-    return { where: arg as WhereInput };
+    return { where: argument as WhereInput };
 };
 
 const mergeBaseWhere = (caller: undefined | WhereInput, injected: undefined | WhereInput): undefined | WhereInput => {
@@ -437,7 +437,7 @@ const mergeBaseWhere = (caller: undefined | WhereInput, injected: undefined | Wh
  * call. The wrapper is a fresh closure per request so the evaluator sees the
  * current `ctx`.
  */
-const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Policy<Ctx>[]>, context: PolicyContext<Ctx>): RlsDatabase => {
+const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<Context>[]>, context: PolicyContext<Context>): RlsDatabase => {
     /**
      * Cached effective read `baseWhere` per table. Cached for the lifetime
      * of one wrapped writer — i.e. one request — so a single procedure
@@ -699,7 +699,7 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Policy<Ctx>[]>, co
  * chain includes this middleware — opt-in, never global. This is the
  * `PLAN2 §3.2` invariant.
  */
-export const rls = <Ctx extends RlsCtxIn = RlsCtxIn>(policies: ReadonlyArray<Policy<Ctx>>): Middleware<Ctx, Ctx> => {
+export const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>): Middleware<Context, Context> => {
     const perTable = indexByTable(policies);
 
     return async ({ ctx, next }) => {
@@ -708,8 +708,8 @@ export const rls = <Ctx extends RlsCtxIn = RlsCtxIn>(policies: ReadonlyArray<Pol
         // branch on claims (`ctx.auth.identity.email` etc.) without each
         // policy paying for its own `getIdentity()` call. `null` covers both
         // the anonymous case and the no-resolver case (older auth states).
-        const identity = (await auth.getIdentity?.()) ?? null;
-        const policyContext: PolicyContext<Ctx> = {
+        const identity = await auth.getIdentity?.() ?? null;
+        const policyContext: PolicyContext<Context> = {
             auth: {
                 identity,
                 roles: auth.roles ?? [],
@@ -718,7 +718,7 @@ export const rls = <Ctx extends RlsCtxIn = RlsCtxIn>(policies: ReadonlyArray<Pol
             ctx,
         };
 
-        const wrapped = wrapDb<Ctx>(ctx.db, perTable, policyContext);
+        const wrapped = wrapDatabase<Context>(ctx.db, perTable, policyContext);
         // `next({ ctx: extension })` expects an extension shape — we only
         // replace `db`, so the downstream context type is unchanged (`Ctx`
         // in / `Ctx` out). The cast routes the wrapped db through the same

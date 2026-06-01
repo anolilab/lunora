@@ -6,7 +6,7 @@ describe("createReconnect", () => {
     it("doubles delay each attempt without jitter", () => {
         expect.assertions(4);
 
-        const reconnect = createReconnect({ initialDelayMs: 100, maxDelayMs: 10_000, jitter: false });
+        const reconnect = createReconnect({ initialDelayMs: 100, jitter: false, maxDelayMs: 10_000 });
 
         expect(reconnect.next()).toBe(100);
         expect(reconnect.next()).toBe(200);
@@ -17,7 +17,7 @@ describe("createReconnect", () => {
     it("caps at maxDelayMs", () => {
         expect.assertions(4);
 
-        const reconnect = createReconnect({ initialDelayMs: 1000, maxDelayMs: 3000, jitter: false });
+        const reconnect = createReconnect({ initialDelayMs: 1000, jitter: false, maxDelayMs: 3000 });
 
         expect(reconnect.next()).toBe(1000);
         expect(reconnect.next()).toBe(2000);
@@ -28,7 +28,7 @@ describe("createReconnect", () => {
     it("reset() returns to initial delay", () => {
         expect.assertions(1);
 
-        const reconnect = createReconnect({ initialDelayMs: 50, maxDelayMs: 5000, jitter: false });
+        const reconnect = createReconnect({ initialDelayMs: 50, jitter: false, maxDelayMs: 5000 });
 
         reconnect.next();
         reconnect.next();
@@ -40,7 +40,7 @@ describe("createReconnect", () => {
     it("jittered delay stays within [delay/2, delay]", () => {
         expect.assertions(2);
 
-        const reconnect = createReconnect({ initialDelayMs: 1000, maxDelayMs: 10_000, jitter: true }, () => 0.5);
+        const reconnect = createReconnect({ initialDelayMs: 1000, jitter: true, maxDelayMs: 10_000 }, () => 0.5);
 
         const first = reconnect.next();
 

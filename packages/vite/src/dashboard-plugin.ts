@@ -76,12 +76,12 @@ const dashboardPlugin = (): Plugin => {
             // external interface). The dashboard ships admin tooling that
             // assumes the developer is the only consumer.
             const configuredHost = server.config.server?.host;
-            const isNonLoopbackBind =
-                configuredHost !== undefined &&
-                configuredHost !== false &&
-                configuredHost !== "localhost" &&
-                configuredHost !== "127.0.0.1" &&
-                configuredHost !== "::1";
+            const isNonLoopbackBind
+                = configuredHost !== undefined
+                    && configuredHost !== false
+                    && configuredHost !== "localhost"
+                    && configuredHost !== "127.0.0.1"
+                    && configuredHost !== "::1";
 
             server.middlewares.use((request, response, next) => {
                 const url = request.url ?? "";

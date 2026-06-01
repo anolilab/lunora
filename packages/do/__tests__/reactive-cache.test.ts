@@ -52,7 +52,7 @@ describe("stableStringify", () => {
     it("encodes object keys in lexical order regardless of input order", () => {
         expect.assertions(1);
 
-        expect(stableStringify({ a: 1, b: 2 })).toBe(stableStringify({ b: 2, a: 1 }));
+        expect(stableStringify({ a: 1, b: 2 })).toBe(stableStringify({ a: 1, b: 2 }));
     });
 
     it("treats { a: undefined } the same as {}", () => {
@@ -64,7 +64,7 @@ describe("stableStringify", () => {
     it("encodes nested structures stably", () => {
         expect.assertions(1);
 
-        const left = stableStringify({ user: { name: "alice", id: "u1" }, limit: 10 });
+        const left = stableStringify({ limit: 10, user: { id: "u1", name: "alice" } });
         const right = stableStringify({ limit: 10, user: { id: "u1", name: "alice" } });
 
         expect(left).toBe(right);
@@ -76,7 +76,7 @@ describe("reactiveCacheKey", () => {
         expect.assertions(1);
 
         expect(reactiveCacheKey("messages:list", { channelId: "A", limit: 10 }, null)).toBe(
-            reactiveCacheKey("messages:list", { limit: 10, channelId: "A" }, null),
+            reactiveCacheKey("messages:list", { channelId: "A", limit: 10 }, null),
         );
     });
 
@@ -108,10 +108,10 @@ const spyCounter = (returnValue?: unknown) => {
     };
 
     return {
-        run,
         get calls() {
             return calls;
         },
+        run,
     };
 };
 
@@ -322,7 +322,7 @@ describe("reactiveCache", () => {
     it("rLS interaction: restrictsCounts/baseWhere bake into the cache key via argsHash", () => {
         expect.assertions(1);
 
-        const restricted = reactiveCacheKey("messages:count", { restrictsCounts: true, baseWhere: { ownerId: "u1" } }, null);
+        const restricted = reactiveCacheKey("messages:count", { baseWhere: { ownerId: "u1" }, restrictsCounts: true }, null);
         const unrestricted = reactiveCacheKey("messages:count", {}, null);
 
         expect(restricted).not.toBe(unrestricted);
@@ -377,7 +377,9 @@ describe("reactiveCache", () => {
         const cache = new ReactiveCache();
 
         await cache.run("k1", new Set(), async () => "hello");
-        await cache.run("k2", new Set(), async () => { return { a: 1 }; });
+        await cache.run("k2", new Set(), async () => {
+            return { a: 1 };
+        });
 
         // "hello" -> JSON "\"hello\"" length 7; { a: 1 } -> JSON length 7.
         expect(cache.size().bytes).toBe(14);
@@ -392,7 +394,7 @@ describe("reactiveCache", () => {
         await cache.run("k1", new Set([depKey("t", "1")]), async () => 1);
         cache.clear();
 
-        expect(cache.size()).toEqual({ entries: 0, bytes: 0 });
+        expect(cache.size()).toEqual({ bytes: 0, entries: 0 });
 
         // After clear, the same key re-runs.
         let calls = 0;
@@ -410,7 +412,9 @@ describe("reactiveCache", () => {
         expect.assertions(5);
 
         const cache = new ReactiveCache();
-        const run = async () => { return { rows: ["r1"] }; };
+        const run = async () => {
+            return { rows: ["r1"] };
+        };
 
         await cache.run("messages:list:{}", new Set([depKey("messages", "r1")]), run); // miss
         await cache.run("messages:list:{}", new Set([depKey("messages", "r1")]), run); // hit
@@ -429,7 +433,9 @@ describe("reactiveCache", () => {
         expect.assertions(2);
 
         const cache = new ReactiveCache({ maxEntries: 1 });
-        const run = async () => { return { ok: true }; };
+        const run = async () => {
+            return { ok: true };
+        };
 
         await cache.run("k1", new Set([depKey("t", "1")]), run);
         await cache.run("k2", new Set([depKey("t", "2")]), run);

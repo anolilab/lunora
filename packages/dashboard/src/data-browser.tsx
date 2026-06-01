@@ -70,7 +70,7 @@ const rowId = (row: TableRow): null | string => {
  * JSON column; when present we parse it, otherwise we fall back to the row's own
  * non-meta columns. Used to prefill the edit form.
  */
-const rowDoc = (row: TableRow): Record<string, unknown> => {
+const rowDocument = (row: TableRow): Record<string, unknown> => {
     const raw = row["__doc__"];
 
     if (typeof raw === "string") {
@@ -85,15 +85,15 @@ const rowDoc = (row: TableRow): Record<string, unknown> => {
         }
     }
 
-    const doc: Record<string, unknown> = {};
+    const document_: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(row)) {
         if (key !== "id" && key !== "__id__" && key !== "_id" && key !== "_creationTime" && key !== "__doc__") {
-            doc[key] = value;
+            document_[key] = value;
         }
     }
 
-    return doc;
+    return document_;
 };
 
 /**
@@ -132,8 +132,17 @@ const formatCell = (value: unknown): string => {
  * scope so the column-def `cell` renderer stays a flat callback instead of
  * nesting another arrow for the click handler.
  */
-function RefCell({ column, id, onNavigate, target }: { column: string; id: string; onNavigate: (target: string, id: string) => void; target: string }): ReactElement {
-    return (
+const RefCell = ({
+    column,
+    id,
+    onNavigate,
+    target,
+}: {
+    column: string;
+    id: string;
+    onNavigate: (target: string, id: string) => void;
+    target: string;
+}): ReactElement => (
         <button
             data-testid={`db-ref-${column}`}
             onClick={() => {
@@ -142,10 +151,11 @@ function RefCell({ column, id, onNavigate, target }: { column: string; id: strin
             title={`Open ${target} ${id}`}
             type="button"
         >
-            {id} ↗
+            {id}
+{" "}
+↗
         </button>
-    );
-}
+);
 
 /** The header glyph for a column given react-table's sort state: ` ▲`, ` ▼`, or empty. */
 const sortIndicator = (sorted: "asc" | "desc" | false): string => {
@@ -176,7 +186,7 @@ const sortIndicator = (sorted: "asc" | "desc" | false): string => {
  * `@tanstack/react-virtual` so a large page never inflates the DOM. None of this
  * touches the server — pagination still flows through `readTablePage`.
  */
-export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement {
+export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement => {
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -341,18 +351,18 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     // Issue a writeRow op then reload the current page so the change shows. A
     // delete passes no doc; insert (id === "") / patch carry the JSON draft.
     const writeRow = useCallback(
-        async (op: "delete" | "insert" | "patch", id: null | string, docText?: string): Promise<void> => {
+        async (op: "delete" | "insert" | "patch", id: null | string, documentText?: string): Promise<void> => {
             if (selectedTable === null) {
                 return;
             }
 
             setWriteError(null);
 
-            let doc: Record<string, unknown> | undefined;
+            let document_: Record<string, unknown> | undefined;
 
             if (op !== "delete") {
                 try {
-                    doc = docText === undefined || docText.trim() === "" ? {} : (JSON.parse(docText) as Record<string, unknown>);
+                    document_ = documentText === undefined || documentText.trim() === "" ? {} : (JSON.parse(documentText) as Record<string, unknown>);
                 } catch (error) {
                     setWriteError(`Invalid JSON: ${(error as Error).message}`);
 
@@ -361,7 +371,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
             }
 
             try {
-                (await client.query(WRITE_ROW, { doc, id: id ?? undefined, op, table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
+                (await client.query(WRITE_ROW, { doc: document_, id: id ?? undefined, op, table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
                 setEditing(null);
                 await fetchPage(shardKey, selectedTable, offset, search);
             } catch (error) {
@@ -373,7 +383,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
 
     const columns = page?.columns;
     const rows = page?.rows;
-    const refs = page?.refs;
+    const references = page?.refs;
 
     // Column defs are derived from the loaded page. Each accessor reads the
     // column by name off the ORIGINAL row object; the cell renderer reuses
@@ -385,7 +395,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
         }
 
         return columns.map((column) => {
-            const target = refs?.[column];
+            const target = references?.[column];
 
             return {
                 accessorFn: (row: TableRow) => row[column],
@@ -398,11 +408,11 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
 
                     return formatCell(value);
                 },
-                header: refs?.[column] === undefined ? column : `${column} →`,
+                header: references?.[column] === undefined ? column : `${column} →`,
                 id: column,
             };
         });
-    }, [columns, refs, navigateToRef]);
+    }, [columns, references, navigateToRef]);
 
     const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 
@@ -483,7 +493,11 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
         // Per-row absolute offset from the virtualizer; necessarily a fresh object
         // each render since `start`/`size` change as the window scrolls.
         // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- dynamic virtualizer offset
-        const rowStyle: CSSProperties = { ...ROW_BASE_STYLE, height: `${virtualRow.size.toString()}px`, transform: `translateY(${virtualRow.start.toString()}px)` };
+        const rowStyle: CSSProperties = {
+            ...ROW_BASE_STYLE,
+            height: `${virtualRow.size.toString()}px`,
+            transform: `translateY(${virtualRow.start.toString()}px)`,
+        };
 
         return (
             <tr data-testid="db-row" key={tableRow.id} style={rowStyle}>
@@ -497,7 +511,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                             disabled={id === null}
                             onClick={() => {
                                 setWriteError(null);
-                                setEditing({ docText: JSON.stringify(rowDoc(original), null, 2), id });
+                                setEditing({ docText: JSON.stringify(rowDocument(original), null, 2), id });
                             }}
                             type="button"
                         >
@@ -552,7 +566,11 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                                 }}
                                 type="button"
                             >
-                                {tableInfo.name} ({tableInfo.rowCount})
+                                {tableInfo.name}
+{" "}
+(
+{tableInfo.rowCount}
+)
                             </button>
                         </li>
                     ))}
@@ -713,6 +731,6 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
             )}
         </div>
     );
-}
+};
 
 export type { DataBrowserProps };

@@ -80,7 +80,7 @@ const stableStringify = (value: unknown): string => {
         return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
     }
 
-    const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
 
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
 };
@@ -188,16 +188,16 @@ export class CirrusClient {
      */
     private readonly streams = new Map<string, { handle: StreamHandle; shardKey: string | undefined }>();
 
-    public constructor(opts: CirrusClientOptions) {
-        this.url = opts.url;
-        this.wsUrl = opts.wsUrl ?? joinUrl(deriveWsUrl(opts.url), WS_PATH);
-        this.wsToken = opts.wsToken;
-        this.fetchImpl = opts.fetch ?? (typeof fetch === "function" ? fetch.bind(globalThis) : (undefined as unknown as typeof fetch));
-        this.WebSocketImpl = opts.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
-        this.bookmark = opts.bookmarkStorage ?? createInMemoryBookmarkStorage();
-        this.reconnectOptions = opts.reconnect;
-        this.persistence = opts.persistence;
-        this.offlineQueue = new OfflineQueue(opts.offlineQueue, opts.persistence);
+    public constructor(options: CirrusClientOptions) {
+        this.url = options.url;
+        this.wsUrl = options.wsUrl ?? joinUrl(deriveWsUrl(options.url), WS_PATH);
+        this.wsToken = options.wsToken;
+        this.fetchImpl = options.fetch ?? (typeof fetch === "function" ? fetch.bind(globalThis) : (undefined as unknown as typeof fetch));
+        this.WebSocketImpl = options.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
+        this.bookmark = options.bookmarkStorage ?? createInMemoryBookmarkStorage();
+        this.reconnectOptions = options.reconnect;
+        this.persistence = options.persistence;
+        this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence);
 
         if (this.persistence) {
             // Deferred to a microtask so the constructor itself stays
@@ -372,12 +372,12 @@ export class CirrusClient {
 
     // --- RPC ---------------------------------------------------------------
 
-    public async query<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
+    public async query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
 
-        return (await this.rpc(fn.__cirrusRef, args as Record<string, unknown>, opts.shardKey, { attachBookmark: true })) as ReturnOf<F>;
+        return (await this.rpc(function_.__cirrusRef, args as Record<string, unknown>, options.shardKey, { attachBookmark: true })) as ReturnOf<F>;
     }
 
     /**
@@ -390,7 +390,7 @@ export class CirrusClient {
      * Opt into queueing-before-first-connect via
      * {@link OfflineQueueOptions.queueBeforeFirstConnect}.
      */
-    public async mutation<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: MutationCallOptions<unknown, unknown> = {}): Promise<ReturnOf<F>> {
+    public async mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: MutationCallOptions<unknown, unknown> = {}): Promise<ReturnOf<F>> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
@@ -400,16 +400,16 @@ export class CirrusClient {
         // Apply optimistic updates to any subscriber listening on this fn.
         const optimisticRollbacks: (() => void)[] = [];
 
-        if (opts.optimistic) {
+        if (options.optimistic) {
             // Scope optimistic updates to subscriptions on the SAME function
             // AND the same shardKey AND the same args. Otherwise one user's
             // mutation would overwrite every other subscriber's value on the
             // same function (e.g. two users on different rooms).
-            const mutationShardKey = opts.shardKey;
+            const mutationShardKey = options.shardKey;
             const mutationArgsKey = stableStringify(argsRecord);
 
             for (const state of this.subscriptions.all()) {
-                if (state.fn.__cirrusRef !== fn.__cirrusRef) {
+                if (state.fn.__cirrusRef !== function_.__cirrusRef) {
                     continue;
                 }
 
@@ -426,7 +426,7 @@ export class CirrusClient {
                 let next: unknown;
 
                 try {
-                    next = opts.optimistic(previous);
+                    next = options.optimistic(previous);
                 } catch {
                     continue;
                 }
@@ -477,9 +477,9 @@ export class CirrusClient {
         // we've been connected before — otherwise the mutation would race
         // the resubscribe. State is scoped to the mutation's own shard so a
         // dropped shard only queues writes destined for it.
-        const conn = this.getConnection(opts.shardKey);
+        const conn = this.getConnection(options.shardKey);
         const wsState: WSState = conn?.wsState ?? "idle";
-        const hasSocket = conn?.socket != null;
+        const hasSocket = conn?.socket != undefined;
         const wasEverConnected = conn?.wasEverConnected ?? false;
         const { queueBeforeFirstConnect } = this.offlineQueue;
         const connectedGate = wasEverConnected || queueBeforeFirstConnect;
@@ -493,10 +493,8 @@ export class CirrusClient {
 
             return new Promise<ReturnOf<F>>((resolve, reject) => {
                 const entry: QueuedMutation<ReturnOf<F>> = {
-                    functionPath: fn.__cirrusRef,
                     args: argsRecord,
-                    shardKey: opts.shardKey,
-                    resolve,
+                    functionPath: function_.__cirrusRef,
                     reject: (error) => {
                         for (const rollback of optimisticRollbacks) {
                             rollback();
@@ -504,6 +502,8 @@ export class CirrusClient {
 
                         reject(error);
                     },
+                    resolve,
+                    shardKey: options.shardKey,
                 };
 
                 this.offlineQueue.enqueue<ReturnOf<F>>(entry);
@@ -517,7 +517,7 @@ export class CirrusClient {
         }
 
         try {
-            return (await this.rpc(fn.__cirrusRef, argsRecord, opts.shardKey, { captureBookmark: true })) as ReturnOf<F>;
+            return (await this.rpc(function_.__cirrusRef, argsRecord, options.shardKey, { captureBookmark: true })) as ReturnOf<F>;
         } catch (error) {
             for (const rollback of optimisticRollbacks) {
                 rollback();
@@ -527,12 +527,12 @@ export class CirrusClient {
         }
     }
 
-    public async action<F extends FunctionReference>(fn: F, args: ArgsOf<F>, opts: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
+    public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
 
-        return (await this.rpc(fn.__cirrusRef, args as Record<string, unknown>, opts.shardKey)) as ReturnOf<F>;
+        return (await this.rpc(function_.__cirrusRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
     }
 
     // --- Scheduler admin ----------------------------------------------------
@@ -783,56 +783,56 @@ export class CirrusClient {
     // --- Subscriptions ------------------------------------------------------
 
     public subscribe<F extends FunctionReference>(
-        fn: F,
+        function_: F,
         args: ArgsOf<F>,
         callback: (data: ReturnOf<F>) => void,
-        opts: { onError?: SubscriptionErrorCallback; shardKey?: string } = {},
+        options: { onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
 
         const argsRecord = (args ?? {}) as Record<string, unknown>;
-        const key = this.subscriptions.key(fn.__cirrusRef, argsRecord, opts.shardKey);
+        const key = this.subscriptions.key(function_.__cirrusRef, argsRecord, options.shardKey);
 
         let state = this.subscriptions.get(key);
-        const cb = callback as SubscriptionCallback;
-        const errorCb = opts.onError;
+        const callback_ = callback as SubscriptionCallback;
+        const errorCallback = options.onError;
 
         if (!state) {
             this.nextSubId += 1;
             const id = `sub_${this.nextSubId.toString()}`;
 
             state = {
-                id,
-                fn,
+                acked: false,
                 args: argsRecord,
-                shardKey: opts.shardKey,
                 callbacks: new Set<SubscriptionCallback>(),
                 errorCallbacks: new Set<SubscriptionErrorCallback>(),
+                fn: function_,
+                id,
                 lastValue: undefined,
-                acked: false,
                 serverVersion: 0,
+                shardKey: options.shardKey,
             };
             this.subscriptions.add(state);
         }
 
-        state.callbacks.add(cb);
+        state.callbacks.add(callback_);
 
-        if (errorCb) {
-            state.errorCallbacks.add(errorCb);
+        if (errorCallback) {
+            state.errorCallbacks.add(errorCallback);
         }
 
         // Replay last value to new subscriber synchronously if available.
         if (state.lastValue !== undefined) {
             try {
-                cb(state.lastValue);
+                callback_(state.lastValue);
             } catch {
                 /* user callback threw — ignore */
             }
         }
 
-        this.ensureSocket(opts.shardKey);
+        this.ensureSocket(options.shardKey);
         this.sendSubscribeIfOpen(state);
 
         return () => {
@@ -840,15 +840,15 @@ export class CirrusClient {
                 return;
             }
 
-            state.callbacks.delete(cb);
+            state.callbacks.delete(callback_);
 
-            if (errorCb) {
-                state.errorCallbacks.delete(errorCb);
+            if (errorCallback) {
+                state.errorCallbacks.delete(errorCallback);
             }
 
             if (state.callbacks.size === 0) {
                 const conn = this.getConnection(state.shardKey);
-                const ok = conn ? this.sendOn(conn, { type: "unsubscribe", id: state.id }) : false;
+                const ok = conn ? this.sendOn(conn, { id: state.id, type: "unsubscribe" }) : false;
 
                 if (!ok && conn) {
                     conn.pendingUnsubscribes.push(state.id);
@@ -878,9 +878,9 @@ export class CirrusClient {
      * reconnect can't OOM the page.
      */
     public stream<F extends FunctionReference<"stream">>(
-        fn: F,
+        function_: F,
         args: ArgsOf<F>,
-        opts: { maxBuffer?: number; shardKey?: string } = {},
+        options: { maxBuffer?: number; shardKey?: string } = {},
     ): StreamIterable<ReturnOf<F>> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
@@ -892,11 +892,11 @@ export class CirrusClient {
 
         this.nextStreamId += 1;
         const id = `stream_${this.nextStreamId.toString()}`;
-        const { shardKey } = opts;
+        const { shardKey } = options;
         const argsRecord = (args ?? {}) as Record<string, unknown>;
 
         const { handle, iterable } = createStream<ReturnOf<F>>({
-            maxBuffer: opts.maxBuffer,
+            maxBuffer: options.maxBuffer,
             onCancel: () => {
                 // Send the cancel frame on the matching connection (if any).
                 // If the socket is down we drop the cancel: the DO has already
@@ -904,7 +904,7 @@ export class CirrusClient {
                 const conn = this.getConnection(shardKey);
 
                 if (conn) {
-                    this.sendOn(conn, { type: "unsubscribe", id });
+                    this.sendOn(conn, { id, type: "unsubscribe" });
                 }
 
                 this.streams.delete(id);
@@ -919,9 +919,9 @@ export class CirrusClient {
 
         const conn = this.getConnection(shardKey);
         const message: ClientMessage = {
-            type: "stream",
             id,
-            query: { args: argsRecord, functionPath: fn.__cirrusRef, shardKey },
+            query: { args: argsRecord, functionPath: function_.__cirrusRef, shardKey },
+            type: "stream",
         };
 
         if (conn?.wsState === "open") {
@@ -1064,9 +1064,9 @@ export class CirrusClient {
         }
 
         const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
-            method: "POST",
+            body: JSON.stringify({ args, functionPath, shardKey }),
             headers,
-            body: JSON.stringify({ functionPath, args, shardKey }),
+            method: "POST",
         });
 
         if (flags.captureBookmark) {
@@ -1181,7 +1181,7 @@ export class CirrusClient {
                 conn.pendingUnsubscribes = [];
 
                 for (const id of pending) {
-                    this.sendOn(conn, { type: "unsubscribe", id });
+                    this.sendOn(conn, { id, type: "unsubscribe" });
                 }
             }
 
@@ -1274,9 +1274,9 @@ export class CirrusClient {
         const table = (state.fn as FunctionReference & { __cirrusTable?: string }).__cirrusTable ?? state.fn.__cirrusRef;
 
         this.sendOn(conn, {
-            type: "subscribe",
             id: state.id,
-            query: { table, functionPath: state.fn.__cirrusRef, args: state.args },
+            query: { args: state.args, functionPath: state.fn.__cirrusRef, table },
+            type: "subscribe",
         });
     }
 
@@ -1306,7 +1306,7 @@ export class CirrusClient {
         }
 
         if (message.type === "chunk") {
-            const { id, data } = message;
+            const { data, id } = message;
             const stream = this.streams.get(id);
 
             if (stream) {
@@ -1324,11 +1324,11 @@ export class CirrusClient {
 
             if (stream && id !== undefined) {
                 const code = typeof (message.error as { code?: unknown } | undefined)?.code === "string" ? (message.error as { code: string }).code : undefined;
-                const messageText =
-                    (typeof message.message === "string" ? message.message : undefined) ??
-                    (typeof (message.error as { message?: unknown } | undefined)?.message === "string"
-                        ? (message.error as { message: string }).message
-                        : "stream error");
+                const messageText
+                    = (typeof message.message === "string" ? message.message : undefined)
+                        ?? (typeof (message.error as { message?: unknown } | undefined)?.message === "string"
+                            ? (message.error as { message: string }).message
+                            : "stream error");
                 const error = Object.assign(new Error(messageText), code ? { code } : undefined);
 
                 stream.handle.fail(error);

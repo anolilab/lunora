@@ -29,12 +29,12 @@ export class TestShardDO extends DurableObject<Env> {
         // Surface the inbound headers the runtime is supposed to propagate
         // so tests can verify the forwarding contract.
         const forwarded = {
+            authorization: request.headers.get("authorization"),
+            body: request.method === "POST" ? await request.json().catch(() => null) : null,
+            bookmark: request.headers.get("x-d1-bookmark"),
+            cookie: request.headers.get("cookie"),
             method: request.method,
             pathname: url.pathname,
-            authorization: request.headers.get("authorization"),
-            cookie: request.headers.get("cookie"),
-            bookmark: request.headers.get("x-d1-bookmark"),
-            body: request.method === "POST" ? await request.json().catch(() => null) : null,
         };
 
         // Allow the test to ask the DO to set an `x-d1-bookmark` response
@@ -46,7 +46,7 @@ export class TestShardDO extends DurableObject<Env> {
             headers.set("x-d1-bookmark", replyBookmark);
         }
 
-        return Response.json(forwarded, { status: 200, headers });
+        return Response.json(forwarded, { headers, status: 200 });
     }
 }
 
@@ -56,8 +56,8 @@ const echoMethodRoute: Route = (request) =>
     Response.json(
         { method: request.method, path: new URL(request.url).pathname },
         {
-            status: 200,
             headers: { "content-type": "application/json" },
+            status: 200,
         },
     );
 const throwsCirrusRoute: Route = () => {
@@ -68,21 +68,21 @@ const throwsGenericRoute: Route = () => {
 };
 
 export default {
-    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
         const worker = createWorker({
-            shardDO: {
-                idFromName: (name) => env.SHARD.idFromName(name),
-                get: (id) => env.SHARD.get(id as DurableObjectId),
-            },
             routes: {
+                "/boom-cirrus": throwsCirrusRoute,
+                "/boom-generic": throwsGenericRoute,
                 "GET /healthz": healthzRoute,
                 // Same path, different method — exercise the "METHOD path" key form.
                 "POST /echo-method": echoMethodRoute,
-                "/boom-cirrus": throwsCirrusRoute,
-                "/boom-generic": throwsGenericRoute,
+            },
+            shardDO: {
+                get: (id) => env.SHARD.get(id as DurableObjectId),
+                idFromName: (name) => env.SHARD.idFromName(name),
             },
         });
 
-        return worker.fetch(request, env, ctx);
+        return worker.fetch(request, env, context);
     },
 };

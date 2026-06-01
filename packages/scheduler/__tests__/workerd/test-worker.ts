@@ -21,30 +21,30 @@ interface Env {
  * `state.storage.list({ end })` parameter is the inclusive upper bound; the
  * mock honours `key < end` which is the same semantics. Other methods map 1:1.
  */
-const toSchedulerState = (ctx: DurableObjectState): SchedulerDOState => {
- return {
-    storage: {
-        get: <T = unknown>(key: string) => ctx.storage.get<T>(key),
-        put: <T = unknown>(entries: Record<string, T> | string, value?: T) => {
-            if (typeof entries === "string") {
-                return ctx.storage.put(entries, value);
-            }
+const toSchedulerState = (context: DurableObjectState): SchedulerDOState => {
+    return {
+        storage: {
+            delete: (keyOrKeys: string | string[]) => {
+                if (Array.isArray(keyOrKeys)) {
+                    return context.storage.delete(keyOrKeys);
+                }
 
-            return ctx.storage.put(entries);
-        },
-        delete: (keyOrKeys: string | string[]) => {
-            if (Array.isArray(keyOrKeys)) {
-                return ctx.storage.delete(keyOrKeys);
-            }
+                return context.storage.delete(keyOrKeys);
+            },
+            deleteAlarm: () => context.storage.deleteAlarm(),
+            get: <T = unknown>(key: string) => context.storage.get<T>(key),
+            getAlarm: () => context.storage.getAlarm(),
+            list: <T = unknown>(options: { end?: string; limit?: number; prefix?: string } = {}) => context.storage.list<T>(options),
+            put: <T = unknown>(entries: Record<string, T> | string, value?: T) => {
+                if (typeof entries === "string") {
+                    return context.storage.put(entries, value);
+                }
 
-            return ctx.storage.delete(keyOrKeys);
+                return context.storage.put(entries);
+            },
+            setAlarm: (time: number | Date) => context.storage.setAlarm(time),
         },
-        list: <T = unknown>(options: { end?: string; limit?: number; prefix?: string } = {}) => ctx.storage.list<T>(options),
-        setAlarm: (time: number | Date) => ctx.storage.setAlarm(time),
-        getAlarm: () => ctx.storage.getAlarm(),
-        deleteAlarm: () => ctx.storage.deleteAlarm(),
-    },
-};
+    };
 };
 
 class TestSchedulerDO extends DurableObject<Env> {
@@ -53,11 +53,11 @@ class TestSchedulerDO extends DurableObject<Env> {
 
     private readonly scheduler: ConcreteScheduler;
 
-    public constructor(ctx: DurableObjectState, env: Env) {
-        super(ctx, env);
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
         // Cast: SchedulerEnv is a bag of bindings; our test `Env` is a
         // subtype of it.
-        this.scheduler = new ConcreteScheduler(toSchedulerState(ctx), env as unknown as SchedulerEnv, this);
+        this.scheduler = new ConcreteScheduler(toSchedulerState(context), env as unknown as SchedulerEnv, this);
     }
 
     public override fetch(request: Request): Promise<Response> {

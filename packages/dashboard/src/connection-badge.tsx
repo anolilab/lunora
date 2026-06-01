@@ -21,10 +21,12 @@ const DOT_BASE_STYLE = { borderRadius: "50%", display: "inline-block", height: 8
  * (a panel showing "Live: on" while the socket is down would otherwise look
  * identical to one that's simply idle).
  */
-export function ConnectionBadge(): ReactElement {
+export const ConnectionBadge = (): ReactElement => {
     const status = useConnectionStatus();
     const { color, text } = LABELS[status];
-    const dotStyle = useMemo(() => { return { ...DOT_BASE_STYLE, backgroundColor: color }; }, [color]);
+    const dotStyle = useMemo(() => {
+        return { ...DOT_BASE_STYLE, backgroundColor: color };
+    }, [color]);
 
     return (
         <span aria-live="polite" data-status={status} data-testid="dash-connection" role="status" style={WRAPPER_STYLE}>
@@ -32,4 +34,4 @@ export function ConnectionBadge(): ReactElement {
             {text}
         </span>
     );
-}
+};

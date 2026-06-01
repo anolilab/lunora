@@ -9,12 +9,12 @@ import { runExportCommand, runImportCommand } from "../../src/commands/data-tran
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => {
- return {
-    error: () => {},
-    info: () => {},
-    success: () => {},
-    warn: () => {},
-};
+    return {
+        error: () => {},
+        info: () => {},
+        success: () => {},
+        warn: () => {},
+    };
 };
 
 let workDir: string;
@@ -172,7 +172,9 @@ describe("cirrus data-transfer", () => {
 
                 return {
                     body: null,
-                    json: async () => { return { conflicts: 0, errors: [], inserted: { users: rows.length } }; },
+                    json: async () => {
+                        return { conflicts: 0, errors: [], inserted: { users: rows.length } };
+                    },
                     ok: true,
                     status: 200,
                     text: async () => "",
@@ -208,7 +210,9 @@ describe("cirrus data-transfer", () => {
 
                 return {
                     body: null,
-                    json: async () => { return { conflicts: 0, errors: [], inserted: { users: 2 } }; },
+                    json: async () => {
+                        return { conflicts: 0, errors: [], inserted: { users: 2 } };
+                    },
                     ok: true,
                     status: 200,
                     text: async () => "",
@@ -236,20 +240,20 @@ describe("cirrus data-transfer", () => {
             writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
 
             const fetchImpl: StreamingFetchLike = async () => {
- return {
-                body: null,
-                json: async () => {
- return {
-                    conflicts: 0,
-                    errors: [{ code: "VALIDATION_ERROR", line: 1, message: "bad", table: "users" }],
-                    inserted: {},
+                return {
+                    body: null,
+                    json: async () => {
+                        return {
+                            conflicts: 0,
+                            errors: [{ code: "VALIDATION_ERROR", line: 1, message: "bad", table: "users" }],
+                            inserted: {},
+                        };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
                 };
-},
-                ok: true,
-                status: 200,
-                text: async () => "",
             };
-};
 
             const result = await runImportCommand({
                 fetchImpl,

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
 /**
@@ -29,7 +29,7 @@ let harness: ReturnType<typeof createSqliteExec>;
 const setupWriter = (): DatabaseWriterLike => {
     runShardMigrations(harness.sql, todosSchema);
 
-    return createShardCtxDb({
+    return createShardContextDatabase({
         clock: () => 1_700_000_000_000,
         schema: todosSchema,
         sql: harness.sql,
@@ -45,7 +45,7 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     await writer.insert("todos", { _id: "t5", archived: false, priority: "high", projectId: "p1", seq: 0 }, { allowExplicitId: true });
 };
 
-const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((doc) => doc["_id"]);
+const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((document_) => document_["_id"]);
 
 describe("ctx-db findMany", () => {
     beforeEach(() => {

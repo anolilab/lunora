@@ -15,20 +15,20 @@ interface FakeWebSocket {
 }
 
 const createFakeWebSocket = (): FakeWebSocket => {
- return {
-    attachment: undefined,
-    closeCalled: false,
-    sent: [],
-    send(data: string) {
-        this.sent.push(data);
-    },
-    serializeAttachment(value: unknown) {
-        this.attachment = value as SocketAttachment | undefined;
-    },
-    deserializeAttachment() {
-        return this.attachment;
-    },
-};
+    return {
+        attachment: undefined,
+        closeCalled: false,
+        deserializeAttachment() {
+            return this.attachment;
+        },
+        send(data: string) {
+            this.sent.push(data);
+        },
+        sent: [],
+        serializeAttachment(value: unknown) {
+            this.attachment = value as SocketAttachment | undefined;
+        },
+    };
 };
 
 const parseFrames = (ws: FakeWebSocket) => ws.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
@@ -67,13 +67,13 @@ class StreamShard extends ShardDO {
         functionPath: string,
         args: Record<string, unknown>,
     ): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
-        const fn = this.registered.get(functionPath);
+        const function_ = this.registered.get(functionPath);
 
-        if (!fn) {
+        if (!function_) {
             return null;
         }
 
-        return { iterator: (signal) => fn(args, signal) };
+        return { iterator: (signal) => function_(args, signal) };
     }
 
     public driveMessage(ws: FakeWebSocket, envelope: SubscriptionEnvelope): Promise<void> {
@@ -91,29 +91,29 @@ class StreamShard extends ShardDO {
 }
 
 describe("shardDO streaming queries", () => {
-    let db: ReturnType<typeof createSqliteExec>;
+    let database: ReturnType<typeof createSqliteExec>;
     let sockets: FakeWebSocket[];
     let state: ShardDOState;
 
     beforeEach(() => {
-        db = createSqliteExec();
-        db.raw(`CREATE TABLE "messages" ("__id__" TEXT PRIMARY KEY, "text" TEXT)`);
+        database = createSqliteExec();
+        database.raw(`CREATE TABLE "messages" ("__id__" TEXT PRIMARY KEY, "text" TEXT)`);
 
         sockets = [];
         state = {
-            id: { name: "shard-stream" },
-            storage: { sql: db.sql as unknown as ShardDOState["storage"]["sql"] },
             acceptWebSocket(ws: WebSocket) {
                 sockets.push(ws as unknown as FakeWebSocket);
             },
             getWebSockets(): WebSocket[] {
                 return sockets as unknown as WebSocket[];
             },
+            id: { name: "shard-stream" },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
         };
     });
 
     afterEach(() => {
-        db.close();
+        database.close();
     });
 
     it("drives an async generator into ack -> chunk frames -> complete", async () => {
@@ -130,7 +130,7 @@ describe("shardDO streaming queries", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { subs: {} });
-        await shard.driveMessage(ws, { type: "stream", id: "stream_1", query: { functionPath: "metrics:tick" } });
+        await shard.driveMessage(ws, { id: "stream_1", query: { functionPath: "metrics:tick" }, type: "stream" });
         await waitForTerminator(ws);
 
         const frames = parseFrames(ws);
@@ -164,11 +164,11 @@ describe("shardDO streaming queries", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { subs: {} });
-        await shard.driveMessage(ws, { type: "stream", id: "stream_2", query: { functionPath: "metrics:loop" } });
+        await shard.driveMessage(ws, { id: "stream_2", query: { functionPath: "metrics:loop" }, type: "stream" });
 
         // Wait for a couple of chunks to land before cancelling.
         await new Promise<void>((r) => setTimeout(r, 5));
-        await shard.driveMessage(ws, { type: "unsubscribe", id: "stream_2" });
+        await shard.driveMessage(ws, { id: "stream_2", type: "unsubscribe" });
 
         // Give the iterator a few ticks to honor the abort.
         await new Promise<void>((r) => setTimeout(r, 20));
@@ -189,7 +189,7 @@ describe("shardDO streaming queries", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { subs: {} });
-        await shard.driveMessage(ws, { type: "stream", id: "stream_3", query: { functionPath: "missing:stream" } });
+        await shard.driveMessage(ws, { id: "stream_3", query: { functionPath: "missing:stream" }, type: "stream" });
         await waitForTerminator(ws);
 
         const errorFrame = parseFrames(ws).find((f) => f.type === "error");
@@ -204,8 +204,8 @@ describe("shardDO streaming queries", () => {
         const shard = new StreamShard(state, {});
         const ws = createFakeWebSocket();
 
-        shard.registerSocket(ws, { subs: {}, admin: true });
-        await shard.driveMessage(ws, { type: "stream", id: "stream_4", query: { functionPath: "__cirrus_admin__:tick" } });
+        shard.registerSocket(ws, { admin: true, subs: {} });
+        await shard.driveMessage(ws, { id: "stream_4", query: { functionPath: "__cirrus_admin__:tick" }, type: "stream" });
 
         const errorFrame = parseFrames(ws).find((f) => f.type === "error");
 
@@ -235,7 +235,7 @@ describe("shardDO streaming queries", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { subs: {} });
-        const driving = shard.driveMessage(ws, { type: "stream", id: "stream_5", query: { functionPath: "metrics:hang" } });
+        const driving = shard.driveMessage(ws, { id: "stream_5", query: { functionPath: "metrics:hang" }, type: "stream" });
 
         // Give the iterator a turn so its first yield lands and it's parked on the abort promise.
         await new Promise<void>((r) => setTimeout(r, 5));
@@ -258,7 +258,7 @@ describe("shardDO streaming queries", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { subs: {} });
-        await shard.driveMessage(ws, { type: "stream", id: "stream_6", query: { functionPath: "metrics:boom" } });
+        await shard.driveMessage(ws, { id: "stream_6", query: { functionPath: "metrics:boom" }, type: "stream" });
         await waitForTerminator(ws);
 
         const frames = parseFrames(ws);

@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { FanOutRequest, MigrationFanOutRequest, ShardRegistry } from "../src/query-coordinator.js";
-import {
-    createQueryCoordinator,
-    createStaticShardRegistry,
-} from "../src/query-coordinator.js";
+import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
 interface ShardCall {
@@ -22,26 +19,28 @@ const createShardSpy = (handler: (shardKey: string) => Promise<Response> | Respo
     const calls: ShardCall[] = [];
 
     const stubFor = (shardKey: string) => {
- return {
-        async fetch(request: Request): Promise<Response> {
-            const body: { args: Record<string, unknown>; functionPath: string } = await request.json();
-            const headers: Record<string, string> = {};
+        return {
+            async fetch(request: Request): Promise<Response> {
+                const body: { args: Record<string, unknown>; functionPath: string } = await request.json();
+                const headers: Record<string, string> = {};
 
-            request.headers.forEach((value, key) => {
-                headers[key] = value;
-            });
+                request.headers.forEach((value, key) => {
+                    headers[key] = value;
+                });
 
-            calls.push({ body, headers, shardKey });
+                calls.push({ body, headers, shardKey });
 
-            return handler(shardKey);
-        },
+                return handler(shardKey);
+            },
+        };
     };
-};
 
     const namespace: ShardNamespaceLike = {
         get: (id) => stubFor((id as { __name: string }).__name),
         getByName: (name) => stubFor(name),
-        idFromName: (name) => { return { __name: name }; },
+        idFromName: (name) => {
+            return { __name: name };
+        },
     };
 
     return { calls, namespace };
@@ -50,12 +49,12 @@ const createShardSpy = (handler: (shardKey: string) => Promise<Response> | Respo
 const json = (value: unknown, init?: ResponseInit): Response => Response.json(value, { headers: { "content-type": "application/json" }, status: 200, ...init });
 
 const buildRequest = (overrides: Partial<FanOutRequest> = {}): FanOutRequest => {
- return {
-    args: {},
-    fanOut: { merge: { kind: "concat" }, table: "messages" },
-    functionPath: "messages:list",
-    ...overrides,
-};
+    return {
+        args: {},
+        fanOut: { merge: { kind: "concat" }, table: "messages" },
+        functionPath: "messages:list",
+        ...overrides,
+    };
 };
 
 describe("createStaticShardRegistry", () => {
@@ -321,14 +320,14 @@ describe("error handling", () => {
 
 describe("orchestrateMigration", () => {
     const migrationRequest = (overrides: Partial<MigrationFanOutRequest> = {}): MigrationFanOutRequest => {
- return {
-        args: { id: "backfill" },
-        functionPath: "__cirrus_admin__:runMigration",
-        headers: { authorization: "Bearer admin" },
-        table: "messages",
-        ...overrides,
+        return {
+            args: { id: "backfill" },
+            functionPath: "__cirrus_admin__:runMigration",
+            headers: { authorization: "Bearer admin" },
+            table: "messages",
+            ...overrides,
+        };
     };
-};
 
     /** Mimic a shard's admin `runMigration` envelope: `{ result: MigrationRunResult }`. */
     const runResult = (changed: number, processed: number, status = "completed"): Response =>
@@ -370,7 +369,7 @@ describe("orchestrateMigration", () => {
         expect(result.processed).toBe(15);
         expect(result.status).toBe("completed");
         expect(result.shards).toHaveLength(3);
-        expect(result.shards[0]).toMatchObject({ shardKey: "a", result: { changed: 2, processed: 5, status: "completed" } });
+        expect(result.shards[0]).toMatchObject({ result: { changed: 2, processed: 5, status: "completed" }, shardKey: "a" });
     });
 
     it("rolls up to failed when any shard's runner reports failure", async () => {
@@ -379,7 +378,7 @@ describe("orchestrateMigration", () => {
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
         const coordinator = createQueryCoordinator({ registry });
 
-        const spy = createShardSpy((shardKey) => (shardKey === "b" ? runResult(1, 1, "failed") : runResult(2, 2)));
+        const spy = createShardSpy((shardKey) => shardKey === "b" ? runResult(1, 1, "failed") : runResult(2, 2));
 
         const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest());
 
@@ -393,7 +392,7 @@ describe("orchestrateMigration", () => {
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
         const coordinator = createQueryCoordinator({ registry });
 
-        const spy = createShardSpy((shardKey) => (shardKey === "b" ? runResult(2, 2, "in_progress") : runResult(2, 2)));
+        const spy = createShardSpy((shardKey) => shardKey === "b" ? runResult(2, 2, "in_progress") : runResult(2, 2));
 
         const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest());
 

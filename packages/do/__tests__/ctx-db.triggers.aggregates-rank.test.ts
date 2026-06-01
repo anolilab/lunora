@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { RankIndexDefinitionLike } from "../src/rank.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
@@ -41,7 +41,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
     const makeWriter = (schema: SchemaLike): DatabaseWriterLike => {
         runShardMigrations(harness.sql, schema);
 
-        return createShardCtxDb({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+        return createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
     };
 
     describe("triggers see staged aggregate/rank state inside the same transaction", () => {
@@ -57,8 +57,8 @@ describe("ctx-db triggers — aggregates and rank", () => {
                         shape: { projectId: { kind: "string" } },
                         triggerMap: {
                             recordCount: {
-                                handler: async (ctx, event) => {
-                                    const count = await ctx.db.count("todos", { projectId: (event.doc as Record<string, unknown>)["projectId"] });
+                                handler: async (context, event) => {
+                                    const count = await context.db.count("todos", { projectId: (event.doc as Record<string, unknown>)["projectId"] });
 
                                     seen.push(count);
                                 },
@@ -93,12 +93,16 @@ describe("ctx-db triggers — aggregates and rank", () => {
                         shape: { projectId: { kind: "string" }, weight: { kind: "number" } },
                         triggerMap: {
                             recordAgg: {
-                                handler: async (ctx) => {
-                                    const sum = await ctx.db.aggregate("todos", { field: "weight", op: "sum" });
-                                    const groups = await ctx.db.groupBy("todos", { by: ["projectId"] });
+                                handler: async (context) => {
+                                    const sum = await context.db.aggregate("todos", { field: "weight", op: "sum" });
+                                    const groups = await context.db.groupBy("todos", { by: ["projectId"] });
 
                                     aggSeen.push(sum);
-                                    groupSeen.push(...groups.map((entry) => { return { count: entry.value as number, projectId: entry.key["projectId"] }; }));
+                                    groupSeen.push(
+                                        ...groups.map((entry) => {
+                                            return { count: entry.value as number, projectId: entry.key["projectId"] };
+                                        }),
+                                    );
                                 },
                                 op: "insert",
                                 timing: "after",
@@ -136,8 +140,8 @@ describe("ctx-db triggers — aggregates and rank", () => {
                         shape: { channelId: { kind: "string" } },
                         triggerMap: {
                             recordRank: {
-                                handler: async (ctx, event) => {
-                                    const result = await ctx.db.rank("messages", "byChannel", { row: event.id });
+                                handler: async (context, event) => {
+                                    const result = await context.db.rank("messages", "byChannel", { row: event.id });
 
                                     ranks.push(result);
                                 },
@@ -177,8 +181,8 @@ describe("ctx-db triggers — aggregates and rank", () => {
                         shape: { projectId: { kind: "string" } },
                         triggerMap: {
                             recordCount: {
-                                handler: async (ctx) => {
-                                    counts.push(await ctx.db.count("todos", { projectId: "p1" }));
+                                handler: async (context) => {
+                                    counts.push(await context.db.count("todos", { projectId: "p1" }));
                                 },
                                 op: "delete",
                                 timing: "after",

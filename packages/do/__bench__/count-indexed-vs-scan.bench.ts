@@ -3,7 +3,7 @@ import { bench, describe } from "vitest";
 import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
 import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 
 /**
  * `count()` is the headline §3.1 win: an `aggregateIndex` lifts it from O(N)
@@ -40,26 +40,26 @@ const total: AggregateIndexDefinitionLike = {
 };
 
 const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
- return {
-    tables: {
-        todos: {
-            aggregateIndexes: indexes,
-            indexes: [{ fields: ["projectId"], name: "by_project" }],
-            shape: {
-                projectId: { kind: "string" },
-                priority: { kind: "string" },
+    return {
+        tables: {
+            todos: {
+                aggregateIndexes: indexes,
+                indexes: [{ fields: ["projectId"], name: "by_project" }],
+                shape: {
+                    priority: { kind: "string" },
+                    projectId: { kind: "string" },
+                },
             },
         },
-    },
-};
+    };
 };
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let index = 0; index < ROW_COUNT; index += 1) {
         await writer.insert("todos", {
             _id: `t${String(index)}`,
-            projectId: `p${String(index % PROJECTS)}`,
             priority: "medium",
+            projectId: `p${String(index % PROJECTS)}`,
         });
     }
 };
@@ -73,13 +73,13 @@ const indexedHarness = createSqliteExec();
 const indexedSchema = makeSchema(byProject, total);
 
 runShardMigrations(indexedHarness.sql, indexedSchema);
-const indexedWriter = createShardCtxDb({ schema: indexedSchema, sql: indexedHarness.sql });
+const indexedWriter = createShardContextDatabase({ schema: indexedSchema, sql: indexedHarness.sql });
 
 const scanHarness = createSqliteExec();
 const scanSchema = makeSchema();
 
 runShardMigrations(scanHarness.sql, scanSchema);
-const scanWriter = createShardCtxDb({ schema: scanSchema, sql: scanHarness.sql });
+const scanWriter = createShardContextDatabase({ schema: scanSchema, sql: scanHarness.sql });
 
 await seed(indexedWriter);
 await seed(scanWriter);

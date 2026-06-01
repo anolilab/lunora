@@ -98,7 +98,7 @@ export const validatorKindToSqlType = (kind: string): ColumnSnapshot["sqlType"] 
     }
 };
 
-const escapeIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+const escapeIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
 
 const renderColumnDefinition = (name: string, column: ColumnSnapshot): string => {
     const parts = [escapeIdentifier(name), column.sqlType];
@@ -147,8 +147,8 @@ const diffColumns = (
         if (old === undefined) {
             entries.push({
                 kind: "addColumn",
-                summary: `ADD COLUMN ${tableName}.${columnName}`,
                 sql: renderAddColumn(tableName, columnName, column),
+                summary: `ADD COLUMN ${tableName}.${columnName}`,
             });
 
             continue;
@@ -194,8 +194,8 @@ const diffIndexes = (
         if (old === undefined) {
             entries.push({
                 kind: "createIndex",
-                summary: `CREATE INDEX ${indexName} ON ${tableName}`,
                 sql: renderCreateIndex(tableName, index),
+                summary: `CREATE INDEX ${indexName} ON ${tableName}`,
             });
 
             continue;
@@ -221,8 +221,8 @@ const diffIndexes = (
         if (next[indexName] === undefined) {
             entries.push({
                 kind: "dropIndex",
-                summary: `DROP INDEX ${indexName}`,
                 sql: renderDropIndex(indexName),
+                summary: `DROP INDEX ${indexName}`,
             });
         }
     }
@@ -244,15 +244,15 @@ export const diffSnapshots = (previous: SchemaSnapshot | undefined, next: Schema
         if (old === undefined) {
             entries.push({
                 kind: "createTable",
-                summary: `CREATE TABLE ${tableName}`,
                 sql: renderCreateTable(table),
+                summary: `CREATE TABLE ${tableName}`,
             });
 
             for (const index of Object.values(table.indexes)) {
                 entries.push({
                     kind: "createIndex",
-                    summary: `CREATE INDEX ${index.name} ON ${tableName}`,
                     sql: renderCreateIndex(tableName, index),
+                    summary: `CREATE INDEX ${index.name} ON ${tableName}`,
                 });
             }
 
@@ -268,8 +268,8 @@ export const diffSnapshots = (previous: SchemaSnapshot | undefined, next: Schema
         if (next.tables[tableName] === undefined) {
             entries.push({
                 kind: "dropTable",
-                summary: `DROP TABLE ${tableName}`,
                 sql: renderDropTable(tableName),
+                summary: `DROP TABLE ${tableName}`,
             });
         }
     }

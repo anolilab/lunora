@@ -92,7 +92,7 @@ const hitRate = (hits: number, misses: number): string => {
  * samples), rendered as an inline-SVG sparkline. The series is capped at
  * {@link MAX_HISTORY} points and is lost on remount.
  */
-export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactElement {
+export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -312,7 +312,11 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
 
                     <dt>Errors</dt>
                     <dd data-testid="mt-errors">
-                        {metrics.errors} ({errorRate})
+                        {metrics.errors}
+{" "}
+(
+{errorRate}
+)
                     </dd>
 
                     <dt>Uptime</dt>
@@ -335,7 +339,10 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                     <dl data-testid="mt-aggregate-stats">
                         <dt>Shards</dt>
                         <dd data-testid="mt-agg-shards">
-                            {aggregate.reachable} reachable{aggregate.failed > 0 ? `, ${aggregate.failed.toString()} unreachable` : ""}
+                            {aggregate.reachable}
+{" "}
+reachable
+{aggregate.failed > 0 ? `, ${aggregate.failed.toString()} unreachable` : ""}
                         </dd>
 
                         <dt>Total requests</dt>
@@ -364,15 +371,17 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                             {shardResults.map((result) => (
                                 <tr data-testid={`mt-agg-row-${result.shard}`} key={result.shard}>
                                     <td>{result.shard}</td>
-                                    {result.metrics === null ? (
+                                    {result.metrics === null
+                                        ? (
                                         <td colSpan={3}>{result.error ?? "unreachable"}</td>
-                                    ) : (
+                                        )
+                                        : (
                                         <>
                                             <td>{result.metrics.requests}</td>
                                             <td>{result.metrics.errors}</td>
                                             <td>{formatBytes(result.metrics.databaseSize)}</td>
                                         </>
-                                    )}
+                                        )}
                                 </tr>
                             ))}
                         </tbody>
@@ -381,6 +390,6 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
             )}
         </div>
     );
-}
+};
 
 export type { MetricsPanelProps };

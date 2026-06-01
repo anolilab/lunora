@@ -37,11 +37,15 @@ describe("functionRunner", () => {
     it("runs the selected query with parsed JSON args and renders the result", async () => {
         expect.assertions(6);
 
-        const mock = createMockClient({ query: () => { return { rows: [1, 2] }; } });
+        const mock = createMockClient({
+            query: () => {
+                return { rows: [1, 2] };
+            },
+        });
 
         render(renderRunner(mock));
 
-        fireEvent.change(screen.getByTestId("args-input"), { target: { value: '{ "limit": 2 }' } });
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: "{ \"limit\": 2 }" } });
         fireEvent.click(screen.getByTestId("run-button"));
 
         await screen.findByTestId("result");
@@ -60,7 +64,11 @@ describe("functionRunner", () => {
     it("routes to client.mutation when the selected function is a mutation", async () => {
         expect.assertions(2);
 
-        const mock = createMockClient({ mutation: () => { return { ok: true }; } });
+        const mock = createMockClient({
+            mutation: () => {
+                return { ok: true };
+            },
+        });
 
         render(renderRunner(mock));
 
@@ -185,7 +193,11 @@ describe("functionRunner", () => {
     it("appends a history entry after a successful run", async () => {
         expect.assertions(3);
 
-        const mock = createMockClient({ query: () => { return { rows: [1] }; } });
+        const mock = createMockClient({
+            query: () => {
+                return { rows: [1] };
+            },
+        });
 
         render(renderRunner(mock));
 
@@ -221,7 +233,12 @@ describe("functionRunner", () => {
     it("prepends newest runs and caps the history at ten entries", async () => {
         expect.assertions(2);
 
-        const mock = createMockClient({ mutation: () => { return { ok: true }; }, query: () => null });
+        const mock = createMockClient({
+            mutation: () => {
+                return { ok: true };
+            },
+            query: () => null,
+        });
 
         render(renderRunner(mock));
 
@@ -254,14 +271,19 @@ describe("functionRunner", () => {
     it("loading a history entry restores its path, args and shard key", async () => {
         expect.assertions(4);
 
-        const mock = createMockClient({ mutation: () => { return { ok: true }; }, query: () => null });
+        const mock = createMockClient({
+            mutation: () => {
+                return { ok: true };
+            },
+            query: () => null,
+        });
 
         render(renderRunner(mock));
 
         // Record a mutation run with custom args + shard, then switch the form
         // away so the load has something to restore.
         fireEvent.change(screen.getByTestId("function-select"), { target: { value: "messages:send" } });
-        fireEvent.change(screen.getByTestId("args-input"), { target: { value: '{ "body": "hi" }' } });
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: "{ \"body\": \"hi\" }" } });
         fireEvent.change(screen.getByTestId("shard-input"), { target: { value: "room-7" } });
         fireEvent.click(screen.getByTestId("run-button"));
 
@@ -274,7 +296,7 @@ describe("functionRunner", () => {
         fireEvent.click(screen.getByTestId("fn-history-load-0"));
 
         expect(screen.getByTestId<HTMLSelectElement>("function-select").value).toBe("messages:send");
-        expect(screen.getByTestId<HTMLTextAreaElement>("args-input").value).toBe('{ "body": "hi" }');
+        expect(screen.getByTestId<HTMLTextAreaElement>("args-input").value).toBe("{ \"body\": \"hi\" }");
         expect(screen.getByTestId<HTMLInputElement>("shard-input").value).toBe("room-7");
         expect(screen.getByTestId("fn-history-status-0").textContent).toBe("✓");
     });

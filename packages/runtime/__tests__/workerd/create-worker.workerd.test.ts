@@ -18,14 +18,14 @@ describe("createWorker (workerd)", () => {
         expect.assertions(5);
 
         const response = await SELF.fetch("https://app.test/_cirrus/rpc", {
-            method: "POST",
+            body: JSON.stringify({ args: { limit: 5 }, functionPath: "messages:list" }),
             headers: {
-                "content-type": "application/json",
                 authorization: "Bearer test-token",
+                "content-type": "application/json",
                 cookie: "session=abc",
                 "x-d1-bookmark": "bookmark-v1",
             },
-            body: JSON.stringify({ functionPath: "messages:list", args: { limit: 5 } }),
+            method: "POST",
         });
 
         expect(response.status).toBe(200);
@@ -40,19 +40,19 @@ describe("createWorker (workerd)", () => {
         expect(forwarded.authorization).toBe("Bearer test-token");
         expect(forwarded.cookie).toBe("session=abc");
         expect(forwarded.bookmark).toBe("bookmark-v1");
-        expect(forwarded.body).toEqual({ functionPath: "messages:list", args: { limit: 5 } });
+        expect(forwarded.body).toEqual({ args: { limit: 5 }, functionPath: "messages:list" });
     });
 
     it("does NOT forward unrelated headers like user-agent or x-secret", async () => {
         expect.assertions(3);
 
         const response = await SELF.fetch("https://app.test/_cirrus/rpc", {
-            method: "POST",
+            body: JSON.stringify({ args: {}, functionPath: "x:y" }),
             headers: {
                 "content-type": "application/json",
                 "x-secret": "must-not-propagate",
             },
-            body: JSON.stringify({ functionPath: "x:y", args: {} }),
+            method: "POST",
         });
 
         // The DO echoes only authorization/cookie/bookmark. Anything else
@@ -78,9 +78,9 @@ describe("createWorker (workerd)", () => {
         // suite already exercises with a hand-rolled stub.
         const stub = env.SHARD.get(env.SHARD.idFromName("__root__"));
         const direct = await stub.fetch("https://shard.internal/rpc?reply-bookmark=bm-99", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
             body: JSON.stringify({}),
+            headers: { "content-type": "application/json" },
+            method: "POST",
         });
 
         expect(direct.headers.get("x-d1-bookmark")).toBe("bm-99");

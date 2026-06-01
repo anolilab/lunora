@@ -2,7 +2,7 @@ import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, Vali
 import { bench, describe } from "vitest";
 
 import { createD1Exec } from "../__tests__/_helpers/node-sqlite-d1.js";
-import { createD1CtxDb, runD1AggregateMigrations } from "../src/d1-ctx-db.js";
+import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db.js";
 
 /**
  * D1 column-dialect mirror of `@cirrus/do/count-indexed-vs-scan`. The
@@ -18,7 +18,9 @@ const ROW_COUNT = 10_000;
 const PROJECTS = 10;
 const CLOCK = 1_700_000_000_000;
 
-const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
+const col = (kind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true } }, kind };
+};
 
 const byProject: AggregateIndexDefinitionLike = {
     by: ["projectId"],
@@ -35,15 +37,15 @@ const total: AggregateIndexDefinitionLike = {
 };
 
 const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
- return {
-    tables: {
-        todos: {
-            aggregateIndexes: indexes,
-            indexes: [],
-            shape: { priority: col("string"), projectId: col("string") },
+    return {
+        tables: {
+            todos: {
+                aggregateIndexes: indexes,
+                indexes: [],
+                shape: { priority: col("string"), projectId: col("string") },
+            },
         },
-    },
-};
+    };
 };
 
 const createWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => {
@@ -60,7 +62,7 @@ const createWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => 
 
     await runD1AggregateMigrations(harness.exec, schema);
 
-    return createD1CtxDb({ clock: () => CLOCK, exec: harness.exec, schema });
+    return createD1ContextDatabase({ clock: () => CLOCK, exec: harness.exec, schema });
 };
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {

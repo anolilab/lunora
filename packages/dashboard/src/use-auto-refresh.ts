@@ -26,9 +26,9 @@ export function useAutoRefresh(onTick: () => void, enabled: boolean, intervalMs:
         }
 
         const id = setInterval(() => {
-            const doc = (globalThis as { document?: { hidden?: boolean } }).document;
+            const document_ = (globalThis as { document?: { hidden?: boolean } }).document;
 
-            if (doc?.hidden === true) {
+            if (document_?.hidden === true) {
                 return;
             }
 

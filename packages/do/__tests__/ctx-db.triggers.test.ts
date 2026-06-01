@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabaseWriterLike, SchedulerLike, SchemaLike, TriggerContextLike, TriggerEventLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
 /**
@@ -16,7 +16,7 @@ let harness: ReturnType<typeof createSqliteExec>;
 const makeWriter = (schema: SchemaLike, scheduler?: SchedulerLike): DatabaseWriterLike => {
     runShardMigrations(harness.sql, schema);
 
-    return createShardCtxDb({ clock: () => 1_700_000_000_000, schema, scheduler, sql: harness.sql });
+    return createShardContextDatabase({ clock: () => 1_700_000_000_000, scheduler, schema, sql: harness.sql });
 };
 
 describe("ctx-db triggers", () => {
@@ -39,8 +39,8 @@ describe("ctx-db triggers", () => {
                         indexes: [],
                         shape: { body: { kind: "string" } },
                         triggerMap: {
-                            a: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "after" }), op: "insert", timing: "after" },
-                            b: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "before" }), op: "insert", timing: "before" },
+                            a: { handler: (_context, event) => void events.push({ doc: event.doc, phase: "after" }), op: "insert", timing: "after" },
+                            b: { handler: (_context, event) => void events.push({ doc: event.doc, phase: "before" }), op: "insert", timing: "before" },
                         },
                     },
                 },
@@ -65,7 +65,7 @@ describe("ctx-db triggers", () => {
                         shape: { body: { kind: "string" } },
                         triggerMap: {
                             a: {
-                                handler: (_ctx, event) => {
+                                handler: (_context, event) => {
                                     captured = event;
                                 },
                                 op: "update",
@@ -96,7 +96,7 @@ describe("ctx-db triggers", () => {
                         shape: { body: { kind: "string" } },
                         triggerMap: {
                             a: {
-                                handler: (_ctx, event) => {
+                                handler: (_context, event) => {
                                     captured = event;
                                 },
                                 op: "update",
@@ -125,8 +125,8 @@ describe("ctx-db triggers", () => {
                         indexes: [],
                         shape: { body: { kind: "string" } },
                         triggerMap: {
-                            a: { handler: (_ctx, event) => void events.push({ phase: "before", previous: event.previous }), op: "delete", timing: "before" },
-                            b: { handler: (_ctx, event) => void events.push({ phase: "after", previous: event.previous }), op: "delete", timing: "after" },
+                            a: { handler: (_context, event) => void events.push({ phase: "before", previous: event.previous }), op: "delete", timing: "before" },
+                            b: { handler: (_context, event) => void events.push({ phase: "after", previous: event.previous }), op: "delete", timing: "after" },
                         },
                     },
                 },
@@ -151,7 +151,7 @@ describe("ctx-db triggers", () => {
                         shape: { body: { kind: "string" }, locked: { kind: "boolean" } },
                         triggerMap: {
                             guard: {
-                                handler: (_ctx, event) => {
+                                handler: (_context, event) => {
                                     if ((event.previous as Record<string, unknown>)["locked"]) {
                                         throw new Error("row is locked");
                                     }
@@ -182,8 +182,8 @@ describe("ctx-db triggers", () => {
                         shape: { body: { kind: "string" } },
                         triggerMap: {
                             audit: {
-                                handler: async (ctx, event) => {
-                                    await ctx.db.insert("audit", { row: event.id, table: event.table });
+                                handler: async (context, event) => {
+                                    await context.db.insert("audit", { row: event.id, table: event.table });
                                 },
                                 op: "insert",
                                 timing: "after",
@@ -209,20 +209,20 @@ describe("ctx-db triggers", () => {
             const deletedReactions: string[] = [];
             const schema: SchemaLike = {
                 tables: {
+                    messages: {
+                        indexes: [],
+                        relationMap: { reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" } },
+                        shape: { body: { kind: "string" } },
+                        triggerMap: {},
+                    },
                     reactions: {
                         indexes: [{ fields: ["messageId"], name: "by_message" }],
                         // The child holds the cascade rule: deleting a message cascades to its reactions.
                         relationMap: { message: { field: "messageId", kind: "one", onDelete: "cascade", references: "_id", table: "messages" } },
                         shape: { emoji: { kind: "string" }, messageId: { kind: "string" } },
                         triggerMap: {
-                            track: { handler: (_ctx, event) => void deletedReactions.push(event.id), op: "delete", timing: "after" },
+                            track: { handler: (_context, event) => void deletedReactions.push(event.id), op: "delete", timing: "after" },
                         },
-                    },
-                    messages: {
-                        indexes: [],
-                        relationMap: { reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" } },
-                        shape: { body: { kind: "string" } },
-                        triggerMap: {},
                     },
                 },
             };
@@ -250,8 +250,8 @@ describe("ctx-db triggers", () => {
                         shape: { body: { kind: "string" } },
                         triggerMap: {
                             bump: {
-                                handler: async (ctx, event) => {
-                                    await ctx.scheduler.runAfter(0, "counters:recount", { id: event.id });
+                                handler: async (context, event) => {
+                                    await context.scheduler.runAfter(0, "counters:recount", { id: event.id });
                                 },
                                 op: "insert",
                                 timing: "after",
@@ -277,8 +277,8 @@ describe("ctx-db triggers", () => {
                         shape: { body: { kind: "string" } },
                         triggerMap: {
                             bump: {
-                                handler: async (ctx) => {
-                                    await ctx.scheduler.runAfter(0, "noop");
+                                handler: async (context) => {
+                                    await context.scheduler.runAfter(0, "noop");
                                 },
                                 op: "insert",
                                 timing: "after",
@@ -302,9 +302,9 @@ describe("ctx-db triggers", () => {
                         shape: { body: { kind: "string" } },
                         triggerMap: {
                             loop: {
-                                handler: async (ctx: TriggerContextLike) => {
+                                handler: async (context: TriggerContextLike) => {
                                     // Each insert refires this same after-insert trigger → unbounded recursion.
-                                    await ctx.db.insert("messages", { body: "again" });
+                                    await context.db.insert("messages", { body: "again" });
                                 },
                                 op: "insert",
                                 timing: "after",

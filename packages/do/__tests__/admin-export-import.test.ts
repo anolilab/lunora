@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ExportRow } from "../src/admin-export-import.js";
 import { exportShardRows, importShardRows, selectExportTables, validateImportRow } from "../src/admin-export-import.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
 import type { RunShardExportArgs, RunShardImportArgs, ShardDOState } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
@@ -12,24 +12,24 @@ import { createSqliteExec } from "./_helpers/node-sqlite.js";
 const ADMIN_TOKEN = "s3cret-admin";
 
 const minimalParser = (kind: string) => {
- return {
-    kind,
-    parse(value: unknown) {
-        if (kind === "string" && typeof value !== "string") {
-            throw new Error(`expected string, received ${typeof value}`);
-        }
+    return {
+        kind,
+        parse(value: unknown) {
+            if (kind === "string" && typeof value !== "string") {
+                throw new Error(`expected string, received ${typeof value}`);
+            }
 
-        if (kind === "number" && typeof value !== "number") {
-            throw new Error(`expected number, received ${typeof value}`);
-        }
+            if (kind === "number" && typeof value !== "number") {
+                throw new Error(`expected number, received ${typeof value}`);
+            }
 
-        if (kind === "boolean" && typeof value !== "boolean") {
-            throw new Error(`expected boolean, received ${typeof value}`);
-        }
+            if (kind === "boolean" && typeof value !== "boolean") {
+                throw new Error(`expected boolean, received ${typeof value}`);
+            }
 
-        return value;
-    },
-};
+            return value;
+        },
+    };
 };
 
 const usersSchema: SchemaLike = {
@@ -40,7 +40,7 @@ const usersSchema: SchemaLike = {
                 channelId: minimalParser("string"),
                 text: minimalParser("string"),
             },
-            shardMode: { kind: "shardBy", field: "channelId" } as never,
+            shardMode: { field: "channelId", kind: "shardBy" } as never,
         },
         users: {
             indexes: [],
@@ -122,18 +122,18 @@ describe("validateImportRow", () => {
 });
 
 describe("exportShardRows / importShardRows roundtrip", () => {
-    let db: ReturnType<typeof createSqliteExec>;
+    let database: ReturnType<typeof createSqliteExec>;
     let writer: DatabaseWriterLike;
 
     beforeEach(async () => {
-        db = createSqliteExec();
-        runShardMigrations(db.sql, usersSchema);
-        writer = createShardCtxDb({ schema: usersSchema, sql: db.sql });
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema);
+        writer = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
 
         for (let index = 1; index <= 3; index += 1) {
             await writer.insert(
                 "users",
-                { _id: `u${String(index)}`, name: `user ${String(index)}`, email: `u${String(index)}@x.io` },
+                { _id: `u${String(index)}`, email: `u${String(index)}@x.io`, name: `user ${String(index)}` },
                 { allowExplicitId: true },
             );
         }
@@ -144,7 +144,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
     });
 
     afterEach(() => {
-        db.close();
+        database.close();
     });
 
     it("exports every row across tables", async () => {
@@ -176,10 +176,10 @@ describe("exportShardRows / importShardRows roundtrip", () => {
     it("import inserts a batch and surfaces per-table counts", async () => {
         expect.assertions(5);
 
-        const freshDb = createSqliteExec();
+        const freshDatabase = createSqliteExec();
 
-        runShardMigrations(freshDb.sql, usersSchema);
-        const freshWriter = createShardCtxDb({ schema: usersSchema, sql: freshDb.sql });
+        runShardMigrations(freshDatabase.sql, usersSchema);
+        const freshWriter = createShardContextDatabase({ schema: usersSchema, sql: freshDatabase.sql });
 
         const rows: ExportRow[] = [
             { doc: { _id: "u9", email: "n@x.io", name: "Nina" }, table: "users" },
@@ -189,23 +189,23 @@ describe("exportShardRows / importShardRows roundtrip", () => {
 
         const result = await importShardRows(freshWriter, usersSchema, { rows });
 
-        expect(result.inserted).toEqual({ users: 2, messages: 1 });
+        expect(result.inserted).toEqual({ messages: 1, users: 2 });
         expect(result.errors).toEqual([]);
         expect(result.conflicts).toBe(0);
 
         await expect(freshWriter.get("u9")).resolves.toMatchObject({ name: "Nina" });
         await expect(freshWriter.get("m9")).resolves.toMatchObject({ text: "hello" });
 
-        freshDb.close();
+        freshDatabase.close();
     });
 
     it("schema-failed rows do not abort the batch — they're reported in errors[]", async () => {
         expect.assertions(3);
 
-        const freshDb = createSqliteExec();
+        const freshDatabase = createSqliteExec();
 
-        runShardMigrations(freshDb.sql, usersSchema);
-        const freshWriter = createShardCtxDb({ schema: usersSchema, sql: freshDb.sql });
+        runShardMigrations(freshDatabase.sql, usersSchema);
+        const freshWriter = createShardContextDatabase({ schema: usersSchema, sql: freshDatabase.sql });
 
         const rows: ExportRow[] = [
             { doc: { _id: "u9", email: "ok@x.io", name: "Nina" }, table: "users" },
@@ -219,7 +219,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         expect(result.errors).toHaveLength(1);
         expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", line: 11, table: "users" });
 
-        freshDb.close();
+        freshDatabase.close();
     });
 
     it("a row whose _id collides with an existing doc is skipped and counted as a conflict", async () => {
@@ -250,15 +250,15 @@ describe("exportShardRows / importShardRows roundtrip", () => {
             exported.push(row);
         }
 
-        const freshDb = createSqliteExec();
+        const freshDatabase = createSqliteExec();
 
-        runShardMigrations(freshDb.sql, usersSchema);
+        runShardMigrations(freshDatabase.sql, usersSchema);
 
-        const freshWriter = createShardCtxDb({ schema: usersSchema, sql: freshDb.sql });
+        const freshWriter = createShardContextDatabase({ schema: usersSchema, sql: freshDatabase.sql });
 
         const result = await importShardRows(freshWriter, usersSchema, { rows: exported });
 
-        expect(result.inserted).toEqual({ users: 3, messages: 2 });
+        expect(result.inserted).toEqual({ messages: 2, users: 3 });
         expect(result.errors).toEqual([]);
 
         for (const original of exported) {
@@ -273,7 +273,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
             }
         }
 
-        freshDb.close();
+        freshDatabase.close();
     });
 });
 
@@ -283,7 +283,7 @@ class ExportShardImpl extends ShardDO {
     }
 
     protected override runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
-        const writer = createShardCtxDb({ schema: usersSchema, sql: this.sql as never });
+        const writer = createShardContextDatabase({ schema: usersSchema, sql: this.sql as never });
         const rows: ExportRow[] = [];
 
         return (async () => {
@@ -296,7 +296,7 @@ class ExportShardImpl extends ShardDO {
     }
 
     protected override async runShardImport(args: RunShardImportArgs) {
-        const writer = createShardCtxDb({
+        const writer = createShardContextDatabase({
             broadcast: (delta) => {
                 this.recordChangedTable(delta.table);
             },
@@ -309,14 +309,14 @@ class ExportShardImpl extends ShardDO {
 }
 
 describe("shardDO admin export/import dispatch", () => {
-    let db: ReturnType<typeof createSqliteExec>;
+    let database: ReturnType<typeof createSqliteExec>;
     let state: ShardDOState;
 
     beforeEach(async () => {
-        db = createSqliteExec();
-        runShardMigrations(db.sql, usersSchema);
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema);
 
-        const writer = createShardCtxDb({ schema: usersSchema, sql: db.sql });
+        const writer = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
 
         await writer.insert("users", { _id: "u1", email: "a@b.com", name: "Alice" }, { allowExplicitId: true });
         await writer.insert("messages", { _id: "m1", channelId: "c1", text: "hi" }, { allowExplicitId: true });
@@ -326,12 +326,12 @@ describe("shardDO admin export/import dispatch", () => {
             getWebSockets() {
                 return [];
             },
-            storage: { sql: db.sql as unknown as ShardDOState["storage"]["sql"] },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
         };
     });
 
     afterEach(() => {
-        db.close();
+        database.close();
     });
 
     const adminRequest = (functionPath: string, args: Record<string, unknown>): Request =>

@@ -44,16 +44,16 @@ const createFakeWebSocket = (subs: Record<string, SubscriptionQuery>): FakeWebSo
 };
 
 const createFakeState = (sockets: FakeWebSocket[]): ShardDOState => {
- return {
-    storage: { sql: { exec: () => undefined } },
-    id: { name: "bench-shard" },
-    acceptWebSocket(ws) {
-        sockets.push(ws as unknown as FakeWebSocket);
-    },
-    getWebSockets() {
-        return sockets as unknown as WebSocket[];
-    },
-};
+    return {
+        acceptWebSocket(ws) {
+            sockets.push(ws as unknown as FakeWebSocket);
+        },
+        getWebSockets() {
+            return sockets as unknown as WebSocket[];
+        },
+        id: { name: "bench-shard" },
+        storage: { sql: { exec: () => undefined } },
+    };
 };
 
 class BenchShard extends ShardDO {
@@ -69,15 +69,15 @@ class BenchShard extends ShardDO {
 const buildShard = (sockets: FakeWebSocket[]): BenchShard => new BenchShard(createFakeState(sockets), {});
 
 const deltaMatching: MutationDelta = {
-    table: "messages",
-    op: "insert",
     key: "m1",
-    row: { id: "m1", channelId: "channels:c1" },
+    op: "insert",
+    row: { channelId: "channels:c1", id: "m1" },
+    table: "messages",
 };
 const deltaDelete: MutationDelta = {
-    table: "messages",
-    op: "delete",
     key: "m1",
+    op: "delete",
+    table: "messages",
 };
 
 describe("broadcastDelta — fan-out", () => {
@@ -128,7 +128,7 @@ describe("broadcastDelta — args filter", () => {
     for (let index = 0; index < 100; index += 1) {
         sockets.push(
             createFakeWebSocket({
-                [`sub-${index}`]: { table: "messages", args: { channelId: `channels:c${index}` } },
+                [`sub-${index}`]: { args: { channelId: `channels:c${index}` }, table: "messages" },
             }),
         );
     }
@@ -145,7 +145,7 @@ describe("broadcastDelta — delete fallback", () => {
     for (let index = 0; index < 100; index += 1) {
         sockets.push(
             createFakeWebSocket({
-                [`sub-${index}`]: { table: "messages", args: { channelId: "channels:c1" } },
+                [`sub-${index}`]: { args: { channelId: "channels:c1" }, table: "messages" },
             }),
         );
     }

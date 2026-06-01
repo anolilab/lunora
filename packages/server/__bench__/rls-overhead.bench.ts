@@ -25,7 +25,7 @@ interface FakeCall {
     tableOrId?: string;
 }
 
-interface FakeDb {
+interface FakeDatabase {
     calls: FakeCall[];
     writer: {
         count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
@@ -41,7 +41,7 @@ interface FakeDb {
     };
 }
 
-const createFakeDb = (): FakeDb => {
+const createFakeDatabase = (): FakeDatabase => {
     const calls: FakeCall[] = [];
 
     return {
@@ -99,23 +99,23 @@ const createFakeDb = (): FakeDb => {
 
 const cirrus = initCirrus.dataModel<Record<string, never>>().create();
 
-interface BenchCtx {
+interface BenchContext {
     auth: { roles?: ReadonlyArray<string>; userId: null | string };
-    db: FakeDb["writer"];
+    db: FakeDatabase["writer"];
 }
 
-const buildCtx = (): BenchCtx => {
-    const db = createFakeDb();
+const buildContext = (): BenchContext => {
+    const database = createFakeDatabase();
 
-    return { auth: { roles: [], userId: "user_42" }, db: db.writer };
+    return { auth: { roles: [], userId: "user_42" }, db: database.writer };
 };
 
 // The procedure builder types `ctx.db` nominally; the RLS middleware signature
 // is structural, so a permissive cast is needed in the bench harness to attach
 // it without dragging the full DataModel typing in here. Same pattern the test
 // harness uses (`rlsForTest`).
-const rlsAsAny = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Middleware<any, any> =>
-    (rls as unknown as (p: ReadonlyArray<Policy<Ctx>>) => Middleware<any, any>)(policies);
+const rlsAsAny = <Context>(policies: ReadonlyArray<Policy<Context>>): Middleware<any, any> =>
+    (rls as unknown as (p: ReadonlyArray<Policy<Context>>) => Middleware<any, any>)(policies);
 
 const baselineHandler = cirrus.query.query(async ({ ctx }) => {
     // Two reads — most queries touch more than one table. The procedure
@@ -123,7 +123,7 @@ const baselineHandler = cirrus.query.query(async ({ ctx }) => {
     // writer (which carries `findMany`/`findFirst`) is what the RLS-wrapped
     // variants see. Cast through `BenchCtx["db"]` here so the bench measures
     // the same surface in every variant.
-    const reader = ctx.db as unknown as BenchCtx["db"];
+    const reader = ctx.db as unknown as BenchContext["db"];
 
     await reader.findMany("documents", { where: { ownerId: "user_42" } });
     await reader.findFirst("users", { where: { _id: "user_42" } });
@@ -131,13 +131,13 @@ const baselineHandler = cirrus.query.query(async ({ ctx }) => {
     return null;
 });
 
-const policyTrue = definePolicy<BenchCtx>({
+const policyTrue = definePolicy<BenchContext>({
     on: "read",
     table: "documents",
     when: () => true,
 });
 
-const policyPredicate = definePolicy<BenchCtx>({
+const policyPredicate = definePolicy<BenchContext>({
     on: "read",
     table: "documents",
     when: ({ auth }) => {
@@ -145,14 +145,14 @@ const policyPredicate = definePolicy<BenchCtx>({
     },
 });
 
-const rlsTrueHandler = cirrus.query.use(rlsAsAny<BenchCtx>([policyTrue])).query(async ({ ctx }) => {
+const rlsTrueHandler = cirrus.query.use(rlsAsAny<BenchContext>([policyTrue])).query(async ({ ctx }) => {
     await ctx.db.findMany("documents", { where: { ownerId: "user_42" } });
     await ctx.db.findFirst("users", { where: { _id: "user_42" } });
 
     return null;
 });
 
-const rlsPredicateHandler = cirrus.query.use(rlsAsAny<BenchCtx>([policyPredicate])).query(async ({ ctx }) => {
+const rlsPredicateHandler = cirrus.query.use(rlsAsAny<BenchContext>([policyPredicate])).query(async ({ ctx }) => {
     await ctx.db.findMany("documents", { where: { ownerId: "user_42" } });
     await ctx.db.findFirst("users", { where: { _id: "user_42" } });
 
@@ -161,14 +161,14 @@ const rlsPredicateHandler = cirrus.query.use(rlsAsAny<BenchCtx>([policyPredicate
 
 describe("rls() middleware — per-query overhead", () => {
     bench("baseline: no RLS in the chain", async () => {
-        await baselineHandler.handler(buildCtx(), {});
+        await baselineHandler.handler(buildContext(), {});
     });
 
     bench("rls(true): wrapper installs, no baseWhere merged", async () => {
-        await rlsTrueHandler.handler(buildCtx(), {});
+        await rlsTrueHandler.handler(buildContext(), {});
     });
 
     bench("rls(predicate): full WhereInput AND-merge per read", async () => {
-        await rlsPredicateHandler.handler(buildCtx(), {});
+        await rlsPredicateHandler.handler(buildContext(), {});
     });
 });

@@ -2,13 +2,13 @@ import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } fr
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { exportGlobalRows, importGlobalRows, selectGlobalTables } from "../src/admin-export-import.js";
-import { createD1CtxDb } from "../src/d1-ctx-db.js";
+import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
 
 const FIXED_CLOCK = 1_700_000_000_000;
 
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
- return {
+    return {
         _meta: { column: { notNull: true, ...column } },
         kind,
 
@@ -69,7 +69,7 @@ describe("d1 admin export/import globals", () => {
         )`,
         );
 
-        writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+        writer = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
     });
 
     afterEach(() => {
@@ -196,7 +196,7 @@ describe("d1 admin export/import globals", () => {
             )`,
             );
 
-            const freshWriter = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema });
+            const freshWriter = createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema });
 
             const result = await importGlobalRows(freshWriter, schema, {
                 rows: exported as { doc: Record<string, unknown>; table: string }[],
@@ -205,7 +205,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.inserted).toEqual({ settings: 2 });
             expect(result.errors).toEqual([]);
 
-            const reload = (await freshWriter.get("s1"));
+            const reload = await freshWriter.get("s1");
 
             expect(reload).toMatchObject({ name: "theme", value: "dark" });
 

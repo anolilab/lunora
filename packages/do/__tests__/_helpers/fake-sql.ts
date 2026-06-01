@@ -45,21 +45,21 @@ const SELECT_ALL = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)"(?: WHERE (
 const SELECT_BY_ID = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id = \?$/u;
 
 const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
- return {
-    [Symbol.iterator]() {
-        return rows[Symbol.iterator]();
-    },
-    one() {
-        if (rows.length === 0) {
-            throw new Error("expected exactly one row, received none");
-        }
+    return {
+        one() {
+            if (rows.length === 0) {
+                throw new Error("expected exactly one row, received none");
+            }
 
-        return rows[0]!;
-    },
-    toArray() {
-        return rows;
-    },
-};
+            return rows[0]!;
+        },
+        [Symbol.iterator]() {
+            return rows[Symbol.iterator]();
+        },
+        toArray() {
+            return rows;
+        },
+    };
 };
 
 const compareValues = (left: unknown, right: unknown): number => {
@@ -86,9 +86,9 @@ const extractFieldValue = (row: FakeRow, field: string): unknown => {
         return row._creationTime;
     }
 
-    const doc = JSON.parse(row.__doc__) as Record<string, unknown>;
+    const document_ = JSON.parse(row.__doc__) as Record<string, unknown>;
 
-    return doc[field];
+    return document_[field];
 };
 
 const jsonExtractPattern = /^json_extract\(__doc__, '\$\.([^']+)'\)$/u;
@@ -130,8 +130,8 @@ const parseWhere = (clause: string): ParsedCondition[] => {
         }
 
         result.push({
-            field: parseFieldExpression(match[1]!),
             comparator: match[2]!,
+            field: parseFieldExpression(match[1]!),
             paramIndex: placeholderIndex,
         });
 
@@ -257,9 +257,9 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             const expressions = createIndexMatch[4]!.split(",").map((segment) => segment.trim());
 
             state.indexes.set(indexName, {
-                unique: Boolean(createIndexMatch[1]?.trim()),
-                table: tableName,
                 expressions,
+                table: tableName,
+                unique: Boolean(createIndexMatch[1]?.trim()),
             });
 
             return cursor<Record<string, unknown>>([]);
@@ -275,25 +275,25 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
                 throw new Error(`fake: insert into unknown table ${tableName}`);
             }
 
-            const [id, creationTime, doc] = params as [string, number, string];
+            const [id, creationTime, document_] = params as [string, number, string];
 
-            table.set(id, { id, _creationTime: creationTime, __doc__: doc });
+            table.set(id, { __doc__: document_, _creationTime: creationTime, id });
             state.lastChanges = 1;
 
             return cursor<Record<string, unknown>>([]);
         }
 
-        const updateDocCasMatch = UPDATE_SET_DOC_CAS.exec(sqlString);
+        const updateDocumentCasMatch = UPDATE_SET_DOC_CAS.exec(sqlString);
 
-        if (updateDocCasMatch) {
-            const tableName = updateDocCasMatch[1]!;
-            const [doc, id, snapshot] = params as [string, string, string];
+        if (updateDocumentCasMatch) {
+            const tableName = updateDocumentCasMatch[1]!;
+            const [document_, id, snapshot] = params as [string, string, string];
             const table = state.tables.get(tableName);
             const row = table?.get(id);
 
             // CAS: only mutate when the on-disk __doc__ still equals the read-time snapshot.
             if (table && row?.__doc__ === snapshot) {
-                table.set(id, { ...row, __doc__: doc });
+                table.set(id, { ...row, __doc__: document_ });
                 state.lastChanges = 1;
             } else {
                 state.lastChanges = 0;
@@ -302,16 +302,16 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
-        const updateDocMatch = UPDATE_SET_DOC.exec(sqlString);
+        const updateDocumentMatch = UPDATE_SET_DOC.exec(sqlString);
 
-        if (updateDocMatch) {
-            const tableName = updateDocMatch[1]!;
-            const [doc, id] = params as [string, string];
+        if (updateDocumentMatch) {
+            const tableName = updateDocumentMatch[1]!;
+            const [document_, id] = params as [string, string];
             const table = state.tables.get(tableName);
             const row = table?.get(id);
 
             if (table && row) {
-                table.set(id, { ...row, __doc__: doc });
+                table.set(id, { ...row, __doc__: document_ });
                 state.lastChanges = 1;
             } else {
                 state.lastChanges = 0;
@@ -324,12 +324,12 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
 
         if (updateBothMatch) {
             const tableName = updateBothMatch[1]!;
-            const [creationTime, doc, id] = params as [number, string, string];
+            const [creationTime, document_, id] = params as [number, string, string];
             const table = state.tables.get(tableName);
             const row = table?.get(id);
 
             if (table && row) {
-                table.set(id, { id, _creationTime: creationTime, __doc__: doc });
+                table.set(id, { __doc__: document_, _creationTime: creationTime, id });
                 state.lastChanges = 1;
             } else {
                 state.lastChanges = 0;
@@ -437,25 +437,25 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
 export const messagesSchema: SchemaLike = {
     tables: {
         messages: {
+            indexes: [
+                { fields: ["channelId"], name: "by_channel" },
+                { fields: ["channelId", "_creationTime"], name: "by_channel_creation" },
+                { fields: ["text"], name: "by_text", unique: true },
+            ],
             shape: {
+                authorId: { kind: "string" },
                 channelId: { kind: "string" },
                 text: { kind: "string" },
-                authorId: { kind: "string" },
             },
-            indexes: [
-                { name: "by_channel", fields: ["channelId"] },
-                { name: "by_channel_creation", fields: ["channelId", "_creationTime"] },
-                { name: "by_text", fields: ["text"], unique: true },
-            ],
         },
         profiles: {
-            shape: { userId: { kind: "string" } },
             indexes: [],
+            shape: { userId: { kind: "string" } },
             shardMode: { kind: "global" },
         },
         roomMembers: {
+            indexes: [{ fields: ["roomId"], name: "by_room" }],
             shape: { roomId: { kind: "string" }, userId: { kind: "string" } },
-            indexes: [{ name: "by_room", fields: ["roomId"] }],
         },
     },
 };

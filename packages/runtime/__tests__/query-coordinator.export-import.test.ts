@@ -17,20 +17,22 @@ const createShardSpy = (handler: (shardKey: string, body: { args: Record<string,
     const calls: ShardCall[] = [];
 
     const stubFor = (shardKey: string) => {
- return {
-        async fetch(request: Request): Promise<Response> {
-            const body: { args: Record<string, unknown>; functionPath: string } = await request.json();
+        return {
+            async fetch(request: Request): Promise<Response> {
+                const body: { args: Record<string, unknown>; functionPath: string } = await request.json();
 
-            calls.push({ body, shardKey });
+                calls.push({ body, shardKey });
 
-            return handler(shardKey, body);
-        },
+                return handler(shardKey, body);
+            },
+        };
     };
-};
 
     const namespace: ShardNamespaceLike = {
         get: (id) => stubFor((id as { __name: string }).__name),
-        idFromName: (name) => { return { __name: name }; },
+        idFromName: (name) => {
+            return { __name: name };
+        },
     };
 
     return { calls, namespace };
@@ -65,7 +67,7 @@ describe("orchestrateExport", () => {
         expect.assertions(3);
 
         const registry = createStaticShardRegistry({ messages: ["c1", "c2"] });
-        const coordinator = createQueryCoordinator({ registry, perShardTimeoutMs: 100 });
+        const coordinator = createQueryCoordinator({ perShardTimeoutMs: 100, registry });
 
         const spy = createShardSpy((shardKey) => {
             if (shardKey === "c2") {

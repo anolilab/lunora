@@ -28,7 +28,7 @@ interface ExecutionContextLike {
     waitUntil: (promise: Promise<unknown>) => void;
 }
 
-type Route = (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> | Response;
+type Route = (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response> | Response;
 
 /**
  * Context handed to HTTP-action handlers. Built per request by the worker; its
@@ -48,7 +48,7 @@ interface HttpActionContext {
 }
 
 interface HttpActionLike {
-    handler: (ctx: HttpActionContext, request: Request) => Promise<Response> | Response;
+    handler: (context: HttpActionContext, request: Request) => Promise<Response> | Response;
 }
 
 /**
@@ -64,7 +64,7 @@ interface HttpRouterLike {
     // own `Bindings`/`ExecutionContext` (which carries a required `props`), assign
     // structurally here; an arrow property would reject it under strict variance.
     // eslint-disable-next-line @typescript-eslint/method-signature-style -- bivariant params are load-bearing for hono compatibility
-    fetch(request: Request, env?: unknown, ctx?: ExecutionContextLike): Promise<Response> | Response;
+    fetch(request: Request, env?: unknown, context?: ExecutionContextLike): Promise<Response> | Response;
 }
 
 /**
@@ -106,10 +106,10 @@ type AdminTableResolver = (table: string) => ShardingInfo | undefined;
  * of `{table, doc}` rows. The runtime concatenates this stream after the
  * shard-local stream so the receiver sees a single NDJSON body.
  */
-type GlobalExportFn = (request: { tables: ReadonlyArray<string> }) => AsyncIterable<{ doc: Record<string, unknown>; table: string }>;
+type GlobalExportFunction = (request: { tables: ReadonlyArray<string> }) => AsyncIterable<{ doc: Record<string, unknown>; table: string }>;
 
 /** Bulk import of `.global()` rows. Returns insert counts + errors merged across tables. */
-type GlobalImportFn = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; startLine?: number }) => Promise<{
+type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; startLine?: number }) => Promise<{
     conflicts: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
@@ -155,7 +155,7 @@ type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
  * compatible with `@cirrus/storage`'s `Storage["list"]` — the runtime stays free
  * of a hard dependency on the storage package.
  */
-type StorageListFn = (prefix?: string, opts?: { cursor?: string; limit?: number }) => Promise<{ cursor?: string; objects: StorageObject[] }>;
+type StorageListFunction = (prefix?: string, options?: { cursor?: string; limit?: number }) => Promise<{ cursor?: string; objects: StorageObject[] }>;
 
 /** One `.global()` table plus its row count. Mirrors `@cirrus/d1`'s `GlobalTableInfo`. */
 interface GlobalTableInfo {
@@ -298,7 +298,7 @@ interface WorkerOptions {
      * Stream `.global()` rows for the admin export endpoint. When omitted,
      * the export endpoint covers only shard-local tables.
      */
-    exportGlobals?: GlobalExportFn;
+    exportGlobals?: GlobalExportFunction;
 
     /**
      * The generated `CIRRUS_FUNCTIONS` map (from `_generated/server.ts`). When
@@ -333,7 +333,7 @@ interface WorkerOptions {
      * Insert `.global()` rows for the admin import endpoint. When omitted,
      * rows targeting global tables are reported as hard errors.
      */
-    importGlobals?: GlobalImportFn;
+    importGlobals?: GlobalImportFunction;
 
     /**
      * Optional telemetry sink. When supplied, the worker emits one
@@ -406,7 +406,7 @@ interface WorkerOptions {
      * (or the raw R2 bucket's `list`) satisfies it. Omit it and the endpoint
      * responds `STORAGE_NOT_CONFIGURED`.
      */
-    storageList?: StorageListFn;
+    storageList?: StorageListFunction;
 }
 
 interface RpcContext {
@@ -530,8 +530,8 @@ const buildErrorEvent = (
         error: { code, message, status },
         functionPath,
         ok: false,
-        ...(extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {}),
-        ...(extra.shardKey ? { shardKey: extra.shardKey } : {}),
+        ...extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {},
+        ...extra.shardKey ? { shardKey: extra.shardKey } : {},
     };
 };
 
@@ -792,11 +792,11 @@ const streamingImport = async (
         }
 
         const { table } = candidate;
-        const doc = candidate.doc as Record<string, unknown>;
+        const document_ = candidate.doc as Record<string, unknown>;
         const info = options.resolveTableSharding?.(table);
 
         if (info?.mode.kind === "global") {
-            globalRows.push({ doc, table });
+            globalRows.push({ doc: document_, table });
             globalLineMap.push(lineNumber);
 
             return;
@@ -807,7 +807,7 @@ const streamingImport = async (
         let shardKey = defaultShard;
 
         if (info?.mode.kind === "shardBy" && typeof info.mode.field === "string") {
-            const raw = doc[info.mode.field];
+            const raw = document_[info.mode.field];
 
             if (raw === undefined || raw === null) {
                 errors.push({
@@ -826,9 +826,9 @@ const streamingImport = async (
         const existing = perShard.get(shardKey);
 
         if (existing) {
-            existing.rows.push({ doc, table });
+            existing.rows.push({ doc: document_, table });
         } else {
-            perShard.set(shardKey, { rows: [{ doc, table }], shardKey, startLine: lineNumber });
+            perShard.set(shardKey, { rows: [{ doc: document_, table }], shardKey, startLine: lineNumber });
         }
     };
 
@@ -946,10 +946,10 @@ const constantTimeEqual = (expected: string, supplied: string): boolean => {
 
     for (let index = 0; index < max; index += 1) {
         const ca = index < expected.length ? expected.charCodeAt(index) : 0;
-        const cb = index < supplied.length ? supplied.charCodeAt(index) : 0;
+        const callback = index < supplied.length ? supplied.charCodeAt(index) : 0;
 
         // eslint-disable-next-line no-bitwise
-        diff |= ca ^ cb;
+        diff |= ca ^ callback;
     }
 
     return diff === 0;
@@ -1022,7 +1022,7 @@ const checkAdminWsToken = (request: Request, expected: string | undefined): bool
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
  * be re-exported directly as `export default createWorker(...)`.
  */
-const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> } => {
+const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response> } => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
     // Fan-out and non-default shard routing are authorization-open when neither
@@ -1204,7 +1204,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         }
 
         const wantGlobals = body.tables === undefined || globalTables.length > 0;
-        const exportGlobalsFn = options.exportGlobals;
+        const exportGlobalsFunction = options.exportGlobals;
 
         // Stream NDJSON: shard-local rows first (from `orchestrateExport`'s
         // collected envelopes), then global rows (from the D1 helper). The
@@ -1228,8 +1228,8 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
                         // `resolveTableSharding`'s keys if the caller passed
                         // none — best effort; a project without the resolver
                         // will simply not fan out automatically.
-                        const probeTables =
-                            exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
+                        const probeTables
+                            = exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
 
                         const result = await coordinator.orchestrateExport(options.shardDO, {
                             args: { tables: exportTables },
@@ -1249,9 +1249,9 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
                     }
 
                     // Globals: stream rows from the D1 helper when configured.
-                    if (wantGlobals && exportGlobalsFn) {
-                        const tablesArg = body.tables === undefined ? [] : globalTables;
-                        const iter = exportGlobalsFn({ tables: tablesArg });
+                    if (wantGlobals && exportGlobalsFunction) {
+                        const tablesArgument = body.tables === undefined ? [] : globalTables;
+                        const iter = exportGlobalsFunction({ tables: tablesArgument });
 
                         for await (const row of iter) {
                             writeRow(row);
@@ -1326,7 +1326,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
     };
 
     /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
-    const queryParam = (url: URL, name: string): string | undefined => {
+    const queryParameter = (url: URL, name: string): string | undefined => {
         const value = url.searchParams.get(name);
 
         return value === null || value === "" ? undefined : value;
@@ -1335,10 +1335,10 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
     /** Parse the shared `limit` / `offset` paging params off an admin GET request. */
     const parsePaging = (request: Request): { limit?: number; offset?: number } => {
         const url = new URL(request.url);
-        const limitParam = url.searchParams.get("limit");
-        const offsetParam = url.searchParams.get("offset");
-        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
-        const offset = offsetParam === null ? undefined : Number.parseInt(offsetParam, 10);
+        const limitParameter = url.searchParams.get("limit");
+        const offsetParameter = url.searchParams.get("offset");
+        const limit = limitParameter === null ? undefined : Number.parseInt(limitParameter, 10);
+        const offset = offsetParameter === null ? undefined : Number.parseInt(offsetParameter, 10);
 
         return {
             limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
@@ -1423,8 +1423,8 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         });
 
         const url = new URL(request.url);
-        const result = await storageList(queryParam(url, "prefix"), {
-            cursor: queryParam(url, "cursor"),
+        const result = await storageList(queryParameter(url, "prefix"), {
+            cursor: queryParameter(url, "cursor"),
             ...parsePaging(request),
         });
 
@@ -1476,7 +1476,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
             message: "global endpoints require a `globalIntrospector` on the worker",
         });
 
-        const table = queryParam(new URL(request.url), "table");
+        const table = queryParameter(new URL(request.url), "table");
 
         if (table === undefined) {
             throw new CirrusError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
@@ -1510,13 +1510,13 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
             message: "auth endpoints require an `authIntrospector` on the worker",
         });
 
-        const userId = queryParam(new URL(request.url), "userId");
+        const userId = queryParameter(new URL(request.url), "userId");
         const page = await introspector.listSessions({ ...parsePaging(request), userId });
 
         return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
-    const buildHttpActionCtx = async (request: Request, env: unknown): Promise<HttpActionContext> => {
+    const buildHttpActionContext = async (request: Request, env: unknown): Promise<HttpActionContext> => {
         const { claims, headers, userId } = await resolveForwardContext(request, env, options.resolveIdentity);
 
         const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
@@ -1557,7 +1557,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         };
     };
 
-    const dispatchHttpRoute = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<null | Response> => {
+    const dispatchHttpRoute = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<null | Response> => {
         if (!options.httpRouter) {
             return null;
         }
@@ -1565,12 +1565,12 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         // Build the action context up front and inject it on a private env
         // binding; the router's middleware lifts it into the handler's context.
         // hono then matches/dispatches and returns its own response (incl. 404).
-        const httpCtx = await buildHttpActionCtx(request, env);
+        const httpContext = await buildHttpActionContext(request, env);
 
-        return options.httpRouter.fetch(request, { ...(env as object), __cirrusCtx: httpCtx }, ctx);
+        return options.httpRouter.fetch(request, { ...(env as object), __cirrusCtx: httpContext }, context);
     };
 
-    const handle = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<Response> => {
+    const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
         const url = new URL(request.url);
 
         // Fast-path reject on a declared `Content-Length` over the cap — cheap
@@ -1581,9 +1581,9 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         // enforcement happens in `readBodyTextWithLimit` / the streaming import
         // reader, which abort with 413 once cumulative bytes exceed the cap.
         if (request.method === "POST" || request.method === "PUT") {
-            const len = Number(request.headers.get("content-length") ?? "");
+            const length_ = Number(request.headers.get("content-length") ?? "");
 
-            if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
+            if (Number.isFinite(length_) && length_ > MAX_BODY_BYTES) {
                 throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
             }
         }
@@ -1594,7 +1594,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         const route = options.routes?.[methodAndPath] ?? options.routes?.[url.pathname];
 
         if (route) {
-            return route(request, env, ctx);
+            return route(request, env, context);
         }
 
         if (url.pathname === WS_PATH) {
@@ -1609,7 +1609,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
             // need the rest of the forward context — only the identity for
             // the authorization decision.
             if (options.authorizeShard) {
-                const identity = options.resolveIdentity ? ((await options.resolveIdentity(request, env)) ?? null) : null;
+                const identity = options.resolveIdentity ? await options.resolveIdentity(request, env) ?? null : null;
                 const allowed = await options.authorizeShard(identity, shardKey);
 
                 if (!allowed) {
@@ -1757,7 +1757,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
                     functionPath: envelope.functionPath,
                     ok: response.ok,
                     shardKey,
-                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
+                    ...response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } },
                 });
 
                 // Propagate the DO's bookmark header so the client can pin reads
@@ -1834,7 +1834,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         // HTTP actions are the lowest-priority matcher: explicit routes and the
         // internal `/_cirrus/*` endpoints above always win. Once the request
         // reaches the router, hono owns routing — its 404 is the terminal 404.
-        const httpRouteResponse = await dispatchHttpRoute(request, env, ctx);
+        const httpRouteResponse = await dispatchHttpRoute(request, env, context);
 
         if (httpRouteResponse) {
             return httpRouteResponse;
@@ -1844,13 +1844,13 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
     };
 
     return {
-        async fetch(request, env, ctx) {
+        async fetch(request, env, context) {
             if (options.passThroughOnException) {
-                ctx.passThroughOnException();
+                context.passThroughOnException();
             }
 
             try {
-                return await handle(request, env, ctx);
+                return await handle(request, env, context);
             } catch (error: unknown) {
                 return toErrorResponse(error);
             }
@@ -1873,8 +1873,8 @@ export type {
     FunctionDescriptor,
     FunctionRegistryEntry,
     FunctionRegistryLike,
-    GlobalExportFn,
-    GlobalImportFn,
+    GlobalExportFunction as GlobalExportFn,
+    GlobalImportFunction as GlobalImportFn,
     GlobalIntrospector,
     GlobalTableInfo,
     GlobalTablePage,
@@ -1886,7 +1886,7 @@ export type {
     RpcContext,
     RpcEnvelope,
     ShardingInfo,
-    StorageListFn,
+    StorageListFunction as StorageListFn,
     StorageObject,
     WorkerOptions,
 };

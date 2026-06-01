@@ -143,13 +143,13 @@ export class ReactiveCache {
     public constructor(options: ReactiveCacheOptions = {}) {
         this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
         this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-        this.now =
-            options.now ??
-            (() => {
-                this.monotonic += 1;
+        this.now
+            = options.now
+                ?? (() => {
+                    this.monotonic += 1;
 
-                return this.monotonic;
-            });
+                    return this.monotonic;
+                });
     }
 
     /**
@@ -406,7 +406,7 @@ export const stableStringify = (value: unknown): string => {
     }
 
     const record = value as Record<string, unknown>;
-    const keys = Object.keys(record).toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const keys = Object.keys(record).toSorted((a, b) => a < b ? -1 : a > b ? 1 : 0);
     const parts: string[] = [];
 
     for (const key of keys) {

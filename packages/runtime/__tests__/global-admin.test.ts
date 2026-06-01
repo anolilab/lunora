@@ -4,14 +4,18 @@ import type { ExecutionContextLike, GlobalIntrospector } from "../src/create-wor
 import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
-const fakeCtx: ExecutionContextLike = {
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
-    idFromName: (name) => { return { __name: name }; },
+    get: () => {
+        return { fetch: async () => new Response("not used", { status: 200 }) };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
 };
 
 const ADMIN_TOKEN = "admin-bear";
@@ -20,10 +24,10 @@ const TABLES = [{ name: "organizations", rowCount: 2 }];
 const PAGE = { columns: ["_id", "name"], rows: [{ _id: "o1", name: "Acme" }], total: 2 };
 
 const introspector = (): GlobalIntrospector => {
- return {
-    listTables: vi.fn<GlobalIntrospector["listTables"]>(async () => TABLES),
-    readTablePage: vi.fn<GlobalIntrospector["readTablePage"]>(async () => PAGE),
-};
+    return {
+        listTables: vi.fn<GlobalIntrospector["listTables"]>(async () => TABLES),
+        readTablePage: vi.fn<GlobalIntrospector["readTablePage"]>(async () => PAGE),
+    };
 };
 
 describe("createWorker — global introspection endpoints", () => {
@@ -32,7 +36,7 @@ describe("createWorker — global introspection endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: introspector(), shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/global/tables", { method: "GET" }), {}, fakeCtx);
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/global/tables", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -45,7 +49,7 @@ describe("createWorker — global introspection endpoints", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/global/tables", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(400);
@@ -63,7 +67,7 @@ describe("createWorker — global introspection endpoints", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/global/tables", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(200);
@@ -82,7 +86,7 @@ describe("createWorker — global introspection endpoints", () => {
                 method: "GET",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(200);
@@ -98,7 +102,7 @@ describe("createWorker — global introspection endpoints", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/global/table", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(400);

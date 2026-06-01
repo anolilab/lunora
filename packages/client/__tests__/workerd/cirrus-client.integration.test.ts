@@ -18,9 +18,9 @@ import type { FunctionReference } from "../../src/types.js";
 import type { TestShardDO } from "./test-worker.js";
 
 const ref = <Args = unknown, Return = unknown>(name: string): FunctionReference<"query" | "mutation", Args, Return> => {
- return {
-    __cirrusRef: name,
-};
+    return {
+        __cirrusRef: name,
+    };
 };
 
 const rootStub = (): DurableObjectStub<TestShardDO> => {
@@ -107,13 +107,13 @@ class SelfWebSocket {
 
 const makeClient = (): CirrusClient =>
     new CirrusClient({
-        url: "https://test.invalid",
         fetch: fetchViaSelf,
-        WebSocket: SelfWebSocket as unknown as typeof WebSocket,
         reconnect: { initialDelayMs: 10, maxDelayMs: 50 },
+        url: "https://test.invalid",
+        WebSocket: SelfWebSocket as unknown as typeof WebSocket,
     });
 
-const waitFor = async (predicate: () => boolean | Promise<boolean>, { timeoutMs = 2000, intervalMs = 10 } = {}): Promise<void> => {
+const waitFor = async (predicate: () => boolean | Promise<boolean>, { intervalMs = 10, timeoutMs = 2000 } = {}): Promise<void> => {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
@@ -180,10 +180,10 @@ describe("cirrusClient (workerd integration)", () => {
         });
 
         const client = new CirrusClient({
-            url: "https://test.invalid",
             fetch: trackingFetch,
-            WebSocket: SelfWebSocket as unknown as typeof WebSocket,
             reconnect: { initialDelayMs: 10, maxDelayMs: 50 },
+            url: "https://test.invalid",
+            WebSocket: SelfWebSocket as unknown as typeof WebSocket,
         });
 
         try {

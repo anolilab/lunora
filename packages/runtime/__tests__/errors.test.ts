@@ -6,17 +6,17 @@ describe("cirrusError", () => {
     it("defaults to 500 INTERNAL when no status is provided", () => {
         expect.assertions(2);
 
-        const err = new CirrusError("boom", { code: "INTERNAL" });
+        const error = new CirrusError("boom", { code: "INTERNAL" });
 
-        expect(err.status).toBe(500);
-        expect(err.code).toBe("INTERNAL");
+        expect(error.status).toBe(500);
+        expect(error.code).toBe("INTERNAL");
     });
 
     it("toResponse roundtrips through JSON", async () => {
         expect.assertions(2);
 
-        const err = new CirrusError("nope", { code: "FORBIDDEN", status: 403 });
-        const response = err.toResponse();
+        const error = new CirrusError("nope", { code: "FORBIDDEN", status: 403 });
+        const response = error.toResponse();
 
         expect(response.status).toBe(403);
         await expect(response.json()).resolves.toEqual({ error: { code: "FORBIDDEN", message: "nope" } });
@@ -25,8 +25,8 @@ describe("cirrusError", () => {
     it("toErrorResponse passes CirrusError through unchanged", async () => {
         expect.assertions(2);
 
-        const err = new CirrusError("missing", { code: "NOT_FOUND", status: 404 });
-        const response = toErrorResponse(err);
+        const error = new CirrusError("missing", { code: "NOT_FOUND", status: 404 });
+        const response = toErrorResponse(error);
 
         expect(response.status).toBe(404);
         await expect(response.json()).resolves.toEqual({ error: { code: "NOT_FOUND", message: "missing" } });
@@ -60,8 +60,8 @@ describe("cirrusError", () => {
         // does not take a hard dependency on that package, so we recognise
         // the shape (name + numeric status + string code) instead.
         const conflict = Object.assign(new Error("stale version"), {
-            name: "ConflictError",
             code: "CONFLICT",
+            name: "ConflictError",
             status: 409,
         });
         const response = toErrorResponse(conflict);
@@ -78,8 +78,8 @@ describe("cirrusError", () => {
         // route it without an `instanceof` check, so the DO package stays
         // free of a runtime dep on `@cirrus/server`.
         const countUnsupported = Object.assign(new Error("count() is not supported in an RLS-restricted context"), {
-            name: "CirrusError",
             code: "COUNT_RLS_UNSUPPORTED",
+            name: "CirrusError",
             status: 422,
         });
         const response = toErrorResponse(countUnsupported);

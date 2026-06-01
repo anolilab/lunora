@@ -20,7 +20,7 @@ const stableStringify = (value: unknown): string => {
 
     const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => a.localeCompare(b));
 
-    return `{${entries.map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`).join(",")}}`;
+    return `{${entries.map(([key, value_]) => `${JSON.stringify(key)}:${stableStringify(value_)}`).join(",")}}`;
 };
 
 /**
@@ -29,7 +29,7 @@ const stableStringify = (value: unknown): string => {
  * the server pushes over the WS.
  */
 export function useSubscription<F extends FunctionReference>(
-    fn: F,
+    function_: F,
     args: ArgsOf<F> | "skip",
     options: UseQueryOptions = {},
 ): UseSubscriptionResult<ReturnOf<F>> {
@@ -43,9 +43,9 @@ export function useSubscription<F extends FunctionReference>(
     // and the serialized args, which already capture every meaningful change;
     // reading `fn`/`args` from a ref keeps the dependency array honest without
     // re-subscribing whenever the consumer recreates them with the same value.
-    const subscribeRef = useRef({ args, fn });
+    const subscribeRef = useRef({ args, fn: function_ });
 
-    subscribeRef.current = { args, fn };
+    subscribeRef.current = { args, fn: function_ };
 
     useEffect(() => {
         if (skipped) {
@@ -53,11 +53,11 @@ export function useSubscription<F extends FunctionReference>(
         }
 
         let cancelled = false;
-        const { args: currentArgs, fn: currentFn } = subscribeRef.current;
+        const { args: currentArgs, fn: currentFunction } = subscribeRef.current;
 
         try {
             const unsubscribe = client.subscribe(
-                currentFn,
+                currentFunction,
                 currentArgs as ArgsOf<F>,
                 (value) => {
                     if (cancelled) {
@@ -88,7 +88,7 @@ export function useSubscription<F extends FunctionReference>(
                 cancelled = true;
             };
         }
-    }, [client, fn.__cirrusRef, serialized, options.shardKey, skipped]);
+    }, [client, function_.__cirrusRef, serialized, options.shardKey, skipped]);
 
     return state;
 }

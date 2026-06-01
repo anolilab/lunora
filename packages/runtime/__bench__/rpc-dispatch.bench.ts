@@ -21,7 +21,7 @@ import type { ShardNamespaceLike } from "../src/resolve-shard.js";
  *    the default `__root__`. Same path; different shard lookup.
  */
 
-const fakeCtx: ExecutionContextLike = {
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
 };
@@ -34,7 +34,9 @@ const makeShard = (): ShardNamespaceLike => {
     return {
         get: () => stub,
         getByName: () => stub,
-        idFromName: (name) => { return { __name: name }; },
+        idFromName: (name) => {
+            return { __name: name };
+        },
     };
 };
 
@@ -46,11 +48,15 @@ const buildRequest = (body: Record<string, unknown>): Request =>
 
 const noAuthWorker = createWorker({ shardDO: makeShard() });
 const useridWorker = createWorker({
-    resolveIdentity: () => { return { userId: "user_42" }; },
+    resolveIdentity: () => {
+        return { userId: "user_42" };
+    },
     shardDO: makeShard(),
 });
 const claimsWorker = createWorker({
-    resolveIdentity: () => { return { email: "u@example.com", roles: ["admin"], userId: "user_42" }; },
+    resolveIdentity: () => {
+        return { email: "u@example.com", roles: ["admin"], userId: "user_42" };
+    },
     shardDO: makeShard(),
 });
 
@@ -59,18 +65,18 @@ const shardEnvelope = { args: { limit: 5 }, functionPath: "messages:list", shard
 
 describe("worker.fetch — RPC dispatch through forwardToShard", () => {
     bench("no auth: bare envelope to __root__", async () => {
-        await noAuthWorker.fetch(buildRequest(bareEnvelope), {}, fakeCtx);
+        await noAuthWorker.fetch(buildRequest(bareEnvelope), {}, fakeContext);
     });
 
     bench("+ resolveIdentity (userId only)", async () => {
-        await useridWorker.fetch(buildRequest(bareEnvelope), {}, fakeCtx);
+        await useridWorker.fetch(buildRequest(bareEnvelope), {}, fakeContext);
     });
 
     bench("+ resolveIdentity (userId + claims → x-cirrus-identity)", async () => {
-        await claimsWorker.fetch(buildRequest(bareEnvelope), {}, fakeCtx);
+        await claimsWorker.fetch(buildRequest(bareEnvelope), {}, fakeContext);
     });
 
     bench("with shardKey: explicit shard selection", async () => {
-        await noAuthWorker.fetch(buildRequest(shardEnvelope), {}, fakeCtx);
+        await noAuthWorker.fetch(buildRequest(shardEnvelope), {}, fakeContext);
     });
 });

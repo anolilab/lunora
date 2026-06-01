@@ -68,7 +68,7 @@ interface D1Exec {
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
 }
 
-interface D1CtxDbOptions {
+interface D1ContextDatabaseOptions {
     clock?: () => number;
     exec: D1Exec;
     idGenerator?: () => string;
@@ -95,7 +95,7 @@ const throwingScheduler: SchedulerLike = {
     },
 };
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
 
 /**
  * Closed allowlist mapping each reducer `op` to the literal SQL function it may
@@ -108,13 +108,13 @@ const AGGREGATE_SQL_FUNCTION: Record<string, string> = { avg: "AVG", count: "COU
 
 /** Resolve a reducer `op` to its SQL function, throwing on an off-allowlist op. */
 const aggregateSqlFunction = (op: string): string => {
-    const fn = AGGREGATE_SQL_FUNCTION[op];
+    const function_ = AGGREGATE_SQL_FUNCTION[op];
 
-    if (fn === undefined) {
+    if (function_ === undefined) {
         throw new Error(`unknown aggregate op "${op}": expected one of ${Object.keys(AGGREGATE_SQL_FUNCTION).join(", ")}`);
     }
 
-    return fn;
+    return function_;
 };
 
 /** Companion-table name for an aggregateIndex (`__agg_` infix matches the DO dialect). */
@@ -172,26 +172,26 @@ const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record
 /** Marker keys distinguishing `RestrictableQueryOptions` from a `WhereInput`. */
 const COUNT_OPTION_KEYS = new Set(["baseWhere", "restrictsCounts", "where"]);
 
-const normalizeCountArg = (arg: RestrictableQueryOptions | undefined | WhereInput): RestrictableQueryOptions => {
-    if (arg === undefined) {
+const normalizeCountArgument = (argument: RestrictableQueryOptions | undefined | WhereInput): RestrictableQueryOptions => {
+    if (argument === undefined) {
         return {};
     }
 
-    if (typeof arg !== "object" || Array.isArray(arg)) {
-        return { where: arg as WhereInput };
+    if (typeof argument !== "object" || Array.isArray(argument)) {
+        return { where: argument as WhereInput };
     }
 
-    const keys = Object.keys(arg);
+    const keys = Object.keys(argument);
 
     if (keys.length === 0) {
         return {};
     }
 
     if (keys.every((key) => COUNT_OPTION_KEYS.has(key))) {
-        return arg as RestrictableQueryOptions;
+        return argument as RestrictableQueryOptions;
     }
 
-    return { where: arg as WhereInput };
+    return { where: argument as WhereInput };
 };
 
 /**
@@ -251,7 +251,7 @@ const decodeRow = (definition: TableDefinitionLike, row: Record<string, unknown>
         return null;
     }
 
-    const doc: Record<string, unknown> = {};
+    const document_: Record<string, unknown> = {};
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         const raw = row[field];
@@ -260,13 +260,13 @@ const decodeRow = (definition: TableDefinitionLike, row: Record<string, unknown>
             continue;
         }
 
-        doc[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
+        document_[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
     }
 
-    doc["_id"] = row["id"];
-    doc["_creationTime"] = row["_creationTime"];
+    document_["_id"] = row["id"];
+    document_["_creationTime"] = row["_creationTime"];
 
-    return doc;
+    return document_;
 };
 
 /**
@@ -413,7 +413,7 @@ const tableNameFromId = async (exec: D1Exec, schema: SchemaLike, id: string, cac
     return undefined;
 };
 
-const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
+const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWriterLike => {
     const { exec, schema } = options;
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
@@ -485,8 +485,8 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         // buffering the entire table. Tallies accumulate incrementally so the
         // memory footprint is `unique(by) ` keys, not row count.
         while (true) {
-            const pageRows =
-                cursorId === undefined
+            const pageRows
+                = cursorId === undefined
                     ? await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY "id" ASC LIMIT ?`, [BATCH_SIZE])
                     : await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" > ? ORDER BY "id" ASC LIMIT ?`, [cursorId, BATCH_SIZE]);
 
@@ -495,17 +495,17 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             for (const row of pageRows) {
-                const doc = decodeRow(definition, row);
+                const document_ = decodeRow(definition, row);
 
-                if (!doc) {
+                if (!document_) {
                     continue;
                 }
 
-                if (index.where && !matchesStaticWhere(doc, index.where)) {
+                if (index.where && !matchesStaticWhere(document_, index.where)) {
                     continue;
                 }
 
-                const encoded = encodeAggregateKey(by, doc);
+                const encoded = encodeAggregateKey(by, document_);
 
                 tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
             }
@@ -530,13 +530,13 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         return true;
     };
 
-    const stepAggregate = async (tableName: string, index: AggregateIndexDefinitionLike, doc: Record<string, unknown>, delta: number): Promise<void> => {
-        if (index.where && !matchesStaticWhere(doc, index.where)) {
+    const stepAggregate = async (tableName: string, index: AggregateIndexDefinitionLike, document_: Record<string, unknown>, delta: number): Promise<void> => {
+        if (index.where && !matchesStaticWhere(document_, index.where)) {
             return;
         }
 
         const aggTable = aggregateTableName(tableName, index.name);
-        const encoded = encodeAggregateKey(index.by ?? [], doc);
+        const encoded = encodeAggregateKey(index.by ?? [], document_);
 
         await exec.run(
             `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
@@ -644,8 +644,8 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         let cursorId: string | undefined;
 
         while (true) {
-            const pageRows =
-                cursorId === undefined
+            const pageRows
+                = cursorId === undefined
                     ? await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY "id" ASC LIMIT ?`, [BATCH_SIZE])
                     : await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" > ? ORDER BY "id" ASC LIMIT ?`, [cursorId, BATCH_SIZE]);
 
@@ -654,20 +654,20 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             for (const row of pageRows) {
-                const doc = decodeRow(definition, row);
+                const document_ = decodeRow(definition, row);
 
-                if (!doc) {
+                if (!document_) {
                     continue;
                 }
 
-                if (index.where && !matchesRankStaticWhere(doc, index.where)) {
+                if (index.where && !matchesRankStaticWhere(document_, index.where)) {
                     continue;
                 }
 
-                const partitionKey = encodePartitionKey(index.partitionBy ?? [], doc);
-                const sortValues = index.sortBy.map((key) => serializeColumnValue(doc[key.field] ?? null));
+                const partitionKey = encodePartitionKey(index.partitionBy ?? [], document_);
+                const sortValues = index.sortBy.map((key) => serializeColumnValue(document_[key.field] ?? null));
 
-                await exec.run(insertSql, [doc["_id"], partitionKey, ...sortValues]);
+                await exec.run(insertSql, [document_["_id"], partitionKey, ...sortValues]);
             }
 
             cursorId = pageRows.at(-1)?.["id"] as string | undefined;
@@ -762,7 +762,7 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
     // assigned only after `writer` is built. It is read solely while a write is
     // in flight — long after construction finishes — so the binding is always
     // initialized by the time a trigger fires.
-    let triggerCtx: TriggerContextLike;
+    let triggerContext: TriggerContextLike;
 
     /** Fire matching triggers with a depth guard against runaway self-triggering. */
     const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
@@ -779,7 +779,7 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             // read here, while a write is in flight — long after construction has
             // initialized the binding. Referencing it lazily keeps `fireTriggers`
             // defined before `writer` without a forward use-before-define.
-            await runTriggers({ ctx: triggerCtx, event, op, schema, tableName: event.table, timing });
+            await runTriggers({ ctx: triggerContext, event, op, schema, tableName: event.table, timing });
         } finally {
             triggerDepth -= 1;
         }
@@ -844,8 +844,8 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         const guardClause = guardColumns.map((column) => `${quoteIdentifier(column)} IS ?`).join(" AND ");
         const guardValues = guardColumns.map((column) => snapshot[column]);
 
-        const sql =
-            verb === "UPDATE"
+        const sql
+            = verb === "UPDATE"
                 ? `UPDATE ${quoteIdentifier(table)} SET ${setClause} WHERE ${guardClause} RETURNING "id"`
                 : `DELETE FROM ${quoteIdentifier(table)} WHERE ${guardClause} RETURNING "id"`;
 
@@ -873,13 +873,13 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         definition: TableDefinitionLike,
         id: string,
         creationTime: number,
-        doc: Record<string, unknown>,
+        document_: Record<string, unknown>,
     ): { columns: string[]; values: unknown[] } => {
         const fields = Object.keys(definition.shape);
 
         return {
             columns: ["id", "_creationTime", ...fields].map((column) => quoteIdentifier(column)),
-            values: [id, creationTime, ...fields.map((field) => serializeColumnValue(doc[field] ?? null))],
+            values: [id, creationTime, ...fields.map((field) => serializeColumnValue(document_[field] ?? null))],
         };
     };
 
@@ -938,17 +938,17 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const opts = normalizeCountArg(whereOrOptions);
+            const options_ = normalizeCountArgument(whereOrOptions);
 
-            if (opts.restrictsCounts) {
+            if (options_.restrictsCounts) {
                 throw new CountRlsUnsupportedError(tableName);
             }
 
             // Indexed path: same planner as the DO dialect (see ctx-db.ts).
             // We only attempt the counter when no baseWhere is set; otherwise
             // we route uniformly through SQL so the RLS predicate participates.
-            if (definition.aggregateIndexes && !opts.baseWhere) {
-                const planned = selectIndexForCount(definition.aggregateIndexes, opts.where);
+            if (definition.aggregateIndexes && !options_.baseWhere) {
+                const planned = selectIndexForCount(definition.aggregateIndexes, options_.where);
 
                 if (planned) {
                     const counterReady = await ensureBackfilled(tableName, planned.index);
@@ -963,7 +963,7 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const effective = mergeWhere(opts.baseWhere, opts.where);
+            const effective = mergeWhere(options_.baseWhere, options_.where);
             const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
 
             let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
@@ -1105,10 +1105,10 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const docs: Record<string, unknown>[] = [];
 
             for (const row of rows) {
-                const doc = decodeRow(definition, row);
+                const document_ = decodeRow(definition, row);
 
-                if (doc) {
-                    docs.push(doc);
+                if (document_) {
+                    docs.push(document_);
                 }
             }
 
@@ -1211,7 +1211,7 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                             const decoded = JSON.parse(row["key"] as string) as Record<string, unknown>;
                             const { value } = row as { value: unknown };
 
-                            indexedResult.push({ key: decoded, value: value == null ? null : Number(value) });
+                            indexedResult.push({ key: decoded, value: value == undefined ? null : Number(value) });
                         }
 
                         return indexedResult;
@@ -1290,14 +1290,14 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const id = usedExplicitId ? (withDefaults["_id"] as string) : generateId();
             const creationTime = typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
-            const docWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };
+            const documentWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };
 
             // `before` sees a shallow copy so an abort-only handler can't reassign
             // the row's top-level fields before they persist. Nested values are
             // still shared by reference — before-handlers are abort/side-effect
             // only, never row transformers (use `.$defaultFn`/`.$onUpdateFn`).
             if (hasMatchingTrigger(tableName, "before", "insert")) {
-                await fireTriggers("before", "insert", { doc: { ...docWithMeta }, id, op: "insert", table: tableName });
+                await fireTriggers("before", "insert", { doc: { ...documentWithMeta }, id, op: "insert", table: tableName });
             }
 
             await ensureBackfilledForTable(tableName);
@@ -1317,11 +1317,11 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 tableNameCache.set(id, tableName);
             }
 
-            await syncAggregates(tableName, undefined, docWithMeta);
-            await syncRanks(tableName, id, undefined, docWithMeta);
+            await syncAggregates(tableName, undefined, documentWithMeta);
+            await syncRanks(tableName, id, undefined, documentWithMeta);
 
             if (hasMatchingTrigger(tableName, "after", "insert")) {
-                await fireTriggers("after", "insert", { doc: docWithMeta, id, op: "insert", table: tableName });
+                await fireTriggers("after", "insert", { doc: documentWithMeta, id, op: "insert", table: tableName });
             }
 
             return id;
@@ -1615,10 +1615,10 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const docs: Record<string, unknown>[] = [];
 
             for (const rankRow of usable) {
-                const doc = decodeRow(definition, byId.get(rankRow[RANK_TIEBREAK] as string));
+                const document_ = decodeRow(definition, byId.get(rankRow[RANK_TIEBREAK] as string));
 
-                if (doc) {
-                    docs.push(doc);
+                if (document_) {
+                    docs.push(document_);
                 }
             }
 
@@ -1673,9 +1673,9 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`document not found: ${id}`);
             }
 
-            const needsPrevious =
-                hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
-            const previous = needsPrevious ? (decodeRow(definition, snapshot) ?? undefined) : undefined;
+            const needsPrevious
+                = hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
+            const previous = needsPrevious ? decodeRow(definition, snapshot) ?? undefined : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
@@ -1693,7 +1693,7 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             await ensureRankBackfilledForTable(tableName);
 
             const fields = Object.keys(definition.shape);
-            const assignments = ['"_creationTime" = ?', ...fields.map((field) => `${quoteIdentifier(field)} = ?`)].join(", ");
+            const assignments = ["\"_creationTime\" = ?", ...fields.map((field) => `${quoteIdentifier(field)} = ?`)].join(", ");
             const values = [creationTime, ...fields.map((field) => serializeColumnValue(replaced[field] ?? null))];
 
             await runGuardedWrite(tableName, "UPDATE", assignments, values, snapshot);
@@ -1707,7 +1707,7 @@ const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         },
     };
 
-    triggerCtx = { db: writer, scheduler };
+    triggerContext = { db: writer, scheduler };
 
     return writer;
 };
@@ -1772,13 +1772,13 @@ const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<vo
                 [],
             );
 
-            const orderedColumns = ['"__partition__" ASC'];
+            const orderedColumns = ["\"__partition__\" ASC"];
 
             for (const [i, sortKey] of index.sortBy.entries()) {
                 orderedColumns.push(`${quoteIdentifier(sortColumnName(i))} ${sortKey.direction === "desc" ? "DESC" : "ASC"}`);
             }
 
-            orderedColumns.push('"__id__" ASC');
+            orderedColumns.push("\"__id__\" ASC");
 
             const btreeName = `${tableName}__rank_${index.name}__btree`;
 
@@ -1787,5 +1787,5 @@ const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<vo
     }
 };
 
-export { createD1CtxDb, runD1AggregateMigrations, runD1RankMigrations };
-export type { D1CtxDbOptions, D1Exec };
+export { createD1ContextDatabase as createD1CtxDb, runD1AggregateMigrations, runD1RankMigrations };
+export type { D1ContextDatabaseOptions as D1CtxDbOptions, D1Exec };

@@ -68,11 +68,11 @@ describe("cirrus analyze", () => {
 
             const { logger } = recordingLogger();
             const written: string[] = [];
-            const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+            const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
                 written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
 
                 return true;
-            }));
+            });
 
             try {
                 const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, json: true, logger });

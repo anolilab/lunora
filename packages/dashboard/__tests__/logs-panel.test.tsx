@@ -172,13 +172,13 @@ describe("logsPanel", () => {
         expect.assertions(3);
 
         const big: LogEntry[] = Array.from({ length: 500 }, (_, index) => {
- return {
-            functionPath: `fn:${String(index)}`,
-            level: "error" as const,
-            message: `entry-${String(index)}`,
-            timestamp: 1_700_000_000_000 + index,
-        };
-});
+            return {
+                functionPath: `fn:${String(index)}`,
+                level: "error" as const,
+                message: `entry-${String(index)}`,
+                timestamp: 1_700_000_000_000 + index,
+            };
+        });
 
         render(renderPanel(createClient(big)));
 

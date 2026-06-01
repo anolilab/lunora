@@ -134,8 +134,8 @@ class D1Client {
      */
     private drizzleHandle: DrizzleD1Database<Record<string, unknown>> | undefined;
 
-    public constructor(db: D1DatabaseLike) {
-        this.db = db;
+    public constructor(database: D1DatabaseLike) {
+        this.db = database;
     }
 
     /**

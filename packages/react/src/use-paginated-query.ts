@@ -36,7 +36,7 @@ interface PageRequest {
  * any cursor patches the right slice without dropping the rest.
  */
 export function usePaginatedQuery<F extends FunctionReference>(
-    fn: F,
+    function_: F,
     args: "skip" | PaginatedArgs<F>,
     options: UsePaginatedQueryOptions,
 ): UsePaginatedQueryResult<PageItemOf<F>> {
@@ -55,7 +55,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
     // size changes. Set-state-during-render (guarded by a ref) is React's
     // sanctioned way to derive state from changing inputs without an extra
     // commit.
-    const resetKey = `${fn.__cirrusRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
+    const resetKey = `${function_.__cirrusRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
     const resetKeyRef = useRef(resetKey);
 
     if (resetKeyRef.current !== resetKey) {
@@ -66,7 +66,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
     // Build the (queryKey, args) pair for each loaded page.
     const pageEntries = pages.map((page) => {
         const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.cursor, numItems: page.numItems } };
-        const key: QueryKey = cirrusQueryKey(fn, pageArgs, shardKey);
+        const key: QueryKey = cirrusQueryKey(function_, pageArgs, shardKey);
 
         return { args: pageArgs, key };
     });
@@ -76,9 +76,9 @@ export function usePaginatedQuery<F extends FunctionReference>(
 
     // Read latest desired entries from a ref so the effect dep list can stay
     // keyed on `pageKeysHash` alone — args/fn changes already invalidate the hash.
-    const desiredRef = useRef<{ entries: typeof pageEntries; fn: F; shardKey: string | undefined }>({ entries: [], fn, shardKey });
+    const desiredRef = useRef<{ entries: typeof pageEntries; fn: F; shardKey: string | undefined }>({ entries: [], fn: function_, shardKey });
 
-    desiredRef.current = { entries: pageEntries, fn, shardKey };
+    desiredRef.current = { entries: pageEntries, fn: function_, shardKey };
 
     // Track per-page detach handles so a page falling out of the request set
     // releases its subscription without disturbing the others.
@@ -207,14 +207,14 @@ export function usePaginatedQuery<F extends FunctionReference>(
 
     nextCursorRef.current = status === "CanLoadMore" ? nextCursor : undefined;
 
-    const loadMore = useCallback((numItems: number) => {
+    const loadMore = useCallback((numberItems: number) => {
         const cursor = nextCursorRef.current;
 
         if (cursor === undefined) {
             return;
         }
 
-        setPages((current) => [...current, { cursor, numItems }]);
+        setPages((current) => [...current, { cursor, numItems: numberItems }]);
     }, []);
 
     return {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SchemaLike, SqlCursor, SqlExec } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 
 /**
  * The FTS5 production path can't run under `node:sqlite` (no fts5 module), so
@@ -25,21 +25,21 @@ interface MatchRow {
 }
 
 const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
- return {
-    [Symbol.iterator]() {
-        return rows[Symbol.iterator]();
-    },
-    one() {
-        if (rows.length !== 1) {
-            throw new Error(`expected exactly one row, received ${String(rows.length)}`);
-        }
+    return {
+        one() {
+            if (rows.length !== 1) {
+                throw new Error(`expected exactly one row, received ${String(rows.length)}`);
+            }
 
-        return rows[0]!;
-    },
-    toArray() {
-        return rows;
-    },
-};
+            return rows[0]!;
+        },
+        [Symbol.iterator]() {
+            return rows[Symbol.iterator]();
+        },
+        toArray() {
+            return rows;
+        },
+    };
 };
 
 const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: Recorded[] } => {
@@ -100,7 +100,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
 
         expect(
             statements.some(
-                (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
+                (statement) => statement.sql === "CREATE VIRTUAL TABLE IF NOT EXISTS \"docs__fts_by_body\" USING fts5(\"__text__\", \"__id__\" UNINDEXED)",
             ),
         ).toBe(true);
     });
@@ -112,12 +112,12 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
 
         runShardMigrations(sql, searchSchema);
 
-        const writer = createShardCtxDb({ idGenerator: () => "d1", schema: searchSchema, sql });
+        const writer = createShardContextDatabase({ idGenerator: () => "d1", schema: searchSchema, sql });
 
         await writer.insert("docs", { body: "hello world", channel: "x", title: "a" });
 
-        const remove = statements.find((statement) => statement.sql === 'DELETE FROM "docs__fts_by_body" WHERE "__id__" = ?');
-        const add = statements.find((statement) => statement.sql === 'INSERT INTO "docs__fts_by_body" ("__text__", "__id__") VALUES (?, ?)');
+        const remove = statements.find((statement) => statement.sql === "DELETE FROM \"docs__fts_by_body\" WHERE \"__id__\" = ?");
+        const add = statements.find((statement) => statement.sql === "INSERT INTO \"docs__fts_by_body\" (\"__text__\", \"__id__\") VALUES (?, ?)");
 
         expect(remove?.params).toStrictEqual(["d1"]);
         expect(add?.params).toStrictEqual(["hello world", "d1"]);
@@ -130,7 +130,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
 
         runShardMigrations(sql, searchSchema);
 
-        const writer = createShardCtxDb({ idGenerator: () => "d1", schema: searchSchema, sql });
+        const writer = createShardContextDatabase({ idGenerator: () => "d1", schema: searchSchema, sql });
 
         await writer.insert("docs", { body: "bye", channel: "x", title: "a" });
 
@@ -140,7 +140,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const ftsWritesAfter = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"));
 
-        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual(['DELETE FROM "docs__fts_by_body" WHERE "__id__" = ?']);
+        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual(["DELETE FROM \"docs__fts_by_body\" WHERE \"__id__\" = ?"]);
         expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
     });
 
@@ -155,7 +155,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
 
         runShardMigrations(sql, searchSchema);
 
-        const writer = createShardCtxDb({ schema: searchSchema, sql });
+        const writer = createShardContextDatabase({ schema: searchSchema, sql });
 
         const results = await writer
             .query("docs")
@@ -165,9 +165,9 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         const matchStatement = statements.find((statement) => statement.sql.includes(" MATCH "));
 
         expect(matchStatement?.sql).toBe(
-            'SELECT m.id, m._creationTime, m.__doc__ FROM "docs__fts_by_body" f JOIN "docs" m ON m.id = f."__id__" WHERE f."__text__" MATCH ? AND json_extract(__doc__, \'$.channel\') = ? ORDER BY f.rank, m._creationTime DESC LIMIT 5',
+            "SELECT m.id, m._creationTime, m.__doc__ FROM \"docs__fts_by_body\" f JOIN \"docs\" m ON m.id = f.\"__id__\" WHERE f.\"__text__\" MATCH ? AND json_extract(__doc__, '$.channel') = ? ORDER BY f.rank, m._creationTime DESC LIMIT 5",
         );
-        expect(matchStatement?.params).toStrictEqual(['"hello" AND "wor"*', "x"]);
+        expect(matchStatement?.params).toStrictEqual(["\"hello\" AND \"wor\"*", "x"]);
 
         // The reader preserves the DB's rank ordering and decodes the rows.
         expect(results.map((document) => document["_id"])).toStrictEqual(["d1", "d2"]);

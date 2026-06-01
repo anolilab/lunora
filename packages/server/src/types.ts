@@ -469,7 +469,7 @@ export interface TriggerCtx {
 }
 
 /** A user-declared trigger handler. Throwing from a `before*` handler aborts the write. */
-export type TriggerHandler<Event> = (ctx: TriggerCtx, event: Event) => Promise<void> | void;
+export type TriggerHandler<Event> = (context: TriggerCtx, event: Event) => Promise<void> | void;
 
 /**
  * A single declared trigger, as stored in {@link TableDefinition.triggerMap}.

@@ -23,7 +23,7 @@ const DEFAULT_PAGE_SIZE = 100;
  * Read-only: surfaces key, size and content-type. Uploads/deletes are out of
  * scope; the host's own storage API owns mutations.
  */
-export function FileBrowser({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: FileBrowserProps): ReactElement {
+export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: FileBrowserProps): ReactElement => {
     const client = useCirrus();
 
     const [prefix, setPrefix] = useState<string>(initialPrefix ?? "");
@@ -41,7 +41,7 @@ export function FileBrowser({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
             try {
                 const page = await client.listStorageObjects({ cursor, limit: pageSize, prefix: searchPrefix });
 
-                setObjects((previous) => (append && previous !== null ? [...previous, ...page.objects] : page.objects));
+                setObjects((previous) => append && previous !== null ? [...previous, ...page.objects] : page.objects);
                 setNextCursor(page.cursor);
             } catch (error_) {
                 if (!append) {
@@ -127,6 +127,6 @@ export function FileBrowser({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
             )}
         </div>
     );
-}
+};
 
 export type { FileBrowserProps };

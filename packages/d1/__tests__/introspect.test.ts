@@ -5,7 +5,7 @@ import { listGlobalTables, readGlobalTablePage } from "../src/introspect.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
 
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
- return {
+    return {
         _meta: { column: { notNull: true, ...column } },
         kind,
     };

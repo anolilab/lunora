@@ -6,9 +6,9 @@ import type { CirrusAuth } from "./create-auth.js";
  * a runtime dependency on `@cirrus/server`; the types are assignable from the
  * fully-typed builder.
  */
-interface MiddlewareNext<CtxIn> {
-    (): Promise<CtxIn>;
-    <Extension extends Record<string, unknown>>(options: { ctx: Extension }): Promise<CtxIn & Extension>;
+interface MiddlewareNext<ContextIn> {
+    (): Promise<ContextIn>;
+    <Extension extends Record<string, unknown>>(options: { ctx: Extension }): Promise<ContextIn & Extension>;
 }
 
 /**
@@ -109,21 +109,21 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  * because TypeScript doesn't allow declaring `const fn: &lt;CtxIn>() => ...` —
  * the generic must live on a callable type alias or interface.
  */
-export type WithAuthPluginsMiddleware<Auth extends CirrusAuth> = <CtxIn>(options: {
-    ctx: CtxIn;
-    next: MiddlewareNext<CtxIn>;
-}) => Promise<CirrusAuthApiContext<Auth> & CtxIn>;
+export type WithAuthPluginsMiddleware<Auth extends CirrusAuth> = <ContextIn>(options: {
+    ctx: ContextIn;
+    next: MiddlewareNext<ContextIn>;
+}) => Promise<CirrusAuthApiContext<Auth> & ContextIn>;
 
-export const withAuthPlugins = <Auth extends CirrusAuth>(auth: Auth): WithAuthPluginsMiddleware<Auth> =>
+export const withAuthPlugins
+    = <Auth extends CirrusAuth>(auth: Auth): WithAuthPluginsMiddleware<Auth> =>
     // The callable is generic over CtxIn so `next({ ctx: { authApi } })`
     // returns `CtxIn & { authApi: Auth["api"] }` — fields the upstream
     // middleware installed survive into the downstream chain. Returning the
     // extended ctx (instead of a fresh object) is critical: the structural
     // mirror of `Middleware` says the return value IS the new ctx, so
     // returning anything narrower would drop upstream fields.
-     async <CtxIn>({ next }: { ctx: CtxIn; next: MiddlewareNext<CtxIn> }): Promise<CirrusAuthApiContext<Auth> & CtxIn> => {
-        const extended = await next({ ctx: { authApi: auth.api } });
+        async <ContextIn>({ next }: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }): Promise<CirrusAuthApiContext<Auth> & ContextIn> => {
+            const extended = await next({ ctx: { authApi: auth.api } });
 
-        return extended;
-    }
-;
+            return extended;
+        };

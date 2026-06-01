@@ -200,7 +200,7 @@ export const emitDataModel = (schema: SchemaIR): string => {
         })
         .join("\n\n");
 
-    const docMap = schema.tables.map((table) => `    ${table.name}: Doc_${table.name};`).join("\n");
+    const documentMap = schema.tables.map((table) => `    ${table.name}: Doc_${table.name};`).join("\n");
 
     // Per-table index name union — surfaced as `IndexName<"messages">` so
     // `TableReader.withIndex(name)` can be typed without a hand-rolled
@@ -260,7 +260,7 @@ export type Id<TName extends string> = string & { readonly __table: TName };
 ${docs}
 
 export interface DataModel {
-${docMap}
+${documentMap}
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
@@ -572,26 +572,26 @@ const relocateGeneratedImports = (returnType: string): string =>
 const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
     const namespaces = new Map<string, FunctionIR[]>();
 
-    for (const fn of functions) {
-        const list = namespaces.get(fn.filePath) ?? [];
+    for (const function_ of functions) {
+        const list = namespaces.get(function_.filePath) ?? [];
 
-        list.push(fn);
-        namespaces.set(fn.filePath, list);
+        list.push(function_);
+        namespaces.set(function_.filePath, list);
     }
 
     const renderNamespace = ([file, list]: [string, FunctionIR[]]): string => {
         const members = list
-            .map((fn) => {
+            .map((function_) => {
                 // We emit `FunctionReference<Kind, ArgsObj, Return>` so the
                 // generated `api.*` references plug directly into
                 // `useQuery`/`useMutation` from `@cirrus/react` (and
                 // `client.query` / `client.mutation` from `@cirrus/client`).
                 // The phantom `Kind`/`Args`/`Return` parameters carry the
                 // info downstream hooks need to infer call signatures.
-                const argsType = renderArgsType(fn.args);
-                const returnType = relocateGeneratedImports(fn.returnType);
+                const argsType = renderArgsType(function_.args);
+                const returnType = relocateGeneratedImports(function_.returnType);
 
-                return `        ${fn.exportName}: FunctionReference<"${fn.kind}", ${argsType}, ${returnType}>;`;
+                return `        ${function_.exportName}: FunctionReference<"${function_.kind}", ${argsType}, ${returnType}>;`;
             })
             .join("\n");
 
@@ -612,8 +612,8 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
  * client-facing `api` surface.
  */
 export const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
-    const publicFunctions = functions.filter((fn) => fn.visibility !== "internal");
-    const internalFunctions = functions.filter((fn) => fn.visibility === "internal");
+    const publicFunctions = functions.filter((function_) => function_.visibility !== "internal");
+    const internalFunctions = functions.filter((function_) => function_.visibility === "internal");
 
     const publicBody = renderApiBody(publicFunctions);
     const internalBody = renderApiBody(internalFunctions);
@@ -661,11 +661,11 @@ const moduleAlias = (filePath: string, index: number): string => `cirrus_${sanit
 const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: string; types: string } => {
     const namespaces = new Map<string, FunctionIR[]>();
 
-    for (const fn of functions) {
-        const list = namespaces.get(fn.filePath) ?? [];
+    for (const function_ of functions) {
+        const list = namespaces.get(function_.filePath) ?? [];
 
-        list.push(fn);
-        namespaces.set(fn.filePath, list);
+        list.push(function_);
+        namespaces.set(function_.filePath, list);
     }
 
     const ordered = [...namespaces.entries()].toSorted(([a], [b]) => a.localeCompare(b));
@@ -673,12 +673,12 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
     const types = ordered
         .map(([file, list]) => {
             const members = list
-                .map((fn) => {
-                    const argsType = renderArgsType(fn.args);
+                .map((function_) => {
+                    const argsType = renderArgsType(function_.args);
                     const optional = argsType === "{}" ? "?" : "";
-                    const returnType = relocateGeneratedImports(fn.returnType);
+                    const returnType = relocateGeneratedImports(function_.returnType);
 
-                    return `        ${fn.exportName}: (args${optional}: ${argsType}) => Promise<${returnType}>;`;
+                    return `        ${function_.exportName}: (args${optional}: ${argsType}) => Promise<${returnType}>;`;
                 })
                 .join("\n");
 
@@ -689,7 +689,7 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
     const implementation = ordered
         .map(([file, list]) => {
             const namespace = sanitizeNamespace(file);
-            const leaves = list.map((fn) => `        ${fn.exportName}: (args) => callRegistered(context, "${namespace}:${fn.exportName}", args),`).join("\n");
+            const leaves = list.map((function_) => `        ${function_.exportName}: (args) => callRegistered(context, "${namespace}:${function_.exportName}", args),`).join("\n");
 
             return `    ${namespace}: {\n${leaves}\n    },`;
         })
@@ -717,8 +717,8 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>, migrations: Rea
         }
     };
 
-    for (const fn of functions) {
-        registerPath(fn.filePath);
+    for (const function_ of functions) {
+        registerPath(function_.filePath);
     }
 
     for (const migration of migrations) {
@@ -739,8 +739,8 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>, migrations: Rea
     // entries stay contiguous and the alias lookup is always populated.
     const dispatchEntries = functions
         .map(
-            (fn) =>
-                `    "${sanitizeNamespace(fn.filePath)}:${fn.exportName}": ${aliasByPath.get(fn.filePath) ?? ""}.${fn.exportName} as unknown as RegisteredCirrusFunction,`,
+            (function_) =>
+                `    "${sanitizeNamespace(function_.filePath)}:${function_.exportName}": ${aliasByPath.get(function_.filePath) ?? ""}.${function_.exportName} as unknown as RegisteredCirrusFunction,`,
         )
         .join("\n");
 
@@ -769,8 +769,8 @@ export const emitServer = (functions: ReadonlyArray<FunctionIR>, migrations: Rea
     // `callRegistered` (and thus `context`) is only referenced when at least one
     // function exists; otherwise it would be an unused local / parameter.
     const callerParameter = functions.length > 0 ? "context" : "_context";
-    const callRegisteredHelper =
-        functions.length > 0
+    const callRegisteredHelper
+        = functions.length > 0
             ? `const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
@@ -971,8 +971,8 @@ export const CIRRUS_MIGRATIONS: Record<string, RegisteredDataMigration> = {${mig
  * generated shard hands this to the base `tableRefs` hook so the admin
  * `readTablePage` can mark those cells as links.
  */
-const buildTableRefs = (schema: SchemaIR): Record<string, Record<string, string>> => {
-    const refs: Record<string, Record<string, string>> = {};
+const buildTableReferences = (schema: SchemaIR): Record<string, Record<string, string>> => {
+    const references: Record<string, Record<string, string>> = {};
 
     for (const table of schema.tables) {
         const fields: Record<string, string> = {};
@@ -986,26 +986,26 @@ const buildTableRefs = (schema: SchemaIR): Record<string, Record<string, string>
         }
 
         if (Object.keys(fields).length > 0) {
-            refs[table.name] = fields;
+            references[table.name] = fields;
         }
     }
 
-    return refs;
+    return references;
 };
 
 export const emitShard = (schema: SchemaIR): string => {
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     const hasTables = schema.tables.length > 0;
-    const tableRefs = buildTableRefs(schema);
+    const tableReferences = buildTableReferences(schema);
 
     const doTypeImports = [
-        ...(hasTables ? ["AggregateOptions", "GroupByOptions"] : []),
+        ...hasTables ? ["AggregateOptions", "GroupByOptions"] : [],
         "DatabaseWriterLike",
         "DataMigrationLike",
         "MigrationRunResult",
         "QueryArgs",
-        ...(hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : []),
+        ...hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : [],
         "RunShardMigrationArgs",
         "RunShardWriteArgs",
         "RunShardWriteResult",
@@ -1014,7 +1014,7 @@ export const emitShard = (schema: SchemaIR): string => {
         "ShardDOState",
         "SqlExec",
         "WhereInput",
-        ...(hasVectors ? ["WriteHook"] : []),
+        ...hasVectors ? ["WriteHook"] : [],
     ];
 
     const importLines = [
@@ -1039,7 +1039,7 @@ export const emitShard = (schema: SchemaIR): string => {
     // and throw a descriptive error.
     const d1ConfigField = hasGlobalTables ? `\n    d1?: (env: Record<string, unknown>) => DatabaseWriterLike;` : "";
 
-    const globalDbStub = hasGlobalTables
+    const globalDatabaseStub = hasGlobalTables
         ? `
 const globalDbStub: DatabaseWriterLike = {
     aggregate: async () => {
@@ -1127,7 +1127,7 @@ const vectorsStub: VectorSearchLike = {
 `
         : "";
 
-    const dbOptions = hasVectors
+    const databaseOptions = hasVectors
         ? `{
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
@@ -1148,11 +1148,11 @@ const vectorsStub: VectorSearchLike = {
                 sql: this.sql as SqlExec,
             }`;
 
-    const vectorsCtxField = hasVectors ? `\n                vectors,` : "";
+    const vectorsContextField = hasVectors ? `\n                vectors,` : "";
 
     // `ctx.orm` mirrors the per-table facade under a kitcn-style namespace; it
     // only exists when the project declares tables (otherwise `facade` is unbuilt).
-    const ormCtxField = hasTables ? `\n                orm: bindOrm(facade),` : "";
+    const ormContextField = hasTables ? `\n                orm: bindOrm(facade),` : "";
 
     // The per-table facade (`ctx.db.<table>.findMany(...)`) is a thin binding
     // over the structural `DatabaseWriterLike`: it pins `tableName` so callers
@@ -1200,7 +1200,7 @@ const bindOrm = (facade: Record<string, ReturnType<typeof bindTable>>) => {
 
     // Build `globalDb` only when a `.global()` table exists; otherwise the
     // binding (and the stub it falls back to) would be unused.
-    const globalDbLine = hasGlobalTables ? `\n            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;` : "";
+    const globalDatabaseLine = hasGlobalTables ? `\n            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;` : "";
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTable>>;
@@ -1222,7 +1222,7 @@ interface FunctionReference {
 }
 
 /** Foreign-key columns per table (\`v.id("target")\` fields) for the data browser. */
-const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringify(tableRefs, null, 4)};
+const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringify(tableReferences, null, 4)};
 
 export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
@@ -1261,7 +1261,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${globalDbStub}${vectorsStub}${bindTableHelper}
+${globalDatabaseStub}${vectorsStub}${bindTableHelper}
 const dispatchRun = (expected: FunctionKind, functionPath: string, args: Record<string, unknown>, ctx: unknown): Promise<unknown> | unknown => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
@@ -1445,7 +1445,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const identity = this.getCurrentIdentity();
 ${vectorsBuild}
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
-            const db: DatabaseWriterLike = createShardCtxDb(${dbOptions});${globalDbLine}
+            const db: DatabaseWriterLike = createShardCtxDb(${databaseOptions});${globalDatabaseLine}
 ${facadeBlock}
             const ctx: Record<string, unknown> = {
                 auth: {
@@ -1453,9 +1453,9 @@ ${facadeBlock}
                     userId: userId ?? null,
                 },
                 db,
-                fetch: globalThis.fetch.bind(globalThis),${ormCtxField}
+                fetch: globalThis.fetch.bind(globalThis),${ormContextField}
                 scheduler,
-                storage: config.storage?.(env) ?? storageStub,${vectorsCtxField}
+                storage: config.storage?.(env) ?? storageStub,${vectorsContextField}
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__cirrusRef, fnArgs, ctx);
@@ -1516,7 +1516,7 @@ const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
 
             // String literals start with a quote; `true`/`false`/`null` are plain
             // keywords; everything else is numeric.
-            if (value.startsWith('"') || value.startsWith("'")) {
+            if (value.startsWith("\"") || value.startsWith("'")) {
                 return { builder: "text", notNull: true };
             }
 
@@ -1560,8 +1560,8 @@ const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: 
     const isOptional = validator.kind === "optional";
     const innerValidator = isOptional && validator.inner ? validator.inner : validator;
 
-    const modeArg = column.mode ? `, { mode: "${column.mode}" }` : "";
-    let expression = `${column.builder}("${name}"${modeArg})`;
+    const modeArgument = column.mode ? `, { mode: "${column.mode}" }` : "";
+    let expression = `${column.builder}("${name}"${modeArgument})`;
 
     if (column.typeAnnotation) {
         expression += `.$type<${column.typeAnnotation}>()`;

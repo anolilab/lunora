@@ -22,9 +22,9 @@ const newStub = (name = "scheduler-tests"): DurableObjectStub<TestSchedulerDO> =
 
 const post = async (stub: DurableObjectStub<TestSchedulerDO>, path: string, body: unknown): Promise<Response> =>
     stub.fetch(`https://scheduler.internal${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        headers: { "content-type": "application/json" },
+        method: "POST",
     });
 
 describe("schedulerDO (workerd)", () => {
@@ -35,10 +35,10 @@ describe("schedulerDO (workerd)", () => {
         const scheduledFor = Date.now() + 60_000;
 
         const response = await post(stub, "/schedule", {
-            functionPath: "messages.send",
             args: { text: "hi" },
-            scheduledFor,
+            functionPath: "messages.send",
             originUrl: "https://app.test",
+            scheduledFor,
         });
 
         expect(response.status).toBe(200);
@@ -59,8 +59,8 @@ describe("schedulerDO (workerd)", () => {
 
         // Two records: one already due (so alarm() should pick it up), one in
         // the future (so the post-fire alarm should be re-armed to that time).
-        await post(stub, "/schedule", { functionPath: "due", args: { x: 1 }, scheduledFor: now - 1000, originUrl: "https://app.test" });
-        await post(stub, "/schedule", { functionPath: "later", args: {}, scheduledFor: now + 60_000, originUrl: "https://app.test" });
+        await post(stub, "/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://app.test", scheduledFor: now - 1000 });
+        await post(stub, "/schedule", { args: {}, functionPath: "later", originUrl: "https://app.test", scheduledFor: now + 60_000 });
 
         // `runDurableObjectAlarm()` short-circuits the wall clock — it fires
         // the pending alarm synchronously.
@@ -85,14 +85,14 @@ describe("schedulerDO (workerd)", () => {
         const sooner = Date.now() + 1000;
 
         const soonerResponse = await post(stub, "/schedule", {
-            functionPath: "b",
             args: {},
-            scheduledFor: sooner,
+            functionPath: "b",
             originUrl: "https://app.test",
+            scheduledFor: sooner,
         });
-        const soonerBody = (await soonerResponse.json()) as ScheduleResponseBody;
+        const soonerBody = await soonerResponse.json();
 
-        await post(stub, "/schedule", { functionPath: "a", args: {}, scheduledFor: later, originUrl: "https://app.test" });
+        await post(stub, "/schedule", { args: {}, functionPath: "a", originUrl: "https://app.test", scheduledFor: later });
 
         await runInDurableObject(stub, async (_instance, state) => {
             await expect(state.storage.getAlarm()).resolves.toBe(sooner);

@@ -91,8 +91,8 @@ interface SessionDOEnv {
 
 const jsonResponse = (status: number, body: unknown): Response =>
     Response.json(body, {
-        status,
         headers: { "content-type": "application/json" },
+        status,
     });
 
 /**
@@ -107,9 +107,9 @@ const constantTimeEqual = (a: string, b: string): boolean => {
 
     for (let index = 0; index < max; index += 1) {
         const ca = index < a.length ? a.charCodeAt(index) : 0;
-        const cb = index < b.length ? b.charCodeAt(index) : 0;
+        const callback = index < b.length ? b.charCodeAt(index) : 0;
 
-        diff |= ca ^ cb;
+        diff |= ca ^ callback;
     }
 
     return diff === 0;
@@ -182,7 +182,7 @@ export class SessionDO {
             let body: { token?: unknown; ttlSeconds?: unknown; userId?: unknown };
 
             try {
-                body = (await request.json());
+                body = await request.json();
             } catch {
                 return jsonResponse(400, { error: "invalid_request" });
             }
@@ -218,7 +218,7 @@ export class SessionDO {
             }
 
             const now = Date.now();
-            const record: SessionRecord = { userId, createdAt: now, expiresAt: now + ttlSeconds * 1000 };
+            const record: SessionRecord = { createdAt: now, expiresAt: now + ttlSeconds * 1000, userId };
 
             await this.state.storage.put(`s:${token}`, record);
 

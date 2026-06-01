@@ -38,7 +38,9 @@ interface MockClientHooks {
 type Impl = (reference: string, args: unknown, options: unknown) => unknown;
 
 const makeMethod = (impl?: Impl): ReturnType<typeof vi.fn> =>
-    vi.fn<(fn: FunctionReference, args: unknown, options: unknown) => Promise<unknown>>(async (fn: FunctionReference, args: unknown, options: unknown) => (impl ? impl(fn.__cirrusRef, args, options) : undefined));
+    vi.fn<(function_: FunctionReference, args: unknown, options: unknown) => Promise<unknown>>(async (function_: FunctionReference, args: unknown, options: unknown) =>
+        (impl ? impl(function_.__cirrusRef, args, options) : undefined),
+    );
 
 interface MockClientImpls {
     action?: Impl;
@@ -86,13 +88,13 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     }
     const subscribers = new Map<string, Set<Sub>>();
     const subscribe = vi.fn<
-        (fn: FunctionReference, args: unknown, callback: (value: unknown) => void, opts?: { onError?: (error: { message: string }) => void }) => () => void
-    >((fn: FunctionReference, _args: unknown, callback: (value: unknown) => void, opts?: { onError?: (error: { message: string }) => void }) => {
-        const set = subscribers.get(fn.__cirrusRef) ?? new Set<Sub>();
-        const sub: Sub = { onError: opts?.onError, onValue: callback };
+        (function_: FunctionReference, args: unknown, callback: (value: unknown) => void, options?: { onError?: (error: { message: string }) => void }) => () => void
+    >((function_: FunctionReference, _args: unknown, callback: (value: unknown) => void, options?: { onError?: (error: { message: string }) => void }) => {
+        const set = subscribers.get(function_.__cirrusRef) ?? new Set<Sub>();
+        const sub: Sub = { onError: options?.onError, onValue: callback };
 
         set.add(sub);
-        subscribers.set(fn.__cirrusRef, set);
+        subscribers.set(function_.__cirrusRef, set);
 
         return () => {
             set.delete(sub);

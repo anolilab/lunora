@@ -8,23 +8,23 @@ type Id<TableName extends string> = string & { readonly __table: TableName };
  * Runtime "kind" tag attached to every validator. Codegen and reflective tools
  * use this to inspect the shape without crawling the closure.
  */
-type ValidatorKind =
-    | "any"
-    | "array"
-    | "bigint"
-    | "boolean"
-    | "bytes"
-    | "date"
-    | "id"
-    | "literal"
-    | "null"
-    | "number"
-    | "object"
-    | "optional"
-    | "record"
-    | "string"
-    | "timestamp"
-    | "union";
+type ValidatorKind
+    = | "any"
+        | "array"
+        | "bigint"
+        | "boolean"
+        | "bytes"
+        | "date"
+        | "id"
+        | "literal"
+        | "null"
+        | "number"
+        | "object"
+        | "optional"
+        | "record"
+        | "string"
+        | "timestamp"
+        | "union";
 
 interface Validator<T = unknown> {
     readonly __type: T;
@@ -88,9 +88,9 @@ interface Column<TSelect, TInsert> {
  */
 interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInsert>, Validator<TSelect> {
     /** Default factory applied in the write layer; field becomes optional on insert. */
-    $defaultFn: (fn: () => TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
+    $defaultFn: (function_: () => TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
     /** Recompute the field on every patch/replace when not explicitly provided. */
-    $onUpdateFn: (fn: () => TSelect) => ColumnValidator<TSelect, TInsert>;
+    $onUpdateFn: (function_: () => TSelect) => ColumnValidator<TSelect, TInsert>;
     /** Override the inferred select/insert type without changing runtime parsing (e.g. `v.string().$type&lt;Id&lt;"users">>()`). */
     $type: <TOverride>() => ColumnValidator<TOverride, TOverride>;
     /** Refinement predicate run after parsing — see {@link Validator.check}. Chainable; preserves column modifiers. */
@@ -153,8 +153,8 @@ interface InternalValidator<T> extends Validator<T> {
  * {@link ColumnValidator} surface.
  */
 interface InternalColumnValidator<T> extends InternalValidator<T> {
-    $defaultFn: (fn: () => T) => InternalColumnValidator<T>;
-    $onUpdateFn: (fn: () => T) => InternalColumnValidator<T>;
+    $defaultFn: (function_: () => T) => InternalColumnValidator<T>;
+    $onUpdateFn: (function_: () => T) => InternalColumnValidator<T>;
     $type: <TOverride>() => InternalColumnValidator<TOverride>;
     check: (predicate: (value: T) => boolean, message?: string) => InternalColumnValidator<T>;
     default: (value: T) => InternalColumnValidator<T>;
@@ -214,8 +214,8 @@ const createValidator = <T>(
     validator.default = (value) => rebuild({ defaultValue: value });
     validator.defaultNow = () => rebuild({ defaultFn: () => Date.now() });
     validator.unique = () => rebuild({ unique: true });
-    validator.$defaultFn = (fn) => rebuild({ defaultFn: fn });
-    validator.$onUpdateFn = (fn) => rebuild({ onUpdateFn: fn });
+    validator.$defaultFn = (function_) => rebuild({ defaultFn: function_ });
+    validator.$onUpdateFn = (function_) => rebuild({ onUpdateFn: function_ });
     // `$type` is a compile-time-only override; runtime parsing is unchanged, so
     // it clones the validator and lets the public signature retype the result.
     validator.$type = (() => rebuild({})) as InternalColumnValidator<T>["$type"];
@@ -392,7 +392,8 @@ type ObjectShapeType<S extends ObjectShape> = {
     [K in keyof S as undefined extends Infer<S[K]> ? K : never]?: Infer<S[K]>;
 } & { [K in keyof S as undefined extends Infer<S[K]> ? never : K]: Infer<S[K]> };
 
-const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<ObjectShapeType<S>, ObjectShapeType<S>> => asColumn(
+const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<ObjectShapeType<S>, ObjectShapeType<S>> =>
+    asColumn(
         createValidator<ObjectShapeType<S>>(
             "object",
             (value, context) => {

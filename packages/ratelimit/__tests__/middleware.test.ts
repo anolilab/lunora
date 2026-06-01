@@ -4,13 +4,13 @@ import { describe, expect, it } from "vitest";
 import { rateLimit } from "../src/middleware.js";
 import { RateLimiter } from "../src/rate-limiter.js";
 
-interface Ctx {
+interface Context {
     userId?: string;
 }
 
 const SENTINEL = "handler-ran";
 
-const invoke = async <C>(middleware: Middleware<C, unknown>, ctx: C): Promise<{ called: boolean; result: unknown }> => {
+const invoke = async <C>(middleware: Middleware<C, unknown>, context: C): Promise<{ called: boolean; result: unknown }> => {
     let called = false;
     const next = (() => {
         called = true;
@@ -18,14 +18,14 @@ const invoke = async <C>(middleware: Middleware<C, unknown>, ctx: C): Promise<{ 
         return Promise.resolve(SENTINEL);
     }) as MiddlewareNext<C>;
 
-    const result = await middleware({ ctx, next });
+    const result = await middleware({ ctx: context, next });
 
     return { called, result };
 };
 
-const catchError = async (fn: () => Promise<unknown>): Promise<Record<string, unknown>> => {
+const catchError = async (function_: () => Promise<unknown>): Promise<Record<string, unknown>> => {
     try {
-        await fn();
+        await function_();
     } catch (error) {
         return error as Record<string, unknown>;
     }
@@ -39,7 +39,7 @@ describe("rateLimit middleware", () => {
     it("calls next when under the limit", async () => {
         expect.assertions(2);
 
-        const middleware = rateLimit<Ctx>(makeLimiter(), "api");
+        const middleware = rateLimit<Context>(makeLimiter(), "api");
 
         const { called, result } = await invoke(middleware, {});
 
@@ -50,7 +50,7 @@ describe("rateLimit middleware", () => {
     it("throws a structural CirrusError (429) once the limit is hit", async () => {
         expect.assertions(4);
 
-        const middleware = rateLimit<Ctx>(makeLimiter(), "api");
+        const middleware = rateLimit<Context>(makeLimiter(), "api");
 
         await invoke(middleware, {});
         const error = await catchError(() => invoke(middleware, {}));
@@ -64,7 +64,7 @@ describe("rateLimit middleware", () => {
     it("maps a deny-list hit to FORBIDDEN (403) without a retryAfter", async () => {
         expect.assertions(3);
 
-        const middleware = rateLimit<Ctx>(makeLimiter(["banned"]), "api", { key: (ctx) => ctx.userId });
+        const middleware = rateLimit<Context>(makeLimiter(["banned"]), "api", { key: (context) => context.userId });
 
         const error = await catchError(() => invoke(middleware, { userId: "banned" }));
 
@@ -77,7 +77,7 @@ describe("rateLimit middleware", () => {
     it("isolates limits by the derived key", async () => {
         expect.assertions(2);
 
-        const middleware = rateLimit<Ctx>(makeLimiter(), "api", { key: (ctx) => ctx.userId });
+        const middleware = rateLimit<Context>(makeLimiter(), "api", { key: (context) => context.userId });
 
         await invoke(middleware, { userId: "alice" });
 
@@ -90,7 +90,7 @@ describe("rateLimit middleware", () => {
         expect.assertions(1);
 
         const shared = makeLimiter();
-        const middleware = rateLimit<Ctx>((_ctx) => shared, "api");
+        const middleware = rateLimit<Context>((_context) => shared, "api");
 
         const { called } = await invoke(middleware, {});
 
@@ -100,7 +100,7 @@ describe("rateLimit middleware", () => {
     it("honors a custom message", async () => {
         expect.assertions(1);
 
-        const middleware = rateLimit<Ctx>(makeLimiter(), "api", { message: "slow down" });
+        const middleware = rateLimit<Context>(makeLimiter(), "api", { message: "slow down" });
 
         await invoke(middleware, {});
         const error = await catchError(() => invoke(middleware, {}));

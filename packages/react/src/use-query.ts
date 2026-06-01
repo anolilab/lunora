@@ -18,7 +18,7 @@ import type { UseQueryOptions } from "./types.js";
  * subscription registry shares a single WS subscription across every consumer
  * of the same queryKey; pushes call `queryClient.setQueryData(...)`.
  */
-export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "skip", options: UseQueryOptions = {}): ReturnOf<F> | undefined {
+export function useQuery<F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options: UseQueryOptions = {}): ReturnOf<F> | undefined {
     const client = useCirrus();
     const queryClient = useQueryClient();
     const { shardKey } = options;
@@ -28,12 +28,12 @@ export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "
 
     // Memoise the queryKey so the effect dep array tracks structural equality
     // via TanStack's hash, not reference equality of the args object.
-    const queryKey = useMemo(() => cirrusQueryKey(fn, argsRecord, shardKey), [fn.__cirrusRef, JSON.stringify(argsRecord), shardKey]);
+    const queryKey = useMemo(() => cirrusQueryKey(function_, argsRecord, shardKey), [function_.__cirrusRef, JSON.stringify(argsRecord), shardKey]);
 
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<ReturnOf<F>>({
         enabled: !skipped,
-        queryFn: () => client.query<F>(fn, argsRecord as ArgsOf<F>, { shardKey }),
+        queryFn: () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey }),
         queryKey,
         // Cirrus is push-driven: once the initial fetch resolves, the WS owns
         // freshness. Staleness only matters when the subscription is missing,
@@ -48,7 +48,7 @@ export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "
 
         const registry = getSubscriptionRegistry(client);
 
-        return registry.attach(queryClient, queryKey, fn, argsRecord, shardKey);
+        return registry.attach(queryClient, queryKey, function_, argsRecord, shardKey);
     }, [client, queryClient, serializeQueryKey(queryKey), skipped]);
 
     return data;

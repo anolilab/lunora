@@ -24,7 +24,9 @@ const createUsersClient = (): MockClientHooks =>
 
             return { rows: SESSIONS, total: SESSIONS.length };
         },
-        listAuthUsers: (): AuthPage<AuthUser> => { return { rows: USERS, total: USERS.length }; },
+        listAuthUsers: (): AuthPage<AuthUser> => {
+            return { rows: USERS, total: USERS.length };
+        },
     });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (

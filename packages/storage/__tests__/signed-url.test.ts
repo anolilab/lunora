@@ -12,9 +12,9 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
-            secret: "shh",
-            key: "uploads/x.png",
             expiresInSeconds: 120,
+            key: "uploads/x.png",
+            secret: "shh",
         });
 
         const result = await verifySignedUrl(url, "shh");
@@ -32,9 +32,9 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
-            secret: "shh",
-            key: "uploads/x.png",
             expiresInSeconds: 60,
+            key: "uploads/x.png",
+            secret: "shh",
         });
 
         // Advance past expiry.
@@ -51,9 +51,9 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
-            secret: "right",
-            key: "x",
             expiresInSeconds: 60,
+            key: "x",
+            secret: "right",
         });
 
         const result = await verifySignedUrl(url, "wrong");
@@ -67,9 +67,9 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
-            secret: "shh",
-            key: "uploads/a.png",
             expiresInSeconds: 60,
+            key: "uploads/a.png",
+            secret: "shh",
         });
 
         const tampered = url.replace("uploads/a.png", "uploads/b.png");
@@ -93,10 +93,10 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
-            secret: "shh",
+            expiresInSeconds: 60,
             key: "uploads/x.png",
             method: "PUT",
-            expiresInSeconds: 60,
+            secret: "shh",
         });
 
         const result = await verifySignedUrl(url, "shh");
@@ -110,9 +110,9 @@ describe("signedUrl", () => {
 
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test/",
-            secret: "shh",
-            key: "a/b/c.txt",
             expiresInSeconds: 60,
+            key: "a/b/c.txt",
+            secret: "shh",
         });
 
         const result = await verifySignedUrl(url, "shh");

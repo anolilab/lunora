@@ -6,7 +6,9 @@ import type { FunctionReference } from "@cirrus/client";
  * client method carries them, so the dashboard routes every admin call through
  * `client.query` — a pure one-shot RPC with no optimistic/offline machinery.
  */
-export const adminRef = (path: string): FunctionReference => { return { __cirrusRef: path }; };
+export const adminRef = (path: string): FunctionReference => {
+    return { __cirrusRef: path };
+};
 
 /** Translate a free-text shard key into the client's call options. Empty → root shard. */
 export const callOptions = (shardKey: string): { shardKey?: string } => {

@@ -4,11 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAutoRefresh } from "../src/use-auto-refresh.js";
 
-function Harness({ enabled, intervalMs, onTick }: { enabled: boolean; intervalMs?: number; onTick: () => void }): ReactElement {
+const Harness = ({ enabled, intervalMs, onTick }: { enabled: boolean; intervalMs?: number; onTick: () => void }): ReactElement => {
     useAutoRefresh(onTick, enabled, intervalMs);
 
     return <div />;
-}
+};
 
 describe("useAutoRefresh", () => {
     beforeEach(() => {

@@ -9,12 +9,12 @@ import type { FetchLike } from "../../src/commands/run.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => {
- return {
-    error: () => {},
-    info: () => {},
-    success: () => {},
-    warn: () => {},
-};
+    return {
+        error: () => {},
+        info: () => {},
+        success: () => {},
+        warn: () => {},
+    };
 };
 
 let workdir: string;
@@ -82,9 +82,9 @@ export const schema = defineSchema({
 
             const sql = readFileSync(result.migrationFile, "utf8");
 
-            expect(sql).toContain('CREATE TABLE IF NOT EXISTS "users"');
-            expect(sql).toContain('"email" TEXT NOT NULL');
-            expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "by_email"');
+            expect(sql).toContain("CREATE TABLE IF NOT EXISTS \"users\"");
+            expect(sql).toContain("\"email\" TEXT NOT NULL");
+            expect(sql).toContain("CREATE UNIQUE INDEX IF NOT EXISTS \"by_email\"");
 
             // Snapshot file is written next to the migration.
             const snapshotPath = join(workdir, "cirrus", "migrations", ".snapshot.json");
@@ -188,7 +188,7 @@ export const schema = defineSchema({
 
             const sql = readFileSync(result.migrationFile, "utf8");
 
-            expect(sql).toContain('ADD COLUMN "nickname" TEXT');
+            expect(sql).toContain("ADD COLUMN \"nickname\" TEXT");
             expect(sql).not.toContain("NOT NULL"); // v.optional → nullable
         });
 
@@ -224,7 +224,7 @@ export const schema = defineSchema({});
 
             const sql = readFileSync(result.migrationFile, "utf8");
 
-            expect(sql).toContain('DROP TABLE IF EXISTS "sessions"');
+            expect(sql).toContain("DROP TABLE IF EXISTS \"sessions\"");
         });
 
         it("emits a manual-SQL comment block for unsupported diffs (drop column)", () => {
@@ -292,10 +292,10 @@ export const schema = defineSchema({
 
             const content = readFileSync(result.file, "utf8");
 
-            expect(content).toContain('import { defineMigration } from "@cirrus/server";');
+            expect(content).toContain("import { defineMigration } from \"@cirrus/server\";");
             expect(content).toContain("export const backfillReadBy = defineMigration({");
-            expect(content).toContain('id: "backfill-read-by",');
-            expect(content).toContain('table: "messages",');
+            expect(content).toContain("id: \"backfill-read-by\",");
+            expect(content).toContain("table: \"messages\",");
             expect(content).toContain("up: (document) => document,");
         });
 
@@ -343,7 +343,7 @@ export const schema = defineSchema({
             const result = runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), warn: (m) => warnings.push(m) }, name: "needs_table" });
 
             expect(result.code).toBe(0);
-            expect(readFileSync(result.file, "utf8")).toContain('table: "TODO_table",');
+            expect(readFileSync(result.file, "utf8")).toContain("table: \"TODO_table\",");
             expect(warnings.join("\n")).toContain("set the `table` field");
         });
     });
@@ -363,19 +363,21 @@ export const backfillReadBy = defineMigration({
         url: string;
     }
 
-    const captureFetch = (calls: CapturedCall[], response: { json: () => Promise<unknown>; ok: boolean; status: number }): FetchLike => async (url, init) => {
-            calls.push({ body: init?.body ? (JSON.parse(init.body) as CapturedCall["body"]) : ({} as CapturedCall["body"]), headers: init?.headers, url });
+    const captureFetch
+        = (calls: CapturedCall[], response: { json: () => Promise<unknown>; ok: boolean; status: number }): FetchLike =>
+            async (url, init) => {
+                calls.push({ body: init?.body ? (JSON.parse(init.body) as CapturedCall["body"]) : ({} as CapturedCall["body"]), headers: init?.headers, url });
 
-            return { json: response.json, ok: response.ok, status: response.status, text: async () => "" };
-        };
+                return { json: response.json, ok: response.ok, status: response.status, text: async () => "" };
+            };
 
     const okResponse = (body: unknown = { ok: 1 }): { json: () => Promise<unknown>; ok: boolean; status: number } => {
- return {
-        json: async () => body,
-        ok: true,
-        status: 200,
+        return {
+            json: async () => body,
+            ok: true,
+            status: 200,
+        };
     };
-};
 
     describe("cirrus migrate up/down/status", () => {
         beforeEach(() => {
@@ -532,7 +534,7 @@ export const backfillReadBy = defineMigration({
             });
 
             expect(result.code).toBe(1);
-            expect(errors.join("\n")).toContain('"ghost" not found');
+            expect(errors.join("\n")).toContain("\"ghost\" not found");
         });
 
         it("--prod without --url is refused before any request", async () => {
@@ -561,7 +563,13 @@ export const backfillReadBy = defineMigration({
 
             const result = await runMigrateDataCommand({
                 cwd: workdir,
-                fetchImpl: captureFetch([], { json: async () => { return { error: { code: "ADMIN_FORBIDDEN" } }; }, ok: false, status: 403 }),
+                fetchImpl: captureFetch([], {
+                    json: async () => {
+                        return { error: { code: "ADMIN_FORBIDDEN" } };
+                    },
+                    ok: false,
+                    status: 403,
+                }),
                 id: "backfill-read-by",
                 logger: silentLogger(),
                 subcommand: "up",

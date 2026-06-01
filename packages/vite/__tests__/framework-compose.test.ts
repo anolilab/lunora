@@ -48,16 +48,16 @@ const VALID_WRANGLER = `{
  * sub-plugin so name-uniqueness assertions are meaningful.
  */
 const tanstackStartLike = (): ReadonlyArray<Plugin> => [
-        {
-            name: "tanstack-start",
-            enforce: "pre",
-            configResolved() {},
-        },
-        {
-            name: "tanstack-start:router",
-            configureServer() {},
-        },
-    ];
+    {
+        configResolved() {},
+        enforce: "pre",
+        name: "tanstack-start",
+    },
+    {
+        configureServer() {},
+        name: "tanstack-start:router",
+    },
+];
 
 /**
  * Shape-faithful stand-in for `@react-router/dev/vite`'s plugin. RR7 ships a
@@ -65,10 +65,10 @@ const tanstackStartLike = (): ReadonlyArray<Plugin> => [
  */
 const reactRouterLike = (): Plugin => {
     return {
-        name: "react-router",
-        enforce: "pre",
         configResolved() {},
         configureServer() {},
+        enforce: "pre",
+        name: "react-router",
     };
 };
 
@@ -100,8 +100,8 @@ describe("framework-compose", () => {
             const resolved = await resolveConfig(
                 {
                     configFile: false,
-                    root: workdir,
                     plugins: [...tanstackStartLike(), ...cirrusPlugins],
+                    root: workdir,
                 },
                 "serve",
             );
@@ -130,8 +130,8 @@ describe("framework-compose", () => {
             const resolved = await resolveConfig(
                 {
                     configFile: false,
-                    root: workdir,
                     plugins: [reactRouterLike(), ...cirrusPlugins],
+                    root: workdir,
                 },
                 "serve",
             );
@@ -172,8 +172,8 @@ describe("framework-compose", () => {
                 resolveConfig(
                     {
                         configFile: false,
-                        root: workdir,
                         plugins: [...tanstackStartLike(), ...cirrusPlugins],
+                        root: workdir,
                     },
                     "serve",
                 ),

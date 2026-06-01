@@ -25,9 +25,9 @@ class TestScheduler extends SchedulerDO {
 
 const post = (path: string, body: unknown): Request =>
     new Request(`https://scheduler.internal${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        headers: { "content-type": "application/json" },
+        method: "POST",
     });
 
 describe("schedulerDO", () => {
@@ -40,14 +40,14 @@ describe("schedulerDO", () => {
 
         const response = await scheduler.fetch(
             post("/schedule", {
-                functionPath: "messages.send",
                 args: { text: "hi" },
-                scheduledFor,
+                functionPath: "messages.send",
                 originUrl: "https://app.test",
+                scheduledFor,
             }),
         );
 
-        const body = (await response.json()) as ScheduleResponseBody;
+        const body = await response.json();
 
         expect(response.status).toBe(200);
         expect(body.scheduledFor).toBe(scheduledFor);
@@ -65,8 +65,8 @@ describe("schedulerDO", () => {
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
-        await scheduler.fetch(post("/schedule", { functionPath: "a", args: {}, scheduledFor: later, originUrl: "https://x.test" }));
-        await scheduler.fetch(post("/schedule", { functionPath: "b", args: {}, scheduledFor: sooner, originUrl: "https://x.test" }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: later }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", originUrl: "https://x.test", scheduledFor: sooner }));
 
         expect(state.alarm).toBe(sooner);
     });
@@ -79,15 +79,15 @@ describe("schedulerDO", () => {
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
-        const soonerResponse = await scheduler.fetch(post("/schedule", { functionPath: "b", args: {}, scheduledFor: sooner, originUrl: "https://x.test" }));
-        const soonerBody = (await soonerResponse.json()) as { id: string };
+        const soonerResponse = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", originUrl: "https://x.test", scheduledFor: sooner }));
+        const soonerBody = await soonerResponse.json();
 
-        await scheduler.fetch(post("/schedule", { functionPath: "a", args: {}, scheduledFor: later, originUrl: "https://x.test" }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: later }));
 
         expect(state.alarm).toBe(sooner);
 
         const cancelResponse = await scheduler.fetch(post("/cancel", { id: soonerBody.id }));
-        const cancelBody = (await cancelResponse.json()) as CancelResponseBody;
+        const cancelBody = await cancelResponse.json();
 
         expect(cancelBody.cancelled).toBe(true);
         expect(state.alarm).toBe(later);
@@ -99,7 +99,7 @@ describe("schedulerDO", () => {
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(post("/cancel", { id: "missing" }));
-        const body = (await response.json()) as CancelResponseBody;
+        const body = await response.json();
 
         expect(body.cancelled).toBe(false);
     });
@@ -111,8 +111,8 @@ describe("schedulerDO", () => {
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const now = Date.now();
 
-        await scheduler.fetch(post("/schedule", { functionPath: "due", args: { x: 1 }, scheduledFor: now - 1000, originUrl: "https://x.test" }));
-        await scheduler.fetch(post("/schedule", { functionPath: "later", args: {}, scheduledFor: now + 60_000, originUrl: "https://x.test" }));
+        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://x.test", scheduledFor: now - 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", originUrl: "https://x.test", scheduledFor: now + 60_000 }));
 
         await scheduler.alarm();
 
@@ -177,7 +177,7 @@ describe("schedulerDO — live subscriptions", () => {
         const scheduled = await scheduler.fetch(
             post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
         );
-        const { id } = (await scheduled.json()) as ScheduleResponseBody;
+        const { id } = await scheduled.json();
 
         // Connect after scheduling, then cancel — the cancel should push an empty list.
         state.sockets.length = 0;

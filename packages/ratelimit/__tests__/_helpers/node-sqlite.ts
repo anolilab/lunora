@@ -9,10 +9,10 @@ import type { SqlLike } from "../../src/store.js";
  * secret-scan hook flags) so the store is exercised against a real engine.
  */
 export const createSqliteSql = (): { close: () => void; sql: SqlLike } => {
-    const db = new DatabaseSync(":memory:");
+    const database = new DatabaseSync(":memory:");
 
     const run = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): { toArray: () => Row[] } => {
-        const statement = db.prepare(query);
+        const statement = database.prepare(query);
         const rows = statement.all(...(params as never[])) as Row[];
 
         return { toArray: () => rows };
@@ -20,7 +20,7 @@ export const createSqliteSql = (): { close: () => void; sql: SqlLike } => {
 
     return {
         close: () => {
-            db.close();
+            database.close();
         },
         sql: { exec: run },
     };

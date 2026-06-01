@@ -1,9 +1,9 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { CirrusRouteHandler, HttpActionCtx } from "../src/index.js";
+import type { CirrusRouteHandler, HttpActionCtx as HttpActionContext } from "../src/index.js";
 import { httpRoute, httpRouter, v } from "../src/index.js";
 
-const ctx = {} as HttpActionCtx;
+const context = {} as HttpActionContext;
 
 /** Mount a built route on a fresh hono app at `method path` and dispatch `request` with an injected ctx. */
 const dispatch = async (route: CirrusRouteHandler, method: string, path: string, request: Request): Promise<Response> => {
@@ -11,7 +11,7 @@ const dispatch = async (route: CirrusRouteHandler, method: string, path: string,
 
     app.on(method, path, route);
 
-    return app.fetch(request, { __cirrusCtx: ctx });
+    return app.fetch(request, { __cirrusCtx: context });
 };
 
 describe("httpRoute terminal shape", () => {
@@ -253,14 +253,14 @@ describe("httpRoute composition", () => {
     it("passes the action ctx through to the handler", async () => {
         expect.assertions(1);
 
-        const seen: HttpActionCtx[] = [];
+        const seen: HttpActionContext[] = [];
         const route = httpRoute.get("/api/ctx").handler((options) => {
             seen.push(options.ctx);
 
             return { ok: true };
         });
 
-        const marker = { auth: "marker" } as unknown as HttpActionCtx;
+        const marker = { auth: "marker" } as unknown as HttpActionContext;
         const app = httpRouter();
 
         app.get("/api/ctx", route);

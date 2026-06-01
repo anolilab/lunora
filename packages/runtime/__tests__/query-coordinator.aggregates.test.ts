@@ -18,31 +18,33 @@ interface ShardSpy {
 
 const createShards = (responses: Record<string, unknown>): ShardSpy => {
     const stubFor = (shardKey: string) => {
- return {
-        async fetch(): Promise<Response> {
-            const value = responses[shardKey];
+        return {
+            async fetch(): Promise<Response> {
+                const value = responses[shardKey];
 
-            return Response.json(value, { status: 200 });
-        },
+                return Response.json(value, { status: 200 });
+            },
+        };
     };
-};
 
     const namespace: ShardNamespaceLike = {
         get: (id) => stubFor((id as { __name: string }).__name),
         getByName: (name) => stubFor(name),
-        idFromName: (name) => { return { __name: name }; },
+        idFromName: (name) => {
+            return { __name: name };
+        },
     };
 
     return { namespace };
 };
 
 const buildRequest = (overrides: Partial<FanOutRequest>): FanOutRequest => {
- return {
-    args: {},
-    fanOut: { merge: { kind: "sum" }, table: "messages" },
-    functionPath: "messages:list",
-    ...overrides,
-};
+    return {
+        args: {},
+        fanOut: { merge: { kind: "sum" }, table: "messages" },
+        functionPath: "messages:list",
+        ...overrides,
+    };
 };
 
 describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
@@ -153,7 +155,7 @@ describe("cross-shard merge — groupBy", () => {
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
         const spy = createShards({
             a: [{ key: { a: 1, b: 2 }, value: 5 }],
-            b: [{ key: { b: 2, a: 1 }, value: 3 }],
+            b: [{ key: { a: 1, b: 2 }, value: 3 }],
         });
         const coordinator = createQueryCoordinator({ registry });
 

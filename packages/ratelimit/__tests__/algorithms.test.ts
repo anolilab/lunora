@@ -7,7 +7,9 @@ const tokenBucket: RateLimitConfig = { kind: "token bucket", period: 1000, rate:
 const fixedWindow: RateLimitConfig = { kind: "fixed window", period: 1000, rate: 5 };
 const slidingWindow: RateLimitConfig = { kind: "sliding window", period: 1000, rate: 10 };
 
-const consumeOptions = (count: number, now: number, reserve = false) => { return { consume: true, count, now, reserve }; };
+const consumeOptions = (count: number, now: number, reserve = false) => {
+    return { consume: true, count, now, reserve };
+};
 
 describe("token bucket", () => {
     it("a fresh key starts full", () => {

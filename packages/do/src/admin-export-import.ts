@@ -117,8 +117,8 @@ export const exportShardTable = async function* (
     while (true) {
         const page = await writer.findMany(table, { cursor, limit: batchSize });
 
-        for (const doc of page.page) {
-            yield { doc, table };
+        for (const document_ of page.page) {
+            yield { doc: document_, table };
         }
 
         if (page.isDone) {
@@ -157,7 +157,7 @@ export const exportShardRows = async function* (
  * fields and re-applied on the writer side — the shape parser otherwise
  * rejects unknown keys.
  */
-export const validateImportRow = (schema: SchemaLike, table: string, doc: Record<string, unknown>): null | string => {
+export const validateImportRow = (schema: SchemaLike, table: string, document_: Record<string, unknown>): null | string => {
     const definition = schema.tables[table];
 
     if (!definition) {
@@ -173,7 +173,7 @@ export const validateImportRow = (schema: SchemaLike, table: string, doc: Record
 
     // Strip framework-managed fields before validating against the user shape.
     // Both are reapplied verbatim on insert so the round-trip is byte-identical.
-    const { _creationTime: _omitCreationTime, _id: _omitId, ...payload } = doc;
+    const { _creationTime: _omitCreationTime, _id: _omitId, ...payload } = document_;
 
     // Reject keys that aren't declared in the table's shape (nor the
     // framework-managed `_id`/`_creationTime` already stripped above).
@@ -254,7 +254,7 @@ export const importShardRows = async (writer: DatabaseWriterLike, schema: Schema
 
         // v1 mode is `append`: when `_id` collides, skip the row and surface
         // the count rather than upserting.
-        const explicitId = typeof doc["_id"] === "string" ? (doc["_id"]) : undefined;
+        const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
 
         if (explicitId !== undefined) {
             try {
@@ -306,7 +306,7 @@ export interface ImportShardAdminArgs {
  */
 export const parseExportShardArgs = (args: Record<string, unknown>): ExportShardAdminArgs => {
     const tables = Array.isArray(args["tables"]) ? (args["tables"] as unknown[]).filter((entry): entry is string => typeof entry === "string") : undefined;
-    const batchSize = typeof args["batchSize"] === "number" ? (args["batchSize"]) : undefined;
+    const batchSize = typeof args["batchSize"] === "number" ? args["batchSize"] : undefined;
 
     return { batchSize, tables };
 };
@@ -333,7 +333,7 @@ export const parseImportShardArgs = (args: Record<string, unknown>): ImportShard
         rows.push({ doc: candidate.doc as Record<string, unknown>, table: candidate.table });
     }
 
-    const startLine = typeof args["startLine"] === "number" ? (args["startLine"]) : undefined;
+    const startLine = typeof args["startLine"] === "number" ? args["startLine"] : undefined;
 
     return { rows, startLine };
 };

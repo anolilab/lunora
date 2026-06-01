@@ -43,23 +43,23 @@ describe("d1 (workerd)", () => {
         expect.assertions(6);
 
         const migrations = [
-            { version: 1, name: "init", sql: "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)" },
-            { version: 2, name: "add_email", sql: "ALTER TABLE users ADD COLUMN email TEXT" },
+            { name: "init", sql: "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)", version: 1 },
+            { name: "add_email", sql: "ALTER TABLE users ADD COLUMN email TEXT", version: 2 },
         ];
 
         const first = await SELF.fetch("https://test/migrate", {
-            method: "POST",
             body: JSON.stringify({ migrations }),
-        }).then((r) => r.json() as Promise<{ applied: { version: number }[]; skipped: { version: number }[] }>);
+            method: "POST",
+        }).then((r) => r.json());
 
         expect(first.applied.map((m) => m.version)).toEqual([1, 2]);
         expect(first.skipped).toEqual([]);
 
         // Re-running applies nothing — the tracking table is real.
         const second = await SELF.fetch("https://test/migrate", {
-            method: "POST",
             body: JSON.stringify({ migrations }),
-        }).then((r) => r.json() as Promise<{ applied: { version: number }[]; skipped: { version: number }[] }>);
+            method: "POST",
+        }).then((r) => r.json());
 
         expect(second.applied).toEqual([]);
         expect(second.skipped.map((m) => m.version)).toEqual([1, 2]);
@@ -81,14 +81,14 @@ describe("d1 (workerd)", () => {
         // mishandles literals + comments). Two `CREATE TABLE`s become two
         // migrations; the runner applies them in version order.
         const migrations = [
-            { version: 1, name: "users", sql: "CREATE TABLE users (id TEXT PRIMARY KEY)" },
-            { version: 2, name: "posts", sql: "CREATE TABLE posts (id TEXT PRIMARY KEY, author TEXT NOT NULL)" },
+            { name: "users", sql: "CREATE TABLE users (id TEXT PRIMARY KEY)", version: 1 },
+            { name: "posts", sql: "CREATE TABLE posts (id TEXT PRIMARY KEY, author TEXT NOT NULL)", version: 2 },
         ];
 
         const result = await SELF.fetch("https://test/migrate", {
-            method: "POST",
             body: JSON.stringify({ migrations }),
-        }).then((r) => r.json() as Promise<{ applied: { version: number }[]; skipped: { version: number }[] }>);
+            method: "POST",
+        }).then((r) => r.json());
 
         expect(result.applied.map((m) => m.version)).toEqual([1, 2]);
 
@@ -109,9 +109,9 @@ describe("d1 (workerd)", () => {
         await env.DB.prepare("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)").run();
 
         const insert = await SELF.fetch("https://test/insert", {
-            method: "POST",
             body: JSON.stringify({ id: "u1", name: "Ada" }),
-        }).then((r) => r.json() as Promise<{ bookmark: string | null; ok: boolean }>);
+            method: "POST",
+        }).then((r) => r.json());
 
         expect(insert.ok).toBe(true);
 
@@ -120,7 +120,7 @@ describe("d1 (workerd)", () => {
         // when supplied, round-trips back through the next read without error.
         const list = await SELF.fetch("https://test/list", {
             headers: insert.bookmark ? { "x-d1-bookmark": insert.bookmark } : {},
-        }).then((r) => r.json() as Promise<{ bookmark: string | null; rows: { id: string; name: string }[] }>);
+        }).then((r) => r.json());
 
         expect(list.rows).toEqual([{ id: "u1", name: "Ada" }]);
     });

@@ -26,12 +26,12 @@ export interface CirrusProviderProps {
 const createDefaultQueryClient = (): QueryClient =>
     new QueryClient({
         defaultOptions: {
+            mutations: { retry: 0 },
             queries: {
                 gcTime: 5 * 60_000,
                 retry: 0,
                 staleTime: Number.POSITIVE_INFINITY,
             },
-            mutations: { retry: 0 },
         },
     });
 

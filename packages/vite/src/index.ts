@@ -7,26 +7,26 @@ import type { CirrusPluginOptions, CloudflarePluginOptions, ResolvedCirrusPlugin
 import { wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";
 
 const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirrusPluginOptions => {
-    const opts = options ?? {};
-    const schemaDir = opts.schemaDir ?? "cirrus";
+    const options_ = options ?? {};
+    const schemaDir = options_.schemaDir ?? "cirrus";
     let cloudflare: false | CloudflarePluginOptions;
 
-    if (opts.cloudflare === false) {
+    if (options_.cloudflare === false) {
         cloudflare = false;
-    } else if (opts.cloudflare === true || opts.cloudflare === undefined) {
+    } else if (options_.cloudflare === true || options_.cloudflare === undefined) {
         cloudflare = {};
     } else {
-        cloudflare = opts.cloudflare;
+        cloudflare = options_.cloudflare;
     }
 
     return {
         cloudflare,
-        dashboard: opts.dashboard ?? true,
-        generatedDir: opts.generatedDir ?? `${schemaDir}/_generated`,
-        overlay: opts.overlay ?? true,
-        projectRoot: opts.projectRoot ?? process.cwd(),
+        dashboard: options_.dashboard ?? true,
+        generatedDir: options_.generatedDir ?? `${schemaDir}/_generated`,
+        overlay: options_.overlay ?? true,
+        projectRoot: options_.projectRoot ?? process.cwd(),
         schemaDir,
-        validateWrangler: opts.validateWrangler ?? true,
+        validateWrangler: options_.validateWrangler ?? true,
     };
 };
 
@@ -93,8 +93,8 @@ const cirrus = async (options?: CirrusPluginOptions): Promise<ReadonlyArray<Plug
 
 const VERSION = "0.0.0";
 
-export { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin } from "./dashboard-plugin.js";
 export { codegenPlugin } from "./codegen-plugin.js";
+export { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin } from "./dashboard-plugin.js";
 export { overlayPlugin } from "./overlay-plugin.js";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
 export { wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";

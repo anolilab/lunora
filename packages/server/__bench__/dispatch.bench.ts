@@ -24,24 +24,24 @@ const smallArgsQuery = query({
 const messageMutation = mutation({
     args: {
         channelId: v.id("channels"),
-        text: v.string(),
         kind: v.union(v.literal("text"), v.literal("image")),
         tags: v.optional(v.array(v.string())),
+        text: v.string(),
     },
     handler: (_context, args) => args,
 });
 
 const heavyMutation = mutation({
     args: {
-        user: v.object({
-            id: v.id("users"),
-            email: v.string(),
-            name: v.string(),
-            age: v.number(),
-            roles: v.array(v.union(v.literal("admin"), v.literal("user"))),
-        }),
         metadata: v.record(v.string(), v.string()),
         notes: v.optional(v.string()),
+        user: v.object({
+            age: v.number(),
+            email: v.string(),
+            id: v.id("users"),
+            name: v.string(),
+            roles: v.array(v.union(v.literal("admin"), v.literal("user"))),
+        }),
     },
     handler: (_context, args) => args,
 });
@@ -51,19 +51,19 @@ const sampleContext = {};
 const smallArgs = { id: "users:abc" as Id<"users"> };
 const messageArgs = {
     channelId: "channels:c1" as Id<"channels">,
-    text: "hello",
     kind: "text" as const,
     tags: ["urgent"],
+    text: "hello",
 };
 const heavyArgs = {
+    metadata: { agent: "bench", ip: "127.0.0.1" },
     user: {
-        id: "users:a" as Id<"users">,
-        email: "a@b.c",
-        name: "alice",
         age: 30,
+        email: "a@b.c",
+        id: "users:a" as Id<"users">,
+        name: "alice",
         roles: ["admin" as const, "user" as const],
     },
-    metadata: { ip: "127.0.0.1", agent: "bench" },
 };
 
 describe("query/mutation dispatch", () => {

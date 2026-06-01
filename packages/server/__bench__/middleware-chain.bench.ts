@@ -35,7 +35,7 @@ const buildHandler = (count: number) => {
         builder = builder.use(passthrough);
     }
 
-    return builder.query(async () => 42) as { handler: (ctx: never, args: Record<string, unknown>) => Promise<unknown> };
+    return builder.query(async () => 42) as { handler: (context: never, args: Record<string, unknown>) => Promise<unknown> };
 };
 
 const n0 = buildHandler(0);
@@ -43,22 +43,22 @@ const n1 = buildHandler(1);
 const n4 = buildHandler(4);
 const n8 = buildHandler(8);
 
-const fakeCtx = {} as never;
+const fakeContext = {} as never;
 
 describe("builder middleware chain — N=0/1/4/8 dispatch cost", () => {
     bench("N=0: no .use (dispatch floor)", async () => {
-        await n0.handler(fakeCtx, {});
+        await n0.handler(fakeContext, {});
     });
 
     bench("N=1: one passthrough middleware", async () => {
-        await n1.handler(fakeCtx, {});
+        await n1.handler(fakeContext, {});
     });
 
     bench("N=4: four passthrough middlewares", async () => {
-        await n4.handler(fakeCtx, {});
+        await n4.handler(fakeContext, {});
     });
 
     bench("N=8: eight passthrough middlewares", async () => {
-        await n8.handler(fakeCtx, {});
+        await n8.handler(fakeContext, {});
     });
 });

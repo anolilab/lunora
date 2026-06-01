@@ -17,28 +17,30 @@ const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSp
     const calls: { request: Request; shardKey: string }[] = [];
 
     const stubFor = (shardKey: string) => {
- return {
-        fetch: async (request: Request) => {
-            calls.push({ shardKey, request });
+        return {
+            fetch: async (request: Request) => {
+                calls.push({ request, shardKey });
 
-            return spy.response;
-        },
+                return spy.response;
+            },
+        };
     };
-};
 
     const namespace: ShardNamespaceLike = {
-        idFromName: (name) => { return { __name: name }; },
         get: (id) => stubFor((id as { __name: string }).__name),
+        idFromName: (name) => {
+            return { __name: name };
+        },
     };
 
-    const spy: ShardSpy = { namespace, calls, response };
+    const spy: ShardSpy = { calls, namespace, response };
 
     return spy;
 };
 
-const fakeCtx: ExecutionContextLike = {
-    waitUntil: () => undefined,
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
+    waitUntil: () => undefined,
 };
 
 describe("createWorker", () => {
@@ -53,7 +55,7 @@ describe("createWorker", () => {
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/missing"), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/missing"), {}, fakeContext);
 
         expect(res.status).toBe(404);
     });
@@ -65,11 +67,11 @@ describe("createWorker", () => {
 
         const res = await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: { limit: 5 }, functionPath: "messages:list" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: { limit: 5 } }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(res.status).toBe(200);
@@ -78,7 +80,7 @@ describe("createWorker", () => {
 
         const body = await shard.calls[0]!.request.json();
 
-        expect(body).toEqual({ functionPath: "messages:list", args: { limit: 5 } });
+        expect(body).toEqual({ args: { limit: 5 }, functionPath: "messages:list" });
     });
 
     it("uses the envelope shardKey when provided", async () => {
@@ -88,11 +90,11 @@ describe("createWorker", () => {
 
         await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "channel-42" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {}, shardKey: "channel-42" }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(shard.calls[0]!.shardKey).toBe("channel-42");
@@ -101,15 +103,15 @@ describe("createWorker", () => {
     it("honors defaultShardKey override", async () => {
         expect.assertions(1);
 
-        const worker = createWorker({ shardDO: shard.namespace, defaultShardKey: "tenant-1" });
+        const worker = createWorker({ defaultShardKey: "tenant-1", shardDO: shard.namespace });
 
         await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "x:y" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "x:y", args: {} }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(shard.calls[0]!.shardKey).toBe("tenant-1");
@@ -120,7 +122,7 @@ describe("createWorker", () => {
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc"), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc"), {}, fakeContext);
 
         expect(res.status).toBe(405);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "METHOD_NOT_ALLOWED" } });
@@ -131,7 +133,7 @@ describe("createWorker", () => {
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { method: "POST", body: "{not json" }), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { body: "{not json", method: "POST" }), {}, fakeContext);
 
         expect(res.status).toBe(400);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
@@ -142,7 +144,7 @@ describe("createWorker", () => {
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { method: "POST", body: JSON.stringify({ args: {} }) }), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { body: JSON.stringify({ args: {} }), method: "POST" }), {}, fakeContext);
 
         expect(res.status).toBe(400);
     });
@@ -156,7 +158,7 @@ describe("createWorker", () => {
             headers: { Upgrade: "websocket" },
         });
 
-        await worker.fetch(upgrade, {}, fakeCtx);
+        await worker.fetch(upgrade, {}, fakeContext);
 
         expect(shard.calls).toHaveLength(1);
         expect(shard.calls[0]!.shardKey).toBe("channel-7");
@@ -167,7 +169,7 @@ describe("createWorker", () => {
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/ws?shard=x"), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/_cirrus/ws?shard=x"), {}, fakeContext);
 
         expect(res.status).toBe(426);
     });
@@ -176,9 +178,9 @@ describe("createWorker", () => {
         expect.assertions(3);
 
         const route = vi.fn<Route>(async () => new Response("hi", { status: 200 }));
-        const worker = createWorker({ shardDO: shard.namespace, routes: { "/auth/callback": route } });
+        const worker = createWorker({ routes: { "/auth/callback": route }, shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/auth/callback"), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/auth/callback"), {}, fakeContext);
 
         expect(route).toHaveBeenCalledTimes(1);
         expect(res.status).toBe(200);
@@ -190,20 +192,20 @@ describe("createWorker", () => {
 
         const stub = { fetch: vi.fn<(request: Request) => Promise<Response>>(async () => new Response("via-getByName")) };
         const namespace: ShardNamespaceLike = {
-            idFromName: vi.fn<ShardNamespaceLike["idFromName"]>(),
             get: vi.fn<ShardNamespaceLike["get"]>(),
             getByName: vi.fn<NonNullable<ShardNamespaceLike["getByName"]>>(() => stub),
+            idFromName: vi.fn<ShardNamespaceLike["idFromName"]>(),
         };
 
         const worker = createWorker({ shardDO: namespace });
 
         await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
-                method: "POST",
                 body: JSON.stringify({ functionPath: "x:y", shardKey: "a" }),
+                method: "POST",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(namespace.getByName).toHaveBeenCalledWith("a");
@@ -217,17 +219,19 @@ describe("createWorker", () => {
         expect.assertions(2);
 
         const worker = createWorker({
+            resolveIdentity: () => {
+                return { userId: "user_42" };
+            },
             shardDO: shard.namespace,
-            resolveIdentity: () => { return { userId: "user_42" }; },
         });
 
         await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBe("user_42");
@@ -238,17 +242,17 @@ describe("createWorker", () => {
         expect.assertions(2);
 
         const worker = createWorker({
-            shardDO: shard.namespace,
             resolveIdentity: () => null,
+            shardDO: shard.namespace,
         });
 
         await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBeNull();
@@ -259,17 +263,19 @@ describe("createWorker", () => {
         expect.assertions(3);
 
         const worker = createWorker({
+            resolveIdentity: () => {
+                return { email: "u@example.com", roles: ["admin"], userId: "user_42" };
+            },
             shardDO: shard.namespace,
-            resolveIdentity: () => { return { userId: "user_42", email: "u@example.com", roles: ["admin"] }; },
         });
 
         await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {} }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBe("user_42");
@@ -283,19 +289,21 @@ describe("createWorker", () => {
     it("does not invoke resolveIdentity when fanOut request would 400 (no coordinator)", async () => {
         expect.assertions(2);
 
-        const resolveIdentity = vi.fn<() => { userId: string }>(() => { return { userId: "user_42" }; });
+        const resolveIdentity = vi.fn<() => { userId: string }>(() => {
+            return { userId: "user_42" };
+        });
         const worker = createWorker({
-            shardDO: shard.namespace,
             resolveIdentity,
+            shardDO: shard.namespace,
         });
 
         const res = await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, fanOut: { kind: "all" }, functionPath: "messages:list" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { kind: "all" } }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(res.status).toBe(400);
@@ -306,30 +314,32 @@ describe("createWorker", () => {
         expect.assertions(3);
 
         const fanOut = vi.fn<(namespace: unknown, args: { headers: Record<string, string> }) => Promise<unknown>>(async (_namespace, args) => {
- return {
-            received: args.headers,
-        };
-});
+            return {
+                received: args.headers,
+            };
+        });
 
         const worker = createWorker({
-            shardDO: shard.namespace,
             queryCoordinator: {
                 fanOut: fanOut as never,
-                orchestrateMigration: fanOut as never,
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: fanOut as never,
                 registry: {} as never,
             },
-            resolveIdentity: () => { return { userId: "user_42", email: "u@example.com" }; },
+            resolveIdentity: () => {
+                return { email: "u@example.com", userId: "user_42" };
+            },
+            shardDO: shard.namespace,
         });
 
         await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, fanOut: { kind: "all" }, functionPath: "messages:list" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { kind: "all" } }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(fanOut).toHaveBeenCalledTimes(1);
@@ -345,24 +355,24 @@ describe("createWorker", () => {
 
         const fanOut = vi.fn<() => never>();
         const worker = createWorker({
-            shardDO: shard.namespace,
+            authorizeShard: () => true,
             queryCoordinator: {
                 fanOut,
-                orchestrateMigration: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
-            authorizeShard: () => true,
+            shardDO: shard.namespace,
         });
 
         const res = await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, fanOut: { merge: { kind: "concat" }, table: "messages" }, functionPath: "messages:list" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { table: "messages", merge: { kind: "concat" } } }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(res.status).toBe(403);
@@ -373,28 +383,32 @@ describe("createWorker", () => {
     it("invokes authorizeFanOut with identity, table, and functionPath", async () => {
         expect.assertions(3);
 
-        const fanOut = vi.fn<() => Promise<unknown>>(async () => { return { data: [], errors: [], failed: 0, ok: 0 }; });
+        const fanOut = vi.fn<() => Promise<unknown>>(async () => {
+            return { data: [], errors: [], failed: 0, ok: 0 };
+        });
         const authorizeFanOut = vi.fn<() => boolean>(() => true);
         const worker = createWorker({
-            shardDO: shard.namespace,
+            authorizeFanOut,
             queryCoordinator: {
                 fanOut: fanOut as never,
-                orchestrateMigration: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
-            authorizeFanOut,
-            resolveIdentity: () => { return { userId: "user_42" }; },
+            resolveIdentity: () => {
+                return { userId: "user_42" };
+            },
+            shardDO: shard.namespace,
         });
 
         await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, fanOut: { merge: { kind: "concat" }, table: "messages" }, functionPath: "messages:list" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { table: "messages", merge: { kind: "concat" } } }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(authorizeFanOut).toHaveBeenCalledTimes(1);
@@ -407,24 +421,24 @@ describe("createWorker", () => {
 
         const fanOut = vi.fn<() => never>();
         const worker = createWorker({
-            shardDO: shard.namespace,
+            authorizeFanOut: () => false,
             queryCoordinator: {
                 fanOut,
-                orchestrateMigration: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
-            authorizeFanOut: () => false,
+            shardDO: shard.namespace,
         });
 
         const res = await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, fanOut: { merge: { kind: "concat" }, table: "messages" }, functionPath: "messages:list" }),
                 method: "POST",
-                body: JSON.stringify({ functionPath: "messages:list", args: {}, fanOut: { table: "messages", merge: { kind: "concat" } } }),
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(res.status).toBe(403);
@@ -452,23 +466,23 @@ describe("createWorker — migration endpoint", () => {
                 request: { args: Record<string, unknown>; functionPath: string; headers: Record<string, string>; table: string },
             ) => Promise<unknown>
         >(async (_namespace, _request) => {
- return {
-            changed: 3,
-            failed: 0,
-            ok: 2,
-            processed: 3,
-            shards: [],
-            status: "completed",
-        };
-});
+            return {
+                changed: 3,
+                failed: 0,
+                ok: 2,
+                processed: 3,
+                shards: [],
+                status: "completed",
+            };
+        });
 
         const worker = createWorker({
             adminToken: "s3cret",
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
-                orchestrateMigration: orchestrateMigration as never,
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: orchestrateMigration as never,
                 registry: {} as never,
             },
             shardDO: shard.namespace,
@@ -480,7 +494,7 @@ describe("createWorker — migration endpoint", () => {
                 { authorization: "Bearer s3cret" },
             ),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(res.status).toBe(200);
@@ -501,7 +515,7 @@ describe("createWorker — migration endpoint", () => {
         const res = await worker.fetch(
             migrateRequest({ functionPath: "__cirrus_admin__:runMigration", table: "messages" }, { authorization: "Bearer s3cret" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(res.status).toBe(400);
@@ -514,15 +528,15 @@ describe("createWorker — migration endpoint", () => {
             adminToken: "s3cret",
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
-                orchestrateMigration: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(migrateRequest({ functionPath: "messages:list", table: "messages" }, { authorization: "Bearer s3cret" }), {}, fakeCtx);
+        const res = await worker.fetch(migrateRequest({ functionPath: "messages:list", table: "messages" }, { authorization: "Bearer s3cret" }), {}, fakeContext);
 
         expect(res.status).toBe(400);
     });
@@ -534,15 +548,15 @@ describe("createWorker — migration endpoint", () => {
             adminToken: "s3cret",
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
-                orchestrateMigration: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(migrateRequest({ functionPath: "__cirrus_admin__:runMigration" }, { authorization: "Bearer s3cret" }), {}, fakeCtx);
+        const res = await worker.fetch(migrateRequest({ functionPath: "__cirrus_admin__:runMigration" }, { authorization: "Bearer s3cret" }), {}, fakeContext);
 
         expect(res.status).toBe(400);
     });
@@ -553,15 +567,15 @@ describe("createWorker — migration endpoint", () => {
         const worker = createWorker({
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
-                orchestrateMigration: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/migrate"), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/_cirrus/migrate"), {}, fakeContext);
 
         expect(res.status).toBe(405);
     });
@@ -572,7 +586,7 @@ describe("createWorker — migration endpoint", () => {
  * Mirrors `@cirrus/server`'s `CirrusHttpEnv` without importing the server
  * package — the runtime stays structurally hono-free.
  */
-interface CtxEnv {
+interface ContextEnv {
     Bindings: { __cirrusCtx?: HttpActionContext };
     Variables: { cirrus: HttpActionContext };
 }
@@ -582,8 +596,8 @@ interface CtxEnv {
  * lift that `@cirrus/server`'s `httpRouter()` installs, then let the test
  * register routes on it. Returned as an {@link HttpRouterLike} (`{ fetch }`).
  */
-const honoApp = (register: (app: Hono<CtxEnv>) => void): HttpRouterLike => {
-    const app = new Hono<CtxEnv>();
+const honoApp = (register: (app: Hono<ContextEnv>) => void): HttpRouterLike => {
+    const app = new Hono<ContextEnv>();
 
     app.use("*", async (c, next) => {
         const injected = c.env.__cirrusCtx;
@@ -615,7 +629,7 @@ describe("createWorker — HTTP actions", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/ping"), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/ping"), {}, fakeContext);
 
         expect(res.status).toBe(201);
         await expect(res.text()).resolves.toBe("pong");
@@ -639,7 +653,7 @@ describe("createWorker — HTTP actions", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/webhook", { body: JSON.stringify({ text: "hi" }), method: "POST" }), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/webhook", { body: JSON.stringify({ text: "hi" }), method: "POST" }), {}, fakeContext);
 
         expect(res.status).toBe(200);
         await expect(res.json()).resolves.toEqual({ created: { id: "m1" } });
@@ -659,11 +673,13 @@ describe("createWorker — HTTP actions", () => {
             httpRouter: honoApp((app) =>
                 app.get("/me", async (c) => Response.json({ claims: await c.var.cirrus.auth.getIdentity(), userId: c.var.cirrus.auth.userId })),
             ),
-            resolveIdentity: () => { return { email: "u@example.com", userId: "user_7" }; },
+            resolveIdentity: () => {
+                return { email: "u@example.com", userId: "user_7" };
+            },
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/me"), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/me"), {}, fakeContext);
 
         await expect(res.json()).resolves.toEqual({ claims: { email: "u@example.com" }, userId: "user_7" });
     });
@@ -676,7 +692,7 @@ describe("createWorker — HTTP actions", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/thing", { method: "POST" }), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/thing", { method: "POST" }), {}, fakeContext);
 
         expect(res.status).toBe(404);
     });
@@ -689,7 +705,7 @@ describe("createWorker — HTTP actions", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/missing"), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/missing"), {}, fakeContext);
 
         expect(res.status).toBe(404);
     });
@@ -706,7 +722,7 @@ describe("createWorker — HTTP actions", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/x"), {}, fakeCtx);
+        const res = await worker.fetch(new Request("https://app.example/x"), {}, fakeContext);
 
         await expect(res.text()).resolves.toBe("explicit");
         expect(action).not.toHaveBeenCalled();
@@ -725,7 +741,7 @@ describe("createWorker — HTTP actions", () => {
         const res = await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(res.status).toBe(200);

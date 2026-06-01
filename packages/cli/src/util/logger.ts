@@ -72,11 +72,21 @@ const sharedPail: PailLogger = createPail({
 
 export const createLogger = (): Logger => {
     return {
-        debug: (message) => { sharedPail.debug(message); },
-        error: (message) => { sharedPail.error(message); },
-        info: (message) => { sharedPail.info(message); },
-        success: (message) => { sharedPail.success(message); },
-        warn: (message) => { sharedPail.warn(message); },
+        debug: (message) => {
+            sharedPail.debug(message);
+        },
+        error: (message) => {
+            sharedPail.error(message);
+        },
+        info: (message) => {
+            sharedPail.info(message);
+        },
+        success: (message) => {
+            sharedPail.success(message);
+        },
+        warn: (message) => {
+            sharedPail.warn(message);
+        },
     };
 };
 

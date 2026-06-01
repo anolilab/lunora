@@ -67,7 +67,7 @@ describe("compileOrderBy", () => {
     it("renders per dialect", () => {
         expect.assertions(1);
 
-        expect(compileOrderBy([{ direction: "asc", field: "createdAt" }], d1FieldRef)).toBe('"createdAt" ASC, "id" ASC');
+        expect(compileOrderBy([{ direction: "asc", field: "createdAt" }], d1FieldRef)).toBe("\"createdAt\" ASC, \"id\" ASC");
     });
 });
 
@@ -76,9 +76,9 @@ describe("encodeCursor / decodeCursor", () => {
         expect.assertions(1);
 
         const keys = [{ direction: "asc" as const, field: "createdAt" }];
-        const doc = { _id: "row_42", createdAt: 1700, title: "ignored" };
+        const document_ = { _id: "row_42", createdAt: 1700, title: "ignored" };
 
-        const cursor = encodeCursor(doc, keys);
+        const cursor = encodeCursor(document_, keys);
 
         expect(decodeCursor(cursor)).toEqual([1700, "row_42"]);
     });
@@ -87,9 +87,9 @@ describe("encodeCursor / decodeCursor", () => {
         expect.assertions(1);
 
         const keys = [{ direction: "asc" as const, field: "name" }];
-        const doc = { _id: "café", name: "naïve — 日本語" };
+        const document_ = { _id: "café", name: "naïve — 日本語" };
 
-        expect(decodeCursor(encodeCursor(doc, keys))).toEqual(["naïve — 日本語", "café"]);
+        expect(decodeCursor(encodeCursor(document_, keys))).toEqual(["naïve — 日本語", "café"]);
     });
 
     it("rejects a non-array payload", () => {

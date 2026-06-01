@@ -2,7 +2,7 @@ import { bench, describe } from "vitest";
 
 import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 
 /**
  * `findMany({ with: { … } })` joins each result row with a related table.
@@ -53,7 +53,7 @@ const harness = createSqliteExec();
 
 runShardMigrations(harness.sql, schema);
 
-const writer: DatabaseWriterLike = createShardCtxDb({ schema, sql: harness.sql });
+const writer: DatabaseWriterLike = createShardContextDatabase({ schema, sql: harness.sql });
 
 // Seed: 10 users, 500 messages spread across them, 2 reactions per message.
 const USER_COUNT = 10;

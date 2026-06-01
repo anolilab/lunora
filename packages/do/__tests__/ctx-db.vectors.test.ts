@@ -3,7 +3,7 @@ import { createVectorSyncHook } from "@cirrus/vectors";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WriteHook } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { createFakeSql, messagesSchema } from "./_helpers/fake-sql.js";
 
 const fixedTime = 1_700_000_000_000;
@@ -28,21 +28,23 @@ const fakeVectorSearch = (): VectorSearchLike & { deletes: [string, ReadonlyArra
         deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => void deletes.push([indexName, ids])),
         deletes,
         getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
-        query: vi.fn<VectorSearchLike["query"]>(async () => { return { count: 0, matches: [] }; }),
+        query: vi.fn<VectorSearchLike["query"]>(async () => {
+            return { count: 0, matches: [] };
+        }),
         upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName, input) => void upserts.push([indexName, input])),
         upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async (indexName, input) => void upserts.push([indexName, input])),
         upserts,
     };
 };
 
-const setup = (): { vectors: ReturnType<typeof fakeVectorSearch>; writer: ReturnType<typeof createShardCtxDb> } => {
+const setup = (): { vectors: ReturnType<typeof fakeVectorSearch>; writer: ReturnType<typeof createShardContextDatabase> } => {
     const { sql } = createFakeSql();
 
     runShardMigrations(sql, messagesSchema);
 
     const vectors = fakeVectorSearch();
     const onWrite: WriteHook = createVectorSyncHook({ schema: vectorsSchema, vectors });
-    const writer = createShardCtxDb({
+    const writer = createShardContextDatabase({
         broadcast: () => undefined,
         clock: () => fixedTime,
         idGenerator: () => "m_1",

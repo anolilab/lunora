@@ -4,18 +4,20 @@ import { CirrusClient } from "../src/cirrus-client.js";
 import { preloadedQueryResult, preloadQuery } from "../src/preload.js";
 import type { FunctionReference, Preloaded } from "../src/types.js";
 
-const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
+const function_ = (ref: string): FunctionReference => {
+    return { __cirrusRef: ref };
+};
 
-const jsonResponse = (body: unknown): Response => Response.json(body, { status: 200, headers: { "content-type": "application/json" } });
+const jsonResponse = (body: unknown): Response => Response.json(body, { headers: { "content-type": "application/json" }, status: 200 });
 
 describe("preloadQuery", () => {
     it("executes the query over HTTP and captures a JSON-serializable token", async () => {
         expect.assertions(7);
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { rows: [1, 2, 3] } }));
-        const client = new CirrusClient({ url: "https://app.example", fetch: fetchMock });
+        const client = new CirrusClient({ fetch: fetchMock, url: "https://app.example" });
 
-        const preloaded = await preloadQuery(client, fn("posts:list"), { limit: 3 });
+        const preloaded = await preloadQuery(client, function_("posts:list"), { limit: 3 });
 
         expect(preloaded.__cirrusPreloaded).toBe(true);
         expect(preloaded.functionPath).toBe("posts:list");
@@ -36,16 +38,16 @@ describe("preloadQuery", () => {
         const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
 
         expect(url).toBe("https://app.example/_cirrus/rpc");
-        expect(JSON.parse(init.body as string)).toEqual({ functionPath: "posts:list", args: { limit: 3 }, shardKey: undefined });
+        expect(JSON.parse(init.body as string)).toEqual({ args: { limit: 3 }, functionPath: "posts:list", shardKey: undefined });
     });
 
     it("carries the shardKey when one is supplied", async () => {
         expect.assertions(2);
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: 7 }));
-        const client = new CirrusClient({ url: "https://app.example", fetch: fetchMock });
+        const client = new CirrusClient({ fetch: fetchMock, url: "https://app.example" });
 
-        const preloaded = await preloadQuery(client, fn("rooms:count"), {}, { shardKey: "room-1" });
+        const preloaded = await preloadQuery(client, function_("rooms:count"), {}, { shardKey: "room-1" });
 
         expect(preloaded.shardKey).toBe("room-1");
         expect(preloaded.value).toBe(7);
@@ -55,9 +57,9 @@ describe("preloadQuery", () => {
         expect.assertions(1);
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }));
-        const client = new CirrusClient({ url: "https://app.example", fetch: fetchMock });
+        const client = new CirrusClient({ fetch: fetchMock, url: "https://app.example" });
 
-        await expect(preloadQuery(client, fn("posts:list"), {})).rejects.toMatchObject({ message: "fail", code: "BOOM" });
+        await expect(preloadQuery(client, function_("posts:list"), {})).rejects.toMatchObject({ code: "BOOM", message: "fail" });
     });
 });
 

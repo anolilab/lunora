@@ -1,17 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ExecutionContextLike, StorageListFn } from "../src/create-worker.js";
+import type { ExecutionContextLike, StorageListFn as StorageListFunction } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
-const fakeCtx: ExecutionContextLike = {
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
-    idFromName: (name) => { return { __name: name }; },
+    get: () => {
+        return { fetch: async () => new Response("not used", { status: 200 }) };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
 };
 
 const ADMIN_TOKEN = "admin-bear";
@@ -24,7 +28,7 @@ describe("createWorker — storage admin endpoint", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList: async () => PAGE });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/storage", { method: "GET" }), {}, fakeCtx);
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/storage", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -37,7 +41,7 @@ describe("createWorker — storage admin endpoint", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(400);
@@ -50,7 +54,7 @@ describe("createWorker — storage admin endpoint", () => {
     it("forwards prefix / cursor / limit to the lister and returns the page", async () => {
         expect.assertions(3);
 
-        const storageList = vi.fn<StorageListFn>(async () => PAGE);
+        const storageList = vi.fn<StorageListFunction>(async () => PAGE);
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList });
 
         const response = await worker.fetch(
@@ -59,7 +63,7 @@ describe("createWorker — storage admin endpoint", () => {
                 method: "GET",
             }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(200);
@@ -75,7 +79,7 @@ describe("createWorker — storage admin endpoint", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(405);

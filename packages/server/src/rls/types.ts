@@ -53,21 +53,21 @@ export type PolicyDecision = WhereInput | boolean | undefined;
  * and `delete` it is the pre-write row; for `insert` it is the candidate
  * document. `ctx` is the full procedure context the middleware closed over.
  */
-export interface PolicyContext<Ctx = unknown> {
+export interface PolicyContext<Context = unknown> {
     readonly auth: {
         readonly identity?: Record<string, unknown> | null;
         readonly roles: ReadonlyArray<string>;
         readonly userId: null | string;
     };
-    readonly ctx: Ctx;
+    readonly ctx: Context;
     readonly row?: Record<string, unknown>;
 }
 
 /** A registered policy as stored in the policy table. */
-export interface Policy<Ctx = unknown> {
+export interface Policy<Context = unknown> {
     readonly on: PolicyOperation;
     readonly table: string;
-    readonly when: (context: PolicyContext<Ctx>) => PolicyDecision;
+    readonly when: (context: PolicyContext<Context>) => PolicyDecision;
 }
 
 /**
@@ -75,7 +75,7 @@ export interface Policy<Ctx = unknown> {
  * shape; we keep the input/output split so callers can read JSDoc on the
  * constructor without the type re-exposing `Policy` internals.
  */
-export interface DefinePolicyInput<Ctx = unknown> {
+export interface DefinePolicyInput<Context = unknown> {
     on: PolicyOperation;
     /** Logical table name the policy applies to. */
     table: string;
@@ -88,7 +88,7 @@ export interface DefinePolicyInput<Ctx = unknown> {
      * reader throws `CirrusError("COUNT_RLS_UNSUPPORTED")` (422). This mirrors
      * kitcn's documented behavior.
      */
-    when: (context: PolicyContext<Ctx>) => PolicyDecision;
+    when: (context: PolicyContext<Context>) => PolicyDecision;
 }
 
 /**

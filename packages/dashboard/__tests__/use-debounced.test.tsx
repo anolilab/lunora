@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useDebounced } from "../src/use-debounced.js";
 
-function Probe({ delayMs, value }: { delayMs?: number; value: string }): React.ReactElement {
+const Probe = ({ delayMs, value }: { delayMs?: number; value: string }): React.ReactElement => {
     const debounced = useDebounced(value, delayMs);
 
     return <span data-testid="out">{debounced}</span>;
-}
+};
 
 describe("useDebounced", () => {
     beforeEach(() => {

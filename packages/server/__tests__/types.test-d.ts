@@ -46,9 +46,9 @@ export type _Check5 = Assert<Equal<BuilderArgs["channelId"], Id<"channels">>>;
 
 // `.use()` returning `next({ ctx })` widens the context the handler sees — if
 // the extension weren't threaded through, `ctx.userId` wouldn't type-check.
-const builderCtx = c.query.use(async ({ next }) => next({ ctx: { userId: "u" } })).query(({ ctx }) => ctx.userId);
+const builderContext = c.query.use(async ({ next }) => next({ ctx: { userId: "u" } })).query(({ ctx }) => ctx.userId);
 
-export type _Check6 = Assert<Equal<Awaited<ReturnType<typeof builderCtx.handler>>, string>>;
+export type _Check6 = Assert<Equal<Awaited<ReturnType<typeof builderContext.handler>>, string>>;
 
 // `.output(validator)` narrows the registered return type to the validator's
 // inferred type, regardless of what the handler body would infer on its own.

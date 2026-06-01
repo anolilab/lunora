@@ -27,27 +27,27 @@ const optionalNumber = v.optional(v.number());
 const literalUnion = v.union(v.literal("admin"), v.literal("user"), v.literal("guest"));
 
 const userObject = v.object({
-    id: v.id("users"),
-    email: v.string(),
-    name: v.string(),
-    age: v.number(),
     active: v.boolean(),
+    age: v.number(),
+    email: v.string(),
+    id: v.id("users"),
+    name: v.string(),
 });
 
 const messageObject = v.object({
-    id: v.id("messages"),
-    channelId: v.id("channels"),
-    text: v.string(),
     authorId: v.id("users"),
+    channelId: v.id("channels"),
     createdAt: v.number(),
     edited: v.optional(v.boolean()),
+    id: v.id("messages"),
     tags: v.array(v.string()),
+    text: v.string(),
 });
 
 const nestedObject = v.object({
-    user: userObject,
     message: messageObject,
     metadata: v.record(v.string(), v.string()),
+    user: userObject,
 });
 
 const stringArray = v.array(v.string());
@@ -57,20 +57,20 @@ const sampleString = "hello world";
 const sampleNumber = 42;
 const sampleBoolean = true;
 const sampleId = "users:abc123";
-const sampleUser = { id: "users:1", email: "a@b.c", name: "alice", age: 30, active: true };
+const sampleUser = { active: true, age: 30, email: "a@b.c", id: "users:1", name: "alice" };
 const sampleMessage = {
-    id: "messages:m1",
-    channelId: "channels:c1",
-    text: "hi",
     authorId: "users:1",
+    channelId: "channels:c1",
     createdAt: 1_700_000_000_000,
     edited: false,
+    id: "messages:m1",
     tags: ["urgent", "starred"],
+    text: "hi",
 };
 const sampleNested = {
-    user: sampleUser,
     message: sampleMessage,
-    metadata: { ip: "127.0.0.1", agent: "vitest" },
+    metadata: { agent: "vitest", ip: "127.0.0.1" },
+    user: sampleUser,
 };
 const sampleStringArray = Array.from({ length: 32 }, (_, index) => `item-${String(index)}`);
 const sampleRecord = Object.fromEntries(Array.from({ length: 16 }, (_, index) => [`key-${String(index)}`, `value-${String(index)}`]));

@@ -9,12 +9,12 @@ import type { Logger } from "../../src/util/logger.js";
 import { createRecordingSpawner } from "../../src/util/spawn.js";
 
 const silentLogger = (): Logger => {
- return {
-    error: () => {},
-    info: () => {},
-    success: () => {},
-    warn: () => {},
-};
+    return {
+        error: () => {},
+        info: () => {},
+        success: () => {},
+        warn: () => {},
+    };
 };
 
 let workdir: string;

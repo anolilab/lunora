@@ -113,8 +113,8 @@ export const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions
         return { code: 0, empty: true, migrationFile: "" };
     }
 
-    const nowFn = options.now ?? (() => new Date());
-    const now = nowFn();
+    const nowFunction = options.now ?? (() => new Date());
+    const now = nowFunction();
     const slug = slugify(options.name ?? "auto");
     const timestamp = formatTimestamp(now);
     const filename = `${timestamp}_${slug}.sql`;
@@ -156,7 +156,7 @@ const camelCase = (slug: string): string =>
     slug
         .split("-")
         .filter((part) => part.length > 0)
-        .map((part, index) => (index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1)))
+        .map((part, index) => index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1))
         .join("");
 
 export interface MigrateCreateCommandOptions {

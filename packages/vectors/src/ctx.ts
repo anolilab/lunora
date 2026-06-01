@@ -62,45 +62,49 @@ export interface VectorSearchLike {
 export const createCtxVectors = (cirrus: CirrusVectors): VectorSearchLike => {
     const upsert = async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
         await cirrus.upsert(indexName, {
+            embed: input.embed,
             id: input.id,
             input: input.input,
-            embed: input.embed,
             metadata: input.metadata,
             namespace: input.namespace,
         });
     };
 
     return {
-        upsert,
-        upsertNow: upsert,
+        deleteByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<void> => {
+            await cirrus.deleteByIds(indexName, ids);
+        },
+        getByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorRecordLike>> => {
+            const records = await cirrus.getByIds(indexName, ids);
+
+            return records.map((record) => {
+                return { id: record.id, metadata: record.metadata, values: record.values };
+            });
+        },
         query: async (indexName: string, input: VectorQueryInputLike): Promise<VectorMatchesLike> => {
             const result = await cirrus.query(indexName, {
-                vector: input.vector,
-                input: input.input,
                 embed: input.embed,
-                topK: input.topK,
-                namespace: input.namespace,
                 filter: input.filter,
+                input: input.input,
+                namespace: input.namespace,
                 // Default to "indexed" rather than "all": returning every
                 // metadata field by default leaks whatever was stored on the
                 // vector (potentially cross-tenant if namespaces aren't wired).
                 // Callers that need full metadata opt in explicitly.
                 returnMetadata: "indexed",
+                topK: input.topK,
+                vector: input.vector,
             });
 
             return {
                 count: result.count,
-                matches: result.matches.map((match) => { return { id: match.id, score: match.score, metadata: match.metadata }; }),
+                matches: result.matches.map((match) => {
+                    return { id: match.id, metadata: match.metadata, score: match.score };
+                }),
             };
         },
-        getByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorRecordLike>> => {
-            const records = await cirrus.getByIds(indexName, ids);
-
-            return records.map((record) => { return { id: record.id, values: record.values, metadata: record.metadata }; });
-        },
-        deleteByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<void> => {
-            await cirrus.deleteByIds(indexName, ids);
-        },
+        upsert,
+        upsertNow: upsert,
     };
 };
 
@@ -229,18 +233,18 @@ export const createVectorSyncHook = (options: { namespace?: string; schema: Sche
             ...inlineToClear.map((index) => vectors.deleteByIds(index.name, [event.id])),
             ...inlineToUpsert.map((index) =>
                 vectors.upsert(index.name, {
+                    embed: index.embed,
                     id: event.id,
                     input: String(row[index.field]),
-                    embed: index.embed,
                     metadata: index.metadata ? pickMetadata(row, index.metadata) : undefined,
                     namespace,
                 }),
             ),
             ...standaloneIndexes.map(([name, definition]) =>
                 vectors.upsert(name, {
+                    embed: definition.embed,
                     id: event.id,
                     input: definition.select(row),
-                    embed: definition.embed,
                     metadata: definition.metadata?.(row),
                     namespace,
                 }),

@@ -25,7 +25,7 @@ const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
  * Read-only and gated by the server's `CIRRUS_ADMIN_TOKEN`, like the rest of the
  * dashboard's admin surface.
  */
-export function SchemaViewer({ initialShardKey }: SchemaViewerProps): ReactElement {
+export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactElement => {
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -74,7 +74,9 @@ export function SchemaViewer({ initialShardKey }: SchemaViewerProps): ReactEleme
             try {
                 const page = (await client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey))) as TablePage;
 
-                setColumns((previous) => { return { ...previous, [table]: page.columns }; });
+                setColumns((previous) => {
+                    return { ...previous, [table]: page.columns };
+                });
             } catch (error_) {
                 setError(errorMessage(error_));
             }
@@ -115,7 +117,11 @@ export function SchemaViewer({ initialShardKey }: SchemaViewerProps): ReactEleme
                                 }}
                                 type="button"
                             >
-                                {table.name} ({table.rowCount})
+                                {table.name}
+{" "}
+(
+{table.rowCount}
+)
                             </button>
                             {expanded === table.name && (
                                 <ul data-testid={`sc-columns-${table.name}`}>
@@ -130,6 +136,6 @@ export function SchemaViewer({ initialShardKey }: SchemaViewerProps): ReactEleme
             )}
         </div>
     );
-}
+};
 
 export type { SchemaViewerProps };

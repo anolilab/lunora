@@ -2,7 +2,7 @@ import { bench, describe } from "vitest";
 
 import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
 import type { SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 
 /**
  * §1.2's keyset cursor seek is O(limit) per page; an offset-style
@@ -31,8 +31,8 @@ const schema: SchemaLike = {
         todos: {
             indexes: [{ fields: ["seq"], name: "by_seq" }],
             shape: {
-                seq: { kind: "number" },
                 priority: { kind: "string" },
+                seq: { kind: "number" },
             },
         },
     },
@@ -42,10 +42,10 @@ const harness = createSqliteExec();
 
 runShardMigrations(harness.sql, schema);
 
-const writer = createShardCtxDb({ schema, sql: harness.sql });
+const writer = createShardContextDatabase({ schema, sql: harness.sql });
 
 for (let index = 0; index < ROW_COUNT; index += 1) {
-    await writer.insert("todos", { _id: `t${String(index).padStart(5, "0")}`, seq: index, priority: "medium" });
+    await writer.insert("todos", { _id: `t${String(index).padStart(5, "0")}`, priority: "medium", seq: index });
 }
 
 // Walk to PAGE_OFFSET once to capture the cursor pointing at row 5000.

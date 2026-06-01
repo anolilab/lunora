@@ -1,5 +1,5 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import { createAuth } from "../src/create-auth.js";
 import { withAuthPlugins } from "../src/middleware.js";
@@ -15,7 +15,7 @@ import { admin, organization } from "../src/plugins.js";
  * 2. invoking an endpoint mutates the auth instance's storage the way the underlying plugin would when called via `auth.api` directly.
  */
 
-interface MockHandlerCtx {
+interface MockHandlerContext {
     authApi?: Record<string, unknown> & {
         createOrganization?: (...args: unknown[]) => Promise<unknown>;
     };
@@ -32,26 +32,26 @@ const SECRET = "x".repeat(32);
  * middleware's signature is internal-shape-specific; the test only cares
  * about the runtime contract.
  */
-const runMiddleware = async <CtxOut>(
-    middleware: (options: { ctx: unknown; next: (opts?: { ctx: Record<string, unknown> }) => Promise<unknown> }) => unknown,
-    initialCtx: unknown,
-): Promise<CtxOut> => {
-    let captured: unknown = initialCtx;
-    const next = async (opts?: { ctx: Record<string, unknown> }): Promise<unknown> => {
-        const merged = { ...(initialCtx as Record<string, unknown>), ...(opts?.ctx as Record<string, unknown>) };
+const runMiddleware = async <ContextOut>(
+    middleware: (options: { ctx: unknown; next: (options_?: { ctx: Record<string, unknown> }) => Promise<unknown> }) => unknown,
+    initialContext: unknown,
+): Promise<ContextOut> => {
+    let captured: unknown = initialContext;
+    const next = async (options?: { ctx: Record<string, unknown> }): Promise<unknown> => {
+        const merged = { ...(initialContext as Record<string, unknown>), ...(options?.ctx as Record<string, unknown>) };
 
         captured = merged;
 
         return merged;
     };
 
-    await middleware({ ctx: initialCtx, next });
+    await middleware({ ctx: initialContext, next });
 
-    return captured as CtxOut;
+    return captured as ContextOut;
 };
 
 describe("withAuthPlugins", () => {
-    let memoryDb: Record<string, unknown[]>;
+    let memoryDatabase: Record<string, unknown[]>;
     // `any` rather than `ReturnType<typeof createAuth>` so the plugin-contributed
     // endpoints (`createOrganization`, `banUser`, …) are reachable through
     // `auth.api` without re-deriving the full generic chain here.
@@ -61,7 +61,7 @@ describe("withAuthPlugins", () => {
         // Pre-seed every table the configured plugins touch — the memory
         // adapter doesn't materialise tables on first write, it expects the
         // key to already exist on the backing record.
-        memoryDb = {
+        memoryDatabase = {
             account: [],
             invitation: [],
             member: [],
@@ -73,7 +73,7 @@ describe("withAuthPlugins", () => {
         };
         auth = createAuth({
             baseURL: "http://localhost",
-            database: memoryAdapter(memoryDb),
+            database: memoryAdapter(memoryDatabase),
             emailAndPassword: { enabled: true },
             plugins: [organization(), admin()],
             secret: SECRET,
@@ -89,19 +89,20 @@ describe("withAuthPlugins", () => {
         // Memory adapter rows live on `memoryDb`, scoped per test — nothing to
         // tear down explicitly, but resetting the reference helps reveal
         // leaks if a test accidentally captures the previous instance.
-        memoryDb = {};
+        memoryDatabase = {};
     });
 
     it("installs `authApi` onto ctx as the auth instance's api surface", async () => {
-        expect.assertions(3);
+        // 2 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
+        expect.assertions(2);
 
         const middleware = withAuthPlugins(auth);
-        const ctx = await runMiddleware<MockHandlerCtx>(middleware, {});
+        const context = await runMiddleware<MockHandlerContext>(middleware, {});
 
-        expect(ctx.authApi).toBeDefined();
-        expect(ctx.authApi).toBe(auth.api);
+        expect(context.authApi).toBeDefined();
+        expect(context.authApi).toBe(auth.api);
 
-        expect(typeof ctx.authApi?.createOrganization).toBe("function");
+        expectTypeOf(context.authApi?.createOrganization).toBeFunction();
     });
 
     it("ctx.authApi.createOrganization writes to the underlying store", async () => {
@@ -116,46 +117,46 @@ describe("withAuthPlugins", () => {
         const ownerId = signUp.user.id;
 
         const middleware = withAuthPlugins(auth);
-        const ctx = await runMiddleware<MockHandlerCtx>(middleware, {});
+        const context = await runMiddleware<MockHandlerContext>(middleware, {});
 
         // Call the plugin endpoint through the ctx — exactly how a handler
         // would reach it after composing the middleware.
-        await ctx.authApi?.createOrganization?.({
+        await context.authApi?.createOrganization?.({
             body: { name: "Acme", slug: "acme", userId: ownerId },
         });
 
         // Memory adapter stores rows under the table name; the plugin's
         // schema names the table `organization`.
-        const organizations = (memoryDb["organization"] ?? []) as { name?: string; slug?: string }[];
+        const organizations = (memoryDatabase["organization"] ?? []) as { name?: string; slug?: string }[];
 
         expect(organizations).toHaveLength(1);
         expect(organizations[0]).toMatchObject({ name: "Acme", slug: "acme" });
     });
 
     it("composing after another middleware preserves the upstream ctx fields", async () => {
-        expect.assertions(3);
+        // 2 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
+        expect.assertions(2);
 
         // Pretend an upstream middleware has already installed `userId` on
         // the ctx. The middleware under test must layer authApi on top
         // *without* dropping userId — that's the regression the type fix
         // guards (the prior shape returned just `CirrusAuthApiContext<Auth>`,
         // erasing whatever the upstream had installed).
-        const ctxIn = { userId: "u_42" };
+        const contextIn = { userId: "u_42" };
 
         // The builder's runtime `next({ ctx: ext })` shallow-merges the
         // extension over the incoming ctx. We model that exactly here.
-        const ctxOut = await withAuthPlugins(auth)({
-            ctx: ctxIn,
-            next: (async (options?: { ctx: Record<string, unknown> }) =>
-                (options?.ctx ? { ...ctxIn, ...options.ctx } : ctxIn)),
+        const contextOut = await withAuthPlugins(auth)({
+            ctx: contextIn,
+            next: async (options?: { ctx: Record<string, unknown> }) => (options?.ctx ? { ...contextIn, ...options.ctx } : contextIn),
         });
 
         // Both fields must survive into the downstream ctx — the regression
         // dropped `userId`. The type-level narrowing (`CtxIn & CirrusAuthApiContext<Auth>`)
         // is also asserted below via the typed access.
-        expect(ctxOut).toMatchObject({ userId: "u_42" });
-        expect(ctxOut.authApi).toBeDefined();
+        expect(contextOut).toMatchObject({ userId: "u_42" });
+        expect(contextOut.authApi).toBeDefined();
 
-        expect(typeof (ctxOut.authApi as { createOrganization?: unknown }).createOrganization).toBe("function");
+        expectTypeOf((contextOut.authApi as { createOrganization?: unknown }).createOrganization).toBeFunction();
     });
 });

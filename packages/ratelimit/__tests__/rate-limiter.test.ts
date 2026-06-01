@@ -128,7 +128,7 @@ describe("key derivation", () => {
         expect.assertions(1);
 
         const limiter = new RateLimiter({
-            config: { "a:b": { kind: "fixed window", period: 1000, rate: 1 }, a: { kind: "fixed window", period: 1000, rate: 1 } },
+            config: { a: { kind: "fixed window", period: 1000, rate: 1 }, "a:b": { kind: "fixed window", period: 1000, rate: 1 } },
             now: () => 0,
         });
 

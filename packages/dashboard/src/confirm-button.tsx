@@ -21,7 +21,7 @@ export interface ConfirmButtonProps {
  * trigger keeps its `testId` (so existing tests that click it still reach the
  * first step); the actual action only runs on the `${testId}-confirm` click.
  */
-export function ConfirmButton({ children, confirmLabel = "Confirm", disabled = false, onConfirm, testId }: ConfirmButtonProps): ReactElement {
+export const ConfirmButton = ({ children, confirmLabel = "Confirm", disabled = false, onConfirm, testId }: ConfirmButtonProps): ReactElement => {
     const [confirming, setConfirming] = useState(false);
 
     if (!confirming) {
@@ -63,4 +63,4 @@ export function ConfirmButton({ children, confirmLabel = "Confirm", disabled = f
             </button>
         </span>
     );
-}
+};

@@ -8,7 +8,7 @@
  */
 import type { DefinePolicyInput, Policy, Role } from "./types.js";
 
-export const definePolicy = <Ctx = unknown>(input: DefinePolicyInput<Ctx>): Policy<Ctx> => {
+export const definePolicy = <Context = unknown>(input: DefinePolicyInput<Context>): Policy<Context> => {
     return { on: input.on, table: input.table, when: input.when };
 };
 
@@ -19,7 +19,7 @@ export const definePolicy = <Ctx = unknown>(input: DefinePolicyInput<Ctx>): Poli
  * op)` AND together (every one must allow). The current implementation keeps
  * them in order and lets the middleware decide — see `./middleware`.
  */
-export const definePolicies = <Ctx = unknown>(policies: ReadonlyArray<Policy<Ctx>>): ReadonlyArray<Policy<Ctx>> => policies;
+export const definePolicies = <Context = unknown>(policies: ReadonlyArray<Policy<Context>>): ReadonlyArray<Policy<Context>> => policies;
 
 export const defineRole = (name: string, options: Omit<Role, "name"> = {}): Role => {
     return { name, ...options };

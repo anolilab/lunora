@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createVectors } from "../src/create-vectors.js";
-import { createCtxVectors } from "../src/ctx.js";
+import { createCtxVectors as createContextVectors } from "../src/ctx.js";
 import type {
     VectorizeDeleteMutation,
     VectorizeIndexLike,
@@ -46,7 +46,30 @@ const createStatefulVectorizeIndex = (): VectorizeIndexLike => {
     };
 
     return {
-        upsert: upsertVectors,
+        deleteByIds: async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => {
+            let count = 0;
+
+            for (const id of ids) {
+                if (store.delete(id)) {
+                    count += 1;
+                }
+            }
+
+            return { count, mutationId: `d_${count}` };
+        },
+        getByIds: async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => {
+            const found: VectorizeVector[] = [];
+
+            for (const id of ids) {
+                const vector = store.get(id);
+
+                if (vector) {
+                    found.push(vector);
+                }
+            }
+
+            return found;
+        },
         insert: upsertVectors,
         query: async (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions): Promise<VectorizeMatches> => {
             const candidates: VectorizeMatch[] = [];
@@ -67,10 +90,10 @@ const createStatefulVectorizeIndex = (): VectorizeIndexLike => {
 
                 candidates.push({
                     id: stored.id,
-                    score: cosine(vector, stored.values),
-                    values: options?.returnValues ? stored.values : undefined,
                     metadata: options?.returnMetadata === "none" ? undefined : stored.metadata,
                     namespace: stored.namespace,
+                    score: cosine(vector, stored.values),
+                    values: options?.returnValues ? stored.values : undefined,
                 });
             }
 
@@ -78,32 +101,9 @@ const createStatefulVectorizeIndex = (): VectorizeIndexLike => {
 
             const matches = candidates.slice(0, options?.topK ?? candidates.length);
 
-            return { matches, count: matches.length };
+            return { count: matches.length, matches };
         },
-        getByIds: async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => {
-            const found: VectorizeVector[] = [];
-
-            for (const id of ids) {
-                const vector = store.get(id);
-
-                if (vector) {
-                    found.push(vector);
-                }
-            }
-
-            return found;
-        },
-        deleteByIds: async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => {
-            let count = 0;
-
-            for (const id of ids) {
-                if (store.delete(id)) {
-                    count += 1;
-                }
-            }
-
-            return { mutationId: `d_${count}`, count };
-        },
+        upsert: upsertVectors,
     };
 };
 
@@ -146,11 +146,11 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         const index = createStatefulVectorizeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
 
-        await vectors.upsert("docs", { id: "doc-1", input: "hello world", embed, metadata: { kind: "greeting" } });
-        await vectors.upsert("docs", { id: "doc-2", input: "bye", embed, metadata: { kind: "farewell" } });
-        await vectors.upsert("docs", { id: "doc-3", input: "hello there", embed, metadata: { kind: "greeting" } });
+        await vectors.upsert("docs", { embed, id: "doc-1", input: "hello world", metadata: { kind: "greeting" } });
+        await vectors.upsert("docs", { embed, id: "doc-2", input: "bye", metadata: { kind: "farewell" } });
+        await vectors.upsert("docs", { embed, id: "doc-3", input: "hello there", metadata: { kind: "greeting" } });
 
-        const result = await vectors.query("docs", { input: "hello", embed, topK: 2, returnMetadata: "all" });
+        const result = await vectors.query("docs", { embed, input: "hello", returnMetadata: "all", topK: 2 });
 
         expect(result.count).toBe(2);
         expect(result.matches.map((match) => match.id)).toEqual(["doc-1", "doc-3"]);
@@ -167,12 +167,12 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         const vectors = createVectors({ indexes: { docs: index } });
 
         await vectors.upsertMany("docs", [
-            { id: "g1", input: "hello", embed, metadata: { kind: "greeting" } },
-            { id: "g2", input: "hey", embed, metadata: { kind: "greeting" } },
-            { id: "f1", input: "bye", embed, metadata: { kind: "farewell" } },
+            { embed, id: "g1", input: "hello", metadata: { kind: "greeting" } },
+            { embed, id: "g2", input: "hey", metadata: { kind: "greeting" } },
+            { embed, id: "f1", input: "bye", metadata: { kind: "farewell" } },
         ]);
 
-        const result = await vectors.query("docs", { input: "hello", embed, filter: { kind: "farewell" } });
+        const result = await vectors.query("docs", { embed, filter: { kind: "farewell" }, input: "hello" });
 
         expect(result.matches.map((match) => match.id)).toEqual(["f1"]);
     });
@@ -181,12 +181,12 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         expect.assertions(3);
 
         const index = createStatefulVectorizeIndex();
-        const ctx = createCtxVectors(createVectors({ indexes: { docs: index } }));
+        const context = createContextVectors(createVectors({ indexes: { docs: index } }));
 
-        await ctx.upsert("docs", { id: "row-1", input: "hello world", embed, metadata: { title: "Greeting" } });
-        await ctx.upsertNow("docs", { id: "row-2", input: "bye", embed, metadata: { title: "Farewell" } });
+        await context.upsert("docs", { embed, id: "row-1", input: "hello world", metadata: { title: "Greeting" } });
+        await context.upsertNow("docs", { embed, id: "row-2", input: "bye", metadata: { title: "Farewell" } });
 
-        const matches = await ctx.query("docs", { input: "hello", embed, topK: 1 });
+        const matches = await context.query("docs", { embed, input: "hello", topK: 1 });
 
         expect(matches.count).toBe(1);
         expect(matches.matches[0]).toMatchObject({ id: "row-1", metadata: { title: "Greeting" } });
@@ -197,14 +197,14 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         expect.assertions(1);
 
         const index = createStatefulVectorizeIndex();
-        const ctx = createCtxVectors(createVectors({ indexes: { docs: index } }));
+        const context = createContextVectors(createVectors({ indexes: { docs: index } }));
 
-        await ctx.upsert("docs", { id: "row-1", input: "hello", embed });
-        await ctx.upsert("docs", { id: "row-2", input: "hello there", embed });
+        await context.upsert("docs", { embed, id: "row-1", input: "hello" });
+        await context.upsert("docs", { embed, id: "row-2", input: "hello there" });
 
-        await ctx.deleteByIds("docs", ["row-1"]);
+        await context.deleteByIds("docs", ["row-1"]);
 
-        const matches = await ctx.query("docs", { input: "hello", embed });
+        const matches = await context.query("docs", { embed, input: "hello" });
 
         expect(matches.matches.map((match) => match.id)).toEqual(["row-2"]);
     });
@@ -213,12 +213,12 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         expect.assertions(1);
 
         const index = createStatefulVectorizeIndex();
-        const ctx = createCtxVectors(createVectors({ indexes: { docs: index } }));
+        const context = createContextVectors(createVectors({ indexes: { docs: index } }));
 
-        await ctx.upsert("docs", { id: "row-1", input: "hello world", embed });
-        await ctx.upsert("docs", { id: "row-2", input: "bye", embed });
+        await context.upsert("docs", { embed, id: "row-1", input: "hello world" });
+        await context.upsert("docs", { embed, id: "row-2", input: "bye" });
 
-        const matches = await ctx.query("docs", { vector: embed("hello"), topK: 1 });
+        const matches = await context.query("docs", { topK: 1, vector: embed("hello") });
 
         expect(matches.matches[0]?.id).toBe("row-1");
     });

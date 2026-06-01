@@ -353,17 +353,17 @@ export const runImportCommand = async (options: ImportCommandOptions): Promise<I
         // `--table` wraps each bare doc — the source is `{...}\n{...}\n`,
         // not `{table,doc}` envelopes. Guard the parse so a malformed line
         // surfaces a row-scoped error instead of an unhandled rejection.
-        let doc: unknown;
+        let document_: unknown;
 
         try {
-            doc = JSON.parse(trimmed);
+            document_ = JSON.parse(trimmed);
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
 
             throw new Error(`invalid JSON on line ${String(lineNumber)}: ${message}`, { cause: error });
         }
 
-        batch.push(JSON.stringify({ doc, table: options.table }));
+        batch.push(JSON.stringify({ doc: document_, table: options.table }));
     };
 
     // `for await ... of` natively awaits each chunk + propagates errors

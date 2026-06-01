@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Doc_attachments, Doc_users, LoadWith } from "./fixtures/simple/expected/_generated/dataModel.js";
+import type { Doc_attachments as Document_attachments, Doc_users as Document_users, LoadWith } from "./fixtures/simple/expected/_generated/dataModel.js";
 
 /**
  * Compile-fixture: the assertions below are verified by `tsc` (via `lint:types`),
@@ -14,7 +14,7 @@ describe("loadWith narrowing", () => {
 
         const loaded = {} as LoadWith<"attachments", { owner: true }>;
         // Annotated destructuring asserts `owner` exists as `Doc_users | null`.
-        const { owner }: { owner: Doc_users | null } = loaded;
+        const { owner }: { owner: Document_users | null } = loaded;
 
         expect(owner).toBeUndefined();
     });
@@ -35,7 +35,7 @@ describe("loadWith narrowing", () => {
 
         const loaded = {} as LoadWith<"users", { attachments: true }>;
         // Annotated destructuring asserts `attachments` exists as `Doc_attachments[]`.
-        const { attachments }: { attachments: Doc_attachments[] } = loaded;
+        const { attachments }: { attachments: Document_attachments[] } = loaded;
 
         expect(attachments).toBeUndefined();
     });
@@ -44,7 +44,7 @@ describe("loadWith narrowing", () => {
         expect.assertions(1);
 
         const loaded = { attachments: [{ owner: null }] } as unknown as LoadWith<"users", { attachments: { with: { owner: true } } }>;
-        const nestedOwner: Doc_users | null = loaded.attachments[0]!.owner;
+        const nestedOwner: Document_users | null = loaded.attachments[0]!.owner;
 
         expect(nestedOwner).toBeNull();
     });

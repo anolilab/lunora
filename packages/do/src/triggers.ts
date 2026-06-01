@@ -60,7 +60,7 @@ export interface TriggerContextLike {
  * `triggerMap` keyed by accessor name.
  */
 export interface TriggerDefinitionLike {
-    readonly handler: (ctx: TriggerContextLike, event: TriggerEventLike) => Promise<void> | void;
+    readonly handler: (context: TriggerContextLike, event: TriggerEventLike) => Promise<void> | void;
     readonly op: TriggerOpLike;
     readonly timing: TriggerTimingLike;
 }

@@ -1,16 +1,16 @@
 import { IDBFactory } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
 
-import { createIndexedDbPersistence, createInMemoryPersistence } from "../src/persistence.js";
+import { createIndexedDbPersistence as createIndexedDatabasePersistence, createInMemoryPersistence } from "../src/persistence.js";
 import type { PersistedMutation, PersistenceAdapter } from "../src/types.js";
 
 const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): PersistedMutation => {
- return {
-    args: { id },
-    functionPath: "posts:create",
-    id,
-    ...overrides,
-};
+    return {
+        args: { id },
+        functionPath: "posts:create",
+        id,
+        ...overrides,
+    };
 };
 
 /**
@@ -20,7 +20,7 @@ const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): Persi
  */
 const adapters: [string, () => PersistenceAdapter][] = [
     ["createInMemoryPersistence", () => createInMemoryPersistence()],
-    ["createIndexedDbPersistence (fake-indexeddb)", () => createIndexedDbPersistence({ indexedDB: new IDBFactory() })],
+    ["createIndexedDbPersistence (fake-indexeddb)", () => createIndexedDatabasePersistence({ indexedDB: new IDBFactory() })],
 ];
 
 describe.each(adapters)("%s", (_name, makeAdapter) => {
@@ -127,13 +127,13 @@ describe("createIndexedDbPersistence — durability across handles", () => {
         expect.assertions(1);
 
         const indexedDB = new IDBFactory();
-        const first = createIndexedDbPersistence({ indexedDB });
+        const first = createIndexedDatabasePersistence({ indexedDB });
 
         await first.append(mutation("a"));
         await first.append(mutation("b"));
 
         // A new adapter (e.g. after a page reload) over the same backing store.
-        const second = createIndexedDbPersistence({ indexedDB });
+        const second = createIndexedDatabasePersistence({ indexedDB });
         const loaded = await second.load();
 
         expect(loaded.map((m) => m.id)).toEqual(["a", "b"]);
@@ -142,6 +142,6 @@ describe("createIndexedDbPersistence — durability across handles", () => {
     it("throws eagerly when no IndexedDB factory is available", () => {
         expect.assertions(1);
 
-        expect(() => createIndexedDbPersistence({ indexedDB: undefined as unknown as IDBFactory })).toThrow(/no IndexedDB available/);
+        expect(() => createIndexedDatabasePersistence({ indexedDB: undefined as unknown as IDBFactory })).toThrow(/no IndexedDB available/);
     });
 });

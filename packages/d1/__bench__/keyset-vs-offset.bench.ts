@@ -2,7 +2,7 @@ import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { bench, describe } from "vitest";
 
 import { createD1Exec } from "../__tests__/_helpers/node-sqlite-d1.js";
-import { createD1CtxDb } from "../src/d1-ctx-db.js";
+import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db.js";
 
 /**
  * D1 column-dialect twin of `@cirrus/do/keyset-vs-offset`. The win is
@@ -16,7 +16,9 @@ const PAGE_SIZE = 50;
 const PAGE_OFFSET = 5000;
 const CLOCK = 1_700_000_000_000;
 
-const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
+const col = (kind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true } }, kind };
+};
 
 const schema: SchemaLike = {
     tables: {
@@ -38,7 +40,7 @@ harness.ddl(
     )`,
 );
 
-const writer: DatabaseWriterLike = createD1CtxDb({ clock: () => CLOCK, exec: harness.exec, schema });
+const writer: DatabaseWriterLike = createD1ContextDatabase({ clock: () => CLOCK, exec: harness.exec, schema });
 
 for (let index = 0; index < ROW_COUNT; index += 1) {
     await writer.insert("todos", { _id: `t${String(index).padStart(5, "0")}`, priority: "medium", seq: index });

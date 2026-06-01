@@ -3,7 +3,7 @@ import { bench, describe } from "vitest";
 import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
 import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 
 /**
  * `aggregate({ op: "sum"|"max"|"min" })` and `groupBy({ by })` are §3.1's
@@ -71,7 +71,7 @@ const makeWriter = (schema: SchemaLike): DatabaseWriterLike => {
 
     runShardMigrations(harness.sql, schema);
 
-    return createShardCtxDb({ schema, sql: harness.sql });
+    return createShardContextDatabase({ schema, sql: harness.sql });
 };
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {

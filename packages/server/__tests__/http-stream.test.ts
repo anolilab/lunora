@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { CirrusRouteHandler, HttpActionCtx } from "../src/index.js";
+import type { CirrusRouteHandler, HttpActionCtx as HttpActionContext } from "../src/index.js";
 import { CirrusError, httpRoute, httpRouter, v } from "../src/index.js";
 
-const ctx = {} as HttpActionCtx;
+const context = {} as HttpActionContext;
 
 const dispatch = async (route: CirrusRouteHandler, method: string, path: string, request: Request): Promise<Response> => {
     const app = httpRouter();
 
     app.on(method, path, route);
 
-    return app.fetch(request, { __cirrusCtx: ctx });
+    return app.fetch(request, { __cirrusCtx: context });
 };
 
 const readSse = async (response: Response): Promise<{ events: { data: unknown; event: string }[]; raw: string }> => {

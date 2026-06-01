@@ -4,23 +4,27 @@ import type { ExecutionContextLike, FunctionRegistryLike } from "../src/create-w
 import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
-const fakeCtx: ExecutionContextLike = {
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
-    idFromName: (name) => { return { __name: name }; },
+    get: () => {
+        return { fetch: async () => new Response("not used", { status: 200 }) };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
 };
 
 const ADMIN_TOKEN = "admin-bear";
 
 const REGISTRY: FunctionRegistryLike = {
+    "billing:sync": { kind: "action", visibility: "public" },
+    "internal:sweep": { kind: "mutation", visibility: "internal" },
     "messages:list": { kind: "query" },
     "messages:send": { kind: "mutation" },
-    "internal:sweep": { kind: "mutation", visibility: "internal" },
-    "billing:sync": { kind: "action", visibility: "public" },
 };
 
 describe("createWorker — functions admin endpoint", () => {
@@ -29,7 +33,7 @@ describe("createWorker — functions admin endpoint", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, functions: REGISTRY, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/functions", { method: "GET" }), {}, fakeCtx);
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/functions", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -42,7 +46,7 @@ describe("createWorker — functions admin endpoint", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/functions", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(400);
@@ -60,7 +64,7 @@ describe("createWorker — functions admin endpoint", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/functions", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(200);
@@ -81,7 +85,7 @@ describe("createWorker — functions admin endpoint", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/functions", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(405);

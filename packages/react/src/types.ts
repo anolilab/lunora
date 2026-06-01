@@ -41,7 +41,7 @@ export interface UsePaginatedQueryResult<T> {
     /** `true` while the first page or a `loadMore` page is in flight. */
     isLoading: boolean;
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
-    loadMore: (numItems: number) => void;
+    loadMore: (numberItems: number) => void;
     /** Flattened items across every loaded page, in order. */
     results: T[];
     status: PaginationStatus;
@@ -55,7 +55,7 @@ export interface UseInfiniteQueryOptions {
 
 export interface UseInfiniteQueryResult<T> {
     /** Request the next page. A no-op unless `status === "CanLoadMore"`. */
-    fetchNextPage: (numItems?: number) => void;
+    fetchNextPage: (numberItems?: number) => void;
     /** `true` when the loaded tail reports it can load another page. */
     hasNextPage: boolean;
     /** `true` while a `fetchNextPage` page (beyond the first) is in flight. */

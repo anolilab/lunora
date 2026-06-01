@@ -100,18 +100,18 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
  * `IndexRangeBuilder` field-for-field so the real `ctx.db` query builder is
  * assignable; only `eq` is exercised.
  */
-interface RateLimitDbIndexRange {
-    eq: (field: string, value: unknown) => RateLimitDbIndexRange;
-    gt: (field: string, value: unknown) => RateLimitDbIndexRange;
-    gte: (field: string, value: unknown) => RateLimitDbIndexRange;
-    lt: (field: string, value: unknown) => RateLimitDbIndexRange;
-    lte: (field: string, value: unknown) => RateLimitDbIndexRange;
+interface RateLimitDatabaseIndexRange {
+    eq: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
+    gt: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
+    gte: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
+    lt: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
+    lte: (field: string, value: unknown) => RateLimitDatabaseIndexRange;
 }
 
 /** The slice of a `ctx.db` table query the store relies on. */
-interface RateLimitDbQuery {
+interface RateLimitDatabaseQuery {
     first: () => Promise<Record<string, unknown> | null>;
-    withIndex: (indexName: string, range: (q: RateLimitDbIndexRange) => RateLimitDbIndexRange) => RateLimitDbQuery;
+    withIndex: (indexName: string, range: (q: RateLimitDatabaseIndexRange) => RateLimitDatabaseIndexRange) => RateLimitDatabaseQuery;
 }
 
 /**
@@ -120,16 +120,16 @@ interface RateLimitDbQuery {
  * directly — declared here (rather than imported) to keep `@cirrus/ratelimit`
  * free of a runtime dependency on `@cirrus/server`.
  */
-interface RateLimitDb {
+interface RateLimitDatabase {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
     insert: <T extends string>(table: T, document: Record<string, unknown>) => Promise<Id<T>>;
     patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
-    query: (table: string) => RateLimitDbQuery;
+    query: (table: string) => RateLimitDatabaseQuery;
 }
 
-interface DbStoreOptions {
+interface DatabaseStoreOptions {
     /** The Cirrus ORM writer — `ctx.db` inside a mutation or action. */
-    db: RateLimitDb;
+    db: RateLimitDatabase;
     /** Index that resolves a row by its key column. Defaults to `by_key`. */
     index?: string;
     /** Column storing the opaque key. Defaults to `key`. */
@@ -155,7 +155,7 @@ interface DbStoreOptions {
  * Each operation is a read-then-write; inside a mutation/action that pair runs
  * under the DO's input gate, so it is atomic against concurrent calls.
  */
-const createDbStore = (options: DbStoreOptions): RateLimitStore => {
+const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     const { db } = options;
     const table = options.table ?? "rateLimits";
     const index = options.index ?? "by_key";
@@ -203,5 +203,5 @@ const createDbStore = (options: DbStoreOptions): RateLimitStore => {
     };
 };
 
-export type { DbStoreOptions, RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, SqlLike, SqlStoreOptions };
-export { createDbStore, createMemoryStore, createSqlStore };
+export type { DatabaseStoreOptions as DbStoreOptions, RateLimitDatabase as RateLimitDb, RateLimitDatabaseIndexRange as RateLimitDbIndexRange, RateLimitDatabaseQuery as RateLimitDbQuery, SqlLike, SqlStoreOptions };
+export { createDatabaseStore as createDbStore, createMemoryStore, createSqlStore };

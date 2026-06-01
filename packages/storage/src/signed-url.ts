@@ -74,7 +74,10 @@ export const buildSignedUrl = async (
     const sig = toBase64Url(new Uint8Array(signature));
 
     const base = args.baseUrl.endsWith("/") ? args.baseUrl.slice(0, -1) : args.baseUrl;
-    const safeKey = args.key.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+    const safeKey = args.key
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/");
 
     return `${base}/${safeKey}?exp=${String(exp)}&method=${method}&sig=${sig}`;
 };
@@ -125,7 +128,11 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
     let sigBytes: Uint8Array;
 
     try {
-        key = url.pathname.replace(LEADING_SLASH_RE, "").split("/").map((segment) => decodeURIComponent(segment)).join("/");
+        key = url.pathname
+            .replace(LEADING_SLASH_RE, "")
+            .split("/")
+            .map((segment) => decodeURIComponent(segment))
+            .join("/");
         sigBytes = fromBase64Url(sig);
     } catch {
         return { reason: "malformed", valid: false };

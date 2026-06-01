@@ -9,12 +9,12 @@ import { runInitCommand } from "../../src/commands/init.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => {
- return {
-    error: () => {},
-    info: () => {},
-    success: () => {},
-    warn: () => {},
-};
+    return {
+        error: () => {},
+        info: () => {},
+        success: () => {},
+        warn: () => {},
+    };
 };
 
 // __tests__/commands/ -> package root -> monorepo root -> templates/
@@ -74,8 +74,8 @@ describe("cirrus init", () => {
             const wrangler = readFileSync(join(workdir, "rainbow", "wrangler.jsonc"), "utf8");
             const main = readFileSync(join(workdir, "rainbow", "src", "main.tsx"), "utf8");
 
-            expect(pkg).toContain('"name": "rainbow"');
-            expect(wrangler).toContain('"name": "rainbow"');
+            expect(pkg).toContain("\"name\": \"rainbow\"");
+            expect(wrangler).toContain("\"name\": \"rainbow\"");
             expect(main).toContain("rainbow");
         });
 
@@ -152,7 +152,7 @@ describe("cirrus init", () => {
             expect(pkg).toContain("@tanstack/react-start");
             expect(pkg).toContain("@tanstack/react-router");
             expect(pkg).toContain("@tanstack/react-query");
-            expect(pkg).toContain('"name": "starter"');
+            expect(pkg).toContain("\"name\": \"starter\"");
         });
 
         it("next template is not yet available", async () => {
@@ -163,7 +163,7 @@ describe("cirrus init", () => {
             const result = await runInitCommand({
                 cwd: workdir,
                 from: templatesRoot,
-                logger: { ...silentLogger(), warn: (msg) => warnings.push(msg) },
+                logger: { ...silentLogger(), warn: (message) => warnings.push(message) },
                 name: "soon",
                 templateType: "next",
             });
@@ -188,7 +188,7 @@ describe("cirrus init", () => {
             const result = await runInitCommand({
                 cwd: workdir,
                 from: templatesRoot,
-                logger: { ...silentLogger(), error: (msg) => errors.push(msg) },
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
                 name: "dup",
                 templateType: "vite",
             });
@@ -205,7 +205,7 @@ describe("cirrus init", () => {
             const result = await runInitCommand({
                 cwd: workdir,
                 from: join(workdir, "does-not-exist"),
-                logger: { ...silentLogger(), error: (msg) => errors.push(msg) },
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
                 name: "broken",
                 templateType: "vite",
             });

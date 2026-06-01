@@ -53,7 +53,7 @@ const rowKey = (row: Record<string, unknown>, index: number): string => {
  * endpoint) and pages rows via `readGlobalTablePage()`. Gated by the server's
  * `CIRRUS_ADMIN_TOKEN`, and only surfaces tables declared `.global()`.
  */
-export function GlobalDataBrowser({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBrowserProps = {}): ReactElement {
+export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBrowserProps = {}): ReactElement => {
     const client = useCirrus();
 
     const [tables, setTables] = useState<GlobalTableInfo[] | null>(null);
@@ -153,7 +153,11 @@ export function GlobalDataBrowser({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
                                 }}
                                 type="button"
                             >
-                                {table.name} ({table.rowCount})
+                                {table.name}
+{" "}
+(
+{table.rowCount}
+)
                             </button>
                         </li>
                     ))}
@@ -216,6 +220,6 @@ export function GlobalDataBrowser({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
             )}
         </div>
     );
-}
+};
 
 export type { GlobalDataBrowserProps };

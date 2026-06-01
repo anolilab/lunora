@@ -61,11 +61,11 @@ export const createDependencyTracker = (): DependencyTracker => {
     const deps = new Set<string>();
 
     return {
-        recordRead(table, idOrScan) {
-            deps.add(depKey(table, idOrScan));
-        },
         collect() {
             return deps;
+        },
+        recordRead(table, idOrScan) {
+            deps.add(depKey(table, idOrScan));
         },
     };
 };

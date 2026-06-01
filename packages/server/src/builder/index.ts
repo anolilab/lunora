@@ -1,7 +1,7 @@
 import type { Validator } from "@cirrus/values";
 
 import { validateArgs } from "../functions.js";
-import type { ActionCtx, ArgsValidator, FunctionKind, InferArgs, MutationCtx, QueryCtx } from "../types.js";
+import type { ActionCtx as ActionContext, ArgsValidator, FunctionKind, InferArgs, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../types.js";
 import type {
     ActionBuilder,
     CirrusBuilders,
@@ -47,10 +47,10 @@ interface BuilderState {
  * a programming error and throws. A `{ ctx }` argument shallow-merges into the
  * context handed to the rest of the chain.
  */
-const runMiddleware = async (middlewares: ReadonlyArray<Middleware<unknown, unknown>>, baseCtx: unknown): Promise<unknown> => {
+const runMiddleware = async (middlewares: ReadonlyArray<Middleware<unknown, unknown>>, baseContext: unknown): Promise<unknown> => {
     let lastIndex = -1;
 
-    const dispatch = async (index: number, ctx: unknown): Promise<unknown> => {
+    const dispatch = async (index: number, context: unknown): Promise<unknown> => {
         if (index <= lastIndex) {
             throw new Error("middleware next() called multiple times");
         }
@@ -60,16 +60,16 @@ const runMiddleware = async (middlewares: ReadonlyArray<Middleware<unknown, unkn
         const middleware = middlewares[index];
 
         if (!middleware) {
-            return ctx;
+            return context;
         }
 
         const next = ((options?: { ctx: Record<string, unknown> }) =>
-            dispatch(index + 1, options?.ctx ? { ...(ctx as Record<string, unknown>), ...options.ctx } : ctx)) as MiddlewareNext<unknown>;
+            dispatch(index + 1, options?.ctx ? { ...(context as Record<string, unknown>), ...options.ctx } : context)) as MiddlewareNext<unknown>;
 
-        return await middleware({ ctx, next });
+        return await middleware({ ctx: context, next });
     };
 
-    return dispatch(0, baseCtx);
+    return dispatch(0, baseContext);
 };
 
 /**
@@ -80,20 +80,20 @@ const runMiddleware = async (middlewares: ReadonlyArray<Middleware<unknown, unkn
  * so a contract violation surfaces as a `ValidationError` at the source rather
  * than as malformed data downstream.
  */
-const makeHandler =
-    <Args extends ArgsValidator, R>(
+const makeHandler
+    = <Args extends ArgsValidator, R>(
         args: Args,
         middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
         userHandler: (options: { args: InferArgs<Args>; ctx: unknown }) => Promise<R> | R,
         output?: Validator,
     ) =>
-    async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
-        const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
-        const ctx = await runMiddleware(middlewares, context);
-        const result = await userHandler({ args: parsed, ctx });
+        async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
+            const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
+            const context_ = await runMiddleware(middlewares, context);
+            const result = await userHandler({ args: parsed, ctx: context_ });
 
-        return (output ? output.parse(result) : result) as Awaited<R>;
-    };
+            return (output ? output.parse(result) : result) as Awaited<R>;
+        };
 
 /**
  * Wrap a streaming user handler in the same arg-validation + middleware shell
@@ -102,33 +102,33 @@ const makeHandler =
  * the caller flips when they unsubscribe; it's the user's responsibility to
  * honour it (or to wire it into any awaited I/O).
  */
-const makeStreamHandler =
-    <Args extends ArgsValidator, R>(
+const makeStreamHandler
+    = <Args extends ArgsValidator, R>(
         args: Args,
         middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
         userHandler: (options: { args: InferArgs<Args>; ctx: unknown; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
     ) =>
-    (context: unknown, rawArgs: InferArgs<Args>, signal: AbortSignal): AsyncIterable<R> => {
+        (context: unknown, rawArgs: InferArgs<Args>, signal: AbortSignal): AsyncIterable<R> => {
         // Args validation runs synchronously at call time so a bad envelope
         // surfaces before the iterator is consumed.
-        const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
+            const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
 
-        // The middleware chain may be async, but we don't want to block the
-        // caller before returning an iterable — defer the chain to the first
-        // `next()` pump by wrapping the iterator with an outer async generator.
-        return (async function* drive(): AsyncGenerator<R, void, void> {
-            const ctx = await runMiddleware(middlewares, context);
-            const iterator = userHandler({ args: parsed, ctx, signal });
+            // The middleware chain may be async, but we don't want to block the
+            // caller before returning an iterable — defer the chain to the first
+            // `next()` pump by wrapping the iterator with an outer async generator.
+            return (async function* drive(): AsyncGenerator<R, void, void> {
+                const context_ = await runMiddleware(middlewares, context);
+                const iterator = userHandler({ args: parsed, ctx: context_, signal });
 
-            for await (const chunk of iterator) {
-                yield chunk;
+                for await (const chunk of iterator) {
+                    yield chunk;
 
-                if (signal.aborted) {
-                    return;
+                    if (signal.aborted) {
+                        return;
+                    }
                 }
-            }
-        })();
-    };
+            })();
+        };
 
 /**
  * Construct a kind-specific builder. The terminal method is keyed by the kind
@@ -146,14 +146,14 @@ const makeStreamHandler =
 const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "internal"): Record<string, unknown> => {
     return {
         __cirrusProcedure: kind,
-        ...(visibility ? { __cirrusVisibility: visibility } : {}),
+        ...visibility ? { __cirrusVisibility: visibility } : {},
         input: (validators: ArgsValidator) => makeBuilder(kind, { ...state, args: { ...state.args, ...validators } }, visibility),
         [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => {
             return {
                 args: state.args,
                 handler: makeHandler(state.args, state.middlewares, userHandler, state.output),
                 kind,
-                ...(visibility ? { visibility } : {}),
+                ...visibility ? { visibility } : {},
             };
         },
         output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),
@@ -161,24 +161,24 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
         // on every builder shape (callers can't hit it from action/mutation builders
         // anyway since the type system narrows it away), but emitting it
         // unconditionally keeps the runtime free of per-kind branching.
-        ...(kind === "query"
+        ...kind === "query"
             ? {
-                  stream: <R>(
-                      userHandler: (options: {
-                          args: Record<string, unknown>;
-                          ctx: unknown;
-                          signal: AbortSignal;
-                      }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
-                  ) => {
-                      return {
-                          args: state.args,
-                          handler: makeStreamHandler(state.args, state.middlewares, userHandler),
-                          kind: "stream" as const,
-                          ...(visibility ? { visibility } : {}),
-                      };
-                  },
-              }
-            : {}),
+                stream: <R>(
+                    userHandler: (options: {
+                        args: Record<string, unknown>;
+                        ctx: unknown;
+                        signal: AbortSignal;
+                    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+                ) => {
+                    return {
+                        args: state.args,
+                        handler: makeStreamHandler(state.args, state.middlewares, userHandler),
+                        kind: "stream" as const,
+                        ...visibility ? { visibility } : {},
+                    };
+                },
+            }
+            : {},
         use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { ...state, middlewares: [...state.middlewares, middleware] }, visibility),
     };
 };
@@ -193,15 +193,15 @@ export const initCirrus = {
         return {
             create: (_options?: CreateOptions): CirrusBuilders => {
                 return {
-                    action: makeBuilder("action", { args: {}, middlewares: [] }) as unknown as ActionBuilder<ActionCtx, EmptyArgs>,
-                    internalAction: makeBuilder("action", { args: {}, middlewares: [] }, "internal") as unknown as InternalActionBuilder<ActionCtx, EmptyArgs>,
+                    action: makeBuilder("action", { args: {}, middlewares: [] }) as unknown as ActionBuilder<ActionContext, EmptyArgs>,
+                    internalAction: makeBuilder("action", { args: {}, middlewares: [] }, "internal") as unknown as InternalActionBuilder<ActionContext, EmptyArgs>,
                     internalMutation: makeBuilder("mutation", { args: {}, middlewares: [] }, "internal") as unknown as InternalMutationBuilder<
-                        MutationCtx,
+                        MutationContext,
                         EmptyArgs
                     >,
-                    internalQuery: makeBuilder("query", { args: {}, middlewares: [] }, "internal") as unknown as InternalQueryBuilder<QueryCtx, EmptyArgs>,
-                    mutation: makeBuilder("mutation", { args: {}, middlewares: [] }) as unknown as MutationBuilder<MutationCtx, EmptyArgs>,
-                    query: makeBuilder("query", { args: {}, middlewares: [] }) as unknown as QueryBuilder<QueryCtx, EmptyArgs>,
+                    internalQuery: makeBuilder("query", { args: {}, middlewares: [] }, "internal") as unknown as InternalQueryBuilder<QueryContext, EmptyArgs>,
+                    mutation: makeBuilder("mutation", { args: {}, middlewares: [] }) as unknown as MutationBuilder<MutationContext, EmptyArgs>,
+                    query: makeBuilder("query", { args: {}, middlewares: [] }) as unknown as QueryBuilder<QueryContext, EmptyArgs>,
                 };
             },
         };

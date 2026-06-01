@@ -407,10 +407,10 @@ class SchedulerDO {
         // `Number.parseInt()` recovery in alarm()/rescheduleAlarm() (it stops
         // at the 'e'), corrupting the sort order so jobs fire immediately.
         if (
-            typeof body.scheduledFor !== "number" ||
-            !Number.isInteger(body.scheduledFor) ||
-            body.scheduledFor <= 0 ||
-            body.scheduledFor > MAX_SCHEDULED_FOR_MS
+            typeof body.scheduledFor !== "number"
+            || !Number.isInteger(body.scheduledFor)
+            || body.scheduledFor <= 0
+            || body.scheduledFor > MAX_SCHEDULED_FOR_MS
         ) {
             return SchedulerDO.error(400, "INVALID_INPUT", "scheduledFor must be a positive integer epoch-millisecond number no greater than 8640000000000000");
         }

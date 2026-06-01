@@ -29,7 +29,7 @@ const makeShardStub = (): ShardStub => {
         async fetch(): Promise<Response> {
             // Mirror the shape `runShardImport` returns: `{ inserted, errors,
             // conflicts }` so the coordinator's roll-up code path is real.
-            return Response.json({ inserted: { todos: 0 }, errors: [], conflicts: 0 }, { status: 200 });
+            return Response.json({ conflicts: 0, errors: [], inserted: { todos: 0 } }, { status: 200 });
         },
     };
 
@@ -37,7 +37,9 @@ const makeShardStub = (): ShardStub => {
         namespace: {
             get: () => stub,
             getByName: () => stub,
-            idFromName: (name) => { return { __name: name }; },
+            idFromName: (name) => {
+                return { __name: name };
+            },
         },
     };
 };
@@ -46,16 +48,16 @@ const buildBatches = (shardCount: number): { rows: { doc: Record<string, unknown
     const perShard = Math.ceil(TOTAL_ROWS / shardCount);
 
     return Array.from({ length: shardCount }, (_outer, shard) => {
- return {
-        rows: Array.from({ length: perShard }, (_inner, index) => {
- return {
-            doc: { _id: `t-s${String(shard)}-${String(index)}`, projectId: `p${String(shard)}`, seq: index },
-            table: "todos",
+        return {
+            rows: Array.from({ length: perShard }, (_inner, index) => {
+                return {
+                    doc: { _id: `t-s${String(shard)}-${String(index)}`, projectId: `p${String(shard)}`, seq: index },
+                    table: "todos",
+                };
+            }),
+            shardKey: `s${String(shard)}`,
         };
-}),
-        shardKey: `s${String(shard)}`,
-    };
-});
+    });
 };
 
 interface ImportSetup {
@@ -69,9 +71,9 @@ const buildSetup = (shardCount: number): ImportSetup => {
     const shardKeys = Array.from({ length: shardCount }, (_, index) => `s${String(index)}`);
 
     return {
+        batches: buildBatches(shardCount),
         coordinator: createQueryCoordinator({ registry: createStaticShardRegistry({ todos: shardKeys }) }),
         namespace: stub.namespace,
-        batches: buildBatches(shardCount),
     };
 };
 

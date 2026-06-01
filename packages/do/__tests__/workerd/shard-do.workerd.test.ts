@@ -36,16 +36,16 @@ describe("shardDO (workerd)", () => {
         });
 
         const response = await stub.fetch("https://shard.internal/rpc", {
-            method: "POST",
+            body: JSON.stringify({ args: { limit: 5 }, functionPath: "messages:list" }),
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ functionPath: "messages:list", args: { limit: 5 } }),
+            method: "POST",
         });
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ result: { ok: true, who: "real-runtime" } });
 
         await runInDurableObject(stub, async (instance) => {
-            expect(instance.lastRpcCall).toEqual({ functionPath: "messages:list", args: { limit: 5 } });
+            expect(instance.lastRpcCall).toEqual({ args: { limit: 5 }, functionPath: "messages:list" });
         });
     });
 
@@ -75,12 +75,12 @@ describe("shardDO (workerd)", () => {
         client.accept();
 
         // Drive a subscribe envelope. The DO's webSocketMessage() runs server-side.
-        client.send(JSON.stringify({ type: "subscribe", id: "sub-1", query: { table: "messages" } }));
+        client.send(JSON.stringify({ id: "sub-1", query: { table: "messages" }, type: "subscribe" }));
 
         // Wait until the server-side handler acks. We poll runInDurableObject()
         // instead of relying on a brittle setTimeout — the runtime drains the
         // message queue between turns.
-        await waitFor(() => received.some((m) => m.includes('"type":"ack"')));
+        await waitFor(() => received.some((m) => m.includes("\"type\":\"ack\"")));
 
         expect(received.some((m) => JSON.parse(m).type === "ack")).toBe(true);
 
@@ -109,17 +109,17 @@ describe("shardDO (workerd)", () => {
         const subs = await Promise.all([openSocket(stub, "sub-msg", { table: "messages" }), openSocket(stub, "sub-doc", { table: "documents" })]);
 
         await runInDurableObject(stub, async (instance) => {
-            instance.broadcast({ table: "messages", op: "insert", key: "m1", row: { id: "m1" } });
+            instance.broadcast({ key: "m1", op: "insert", row: { id: "m1" }, table: "messages" });
         });
 
-        await waitFor(() => subs[0].received.some((m) => m.includes('"type":"delta"')));
+        await waitFor(() => subs[0].received.some((m) => m.includes("\"type\":\"delta\"")));
 
-        const msgDeltas = subs[0].received.filter((m) => m.includes('"type":"delta"'));
-        const docDeltas = subs[1].received.filter((m) => m.includes('"type":"delta"'));
+        const messageDeltas = subs[0].received.filter((m) => m.includes("\"type\":\"delta\""));
+        const documentDeltas = subs[1].received.filter((m) => m.includes("\"type\":\"delta\""));
 
-        expect(msgDeltas).toHaveLength(1);
-        expect(docDeltas).toHaveLength(0);
-        expect(JSON.parse(msgDeltas[0]!)).toMatchObject({ type: "delta", id: "sub-msg", delta: { table: "messages", op: "insert" } });
+        expect(messageDeltas).toHaveLength(1);
+        expect(documentDeltas).toHaveLength(0);
+        expect(JSON.parse(messageDeltas[0]!)).toMatchObject({ delta: { op: "insert", table: "messages" }, id: "sub-msg", type: "delta" });
 
         subs[0].client.close(1000, "done");
         subs[1].client.close(1000, "done");
@@ -140,10 +140,10 @@ describe("shardDO (workerd)", () => {
 
         // Emit on A only.
         await runInDurableObject(shardA, async (instance) => {
-            instance.broadcast({ table: "messages", op: "insert", key: "x1", row: { id: "x1" } });
+            instance.broadcast({ key: "x1", op: "insert", row: { id: "x1" }, table: "messages" });
         });
 
-        await waitFor(() => subA.received.some((m) => m.includes('"type":"delta"')));
+        await waitFor(() => subA.received.some((m) => m.includes("\"type\":\"delta\"")));
 
         // Give B a chance to (incorrectly) receive — wait a short fixed
         // interval after A has already received its delta. The runtime
@@ -151,8 +151,8 @@ describe("shardDO (workerd)", () => {
         // hear about A's emission it would be by now.
         await new Promise((resolve) => setTimeout(resolve, 50));
 
-        const aDeltas = subA.received.filter((m) => m.includes('"type":"delta"'));
-        const bDeltas = subB.received.filter((m) => m.includes('"type":"delta"'));
+        const aDeltas = subA.received.filter((m) => m.includes("\"type\":\"delta\""));
+        const bDeltas = subB.received.filter((m) => m.includes("\"type\":\"delta\""));
 
         expect(aDeltas).toHaveLength(1);
         expect(bDeltas).toHaveLength(0);
@@ -184,14 +184,14 @@ const openSocket = async (stub: DurableObjectStub<TestShardDO>, subId: string, q
     });
 
     client.accept();
-    client.send(JSON.stringify({ type: "subscribe", id: subId, query }));
+    client.send(JSON.stringify({ id: subId, query, type: "subscribe" }));
 
-    await waitFor(() => received.some((m) => m.includes('"type":"ack"')));
+    await waitFor(() => received.some((m) => m.includes("\"type\":\"ack\"")));
 
     return { client, received };
 };
 
-const waitFor = async (predicate: () => boolean, { timeoutMs = 2000, intervalMs = 10 }: { intervalMs?: number; timeoutMs?: number } = {}): Promise<void> => {
+const waitFor = async (predicate: () => boolean, { intervalMs = 10, timeoutMs = 2000 }: { intervalMs?: number; timeoutMs?: number } = {}): Promise<void> => {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {

@@ -83,12 +83,12 @@ export const defineSchemaExtension = <T extends Record<string, TableDefinition>>
  * or only the middleware (plugins that augment ctx without persistent
  * state).
  */
-export interface Plugin<TExt extends Record<string, TableDefinition> = Record<string, TableDefinition>, TCtxIn = unknown, TCtxOut = TCtxIn> {
+export interface Plugin<TExtension extends Record<string, TableDefinition> = Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn> {
     /**
      * Optional schema extension. Apps install via
      * `defineSchema(...).extend(plugin.extension)`.
      */
-    readonly extension?: SchemaExtension<TExt>;
+    readonly extension?: SchemaExtension<TExtension>;
     /** Stable key identifying the plugin. Matches `extension.key` when set. */
     readonly key: string;
 
@@ -102,23 +102,23 @@ export interface Plugin<TExt extends Record<string, TableDefinition> = Record<st
      *     next({ ctx: { api: { ...ctx.api, ratelimit: api } } })
      * ```
      */
-    readonly middleware?: Middleware<TCtxIn, TCtxOut>;
+    readonly middleware?: Middleware<TContextIn, TContextOut>;
 }
 
 /** Options to {@link definePlugin}. */
-export interface DefinePluginOptions<TExt extends Record<string, TableDefinition>, TCtxIn, TCtxOut> {
-    extension?: SchemaExtension<TExt>;
-    middleware?: Middleware<TCtxIn, TCtxOut>;
+export interface DefinePluginOptions<TExtension extends Record<string, TableDefinition>, TContextIn, TContextOut> {
+    extension?: SchemaExtension<TExtension>;
+    middleware?: Middleware<TContextIn, TContextOut>;
 }
 
 /**
  * Package a schema extension + middleware as a reusable plugin. Either
  * field is optional — `definePlugin("foo", {})` is valid but degenerate.
  */
-export const definePlugin = <TExt extends Record<string, TableDefinition>, TCtxIn = unknown, TCtxOut = TCtxIn>(
+export const definePlugin = <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
     key: string,
-    options: DefinePluginOptions<TExt, TCtxIn, TCtxOut>,
-): Plugin<TExt, TCtxIn, TCtxOut> => {
+    options: DefinePluginOptions<TExtension, TContextIn, TContextOut>,
+): Plugin<TExtension, TContextIn, TContextOut> => {
     if (!key) {
         throw new Error("definePlugin: `key` is required and must be a non-empty string");
     }
@@ -129,8 +129,8 @@ export const definePlugin = <TExt extends Record<string, TableDefinition>, TCtxI
 
     return {
         key,
-        ...(options.extension ? { extension: options.extension } : {}),
-        ...(options.middleware ? { middleware: options.middleware } : {}),
+        ...options.extension ? { extension: options.extension } : {},
+        ...options.middleware ? { middleware: options.middleware } : {},
     };
 };
 
@@ -162,20 +162,20 @@ export type ComponentFunctions = Readonly<Record<string, RegisteredFunction<any,
  * without functions (e.g. shared table definitions), and any combination.
  */
 export interface Component<
-    TExt extends Record<string, TableDefinition> = Record<string, TableDefinition>,
-    TCtxIn = unknown,
-    TCtxOut = TCtxIn,
+    TExtension extends Record<string, TableDefinition> = Record<string, TableDefinition>,
+    TContextIn = unknown,
+    TContextOut = TContextIn,
     F extends ComponentFunctions = ComponentFunctions,
-> extends Plugin<TExt, TCtxIn, TCtxOut> {
+> extends Plugin<TExtension, TContextIn, TContextOut> {
     readonly functions: F;
 }
 
 export interface DefineComponentOptions<
-    TExt extends Record<string, TableDefinition>,
-    TCtxIn,
-    TCtxOut,
+    TExtension extends Record<string, TableDefinition>,
+    TContextIn,
+    TContextOut,
     F extends ComponentFunctions,
-> extends DefinePluginOptions<TExt, TCtxIn, TCtxOut> {
+> extends DefinePluginOptions<TExtension, TContextIn, TContextOut> {
     /** Registered functions the component ships. Keys are the function's local name. */
     functions?: F;
 }
@@ -201,17 +201,17 @@ export interface DefineComponentOptions<
  * the explicit re-export pattern works without any codegen change.
  */
 export const defineComponent = <
-    TExt extends Record<string, TableDefinition>,
-    TCtxIn = unknown,
-    TCtxOut = TCtxIn,
+    TExtension extends Record<string, TableDefinition>,
+    TContextIn = unknown,
+    TContextOut = TContextIn,
     F extends ComponentFunctions = ComponentFunctions,
 >(
     key: string,
-    options: DefineComponentOptions<TExt, TCtxIn, TCtxOut, F>,
-): Component<TExt, TCtxIn, TCtxOut, F> => {
+    options: DefineComponentOptions<TExtension, TContextIn, TContextOut, F>,
+): Component<TExtension, TContextIn, TContextOut, F> => {
     const plugin = definePlugin(key, {
-        ...(options.extension ? { extension: options.extension } : {}),
-        ...(options.middleware ? { middleware: options.middleware } : {}),
+        ...options.extension ? { extension: options.extension } : {},
+        ...options.middleware ? { middleware: options.middleware } : {},
     });
 
     return {

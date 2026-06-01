@@ -31,8 +31,8 @@ export interface ScheduleRecord {
 
 export interface Scheduler {
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
-    runAfter: <F extends FunctionReference>(delayMs: number, fn: F, args: ArgsOf<F>, opts?: RunOptions) => Promise<{ id: string; scheduledFor: number }>;
-    runAt: <F extends FunctionReference>(date: Date | number, fn: F, args: ArgsOf<F>, opts?: RunOptions) => Promise<{ id: string; scheduledFor: number }>;
+    runAfter: <F extends FunctionReference>(delayMs: number, function_: F, args: ArgsOf<F>, options?: RunOptions) => Promise<{ id: string; scheduledFor: number }>;
+    runAt: <F extends FunctionReference>(date: Date | number, function_: F, args: ArgsOf<F>, options?: RunOptions) => Promise<{ id: string; scheduledFor: number }>;
 }
 
 /** Subset of `DurableObjectNamespace` the package consumes. */

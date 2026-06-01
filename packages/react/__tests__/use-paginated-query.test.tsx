@@ -7,29 +7,31 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import { usePaginatedQuery } from "../src/use-paginated-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
+const function_ = (ref: string): FunctionReference => {
+    return { __cirrusRef: ref };
+};
 
 /** Keyset-style backend over a fixed list, cursor = next offset as a string. */
-const makePaginator =
-    (items: string[]) =>
-    (_ref: string, args: unknown): { continueCursor: null | string; isDone: boolean; page: string[] } => {
-        const { paginationOpts } = args as { paginationOpts: { cursor: null | string; numItems: number } };
-        const offset = paginationOpts.cursor ? Number(paginationOpts.cursor) : 0;
-        const end = offset + paginationOpts.numItems;
-        const page = items.slice(offset, end);
-        const isDone = end >= items.length;
+const makePaginator
+    = (items: string[]) =>
+        (_ref: string, args: unknown): { continueCursor: null | string; isDone: boolean; page: string[] } => {
+            const { paginationOpts } = args as { paginationOpts: { cursor: null | string; numItems: number } };
+            const offset = paginationOpts.cursor ? Number(paginationOpts.cursor) : 0;
+            const end = offset + paginationOpts.numItems;
+            const page = items.slice(offset, end);
+            const isDone = end >= items.length;
 
-        return { continueCursor: isDone ? null : String(end), isDone, page };
-    };
+            return { continueCursor: isDone ? null : String(end), isDone, page };
+        };
 
 interface HarnessProps {
     initialNumItems?: number;
-    onLoadMore?: (loadMore: (numItems: number) => void) => void;
+    onLoadMore?: (loadMore: (numberItems: number) => void) => void;
     skip?: boolean;
 }
 
-const Harness = ({ initialNumItems = 2, onLoadMore, skip = false }: HarnessProps): ReactElement => {
-    const { isLoading, loadMore, results, status } = usePaginatedQuery(fn("items:list"), skip ? "skip" : ({}), { initialNumItems });
+const Harness = ({ initialNumItems: initialNumberItems = 2, onLoadMore, skip = false }: HarnessProps): ReactElement => {
+    const { isLoading, loadMore, results, status } = usePaginatedQuery(function_("items:list"), skip ? "skip" : {}, { initialNumItems: initialNumberItems });
 
     onLoadMore?.(loadMore);
 
@@ -70,7 +72,7 @@ describe("usePaginatedQuery", () => {
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
 
-        let loadMore: (numItems: number) => void = () => undefined;
+        let loadMore: (numberItems: number) => void = () => undefined;
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -113,7 +115,7 @@ describe("usePaginatedQuery", () => {
 
         const mock = createMockClient(makePaginator(["a", "b"]));
 
-        let loadMore: (numItems: number) => void = () => undefined;
+        let loadMore: (numberItems: number) => void = () => undefined;
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -140,7 +142,7 @@ describe("usePaginatedQuery", () => {
         expect(screen.getByTestId("results").textContent).toBe("a,b");
     });
 
-    it('"skip" short-circuits — no query and stays LoadingFirstPage', () => {
+    it("\"skip\" short-circuits — no query and stays LoadingFirstPage", () => {
         expect.assertions(4);
 
         const mock = createMockClient(makePaginator(["a", "b"]));

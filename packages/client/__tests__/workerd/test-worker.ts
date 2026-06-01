@@ -25,9 +25,9 @@ export class TestShardDO extends DurableObject<Env> {
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
 
-    public constructor(ctx: DurableObjectState, env: Env) {
-        super(ctx, env);
-        this.shard = new ConcreteShard(ctx as unknown as ShardDOState, env, this);
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.shard = new ConcreteShard(context as unknown as ShardDOState, env, this);
     }
 
     public override fetch(request: Request): Promise<Response> {
@@ -68,9 +68,9 @@ class ConcreteShard extends ShardDO {
 }
 
 export default {
-    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
         const runtime = createWorker({ shardDO: env.SHARD as never });
 
-        return runtime.fetch(request, env, ctx);
+        return runtime.fetch(request, env, context);
     },
 };

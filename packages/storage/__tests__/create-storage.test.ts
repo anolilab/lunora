@@ -8,12 +8,12 @@ const PUBLIC_BASE_URL_RE = /publicBaseUrl/;
 const SIGNING_SECRET_RE = /signingSecret/;
 
 const fakeObject = (key: string, etag: string = "etag-1"): R2ObjectLike => {
- return {
-    key,
-    size: 4,
-    etag,
-    httpMetadata: { contentType: "text/plain" },
-};
+    return {
+        etag,
+        httpMetadata: { contentType: "text/plain" },
+        key,
+        size: 4,
+    };
 };
 
 const fakeBucket = (): R2BucketLike & { deletes: string[]; puts: { body: unknown; key: string; options?: unknown }[] } => {
@@ -21,13 +21,10 @@ const fakeBucket = (): R2BucketLike & { deletes: string[]; puts: { body: unknown
     const deletes: string[] = [];
 
     return {
-        puts,
-        deletes,
-        put: vi.fn<R2BucketLike["put"]>(async (key, body, options) => {
-            puts.push({ key, body, options });
-
-            return fakeObject(key, "etag-new");
+        delete: vi.fn<R2BucketLike["delete"]>(async (key) => {
+            deletes.push(key);
         }),
+        deletes,
         get: vi.fn<R2BucketLike["get"]>(async (key) => {
             if (key === "missing") {
                 return null;
@@ -35,20 +32,23 @@ const fakeBucket = (): R2BucketLike & { deletes: string[]; puts: { body: unknown
 
             return {
                 ...fakeObject(key),
-                body: null,
                 arrayBuffer: async () => new ArrayBuffer(0),
+                body: null,
                 text: async () => "ok",
             } satisfies R2ObjectBodyLike;
         }),
-        delete: vi.fn<R2BucketLike["delete"]>(async (key) => {
-            deletes.push(key);
-        }),
         list: vi.fn<R2BucketLike["list"]>(async (options) => {
- return {
-            objects: [fakeObject(`${options?.prefix ?? ""}a`), fakeObject(`${options?.prefix ?? ""}b`)],
-            cursor: options?.cursor ? undefined : "next-cursor",
-        };
-}),
+            return {
+                cursor: options?.cursor ? undefined : "next-cursor",
+                objects: [fakeObject(`${options?.prefix ?? ""}a`), fakeObject(`${options?.prefix ?? ""}b`)],
+            };
+        }),
+        put: vi.fn<R2BucketLike["put"]>(async (key, body, options) => {
+            puts.push({ body, key, options });
+
+            return fakeObject(key, "etag-new");
+        }),
+        puts,
     };
 };
 
@@ -71,10 +71,10 @@ describe("createStorage", () => {
             customMetadata: { uploadedBy: "alice" },
         });
 
-        expect(result).toEqual({ key: "avatars/alice.png", etag: "etag-new" });
+        expect(result).toEqual({ etag: "etag-new", key: "avatars/alice.png" });
         expect(bucket.puts[0]?.options).toMatchObject({
-            httpMetadata: { contentType: "image/png" },
             customMetadata: { uploadedBy: "alice" },
+            httpMetadata: { contentType: "image/png" },
         });
     });
 

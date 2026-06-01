@@ -43,9 +43,9 @@ describe("renderEmail", () => {
         const mailer = createMailer({ from: "x@x.test", transport });
 
         await mailer.send({
-            to: "bob@x.test",
-            subject: "Hi",
             react: <WelcomeEmail name="Bob" />,
+            subject: "Hi",
+            to: "bob@x.test",
         });
 
         expect(captured[0]?.html).toContain("Bob");

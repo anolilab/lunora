@@ -4,14 +4,18 @@ import type { AuthIntrospector, ExecutionContextLike } from "../src/create-worke
 import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
-const fakeCtx: ExecutionContextLike = {
+const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
     waitUntil: () => undefined,
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
-    idFromName: (name) => { return { __name: name }; },
+    get: () => {
+        return { fetch: async () => new Response("not used", { status: 200 }) };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
 };
 
 const ADMIN_TOKEN = "admin-bear";
@@ -20,10 +24,10 @@ const USERS = { rows: [{ email: "a@example.com", id: "u1" }], total: 1 };
 const SESSIONS = { rows: [{ id: "s1", userId: "u1" }], total: 1 };
 
 const introspector = (): AuthIntrospector => {
- return {
-    listSessions: vi.fn<AuthIntrospector["listSessions"]>(async () => SESSIONS),
-    listUsers: vi.fn<AuthIntrospector["listUsers"]>(async () => USERS),
-};
+    return {
+        listSessions: vi.fn<AuthIntrospector["listSessions"]>(async () => SESSIONS),
+        listUsers: vi.fn<AuthIntrospector["listUsers"]>(async () => USERS),
+    };
 };
 
 const authed = (url: string): Request => new Request(url, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" });
@@ -34,7 +38,7 @@ describe("createWorker — auth introspection endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/auth/users", { method: "GET" }), {}, fakeCtx);
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/auth/users", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -44,7 +48,7 @@ describe("createWorker — auth introspection endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
-        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users"), {}, fakeCtx);
+        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users"), {}, fakeContext);
 
         expect(response.status).toBe(400);
 
@@ -59,7 +63,7 @@ describe("createWorker — auth introspection endpoints", () => {
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
 
-        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users?limit=10&offset=5"), {}, fakeCtx);
+        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users?limit=10&offset=5"), {}, fakeContext);
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual(USERS);
@@ -72,7 +76,7 @@ describe("createWorker — auth introspection endpoints", () => {
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
 
-        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/sessions?userId=u1&limit=20"), {}, fakeCtx);
+        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/sessions?userId=u1&limit=20"), {}, fakeContext);
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual(SESSIONS);
@@ -85,7 +89,7 @@ describe("createWorker — auth introspection endpoints", () => {
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
 
-        await worker.fetch(authed("https://app.example/_cirrus/admin/auth/sessions"), {}, fakeCtx);
+        await worker.fetch(authed("https://app.example/_cirrus/admin/auth/sessions"), {}, fakeContext);
 
         expect(intro.listSessions).toHaveBeenCalledWith({ limit: undefined, offset: undefined, userId: undefined });
     });
@@ -98,7 +102,7 @@ describe("createWorker — auth introspection endpoints", () => {
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/auth/users", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
             {},
-            fakeCtx,
+            fakeContext,
         );
 
         expect(response.status).toBe(405);

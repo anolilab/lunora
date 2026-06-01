@@ -2,7 +2,7 @@ import { resendProvider } from "@visulima/email/providers/resend";
 
 import { toQueuedPayload } from "./queue.js";
 import { renderEmail } from "./render.js";
-import type { CirrusMailOptions, Mailer, MailTransport, SendOpts, SendPayload } from "./types.js";
+import type { CirrusMailOptions, Mailer, MailTransport, SendOpts as SendOptions, SendPayload } from "./types.js";
 
 /** RFC 5321 caps the entire mailbox path at 320 chars; reject anything longer. */
 const MAX_EMAIL_LENGTH = 320;
@@ -153,12 +153,12 @@ export const createMailer = (options: CirrusMailOptions): Mailer => {
 
     const transport = options.transport ?? buildDefaultTransport();
 
-    const buildPayload = async (opts: SendOpts): Promise<SendPayload> => {
-        let { html } = opts;
-        let { text } = opts;
+    const buildPayload = async (options_: SendOptions): Promise<SendPayload> => {
+        let { html } = options_;
+        let { text } = options_;
 
-        if (opts.react) {
-            const rendered = await renderEmail(opts.react);
+        if (options_.react) {
+            const rendered = await renderEmail(options_.react);
 
             html = html ?? rendered.html;
             text = text ?? rendered.text;
@@ -167,35 +167,35 @@ export const createMailer = (options: CirrusMailOptions): Mailer => {
         // The subject and any custom headers flow straight into the provider's
         // header block, so they need the same CR/LF rejection the address
         // fields get. Validated here so both send() and queue() are covered.
-        assertSafeHeaderValue("subject", opts.subject);
+        assertSafeHeaderValue("subject", options_.subject);
 
-        if (opts.headers) {
-            for (const [name, value] of Object.entries(opts.headers)) {
+        if (options_.headers) {
+            for (const [name, value] of Object.entries(options_.headers)) {
                 assertSafeHeaderValue(`header name "${name}"`, name);
                 assertSafeHeaderValue(`header "${name}" value`, value);
             }
         }
 
         return {
-            bcc: opts.bcc,
-            cc: opts.cc,
-            from: opts.from ?? options.from,
-            headers: opts.headers,
+            bcc: options_.bcc,
+            cc: options_.cc,
+            from: options_.from ?? options.from,
+            headers: options_.headers,
             html,
-            replyTo: opts.replyTo,
-            subject: opts.subject,
+            replyTo: options_.replyTo,
+            subject: options_.subject,
             text,
-            to: opts.to,
+            to: options_.to,
         };
     };
 
-    const send = async (opts: SendOpts): Promise<{ id: string }> => {
-        const payload = await buildPayload(opts);
+    const send = async (options_: SendOptions): Promise<{ id: string }> => {
+        const payload = await buildPayload(options_);
 
         return transport.send(payload);
     };
 
-    const queue = async (opts: SendOpts): Promise<{ queued: true }> => {
+    const queue = async (options_: SendOptions): Promise<{ queued: true }> => {
         if (!options.queue) {
             throw new Error("@cirrus/mail: `queue` binding is required for mailer.queue()");
         }
@@ -204,7 +204,7 @@ export const createMailer = (options: CirrusMailOptions): Mailer => {
         // cannot carry the raw `react` field. We render to html/text up
         // front and serialise only the rendered output — the consumer
         // pattern intentionally works on pre-rendered payloads.
-        const payload = await buildPayload(opts);
+        const payload = await buildPayload(options_);
 
         await options.queue.send(toQueuedPayload(payload));
 

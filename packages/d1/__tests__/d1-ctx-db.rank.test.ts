@@ -1,7 +1,7 @@
 import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createD1CtxDb, runD1RankMigrations } from "../src/d1-ctx-db.js";
+import { createD1CtxDb as createD1ContextDatabase, runD1RankMigrations } from "../src/d1-ctx-db.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
 
 /**
@@ -10,7 +10,9 @@ import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
  * coupling seam, and the opt-in migration helper.
  */
 
-const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
+const col = (kind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true } }, kind };
+};
 
 const byChannel: RankIndexDefinitionLike = {
     name: "byChannel",
@@ -26,19 +28,19 @@ const byScoreDesc: RankIndexDefinitionLike = {
 };
 
 const makeSchema = (...indexes: RankIndexDefinitionLike[]): SchemaLike => {
- return {
-    tables: {
-        messages: {
-            indexes: [],
-            rankIndexes: indexes,
-            shape: {
-                archived: col("boolean"),
-                channelId: col("string"),
-                score: col("number"),
+    return {
+        tables: {
+            messages: {
+                indexes: [],
+                rankIndexes: indexes,
+                shape: {
+                    archived: col("boolean"),
+                    channelId: col("string"),
+                    score: col("number"),
+                },
             },
         },
-    },
-};
+    };
 };
 
 let harness: ReturnType<typeof createD1Exec>;
@@ -56,7 +58,7 @@ const setupWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => {
 
     await runD1RankMigrations(harness.exec, schema);
 
-    return createD1CtxDb({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
+    return createD1ContextDatabase({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
 };
 
 describe("d1 rankIndex parity", () => {
@@ -137,7 +139,7 @@ describe("d1 rankIndex parity", () => {
 
         const page = await writer.rankPage("messages", "leaderboard", { take: 10 });
 
-        expect(page.page.map((doc) => doc["_id"])).toEqual(["m2", "m3", "m1"]);
+        expect(page.page.map((document_) => document_["_id"])).toEqual(["m2", "m3", "m1"]);
         expect(page.isDone).toBe(true);
     });
 
@@ -152,7 +154,7 @@ describe("d1 rankIndex parity", () => {
 
         const page = await writer.rankPage("messages", "byChannel", { take: 10, where: { channelId: "c1" } });
 
-        expect(page.page.map((doc) => doc["_id"])).toEqual(["m1", "m3"]);
+        expect(page.page.map((document_) => document_["_id"])).toEqual(["m1", "m3"]);
     });
 
     it("falls back to null when no rank companion exists (opt-in)", async () => {
@@ -170,7 +172,7 @@ describe("d1 rankIndex parity", () => {
         );
 
         const schema = makeSchema(byChannel);
-        const writer = createD1CtxDb({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
+        const writer = createD1ContextDatabase({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
 
         await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
 

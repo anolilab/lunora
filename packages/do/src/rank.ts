@@ -173,7 +173,7 @@ export const resolveRankPartition = (index: RankIndexDefinitionLike, where: Reco
 
     for (const field of partitionBy) {
         if (field in requested) {
-            const value = (requested)[field];
+            const value = requested[field];
 
             if (value !== null && typeof value === "object" && !Array.isArray(value)) {
                 const operatorKeys = Object.keys(value);

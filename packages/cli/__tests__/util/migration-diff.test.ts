@@ -12,7 +12,9 @@ import {
     validatorKindToSqlType,
 } from "../../src/util/migration-diff.js";
 
-const snapshot = (tables: SchemaSnapshot["tables"]): SchemaSnapshot => { return { tables, version: 1 }; };
+const snapshot = (tables: SchemaSnapshot["tables"]): SchemaSnapshot => {
+    return { tables, version: 1 };
+};
 
 describe("validatorKindToSqlType", () => {
     it("maps boolean/number/bigint to INTEGER", () => {
@@ -51,18 +53,18 @@ describe("sQL renderers", () => {
         expect.assertions(6);
 
         const sql = renderCreateTable({
-            name: "users",
             columns: {
-                email: { sqlType: "TEXT", nullable: false },
-                age: { sqlType: "INTEGER", nullable: true },
+                age: { nullable: true, sqlType: "INTEGER" },
+                email: { nullable: false, sqlType: "TEXT" },
             },
             indexes: {},
+            name: "users",
         });
 
-        expect(sql).toContain('CREATE TABLE IF NOT EXISTS "users"');
-        expect(sql).toContain('"_id" TEXT PRIMARY KEY');
-        expect(sql).toContain('"email" TEXT NOT NULL');
-        expect(sql).toContain('"age" INTEGER');
+        expect(sql).toContain("CREATE TABLE IF NOT EXISTS \"users\"");
+        expect(sql).toContain("\"_id\" TEXT PRIMARY KEY");
+        expect(sql).toContain("\"email\" TEXT NOT NULL");
+        expect(sql).toContain("\"age\" INTEGER");
         expect(sql).not.toMatch(/"age"\s+INTEGER\s+NOT NULL/u);
         expect(sql.trim().endsWith(";")).toBe(true);
     });
@@ -70,29 +72,29 @@ describe("sQL renderers", () => {
     it("renderAddColumn produces ALTER TABLE", () => {
         expect.assertions(1);
 
-        const sql = renderAddColumn("users", "nickname", { sqlType: "TEXT", nullable: true });
+        const sql = renderAddColumn("users", "nickname", { nullable: true, sqlType: "TEXT" });
 
-        expect(sql).toBe('ALTER TABLE "users" ADD COLUMN "nickname" TEXT;');
+        expect(sql).toBe("ALTER TABLE \"users\" ADD COLUMN \"nickname\" TEXT;");
     });
 
     it("renderDropTable emits DROP TABLE IF EXISTS", () => {
         expect.assertions(1);
 
-        expect(renderDropTable("users")).toBe('DROP TABLE IF EXISTS "users";');
+        expect(renderDropTable("users")).toBe("DROP TABLE IF EXISTS \"users\";");
     });
 
     it("renderCreateIndex emits the named index", () => {
         expect.assertions(1);
 
-        const sql = renderCreateIndex("users", { name: "by_email", fields: ["email"], unique: true });
+        const sql = renderCreateIndex("users", { fields: ["email"], name: "by_email", unique: true });
 
-        expect(sql).toBe('CREATE UNIQUE INDEX IF NOT EXISTS "by_email" ON "users" ("email");');
+        expect(sql).toBe("CREATE UNIQUE INDEX IF NOT EXISTS \"by_email\" ON \"users\" (\"email\");");
     });
 
     it("renderDropIndex emits DROP INDEX IF EXISTS", () => {
         expect.assertions(1);
 
-        expect(renderDropIndex("by_email")).toBe('DROP INDEX IF EXISTS "by_email";');
+        expect(renderDropIndex("by_email")).toBe("DROP INDEX IF EXISTS \"by_email\";");
     });
 });
 
@@ -103,9 +105,9 @@ describe("diffSnapshots", () => {
         const previous = snapshot({});
         const next = snapshot({
             users: {
-                name: "users",
-                columns: { email: { sqlType: "TEXT", nullable: false } },
+                columns: { email: { nullable: false, sqlType: "TEXT" } },
                 indexes: {},
+                name: "users",
             },
         });
 
@@ -124,11 +126,11 @@ describe("diffSnapshots", () => {
         const previous = snapshot({});
         const next = snapshot({
             users: {
-                name: "users",
-                columns: { email: { sqlType: "TEXT", nullable: false } },
+                columns: { email: { nullable: false, sqlType: "TEXT" } },
                 indexes: {
-                    by_email: { name: "by_email", fields: ["email"], unique: true },
+                    by_email: { fields: ["email"], name: "by_email", unique: true },
                 },
+                name: "users",
             },
         });
 
@@ -144,7 +146,7 @@ describe("diffSnapshots", () => {
         expect.assertions(3);
 
         const previous = snapshot({
-            users: { name: "users", columns: {}, indexes: {} },
+            users: { columns: {}, indexes: {}, name: "users" },
         });
         const next = snapshot({});
 
@@ -152,23 +154,23 @@ describe("diffSnapshots", () => {
 
         expect(diff.entries).toHaveLength(1);
         expect(diff.entries[0]?.kind).toBe("dropTable");
-        expect(diff.entries[0]?.sql).toBe('DROP TABLE IF EXISTS "users";');
+        expect(diff.entries[0]?.sql).toBe("DROP TABLE IF EXISTS \"users\";");
     });
 
     it("aDD COLUMN when a column appears on an existing table", () => {
         expect.assertions(3);
 
         const previous = snapshot({
-            users: { name: "users", columns: { email: { sqlType: "TEXT", nullable: false } }, indexes: {} },
+            users: { columns: { email: { nullable: false, sqlType: "TEXT" } }, indexes: {}, name: "users" },
         });
         const next = snapshot({
             users: {
-                name: "users",
                 columns: {
-                    email: { sqlType: "TEXT", nullable: false },
-                    nickname: { sqlType: "TEXT", nullable: true },
+                    email: { nullable: false, sqlType: "TEXT" },
+                    nickname: { nullable: true, sqlType: "TEXT" },
                 },
                 indexes: {},
+                name: "users",
             },
         });
 
@@ -176,7 +178,7 @@ describe("diffSnapshots", () => {
 
         expect(diff.entries).toHaveLength(1);
         expect(diff.entries[0]?.kind).toBe("addColumn");
-        expect(diff.entries[0]?.sql).toContain('ADD COLUMN "nickname" TEXT');
+        expect(diff.entries[0]?.sql).toContain("ADD COLUMN \"nickname\" TEXT");
     });
 
     it("cREATE INDEX / DROP INDEX on column-stable tables", () => {
@@ -184,16 +186,16 @@ describe("diffSnapshots", () => {
 
         const previous = snapshot({
             users: {
+                columns: { email: { nullable: false, sqlType: "TEXT" } },
+                indexes: { by_email_old: { fields: ["email"], name: "by_email_old", unique: false } },
                 name: "users",
-                columns: { email: { sqlType: "TEXT", nullable: false } },
-                indexes: { by_email_old: { name: "by_email_old", fields: ["email"], unique: false } },
             },
         });
         const next = snapshot({
             users: {
+                columns: { email: { nullable: false, sqlType: "TEXT" } },
+                indexes: { by_email: { fields: ["email"], name: "by_email", unique: false } },
                 name: "users",
-                columns: { email: { sqlType: "TEXT", nullable: false } },
-                indexes: { by_email: { name: "by_email", fields: ["email"], unique: false } },
             },
         });
 
@@ -208,16 +210,16 @@ describe("diffSnapshots", () => {
 
         const previous = snapshot({
             users: {
-                name: "users",
                 columns: {
-                    email: { sqlType: "TEXT", nullable: false },
-                    legacyColumn: { sqlType: "TEXT", nullable: true },
+                    email: { nullable: false, sqlType: "TEXT" },
+                    legacyColumn: { nullable: true, sqlType: "TEXT" },
                 },
                 indexes: {},
+                name: "users",
             },
         });
         const next = snapshot({
-            users: { name: "users", columns: { email: { sqlType: "TEXT", nullable: false } }, indexes: {} },
+            users: { columns: { email: { nullable: false, sqlType: "TEXT" } }, indexes: {}, name: "users" },
         });
 
         const diff = diffSnapshots(previous, next);
@@ -232,10 +234,10 @@ describe("diffSnapshots", () => {
         expect.assertions(3);
 
         const previous = snapshot({
-            users: { name: "users", columns: { age: { sqlType: "TEXT", nullable: false } }, indexes: {} },
+            users: { columns: { age: { nullable: false, sqlType: "TEXT" } }, indexes: {}, name: "users" },
         });
         const next = snapshot({
-            users: { name: "users", columns: { age: { sqlType: "INTEGER", nullable: false } }, indexes: {} },
+            users: { columns: { age: { nullable: false, sqlType: "INTEGER" } }, indexes: {}, name: "users" },
         });
 
         const diff = diffSnapshots(previous, next);
@@ -249,7 +251,7 @@ describe("diffSnapshots", () => {
         expect.assertions(3);
 
         const equal = snapshot({
-            users: { name: "users", columns: { email: { sqlType: "TEXT", nullable: false } }, indexes: {} },
+            users: { columns: { email: { nullable: false, sqlType: "TEXT" } }, indexes: {}, name: "users" },
         });
 
         const diff = diffSnapshots(equal, equal);
@@ -263,7 +265,7 @@ describe("diffSnapshots", () => {
         expect.assertions(2);
 
         const next = snapshot({
-            users: { name: "users", columns: { email: { sqlType: "TEXT", nullable: false } }, indexes: {} },
+            users: { columns: { email: { nullable: false, sqlType: "TEXT" } }, indexes: {}, name: "users" },
         });
 
         const diff = diffSnapshots(undefined, next);
@@ -279,9 +281,9 @@ describe("renderMigrationFile", () => {
 
         const next = snapshot({
             users: {
-                name: "users",
-                columns: { email: { sqlType: "TEXT", nullable: false } },
+                columns: { email: { nullable: false, sqlType: "TEXT" } },
                 indexes: {},
+                name: "users",
             },
         });
 
@@ -290,7 +292,7 @@ describe("renderMigrationFile", () => {
 
         expect(body).toContain("Cirrus migration: init");
         expect(body).toContain("2024-01-01T00:00:00.000Z");
-        expect(body).toContain('CREATE TABLE IF NOT EXISTS "users"');
+        expect(body).toContain("CREATE TABLE IF NOT EXISTS \"users\"");
     });
 
     it("appends a manual-SQL comment block for unsupported deltas", () => {
@@ -298,13 +300,13 @@ describe("renderMigrationFile", () => {
 
         const previous = snapshot({
             users: {
-                name: "users",
-                columns: { email: { sqlType: "TEXT", nullable: false }, legacy: { sqlType: "TEXT", nullable: true } },
+                columns: { email: { nullable: false, sqlType: "TEXT" }, legacy: { nullable: true, sqlType: "TEXT" } },
                 indexes: {},
+                name: "users",
             },
         });
         const next = snapshot({
-            users: { name: "users", columns: { email: { sqlType: "TEXT", nullable: false } }, indexes: {} },
+            users: { columns: { email: { nullable: false, sqlType: "TEXT" } }, indexes: {}, name: "users" },
         });
 
         const diff = diffSnapshots(previous, next);

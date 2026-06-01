@@ -9,13 +9,15 @@ import { createMockClient } from "./mock-client.js";
 let setTokenHandle: ((token: string | null) => void) | undefined;
 
 const Display = (): ReactElement => {
-    const { token, user, setToken } = useAuth();
+    const { setToken, token, user } = useAuth();
 
     setTokenHandle = setToken;
 
     return (
         <div data-testid="display">
-            {token ?? "null"}|{user ? "user" : "anon"}
+            {token ?? "null"}
+|
+{user ? "user" : "anon"}
         </div>
     );
 };

@@ -31,5 +31,5 @@ export const useAuth = (): UseAuthResult => {
         [client],
     );
 
-    return { user, token, setToken };
+    return { setToken, token, user };
 };

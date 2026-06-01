@@ -21,17 +21,17 @@ const SECRET = "x".repeat(32);
 
 const STRONG_PASSWORD = "correct horse battery staple";
 
-const seedMemoryDb = (): Record<string, unknown[]> => {
- return {
-    account: [],
-    invitation: [],
-    member: [],
-    organization: [],
-    session: [],
-    team: [],
-    user: [],
-    verification: [],
-};
+const seedMemoryDatabase = (): Record<string, unknown[]> => {
+    return {
+        account: [],
+        invitation: [],
+        member: [],
+        organization: [],
+        session: [],
+        team: [],
+        user: [],
+        verification: [],
+    };
 };
 
 /**
@@ -58,7 +58,7 @@ const signInAndCookie = async (auth: any, email: string, password: string): Prom
 };
 
 describe("admin plugin behaviour", () => {
-    let memoryDb: Record<string, unknown[]>;
+    let memoryDatabase: Record<string, unknown[]>;
     // `any` rather than `ReturnType<typeof createAuth>` so the plugin-contributed
     // endpoints are reachable through `auth.api` without re-deriving the full
     // generic chain here.
@@ -67,10 +67,10 @@ describe("admin plugin behaviour", () => {
     let adminHeaders: Headers;
 
     beforeEach(async () => {
-        memoryDb = seedMemoryDb();
+        memoryDatabase = seedMemoryDatabase();
         auth = createAuth({
             baseURL: "http://localhost",
-            database: memoryAdapter(memoryDb),
+            database: memoryAdapter(memoryDatabase),
             emailAndPassword: { enabled: true },
             plugins: [admin()],
             secret: SECRET,
@@ -86,7 +86,7 @@ describe("admin plugin behaviour", () => {
 
         adminId = adminSignUp.user.id;
 
-        const userRow = memoryDb["user"]?.find((row) => (row as { id: string }).id === adminId) as Record<string, unknown>;
+        const userRow = memoryDatabase["user"]?.find((row) => (row as { id: string }).id === adminId) as Record<string, unknown>;
 
         userRow["role"] = "admin";
 
@@ -107,7 +107,7 @@ describe("admin plugin behaviour", () => {
             headers: adminHeaders,
         });
 
-        const userRow = memoryDb["user"]?.find((row) => (row as { id: string }).id === userId) as { banned?: boolean; banReason?: string } | undefined;
+        const userRow = memoryDatabase["user"]?.find((row) => (row as { id: string }).id === userId) as { banned?: boolean; banReason?: string } | undefined;
 
         expect(userRow?.banned).toBe(true);
         expect(userRow?.banReason).toBe("spam");
@@ -144,17 +144,17 @@ describe("admin plugin behaviour", () => {
 });
 
 describe("organization plugin behaviour", () => {
-    let memoryDb: Record<string, unknown[]>;
+    let memoryDatabase: Record<string, unknown[]>;
     // `any` rather than `ReturnType<typeof createAuth>` so the plugin-contributed
     // endpoints are reachable through `auth.api` without re-deriving the full
     // generic chain here.
     let auth: any;
 
     beforeEach(() => {
-        memoryDb = seedMemoryDb();
+        memoryDatabase = seedMemoryDatabase();
         auth = createAuth({
             baseURL: "http://localhost",
-            database: memoryAdapter(memoryDb),
+            database: memoryAdapter(memoryDatabase),
             emailAndPassword: { enabled: true },
             plugins: [organization()],
             secret: SECRET,
@@ -175,14 +175,14 @@ describe("organization plugin behaviour", () => {
 
         expect(org).not.toBeNull();
 
-        const organizations = (memoryDb["organization"] ?? []) as { name: string; slug: string }[];
+        const organizations = (memoryDatabase["organization"] ?? []) as { name: string; slug: string }[];
 
         expect(organizations).toEqual([expect.objectContaining({ name: "Acme", slug: "acme" })]);
 
         // The plugin auto-creates a `member` row for the creator with the
         // `owner` role. That's the contract third-party admin UIs rely on,
         // so we lock it in here.
-        const members = (memoryDb["member"] ?? []) as { organizationId: string; role: string; userId: string }[];
+        const members = (memoryDatabase["member"] ?? []) as { organizationId: string; role: string; userId: string }[];
 
         expect(members).toEqual([expect.objectContaining({ organizationId: org?.id, role: "owner", userId: ownerId })]);
     });
@@ -195,7 +195,7 @@ describe("organization plugin behaviour", () => {
             body: { email: "lead@example.com", name: "Lead", password: STRONG_PASSWORD },
         });
         const ownerHeaders = await signInAndCookie(auth, "lead@example.com", STRONG_PASSWORD);
-        const ownerId = (memoryDb["user"]?.find((row) => (row as { email: string }).email === "lead@example.com") as { id: string }).id;
+        const ownerId = (memoryDatabase["user"]?.find((row) => (row as { email: string }).email === "lead@example.com") as { id: string }).id;
 
         const org = (await auth.api.createOrganization({
             body: { name: "Initech", slug: "initech" },
@@ -214,7 +214,7 @@ describe("organization plugin behaviour", () => {
             headers: ownerHeaders,
         });
 
-        const invitations = (memoryDb["invitation"] ?? []) as {
+        const invitations = (memoryDatabase["invitation"] ?? []) as {
             email: string;
             inviterId: string;
             organizationId: string;

@@ -4,12 +4,12 @@ import { runDocsCommand } from "../../src/commands/docs.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => {
- return {
-    error: () => {},
-    info: () => {},
-    success: () => {},
-    warn: () => {},
-};
+    return {
+        error: () => {},
+        info: () => {},
+        success: () => {},
+        warn: () => {},
+    };
 };
 
 const recordingOpener = (): { openedUrls: string[]; opener: (url: string) => Promise<void> } => {
@@ -61,7 +61,7 @@ describe("cirrus docs", () => {
         const errors: string[] = [];
 
         const result = await runDocsCommand({
-            logger: { ...silentLogger(), error: (msg) => errors.push(msg) },
+            logger: { ...silentLogger(), error: (message) => errors.push(message) },
             opener: async () => {
                 throw new Error("xdg-open not found");
             },

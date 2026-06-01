@@ -58,7 +58,7 @@ export class CirrusSubscriptionRegistry {
     public attach(
         queryClient: QueryClient,
         queryKey: QueryKey,
-        fn: FunctionReference,
+        function_: FunctionReference,
         args: Record<string, unknown>,
         shardKey: string | undefined,
         options: { pollIntervalMs?: number } = {},
@@ -72,7 +72,7 @@ export class CirrusSubscriptionRegistry {
 
             try {
                 entry.unsubscribe = this.client.subscribe(
-                    fn,
+                    function_,
                     args,
                     (value) => {
                         queryClient.setQueryData(queryKey, value);
@@ -119,7 +119,12 @@ export class CirrusSubscriptionRegistry {
  * TanStack hashes for dedup. The `"cirrus"` literal namespaces our entries so
  * an app's own queries can't collide with ours.
  */
-export const cirrusQueryKey = (fn: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => ["cirrus", fn.__cirrusRef, args, shardKey ?? null];
+export const cirrusQueryKey = (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => [
+    "cirrus",
+    function_.__cirrusRef,
+    args,
+    shardKey ?? null,
+];
 
 /**
  * Stringify a queryKey for use in a React effect's dep list. TanStack hashes

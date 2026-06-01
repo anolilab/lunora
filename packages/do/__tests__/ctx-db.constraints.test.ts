@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "../src/ctx-db.js";
-import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { ConflictError } from "../src/transaction.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
@@ -14,10 +14,10 @@ import { createSqliteExec } from "./_helpers/node-sqlite.js";
 const FIXED_CLOCK = 1_700_000_000_000;
 
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
- return {
-    _meta: { column: { notNull: true, ...column } },
-    kind,
-};
+    return {
+        _meta: { column: { notNull: true, ...column } },
+        kind,
+    };
 };
 
 let harness: ReturnType<typeof createSqliteExec>;
@@ -54,7 +54,7 @@ const setup = () => {
 
     return {
         revCalls: () => revs,
-        writer: createShardCtxDb({ clock: () => FIXED_CLOCK, schema, sql: harness.sql }),
+        writer: createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql }),
     };
 };
 
@@ -74,10 +74,10 @@ describe("ctx-db constraints", () => {
             const { writer } = setup();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const document_ = await writer.get(id);
 
-            expect(doc?.["status"]).toBe("todo");
-            expect(doc?.["seq"]).toBe(7);
+            expect(document_?.["status"]).toBe("todo");
+            expect(document_?.["seq"]).toBe(7);
         });
 
         it("a provided value overrides the default", async () => {
@@ -86,10 +86,10 @@ describe("ctx-db constraints", () => {
             const { writer } = setup();
 
             const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const document_ = await writer.get(id);
 
-            expect(doc?.["status"]).toBe("done");
-            expect(doc?.["seq"]).toBe(99);
+            expect(document_?.["status"]).toBe("done");
+            expect(document_?.["seq"]).toBe(99);
         });
 
         it("does not run `$onUpdateFn` on insert", async () => {
@@ -98,9 +98,9 @@ describe("ctx-db constraints", () => {
             const { revCalls, writer } = setup();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const doc = await writer.get(id);
+            const document_ = await writer.get(id);
 
-            expect(doc?.["rev"]).toBeUndefined();
+            expect(document_?.["rev"]).toBeUndefined();
             expect(revCalls()).toBe(0);
         });
     });
@@ -213,7 +213,7 @@ describe("ctx-db constraints", () => {
 
             runShardMigrations(harness.sql, schema);
 
-            return createShardCtxDb({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+            return createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
         };
 
         it("(tenantId, slug) duplicate inserts conflict; differing in either column is allowed", async () => {
@@ -255,22 +255,22 @@ describe("ctx-db constraints", () => {
          * pass a structural fake — same shape, hand-rolled `parse`.
          */
         const checked = (kind: string, predicate: (value: unknown) => boolean, message: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
- return {
-            _meta: { column: { notNull: true, ...column } },
-            kind,
-            parse(value) {
-                if (!predicate(value)) {
-                    const error: Error & { code?: string } = new Error(message);
+            return {
+                _meta: { column: { notNull: true, ...column } },
+                kind,
+                parse(value) {
+                    if (!predicate(value)) {
+                        const error: Error & { code?: string } = new Error(message);
 
-                    error.code = "VALIDATION";
+                        error.code = "VALIDATION";
 
-                    throw error;
-                }
+                        throw error;
+                    }
 
-                return value;
-            },
+                    return value;
+                },
+            };
         };
-};
 
         const setupCheck = () => {
             const schema: SchemaLike = {
@@ -288,7 +288,7 @@ describe("ctx-db constraints", () => {
 
             runShardMigrations(harness.sql, schema);
 
-            return createShardCtxDb({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+            return createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
         };
 
         it("insert rejects a row that fails the refinement", async () => {

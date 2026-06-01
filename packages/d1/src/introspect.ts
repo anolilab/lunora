@@ -38,7 +38,7 @@ interface ReadGlobalTablePageOptions {
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 500;
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 
@@ -53,7 +53,7 @@ const isGlobalTable = (schema: SchemaLike, table: string): boolean => schema.tab
  */
 const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknown>): Record<string, unknown> => {
     const definition = schema.tables[table];
-    const doc: Record<string, unknown> = {};
+    const document_: Record<string, unknown> = {};
 
     if (definition) {
         for (const [field, validator] of Object.entries(definition.shape)) {
@@ -63,14 +63,14 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
                 continue;
             }
 
-            doc[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
+            document_[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
         }
     }
 
-    doc["_id"] = row["id"];
-    doc["_creationTime"] = row["_creationTime"];
+    document_["_id"] = row["id"];
+    document_["_creationTime"] = row["_creationTime"];
 
-    return doc;
+    return document_;
 };
 
 const countRows = async (exec: D1Exec, quotedTable: string): Promise<number> => {

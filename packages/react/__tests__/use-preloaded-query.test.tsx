@@ -9,12 +9,12 @@ import { usePreloadedQuery } from "../src/use-preloaded-query.js";
 import { createMockClient } from "./mock-client.js";
 
 const preloaded = <T,>(functionPath: string, value: T, args: Record<string, unknown> = {}): Preloaded<T> => {
- return {
-    __cirrusPreloaded: true,
-    args,
-    functionPath,
-    value,
-};
+    return {
+        __cirrusPreloaded: true,
+        args,
+        functionPath,
+        value,
+    };
 };
 
 const Display = ({ token }: { token: Preloaded }): ReactElement => {
@@ -28,7 +28,9 @@ describe("usePreloadedQuery", () => {
         expect.assertions(2);
 
         // queryImpl returns a sentinel that must never appear — proving no fetch.
-        const mock = createMockClient(() => { return { count: 999 }; });
+        const mock = createMockClient(() => {
+            return { count: 999 };
+        });
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -43,7 +45,9 @@ describe("usePreloadedQuery", () => {
     it("attaches a live subscription so server pushes update the value", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient(() => { return { count: 1 }; });
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -71,7 +75,9 @@ describe("usePreloadedQuery", () => {
     it("server-renders the preloaded value (SSR getServerSnapshot, no effects)", () => {
         expect.assertions(3);
 
-        const mock = createMockClient(() => { return { count: 1 }; });
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
 
         const view = renderToString(
             <CirrusProvider client={mock.asClient}>
@@ -81,7 +87,7 @@ describe("usePreloadedQuery", () => {
 
         // React HTML-escapes the quotes in the serialized JSON, so decode them
         // before matching the preloaded value the server snapshot produced.
-        expect(view.replaceAll("&quot;", '"')).toContain(JSON.stringify({ count: 42 }));
+        expect(view.replaceAll("&quot;", "\"")).toContain(JSON.stringify({ count: 42 }));
         // No effects run during SSR, so neither transport is touched.
         expect(mock.query).not.toHaveBeenCalled();
         expect(mock.subscribe).not.toHaveBeenCalled();

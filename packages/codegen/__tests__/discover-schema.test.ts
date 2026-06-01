@@ -336,8 +336,8 @@ describe("discoverSchema", () => {
         // Phantom descriptors + the per-table Relations map.
         expect(dataModel).toContain("export interface OneRelation<Target extends keyof DataModel>");
         expect(dataModel).toContain("export interface ManyRelation<Target extends keyof DataModel>");
-        expect(dataModel).toContain('posts: ManyRelation<"posts">;');
-        expect(dataModel).toContain('author: OneRelation<"users">;');
+        expect(dataModel).toContain("posts: ManyRelation<\"posts\">;");
+        expect(dataModel).toContain("author: OneRelation<\"users\">;");
 
         // The with-inference machinery + generic facades.
         expect(dataModel).toContain("export type WithArg<T extends keyof DataModel>");
@@ -388,6 +388,6 @@ describe("discoverSchema", () => {
         const schema = discoverSchema(project, schemaPath);
         const dataModel = emitDataModel(schema);
 
-        expect(dataModel).toContain('export type VectorIndexName = "docs-body" | "docs-title";');
+        expect(dataModel).toContain("export type VectorIndexName = \"docs-body\" | \"docs-title\";");
     });
 });

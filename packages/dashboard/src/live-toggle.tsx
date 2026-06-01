@@ -14,17 +14,17 @@ export interface LiveToggleProps {
  * Rendered identically across panels; only the test-id `prefix` differs. State
  * lives in `useLiveToggle`.
  */
-export function LiveToggle({ live, liveError, onToggle, prefix }: LiveToggleProps): ReactElement {
-    return (
+export const LiveToggle = ({ live, liveError, onToggle, prefix }: LiveToggleProps): ReactElement => (
         <>
             <button aria-pressed={live} data-testid={`${prefix}-live`} onClick={onToggle} type="button">
                 {live ? "Live: on" : "Live: off"}
             </button>
             {live && liveError !== null && (
                 <span data-testid={`${prefix}-live-error`} role="status">
-                    Live unavailable: {liveError}
+                    Live unavailable:
+{" "}
+{liveError}
                 </span>
             )}
         </>
-    );
-}
+);
