@@ -350,8 +350,12 @@ export class SchedulerDO {
 
         if (attempts > MAX_RETRY_ATTEMPTS) {
             await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
-            // Park is terminal; clear any pending retry row.
+            // Park is terminal; clear the pending retry row AND the live header
+            // row. Leaving `id:<id>` behind would keep the dead job visible in
+            // listRecords()/`/list` (and the dashboard) as a scheduled job that
+            // can never fire — only the `dead:` record should survive.
             await this.state.storage.delete(`${RETRY_PREFIX}${record.id}`);
+            await this.state.storage.delete(`${HEADER_PREFIX}${record.id}`);
 
             return;
         }

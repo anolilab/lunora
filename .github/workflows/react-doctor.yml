@@ -20,12 +20,17 @@
             - "name": "Git checkout"
               "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
               "with":
+                  # diff mode (below) compares against the base branch, which needs
+                  # full history — a shallow clone (default depth 1) makes the diff fail.
+                  "fetch-depth": 0
                   "persist-credentials": false
             # TODO(security): pin `millionco/react-doctor` to a commit SHA (with a
             # `# vX.Y.Z` comment) instead of the mutable `@main` branch, matching the
             # SHA-pinning convention used by every other workflow in this repo.
             # A SHA could not be resolved offline; resolve the latest tagged release
-            # commit and replace `@main` below.
+            # commit and replace `@main` below. NOTE: pinning the action SHA alone does
+            # not fully pin the tool — the action runs `npx -y react-doctor@latest`
+            # internally, so the scanner binary still floats; pin that version too.
             - "uses": "millionco/react-doctor@main"
               "with":
                   "github-token": "${{ secrets.GITHUB_TOKEN }}"

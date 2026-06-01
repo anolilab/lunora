@@ -551,7 +551,15 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
                 id,
                 "update",
                 () => base.replace(id, document),
-                (preRow) => ({ ...(document as Record<string, unknown>), _creationTime: preRow["_creationTime"], _id: preRow["_id"] }),
+                // Mirror the writer's post-image: `_id` always comes from the
+                // existing row; `_creationTime` honors a caller-supplied value
+                // (the writer keeps `document._creationTime` when present) and
+                // otherwise falls back to the existing row's value.
+                (preRow) => ({
+                    ...(document as Record<string, unknown>),
+                    _creationTime: (document as Record<string, unknown>)["_creationTime"] ?? preRow["_creationTime"],
+                    _id: preRow["_id"],
+                }),
             ),
     };
 };

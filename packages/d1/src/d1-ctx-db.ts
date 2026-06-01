@@ -749,7 +749,20 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         }
     };
 
-    /** Run a write, remapping a UNIQUE-index breach to a {@link ConflictError} (code `CONFLICT`, 409). */
+    /**
+     * Run a write, remapping a UNIQUE-index breach to a {@link ConflictError}
+     * (code `CONFLICT`, 409).
+     *
+     * Concurrency note: unlike the Durable-Object dialect (`@cirrus/do`'s
+     * ctx-db), the D1 write paths (`patch`/`replace`/`delete`) do NOT apply an
+     * optimistic-concurrency CAS guard. D1's `D1Exec.run` does not surface a
+     * rows-affected count, so a reliable `WHERE id = ? AND __doc__ = ?` /
+     * `changes()` check would require widening the {@link D1Exec} contract.
+     * The read-modify-write window across an `await` (before-trigger /
+     * onDelete cascade) is therefore last-write-wins on the global-table path.
+     * Tracked as a follow-up; closing it means threading `meta.changes` through
+     * the exec adapter.
+     */
     const runWrite = async (table: string, sql: string, parameters: readonly unknown[]): Promise<void> => {
         try {
             await exec.run(sql, parameters);

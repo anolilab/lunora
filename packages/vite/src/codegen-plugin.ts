@@ -106,7 +106,7 @@ export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                     if (ok) {
                         // Invalidate generated modules so the dev server picks up new types/values.
                         for (const moduleEntry of server.moduleGraph.idToModuleMap.values()) {
-                            if (moduleEntry.id && moduleEntry.id.startsWith(absoluteGeneratedDirectory)) {
+                            if (moduleEntry.id && isInside(moduleEntry.id, absoluteGeneratedDirectory)) {
                                 server.moduleGraph.invalidateModule(moduleEntry);
                             }
                         }
