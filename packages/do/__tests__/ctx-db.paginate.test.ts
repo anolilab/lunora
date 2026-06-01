@@ -40,11 +40,11 @@ const setupWriter = (): DatabaseWriterLike => {
 
 /** Seed four p1 todos (seq 0..3 ⇒ t5,t1,t2,t3 in seq order) and one p2 todo. */
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
-    await writer.insert("todos", { _id: "t1", archived: true, projectId: "p1", seq: 1 });
-    await writer.insert("todos", { _id: "t2", archived: false, projectId: "p1", seq: 2 });
-    await writer.insert("todos", { _id: "t3", archived: false, projectId: "p1", seq: 3 });
-    await writer.insert("todos", { _id: "t4", archived: false, projectId: "p2", seq: 4 });
-    await writer.insert("todos", { _id: "t5", archived: false, projectId: "p1", seq: 0 });
+    await writer.insert("todos", { _id: "t1", archived: true, projectId: "p1", seq: 1 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t2", archived: false, projectId: "p1", seq: 2 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t3", archived: false, projectId: "p1", seq: 3 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t4", archived: false, projectId: "p2", seq: 4 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t5", archived: false, projectId: "p1", seq: 0 }, { allowExplicitId: true });
 };
 
 const ids = (docs: Array<Record<string, unknown>>): unknown[] => docs.map((doc) => doc["_id"]);
@@ -85,8 +85,8 @@ describe("reader.paginate — index ordering", () => {
     test("a final page that exactly fills numItems still reports isDone with no cursor", async () => {
         const writer = setupWriter();
 
-        await writer.insert("todos", { _id: "a", archived: false, projectId: "p1", seq: 1 });
-        await writer.insert("todos", { _id: "b", archived: false, projectId: "p1", seq: 2 });
+        await writer.insert("todos", { _id: "a", archived: false, projectId: "p1", seq: 1 }, { allowExplicitId: true });
+        await writer.insert("todos", { _id: "b", archived: false, projectId: "p1", seq: 2 }, { allowExplicitId: true });
 
         const result = await writer
             .query("todos")
@@ -135,7 +135,7 @@ describe("reader.paginate — index ordering", () => {
 
         // seq 0.5 sorts before the cursor position (t1, seq 1) — keyset paging
         // must neither leak it into nor shift the next page.
-        await writer.insert("todos", { _id: "t6", archived: false, projectId: "p1", seq: 0.5 });
+        await writer.insert("todos", { _id: "t6", archived: false, projectId: "p1", seq: 0.5 }, { allowExplicitId: true });
 
         const second = await writer
             .query("todos")

@@ -209,11 +209,11 @@ export const emitDataModel = (schema: SchemaIR): string => {
     const indexNamesByTable = schema.tables
         .map((table) => {
             const names = table.indexes
-                .map((index) => {
-                    assertIdentifier(index.name, "index name");
-
-                    return `"${index.name}"`;
-                })
+                // Index names are emitted as string-literal members of a union
+                // type, so they may legitimately be non-identifiers (e.g.
+                // "by-author"). JSON.stringify quotes + escapes them safely,
+                // which closes the injection vector without rejecting hyphens.
+                .map((index) => JSON.stringify(index.name))
                 .join(" | ");
 
             return `    ${table.name}: ${names || "never"};`;
@@ -222,26 +222,13 @@ export const emitDataModel = (schema: SchemaIR): string => {
 
     const searchIndexNamesByTable = schema.tables
         .map((table) => {
-            const names = table.searchIndexes
-                .map((index) => {
-                    assertIdentifier(index.name, "search index name");
-
-                    return `"${index.name}"`;
-                })
-                .join(" | ");
+            const names = table.searchIndexes.map((index) => JSON.stringify(index.name)).join(" | ");
 
             return `    ${table.name}: ${names || "never"};`;
         })
         .join("\n");
 
-    const vectorIndexNames =
-        schema.vectorIndexes
-            .map((index) => {
-                assertIdentifier(index.name, "vector index name");
-
-                return `"${index.name}"`;
-            })
-            .join(" | ") || "never";
+    const vectorIndexNames = schema.vectorIndexes.map((index) => JSON.stringify(index.name)).join(" | ") || "never";
 
     const insertInterfaces = schema.tables.map((table) => renderInsertInterface(table)).join("\n\n");
     const insertMap = schema.tables.map((table) => `    ${table.name}: Insert_${table.name};`).join("\n");

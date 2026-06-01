@@ -86,8 +86,8 @@ describe("selectGlobalTables", () => {
 
 describe("exportGlobalRows", () => {
     test("yields every row of each global table", async () => {
-        await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" });
-        await writer.insert("settings", { _id: "s2", name: "lang", value: "en" });
+        await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
+        await writer.insert("settings", { _id: "s2", name: "lang", value: "en" }, { allowExplicitId: true });
 
         const rows: unknown[] = [];
 
@@ -140,7 +140,7 @@ describe("importGlobalRows", () => {
     });
 
     test("counts _id collisions as conflicts and skips them", async () => {
-        await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" });
+        await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
 
         const result = await importGlobalRows(writer, schema, {
             rows: [
@@ -158,8 +158,8 @@ describe("importGlobalRows", () => {
     });
 
     test("roundtrip: export then re-import into a fresh D1 produces identical rows", async () => {
-        await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" });
-        await writer.insert("settings", { _id: "s2", name: "lang", value: "en" });
+        await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
+        await writer.insert("settings", { _id: "s2", name: "lang", value: "en" }, { allowExplicitId: true });
 
         const exported: unknown[] = [];
 

@@ -88,7 +88,7 @@ describe("createShardCtxDb — insert/get", () => {
     });
 
     test("honors a caller-supplied _id", async () => {
-        const id = await context.writer.insert("messages", { _id: "fixed", channelId: "c1", text: "hi", authorId: "u1" });
+        const id = await context.writer.insert("messages", { _id: "fixed", channelId: "c1", text: "hi", authorId: "u1" }, { allowExplicitId: true });
 
         expect(id).toBe("fixed");
 
@@ -184,8 +184,8 @@ describe("createShardCtxDb — query()", () => {
             },
         });
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer.query("messages").collect();
 
@@ -204,9 +204,9 @@ describe("createShardCtxDb — query()", () => {
             },
         });
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" });
-        await writer.insert("messages", { _id: "c", channelId: "c1", text: "third", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "c", channelId: "c1", text: "third", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer.query("messages").take(2);
 
@@ -227,8 +227,8 @@ describe("createShardCtxDb — query()", () => {
 
         await expect(writer.query("messages").first()).resolves.toBeNull();
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" }, { allowExplicitId: true });
 
         const row = await writer.query("messages").first();
 
@@ -238,8 +238,8 @@ describe("createShardCtxDb — query()", () => {
     test("filter() runs in JS against the decoded document", async () => {
         const { writer } = setupWriter();
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "hello", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "world", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "hello", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "world", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer
             .query("messages")
@@ -253,8 +253,8 @@ describe("createShardCtxDb — query()", () => {
     test("withIndex().eq() pushes the predicate into SQL", async () => {
         const { writer } = setupWriter();
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "hi", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c2", text: "hi", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "hi", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c2", text: "hi", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer
             .query("messages")
@@ -277,9 +277,9 @@ describe("createShardCtxDb — query()", () => {
             },
         });
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" });
-        await writer.insert("messages", { _id: "c", channelId: "c1", text: "third", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "c", channelId: "c1", text: "third", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer
             .query("messages")
@@ -313,9 +313,9 @@ describe("createShardCtxDb — query()", () => {
             },
         });
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "keep", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "skip", authorId: "u1" });
-        await writer.insert("messages", { _id: "c", channelId: "c1", text: "keep", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "keep", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "skip", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "c", channelId: "c1", text: "keep", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer
             .query("messages")

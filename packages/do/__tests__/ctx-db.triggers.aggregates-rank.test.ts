@@ -68,8 +68,8 @@ describe("triggers see staged aggregate/rank state inside the same transaction",
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("todos", { _id: "t1", projectId: "p1" });
-        await writer.insert("todos", { _id: "t2", projectId: "p1" });
+        await writer.insert("todos", { _id: "t1", projectId: "p1" }, { allowExplicitId: true });
+        await writer.insert("todos", { _id: "t2", projectId: "p1" }, { allowExplicitId: true });
 
         // Both reads must include the just-staged row — counter was stepped
         // before the trigger fired.
@@ -104,8 +104,8 @@ describe("triggers see staged aggregate/rank state inside the same transaction",
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("todos", { _id: "t1", projectId: "p1", weight: 10 });
-        await writer.insert("todos", { _id: "t2", projectId: "p2", weight: 5 });
+        await writer.insert("todos", { _id: "t1", projectId: "p1", weight: 10 }, { allowExplicitId: true });
+        await writer.insert("todos", { _id: "t2", projectId: "p2", weight: 5 }, { allowExplicitId: true });
 
         expect(aggSeen).toEqual([10, 15]);
 
@@ -143,9 +143,9 @@ describe("triggers see staged aggregate/rank state inside the same transaction",
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _creationTime: 100, _id: "m1", channelId: "c1" });
-        await writer.insert("messages", { _creationTime: 200, _id: "m2", channelId: "c1" });
-        await writer.insert("messages", { _creationTime: 150, _id: "m3", channelId: "c1" });
+        await writer.insert("messages", { _creationTime: 100, _id: "m1", channelId: "c1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _creationTime: 200, _id: "m2", channelId: "c1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _creationTime: 150, _id: "m3", channelId: "c1" }, { allowExplicitId: true });
 
         // m1 enters first → position 1 of 1.
         // m2 enters second → position 2 of 2 (it has a later _creationTime).
@@ -180,8 +180,8 @@ describe("triggers see staged aggregate/rank state inside the same transaction",
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("todos", { _id: "t1", projectId: "p1" });
-        await writer.insert("todos", { _id: "t2", projectId: "p1" });
+        await writer.insert("todos", { _id: "t1", projectId: "p1" }, { allowExplicitId: true });
+        await writer.insert("todos", { _id: "t2", projectId: "p1" }, { allowExplicitId: true });
         await writer.delete("t1");
 
         expect(counts).toEqual([1]);

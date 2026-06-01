@@ -55,7 +55,12 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
         // (`tableNameFromId` + `get`) reaches the FTS write-sync.
         let rows: Row[] = [];
 
-        if (/ MATCH /u.test(sql)) {
+        if (/^SELECT changes\(\) AS changed$/u.test(sql)) {
+            // OCC-guarded patch/delete (finding 40) probes changes() after the
+            // write; in this single-writer double the row always matches the
+            // CAS snapshot, so report one changed row.
+            rows = [{ changed: 1 }] as unknown as Row[];
+        } else if (/ MATCH /u.test(sql)) {
             rows = matchRows as unknown as Row[];
         } else if (/WHERE id = \? LIMIT 1$/u.test(sql)) {
             rows = (matchRows.length > 0 ? [{ 1: 1 }] : []) as unknown as Row[];

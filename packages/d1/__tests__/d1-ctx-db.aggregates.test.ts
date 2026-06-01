@@ -53,11 +53,11 @@ const setupWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => {
 };
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
-    await writer.insert("todos", { _id: "t1", archived: false, projectId: "p1", seq: 1 });
-    await writer.insert("todos", { _id: "t2", archived: false, projectId: "p1", seq: 2 });
-    await writer.insert("todos", { _id: "t3", archived: true, projectId: "p1", seq: 3 });
-    await writer.insert("todos", { _id: "t4", archived: false, projectId: "p2", seq: 4 });
-    await writer.insert("todos", { _id: "t5", archived: false, projectId: "p1", seq: 0 });
+    await writer.insert("todos", { _id: "t1", archived: false, projectId: "p1", seq: 1 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t2", archived: false, projectId: "p1", seq: 2 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t3", archived: true, projectId: "p1", seq: 3 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t4", archived: false, projectId: "p2", seq: 4 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t5", archived: false, projectId: "p1", seq: 0 }, { allowExplicitId: true });
 };
 
 beforeEach(() => {
@@ -68,7 +68,7 @@ afterEach(() => {
     harness.close();
 });
 
-describe("D1 aggregateIndex parity", () => {
+describe("d1 aggregateIndex parity", () => {
     test("trigger-maintained counter answers indexed reads", async () => {
         const writer = await setupWriter(makeSchema(byProject));
 

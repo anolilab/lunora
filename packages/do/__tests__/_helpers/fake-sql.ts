@@ -23,6 +23,8 @@ export interface FakeIndex {
 
 export interface FakeSqlState {
     indexes: Map<string, FakeIndex>;
+    /** Rows touched by the most recent INSERT/UPDATE/DELETE — mirrors SQLite `changes()`. */
+    lastChanges: number;
     statements: string[];
     tables: Map<string, Map<string, FakeRow>>;
 }
@@ -32,7 +34,12 @@ const CREATE_INDEX = /^CREATE (UNIQUE )?\s*INDEX IF NOT EXISTS "([^"]+)" ON "([^
 const INSERT = /^INSERT INTO "([^"]+)" \(id, _creationTime, __doc__\) VALUES \(\?, \?, \?\)/u;
 const UPDATE_SET_DOC = /^UPDATE "([^"]+)" SET __doc__ = \? WHERE id = \?$/u;
 const UPDATE_SET_DOC_AND_TIME = /^UPDATE "([^"]+)" SET _creationTime = \?, __doc__ = \? WHERE id = \?$/u;
+// OCC-guarded write forms (finding 40): the CAS appends `AND __doc__ = ?`,
+// matching the read-time snapshot so a concurrent write touches zero rows.
+const UPDATE_SET_DOC_CAS = /^UPDATE "([^"]+)" SET __doc__ = \? WHERE id = \? AND __doc__ = \?$/u;
 const DELETE_BY_ID = /^DELETE FROM "([^"]+)" WHERE id = \?$/u;
+const DELETE_BY_ID_CAS = /^DELETE FROM "([^"]+)" WHERE id = \? AND __doc__ = \?$/u;
+const SELECT_CHANGES = /^SELECT changes\(\) AS changed$/u;
 const PROBE_ID = /^SELECT 1 FROM "([^"]+)" WHERE id = \? LIMIT 1$/u;
 const SELECT_ALL = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)"(?: WHERE (.+?))?(?: ORDER BY (.+?))?(?: LIMIT (\d+))?$/u;
 const SELECT_BY_ID = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id = \?$/u;
@@ -218,6 +225,7 @@ const sortRows = (rows: FakeRow[], orderClause: string | undefined): FakeRow[] =
 export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
     const state: FakeSqlState = {
         indexes: new Map(),
+        lastChanges: 0,
         statements: [],
         tables: new Map(),
     };
@@ -268,6 +276,26 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             const [id, creationTime, doc] = params as [string, number, string];
 
             table.set(id, { id, _creationTime: creationTime, __doc__: doc });
+            state.lastChanges = 1;
+
+            return cursor<Record<string, unknown>>([]);
+        }
+
+        const updateDocCasMatch = UPDATE_SET_DOC_CAS.exec(sqlString);
+
+        if (updateDocCasMatch) {
+            const tableName = updateDocCasMatch[1]!;
+            const [doc, id, snapshot] = params as [string, string, string];
+            const table = state.tables.get(tableName);
+            const row = table?.get(id);
+
+            // CAS: only mutate when the on-disk __doc__ still equals the read-time snapshot.
+            if (table && row?.__doc__ === snapshot) {
+                table.set(id, { ...row, __doc__: doc });
+                state.lastChanges = 1;
+            } else {
+                state.lastChanges = 0;
+            }
 
             return cursor<Record<string, unknown>>([]);
         }
@@ -282,6 +310,9 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
 
             if (table && row) {
                 table.set(id, { ...row, __doc__: doc });
+                state.lastChanges = 1;
+            } else {
+                state.lastChanges = 0;
             }
 
             return cursor<Record<string, unknown>>([]);
@@ -297,6 +328,27 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
 
             if (table && row) {
                 table.set(id, { id, _creationTime: creationTime, __doc__: doc });
+                state.lastChanges = 1;
+            } else {
+                state.lastChanges = 0;
+            }
+
+            return cursor<Record<string, unknown>>([]);
+        }
+
+        const deleteCasMatch = DELETE_BY_ID_CAS.exec(sqlString);
+
+        if (deleteCasMatch) {
+            const tableName = deleteCasMatch[1]!;
+            const [id, snapshot] = params as [string, string];
+            const table = state.tables.get(tableName);
+            const row = table?.get(id);
+
+            if (table && row?.__doc__ === snapshot) {
+                table.delete(id);
+                state.lastChanges = 1;
+            } else {
+                state.lastChanges = 0;
             }
 
             return cursor<Record<string, unknown>>([]);
@@ -307,10 +359,17 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
         if (deleteMatch) {
             const tableName = deleteMatch[1]!;
             const [id] = params as [string];
+            const existed = state.tables.get(tableName)?.delete(id);
 
-            state.tables.get(tableName)?.delete(id);
+            state.lastChanges = existed ? 1 : 0;
 
             return cursor<Record<string, unknown>>([]);
+        }
+
+        const changesMatch = SELECT_CHANGES.exec(sqlString);
+
+        if (changesMatch) {
+            return cursor<Record<string, unknown>>([{ changed: state.lastChanges }]);
         }
 
         const probeMatch = PROBE_ID.exec(sqlString);
