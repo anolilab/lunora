@@ -14,7 +14,7 @@ import type { Route } from "../../src/create-worker.js";
 import { createWorker } from "../../src/create-worker.js";
 import { CirrusError } from "../../src/errors.js";
 
-export interface Env {
+interface Env {
     SHARD: DurableObjectNamespace<TestShardDO>;
 }
 
@@ -22,7 +22,7 @@ export interface Env {
  * Echo-style Durable Object: returns a JSON document describing exactly
  * what `createWorker` forwarded. Tests assert against this payload.
  */
-export class TestShardDO extends DurableObject<Env> {
+class TestShardDO extends DurableObject<Env> {
     // eslint-disable-next-line class-methods-use-this -- echo DO override; the handler reads only the inbound request, not instance state
     public override async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
@@ -67,6 +67,9 @@ const throwsCirrusRoute: Route = () => {
 const throwsGenericRoute: Route = () => {
     throw new Error("internal-detail-that-must-not-leak");
 };
+
+export type { Env };
+export { TestShardDO };
 
 export default {
     async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {

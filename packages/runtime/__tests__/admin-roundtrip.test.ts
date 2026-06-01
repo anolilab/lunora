@@ -160,6 +160,7 @@ describe("admin roundtrip — 3 shards", () => {
             const { writer } = sourceCluster.shards.get(key)!;
 
             for (let index = 1; index <= 4; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- ordered inserts into one shard writer; OCC requires sequential application
                 await writer.insert("messages", {
                     _id: `${key}-m${String(index)}`,
                     channelId: key,
@@ -226,12 +227,13 @@ describe("admin roundtrip — 3 shards", () => {
 
         for (const key of channelKeys) {
             const { writer } = targetCluster.shards.get(key)!;
+            // eslint-disable-next-line no-await-in-loop -- per-shard verification reads, asserted in order for readable failures
             const page = await writer.findMany("messages", {});
 
             expect(page.page).toHaveLength(4);
 
-            for (const document_ of page.page) {
-                expect(document_["channelId"]).toBe(key);
+            for (const record of page.page) {
+                expect(record["channelId"]).toBe(key);
             }
         }
 

@@ -15,26 +15,24 @@ interface ShardSpy {
 }
 
 const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSpy => {
-    const stubFor = () => {
-        return {
-            fetch: async () => {
-                if (spy.throwOnFetch) {
-                    throw spy.throwOnFetch;
-                }
+    const spy = { response } as ShardSpy;
 
-                return spy.response;
-            },
-        };
-    };
+    spy.namespace = {
+        get: () => {
+            return {
+                fetch: async () => {
+                    if (spy.throwOnFetch) {
+                        throw spy.throwOnFetch;
+                    }
 
-    const namespace: ShardNamespaceLike = {
-        get: () => stubFor(),
+                    return spy.response;
+                },
+            };
+        },
         idFromName: (name) => {
             return { __name: name };
         },
     };
-
-    const spy: ShardSpy = { namespace, response };
 
     return spy;
 };

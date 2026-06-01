@@ -517,6 +517,7 @@ describe("import streaming — large body", () => {
         let buffer = "";
 
         while (true) {
+            // eslint-disable-next-line no-await-in-loop -- streaming reader: each chunk must be read sequentially
             const { done, value } = await reader.read();
 
             if (done) {
