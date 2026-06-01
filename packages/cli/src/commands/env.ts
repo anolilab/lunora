@@ -78,6 +78,8 @@ const serializeDevVars = (map: Map<string, ParsedLine>): string => {
 
     for (const entry of map.values()) {
         // Always quote to preserve whitespace and special characters round-trip.
+        // Newlines are rejected at write time (env set), so single-line escaping
+        // of backslash + double-quote is sufficient here.
         const escaped = entry.value.replaceAll("\\", "\\\\").replaceAll('"', String.raw`\"`);
 
         lines.push(`${entry.key}="${escaped}"`);
@@ -160,6 +162,15 @@ export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvComm
 
         if (options.value === undefined) {
             logger.error("env set requires a value. Usage: cirrus env set <KEY> <VALUE>");
+
+            return { code: 1, descriptors: [] };
+        }
+
+        // `.dev.vars` is a line-oriented format and parseDevVars splits on
+        // newlines; a value containing CR/LF would corrupt the round-trip and
+        // could inject spurious vars. Reject rather than silently mangle.
+        if (/[\r\n]/u.test(options.value)) {
+            logger.error(`env: value for "${options.key}" contains a newline, which .dev.vars cannot represent`);
 
             return { code: 1, descriptors: [] };
         }

@@ -45,7 +45,7 @@ describe("ctx-db against real SQLite — migrations", () => {
         const { writer } = setupWriter({ idGenerator: () => "m_1" });
 
         await writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
-        await writer.insert("roomMembers", { _id: "rm_1", roomId: "r1", userId: "u1" });
+        await writer.insert("roomMembers", { _id: "rm_1", roomId: "r1", userId: "u1" }, { allowExplicitId: true });
 
         await expect(writer.query("messages").collect()).resolves.toHaveLength(1);
         await expect(writer.query("roomMembers").collect()).resolves.toHaveLength(1);
@@ -62,11 +62,11 @@ describe("ctx-db against real SQLite — migrations", () => {
     test("enforces UNIQUE indexes at the engine level", async () => {
         const { writer } = setupWriter();
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "dup", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "dup", authorId: "u1" }, { allowExplicitId: true });
 
         // `by_text` is declared unique — a second row with the same text must
         // be rejected by SQLite, not just by the adapter.
-        await expect(writer.insert("messages", { _id: "b", channelId: "c2", text: "dup", authorId: "u2" })).rejects.toThrow();
+        await expect(writer.insert("messages", { _id: "b", channelId: "c2", text: "dup", authorId: "u2" }, { allowExplicitId: true })).rejects.toThrow();
     });
 });
 
@@ -130,8 +130,8 @@ describe("ctx-db against real SQLite — queries", () => {
             },
         });
 
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" });
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer.query("messages").collect();
 
@@ -142,8 +142,8 @@ describe("ctx-db against real SQLite — queries", () => {
     test("withIndex().eq() filters in the engine", async () => {
         const { writer } = setupWriter();
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "x", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c2", text: "y", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "x", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c2", text: "y", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer
             .query("messages")
@@ -164,9 +164,9 @@ describe("ctx-db against real SQLite — queries", () => {
             },
         });
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }); // t=10
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }); // t=20
-        await writer.insert("messages", { _id: "c", channelId: "c1", text: "3", authorId: "u1" }); // t=30
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }, { allowExplicitId: true }); // t=10
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }, { allowExplicitId: true }); // t=20
+        await writer.insert("messages", { _id: "c", channelId: "c1", text: "3", authorId: "u1" }, { allowExplicitId: true }); // t=30
 
         const rows = await writer
             .query("messages")
@@ -186,9 +186,9 @@ describe("ctx-db against real SQLite — queries", () => {
             },
         });
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" });
-        await writer.insert("messages", { _id: "c", channelId: "c1", text: "3", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "c", channelId: "c1", text: "3", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer.query("messages").take(2);
 
@@ -198,8 +198,8 @@ describe("ctx-db against real SQLite — queries", () => {
     test("filter() applies in JS after the engine fetch", async () => {
         const { writer } = setupWriter();
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "keep", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "drop", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "keep", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "drop", authorId: "u1" }, { allowExplicitId: true });
 
         const rows = await writer
             .query("messages")
@@ -222,8 +222,8 @@ describe("ctx-db against real SQLite — queries", () => {
 
         await expect(writer.query("messages").first()).resolves.toBeNull();
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" });
+        await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }, { allowExplicitId: true });
 
         await expect(writer.query("messages").first()).resolves.toMatchObject({ _id: "a" });
     });

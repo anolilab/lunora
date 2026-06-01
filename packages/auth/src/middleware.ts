@@ -33,6 +33,23 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
      * await ctx.authApi.createOrganization({ body: { name: "Acme" }, headers });
      * await ctx.authApi.banUser({ body: { userId: "u_1" }, headers });
      * ```
+     *
+     * # ⚠️ SECURITY: privileged surface — you MUST pass `headers`
+     *
+     * This is the **full, privileged** better-auth API (`auth.api`) — it
+     * includes admin/management endpoints such as `banUser`, `setRole`,
+     * impersonation, `createOrganization`, `removeMember`, … better-auth
+     * authorizes these calls from the caller's session in the `headers` you
+     * pass. Invoked **without** `headers`, better-auth treats the call as a
+     * trusted server-side invocation and **bypasses session authorization
+     * entirely** — any procedure that can reach `ctx.authApi` could then ban a
+     * user, escalate a role, or read another tenant's data.
+     *
+     * Cirrus's procedure context carries only the resolved identity, not the
+     * raw inbound `Headers`, so this middleware CANNOT pre-bind them for you.
+     * Therefore: **thread the inbound `Headers` into every `ctx.authApi.*`
+     * call** (typically from an HTTP action — see {@link withAuthPlugins}). A
+     * header-less call is an authorization bypass, not a convenience.
      */
     readonly authApi: Auth["api"];
 }
@@ -43,15 +60,22 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  * downstream handler gets typed access to the plugin endpoints — no more
  * importing the auth instance directly from every query/mutation file.
  *
- * # Headers caveat
+ * # ⚠️ SECURITY: headers are load-bearing for authorization
  *
- * better-auth's `auth.api.<endpoint>({ headers, body })` calls almost always
- * need the inbound `Headers` so the endpoint can resolve the caller's session,
- * verify CSRF, enforce origin checks, etc. Cirrus's procedure context does
- * not currently carry the raw request headers (only the resolved identity —
- * see {@link AuthState} in `@cirrus/server`), so the middleware does **not**
- * pre-bind headers for you. Pass them explicitly from a transport that has
- * them, typically an HTTP action:
+ * `ctx.authApi` is the **full privileged** better-auth surface (`auth.api`):
+ * `banUser`, `setRole`, impersonation, `createOrganization`, `removeMember`,
+ * and so on. better-auth authorizes these from the caller's session carried in
+ * the `headers` you pass. **Called without `headers`, better-auth treats the
+ * invocation as a trusted server-side call and skips session authorization
+ * altogether** — so a header-less `ctx.authApi.banUser(...)` from any procedure
+ * runs with full privileges regardless of who the caller is. This is an
+ * authorization bypass, not just a missing convenience.
+ *
+ * Cirrus's procedure context does not currently carry the raw request headers
+ * (only the resolved identity — see {@link AuthState} in `@cirrus/server`), so
+ * this middleware **cannot** pre-bind headers for you and does **not** do so.
+ * You MUST pass the inbound `Headers` explicitly into **every** `ctx.authApi.*`
+ * call, from a transport that has them — typically an HTTP action:
  *
  * ```ts
  * // cirrus/orgs.ts
@@ -84,7 +108,10 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  * because TypeScript doesn't allow declaring `const fn: <CtxIn>() => ...` —
  * the generic must live on a callable type alias or interface.
  */
-export type WithAuthPluginsMiddleware<Auth extends CirrusAuth> = <CtxIn>(options: { ctx: CtxIn; next: MiddlewareNext<CtxIn> }) => Promise<CirrusAuthApiContext<Auth> & CtxIn>;
+export type WithAuthPluginsMiddleware<Auth extends CirrusAuth> = <CtxIn>(options: {
+    ctx: CtxIn;
+    next: MiddlewareNext<CtxIn>;
+}) => Promise<CirrusAuthApiContext<Auth> & CtxIn>;
 
 export const withAuthPlugins = <Auth extends CirrusAuth>(auth: Auth): WithAuthPluginsMiddleware<Auth> => {
     // The callable is generic over CtxIn so `next({ ctx: { authApi } })`

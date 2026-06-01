@@ -54,14 +54,14 @@ describe("with — loading relations", () => {
     };
 
     const seed = async (writer: DatabaseWriterLike): Promise<void> => {
-        await writer.insert("users", { _id: "u1", name: "Ada" });
-        await writer.insert("users", { _id: "u2", name: "Linus" });
-        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" });
-        await writer.insert("messages", { _id: "m2", authorId: "u1", body: "yo" });
-        await writer.insert("messages", { _id: "m3", authorId: "u2", body: "hey" });
-        await writer.insert("reactions", { _id: "r1", emoji: "👍", messageId: "m1" });
-        await writer.insert("reactions", { _id: "r2", emoji: "🎉", messageId: "m1" });
-        await writer.insert("reactions", { _id: "r3", emoji: "🔥", messageId: "m2" });
+        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+        await writer.insert("users", { _id: "u2", name: "Linus" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m2", authorId: "u1", body: "yo" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m3", authorId: "u2", body: "hey" }, { allowExplicitId: true });
+        await writer.insert("reactions", { _id: "r1", emoji: "👍", messageId: "m1" }, { allowExplicitId: true });
+        await writer.insert("reactions", { _id: "r2", emoji: "🎉", messageId: "m1" }, { allowExplicitId: true });
+        await writer.insert("reactions", { _id: "r3", emoji: "🔥", messageId: "m2" }, { allowExplicitId: true });
     };
 
     test("loads a one relation as Doc | null", async () => {
@@ -79,7 +79,7 @@ describe("with — loading relations", () => {
     test("one relation with no match attaches null", async () => {
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _id: "m9", authorId: "ghost", body: "?" });
+        await writer.insert("messages", { _id: "m9", authorId: "ghost", body: "?" }, { allowExplicitId: true });
 
         const { page } = await writer.findMany("messages", { with: { author: true } });
 
@@ -102,7 +102,7 @@ describe("with — loading relations", () => {
     test("many relation with no children attaches []", async () => {
         const writer = makeWriter(schema);
 
-        await writer.insert("users", { _id: "u3", name: "Loner" });
+        await writer.insert("users", { _id: "u3", name: "Loner" }, { allowExplicitId: true });
 
         const { page } = await writer.findMany("users", { where: { _id: "u3" }, with: { messages: true } });
 
@@ -151,7 +151,7 @@ describe("with — loading relations", () => {
     test("throws on an unknown relation name", async () => {
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" });
+        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
 
         await expect(writer.findMany("messages", { with: { nope: true } })).rejects.toThrow(/unknown relation "nope"/);
     });
@@ -182,9 +182,9 @@ describe("onDelete", () => {
     test("cascade deletes holder rows (and chains recursively)", async () => {
         const writer = makeWriter(buildSchema("cascade"));
 
-        await writer.insert("users", { _id: "u1", name: "Ada" });
-        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" });
-        await writer.insert("reactions", { _id: "r1", emoji: "👍", messageId: "m1" });
+        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
+        await writer.insert("reactions", { _id: "r1", emoji: "👍", messageId: "m1" }, { allowExplicitId: true });
 
         await writer.delete("u1");
 
@@ -195,8 +195,8 @@ describe("onDelete", () => {
     test("set null clears the FK on holder rows", async () => {
         const writer = makeWriter(buildSchema("set null"));
 
-        await writer.insert("users", { _id: "u1", name: "Ada" });
-        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" });
+        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
 
         await writer.delete("u1");
 
@@ -209,8 +209,8 @@ describe("onDelete", () => {
     test("restrict throws when a holder still references the parent", async () => {
         const writer = makeWriter(buildSchema("restrict"));
 
-        await writer.insert("users", { _id: "u1", name: "Ada" });
-        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" });
+        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
 
         await expect(writer.delete("u1")).rejects.toThrow(/still references it/);
         await expect(writer.get("u1")).resolves.not.toBeNull();
@@ -219,7 +219,7 @@ describe("onDelete", () => {
     test("restrict allows deletion once no holders remain", async () => {
         const writer = makeWriter(buildSchema("restrict"));
 
-        await writer.insert("users", { _id: "u1", name: "Ada" });
+        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
 
         await writer.delete("u1");
 
@@ -243,7 +243,7 @@ describe("cross-backend guard", () => {
     test("throws when a relation crosses the DO↔D1 boundary", async () => {
         const writer = makeWriter(schema);
 
-        await writer.insert("local", { _id: "l1", ref: "g1" });
+        await writer.insert("local", { _id: "l1", ref: "g1" }, { allowExplicitId: true });
 
         await expect(writer.findMany("local", { with: { remote: true } })).rejects.toThrow(/cross-backend relation 'local.remote' not supported/);
     });
@@ -324,7 +324,7 @@ describe("cross-backend onDelete cascade (DO parent → D1 holder)", () => {
             sql: harness.sql,
         });
 
-        await writer.insert("groups", { _id: "g1", name: "Engineering" });
+        await writer.insert("groups", { _id: "g1", name: "Engineering" }, { allowExplicitId: true });
         await fake.insert("memberships", { _id: "m1", groupId: "g1", userId: "u1" });
         await fake.insert("memberships", { _id: "m2", groupId: "g1", userId: "u2" });
         await fake.insert("memberships", { _id: "m3", groupId: "g2", userId: "u3" });
@@ -343,7 +343,7 @@ describe("cross-backend onDelete cascade (DO parent → D1 holder)", () => {
         // delete the parent while leaving the global holders dangling.
         const writer = createShardCtxDb({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
 
-        await writer.insert("groups", { _id: "g1", name: "Engineering" });
+        await writer.insert("groups", { _id: "g1", name: "Engineering" }, { allowExplicitId: true });
 
         await expect(writer.delete("g1")).rejects.toThrow(/cross-backend cascade.*globalDb/u);
     });
@@ -358,7 +358,5 @@ describe("cross-backend onDelete rejected (D1 parent → shardBy holder)", () =>
      * symmetry from the DO side so a future Coordinator implementation
      * has a clear home.
      */
-    test.skip("global → shardBy cascade is documented as unsupported; covered in @cirrus/d1 tests", () => {
-        /* see packages/d1/__tests__/d1-ctx-db.test.ts for the actual coverage */
-    });
+    test.todo("global → shardBy cascade is documented as unsupported; covered in @cirrus/d1 tests");
 });

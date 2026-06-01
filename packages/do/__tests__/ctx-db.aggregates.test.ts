@@ -64,11 +64,11 @@ const setupWriter = (schema: SchemaLike): DatabaseWriterLike => {
 };
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
-    await writer.insert("todos", { _id: "t1", archived: false, projectId: "p1", seq: 1 });
-    await writer.insert("todos", { _id: "t2", archived: false, projectId: "p1", seq: 2 });
-    await writer.insert("todos", { _id: "t3", archived: true, projectId: "p1", seq: 3 });
-    await writer.insert("todos", { _id: "t4", archived: false, projectId: "p2", seq: 4 });
-    await writer.insert("todos", { _id: "t5", archived: false, projectId: "p1", seq: 0 });
+    await writer.insert("todos", { _id: "t1", archived: false, projectId: "p1", seq: 1 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t2", archived: false, projectId: "p1", seq: 2 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t3", archived: true, projectId: "p1", seq: 3 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t4", archived: false, projectId: "p2", seq: 4 }, { allowExplicitId: true });
+    await writer.insert("todos", { _id: "t5", archived: false, projectId: "p1", seq: 0 }, { allowExplicitId: true });
 };
 
 beforeEach(() => {
@@ -186,8 +186,8 @@ describe("aggregateIndex planning", () => {
     });
 });
 
-describe("RLS coupling seam", () => {
-    test("AND-merges baseWhere into the scan predicate", async () => {
+describe("rLS coupling seam", () => {
+    test("aND-merges baseWhere into the scan predicate", async () => {
         const writer = setupWriter(makeSchema());
 
         await seed(writer);
@@ -300,7 +300,7 @@ describe("auto-backfill", () => {
         // The counter table is now populated independently of any read.
         const rows = harness.raw(`SELECT "__key__", "__value__" FROM "todos__agg_byProject"`);
 
-        expect(rows.length).toBe(2);
+        expect(rows).toHaveLength(2);
 
         writer = createShardCtxDb({ clock: () => 1_700_000_000_000, schema: schemaWithIndex, sql: harness.sql });
 

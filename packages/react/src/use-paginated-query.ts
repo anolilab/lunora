@@ -84,8 +84,26 @@ export function usePaginatedQuery<F extends FunctionReference>(
     // releases its subscription without disturbing the others.
     const detachesRef = useRef(new Map<string, () => void>());
 
+    // The CirrusClient the current detach handles are bound to. Page-key hashes
+    // don't encode client identity, so a client swap (same page keys) would
+    // otherwise leave every subscription attached to the old client — detach
+    // and rebuild against the new one when this changes.
+    const detachClientRef = useRef(client);
+
     useEffect(() => {
         const detaches = detachesRef.current;
+
+        // Client changed while page keys stayed the same: tear every page's
+        // subscription off the old client so the loop below re-attaches them to
+        // the new one.
+        if (detachClientRef.current !== client) {
+            for (const detach of detaches.values()) {
+                detach();
+            }
+
+            detaches.clear();
+            detachClientRef.current = client;
+        }
 
         if (skipped) {
             for (const detach of detaches.values()) {

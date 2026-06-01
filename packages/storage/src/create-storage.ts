@@ -132,7 +132,13 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
 
         validateKey(key);
 
-        return `${options.publicBaseUrl.replace(/\/+$/, "")}/${key}`;
+        // Encode each path segment the same way buildSignedUrl does so getUrl
+        // and getSignedUrl agree on the key representation — validateKey permits
+        // URL-significant chars (`?`, `#`, space) that would otherwise corrupt
+        // the public URL.
+        const safeKey = key.split("/").map(encodeURIComponent).join("/");
+
+        return `${options.publicBaseUrl.replace(/\/+$/, "")}/${safeKey}`;
     };
 
     const getSignedUrl = async (key: string, signedOpts: SignedUrlOptions = {}): Promise<string> => {

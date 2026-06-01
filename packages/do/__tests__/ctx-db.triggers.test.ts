@@ -44,7 +44,7 @@ describe("trigger firing", () => {
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _id: "m1", body: "hi" });
+        await writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true });
 
         expect(events.map((e) => e.phase)).toEqual(["before", "after"]);
         expect((events[0]!.doc as Record<string, unknown>)["body"]).toBe("hi");
@@ -72,7 +72,7 @@ describe("trigger firing", () => {
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _id: "m1", body: "hi" });
+        await writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true });
         await writer.patch("m1", { body: "bye" });
 
         expect(captured!.op).toBe("update");
@@ -101,7 +101,7 @@ describe("trigger firing", () => {
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _id: "m1", body: "hi" });
+        await writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true });
         await writer.replace("m1", { body: "fresh" });
 
         expect((captured!.previous as Record<string, unknown>)["body"]).toBe("hi");
@@ -124,7 +124,7 @@ describe("trigger firing", () => {
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _id: "m1", body: "hi" });
+        await writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true });
         await writer.delete("m1");
 
         expect(events.map((e) => e.phase)).toEqual(["before", "after"]);
@@ -154,7 +154,7 @@ describe("trigger firing", () => {
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _id: "m1", body: "hi", locked: true });
+        await writer.insert("messages", { _id: "m1", body: "hi", locked: true }, { allowExplicitId: true });
 
         await expect(writer.delete("m1")).rejects.toThrow(/row is locked/);
         await expect(writer.get("m1")).resolves.not.toBeNull();
@@ -181,7 +181,7 @@ describe("trigger firing", () => {
         };
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _id: "m1", body: "hi" });
+        await writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true });
 
         const { page } = await writer.findMany("audit");
 
@@ -214,9 +214,9 @@ describe("trigger firing", () => {
 
         const writer = makeWriter(schema);
 
-        await writer.insert("messages", { _id: "m1", body: "hi" });
-        await writer.insert("reactions", { _id: "r1", emoji: "👍", messageId: "m1" });
-        await writer.insert("reactions", { _id: "r2", emoji: "🎉", messageId: "m1" });
+        await writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true });
+        await writer.insert("reactions", { _id: "r1", emoji: "👍", messageId: "m1" }, { allowExplicitId: true });
+        await writer.insert("reactions", { _id: "r2", emoji: "🎉", messageId: "m1" }, { allowExplicitId: true });
 
         await writer.delete("m1");
 
@@ -245,7 +245,7 @@ describe("trigger firing", () => {
         };
         const writer = makeWriter(schema, scheduler);
 
-        await writer.insert("messages", { _id: "m1", body: "hi" });
+        await writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true });
 
         expect(runAfter).toHaveBeenCalledWith(0, "counters:recount", { id: "m1" });
     });
@@ -270,7 +270,7 @@ describe("trigger firing", () => {
         };
         const writer = makeWriter(schema);
 
-        await expect(writer.insert("messages", { _id: "m1", body: "hi" })).rejects.toThrow(/no scheduler configured/);
+        await expect(writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true })).rejects.toThrow(/no scheduler configured/);
     });
 
     test("the recursion-depth guard aborts a self-triggering loop", async () => {
@@ -294,6 +294,6 @@ describe("trigger firing", () => {
         };
         const writer = makeWriter(schema);
 
-        await expect(writer.insert("messages", { _id: "m1", body: "hi" })).rejects.toThrow(/trigger recursion exceeded/);
+        await expect(writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true })).rejects.toThrow(/trigger recursion exceeded/);
     });
 });

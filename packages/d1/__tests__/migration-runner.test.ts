@@ -38,14 +38,17 @@ const createDb = async (initiallyAppliedSql: string[] = []): Promise<FakeDb> => 
             run: async () => {
                 executed.push({ sql, binds: [...binds] });
 
-                // The runner now binds `hash` and `created_at` as parameters
-                // (drizzle emits `?` placeholders). Snapshot the bound hash so
-                // the fake can simulate applied state.
+                // The runner inlines `hash` and `created_at` directly into the
+                // tracking INSERT's `sql.raw(...)` literal (drizzle's d1 batch
+                // path crashes on a SQLiteRaw carrying bound params), so there
+                // are no `?` binds to snapshot here. Parse the 64-char SHA-256
+                // hex hash back out of the literal so the fake can simulate
+                // applied state.
                 if (sql.includes("INSERT INTO") && sql.includes("__drizzle_migrations")) {
-                    const boundHash = binds[0];
+                    const match = /VALUES \('([0-9a-f]{64})'/u.exec(sql);
 
-                    if (typeof boundHash === "string" && /^[0-9a-f]+$/u.test(boundHash)) {
-                        appliedHashes.push(boundHash);
+                    if (match) {
+                        appliedHashes.push(match[1]!);
                     }
                 }
 

@@ -53,7 +53,6 @@ import {
     resolveWith,
     runRowValidators,
     runTriggers,
-    selectIndexForAggregate,
     selectIndexForCount,
     selectIndexForGroupBy,
     sortColumnName,
@@ -96,6 +95,26 @@ const throwingScheduler: SchedulerLike = {
 };
 
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+
+/**
+ * Closed allowlist mapping each reducer `op` to the literal SQL function it may
+ * emit. `AggregateOp` is a compile-time type only — a caller reaching the
+ * runtime with an off-list `op` (forged wire payload, `as any`) would otherwise
+ * have it concatenated straight into the SQL string. Routing every reducer
+ * through this table guarantees only a known function name reaches the query.
+ */
+const AGGREGATE_SQL_FUNCTION: Record<string, string> = { avg: "AVG", count: "COUNT", max: "MAX", min: "MIN", sum: "SUM" };
+
+/** Resolve a reducer `op` to its SQL function, throwing on an off-allowlist op. */
+const aggregateSqlFunction = (op: string): string => {
+    const fn = AGGREGATE_SQL_FUNCTION[op];
+
+    if (fn === undefined) {
+        throw new Error(`unknown aggregate op "${op}": expected one of ${Object.keys(AGGREGATE_SQL_FUNCTION).join(", ")}`);
+    }
+
+    return fn;
+};
 
 /** Companion-table name for an aggregateIndex (`__agg_` infix matches the DO dialect). */
 const aggregateTableName = (table: string, indexName: string): string => `${table}__agg_${indexName}`;
@@ -293,12 +312,16 @@ const TABLE_NAME_CACHE_CAPACITY = 128;
  * ctx-db starts cold and a unit test never inherits another's cache.
  */
 const createTableNameCache = (): {
+    delete: (id: string) => void;
     get: (id: string) => string | undefined;
     set: (id: string, table: string) => void;
 } => {
     const map = new Map<string, string>();
 
     return {
+        delete: (id) => {
+            map.delete(id);
+        },
         get: (id) => {
             const hit = map.get(id);
 
@@ -726,7 +749,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         }
     };
 
-    /** Run a write, remapping a UNIQUE-index breach to a {@link ConflictError} (code `CONFLICT`, 409). */
+    /**
+     * Run a write, remapping a UNIQUE-index breach to a {@link ConflictError}
+     * (code `CONFLICT`, 409).
+     */
     const runWrite = async (table: string, sql: string, parameters: readonly unknown[]): Promise<void> => {
         try {
             await exec.run(sql, parameters);
@@ -736,6 +762,73 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             throw error;
+        }
+    };
+
+    /**
+     * Snapshot the RAW stored row (physical column values, not decoded into a
+     * document) for `id` in `tableName`. Captured BEFORE a write's before-
+     * trigger / onDelete-cascade `await` window so the optimistic-concurrency
+     * CAS can compare stored-value to stored-value. Returns `undefined` when the
+     * row is gone.
+     */
+    const rawRow = async (tableName: string, id: string): Promise<Record<string, unknown> | undefined> => {
+        const rows = await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" = ?`, [id]);
+
+        return rows[0];
+    };
+
+    /**
+     * Run an optimistic-concurrency-guarded write — the D1 twin of the DO
+     * dialect's `runGuardedWrite`. D1 stores rows as real columns (no `__doc__`
+     * blob) and `D1Exec.run` returns no rows-affected count, so the CAS is
+     * expressed as `WHERE "id" IS ? AND "<col>" IS ? ... RETURNING "id"` run via
+     * `exec.all` (both D1 and node:sqlite support `RETURNING`). The bound values
+     * are the RAW column values captured at read time ({@link rawRow}) so the
+     * comparison is faithful; `IS` gives NULL-safe equality. An empty RETURNING
+     * set means a concurrent write committed during the intervening `await` and
+     * changed the row — surfaced as a {@link ConflictError}.
+     *
+     * `snapshot` of `undefined` means there was nothing on disk at read time
+     * (only happens on the delete path when the row was already gone); the
+     * guard is skipped because there is no write to perform.
+     */
+    const runGuardedWrite = async (
+        table: string,
+        verb: "DELETE" | "UPDATE",
+        setClause: string,
+        setValues: readonly unknown[],
+        snapshot: Record<string, unknown> | undefined,
+    ): Promise<void> => {
+        if (snapshot === undefined) {
+            return;
+        }
+
+        const guardColumns = Object.keys(snapshot);
+        const guardClause = guardColumns.map((column) => `${quoteIdentifier(column)} IS ?`).join(" AND ");
+        const guardValues = guardColumns.map((column) => snapshot[column]);
+
+        const sql =
+            verb === "UPDATE"
+                ? `UPDATE ${quoteIdentifier(table)} SET ${setClause} WHERE ${guardClause} RETURNING "id"`
+                : `DELETE FROM ${quoteIdentifier(table)} WHERE ${guardClause} RETURNING "id"`;
+
+        const parameters = verb === "UPDATE" ? [...setValues, ...guardValues] : guardValues;
+
+        let returned: Array<Record<string, unknown>>;
+
+        try {
+            returned = await exec.all(sql, parameters);
+        } catch (error) {
+            if (isUniqueViolation(error)) {
+                throw new ConflictError(`unique constraint violation on "${table}"`);
+            }
+
+            throw error;
+        }
+
+        if (returned.length === 0) {
+            throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`);
         }
     };
 
@@ -808,6 +901,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
+            // Reject an off-allowlist `op` up front (it's a compile-time-only
+            // type) before it can reach any SQL-emitting path.
+            aggregateSqlFunction(aggOptions.op);
+
             if (aggOptions.op === "count") {
                 return writer.count(tableName, {
                     baseWhere: aggOptions.baseWhere,
@@ -820,42 +917,19 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
             }
 
-            // Indexed path mirrors @cirrus/do: when no baseWhere is set and
-            // an aggregateIndex with matching (op, field, by) covers the
-            // request, route to the counter companion — one row read regardless
-            // of N. Same scan fallback when baseWhere is present so the RLS
-            // predicate participates uniformly.
-            if (definition.aggregateIndexes && !aggOptions.baseWhere) {
-                const planned = selectIndexForAggregate(
-                    definition.aggregateIndexes,
-                    aggOptions.op,
-                    aggOptions.field,
-                    aggOptions.where as Record<string, unknown> | undefined,
-                );
-
-                if (planned) {
-                    const counterReady = await ensureBackfilled(tableName, planned.index);
-
-                    if (counterReady) {
-                        const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
-                        const aggTable = aggregateTableName(tableName, planned.index.name);
-                        const indexedRows = await exec.all(`SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [encoded]);
-
-                        if (indexedRows.length === 0) {
-                            return null;
-                        }
-
-                        const indexedValue = indexedRows[0]?.["value"];
-
-                        return indexedValue === null || indexedValue === undefined ? null : Number(indexedValue);
-                    }
-                }
-            }
-
+            // No indexed fast-path for non-count reducers: the `__agg_`
+            // companion stores a *row count* per `by`-group (the counter is
+            // stepped by ±1 and backfilled by tallying +1/row, regardless of
+            // the index's declared `op`). Reading it for sum/avg/min/max would
+            // return the row COUNT, not the reduction. Until the counter is
+            // made reducer-aware, sum/avg/min/max always fall through to the
+            // SQL scan below, which computes the correct value. `count` never
+            // reaches here (it early-returns to `writer.count` above, which
+            // does use the counter).
             const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
 
-            let querySql = `SELECT ${aggOptions.op.toUpperCase()}(${columnRef(aggOptions.field)}) AS value FROM ${quoteIdentifier(tableName)}`;
+            let querySql = `SELECT ${aggregateSqlFunction(aggOptions.op)}(${columnRef(aggOptions.field)}) AS value FROM ${quoteIdentifier(tableName)}`;
 
             if (whereSql) {
                 querySql += ` WHERE ${whereSql}`;
@@ -876,15 +950,23 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             const agg = groupOptions.agg ?? { op: "count" };
 
+            // Reject an off-allowlist reducer `op` before any SQL is emitted.
+            aggregateSqlFunction(agg.op);
+
             if (agg.op !== "count" && !agg.field) {
                 throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
             }
 
-            // Indexed path mirrors @cirrus/do: when no baseWhere is set and an
-            // aggregateIndex's `by` exactly matches `groupOptions.by` (op +
-            // field too, when not `count`), every group answer is already in
-            // the companion table. baseWhere falls through to scan.
-            if (definition.aggregateIndexes && !groupOptions.baseWhere) {
+            // Indexed path: when no baseWhere is set and an aggregateIndex's
+            // `by` exactly matches `groupOptions.by`, every group answer is
+            // already in the companion table. baseWhere falls through to scan.
+            //
+            // Restricted to `count`: the `__agg_` companion stores a *row
+            // count* per group regardless of the index's declared `op` (see
+            // `stepAggregate`/`ensureBackfilled`), so reading it for
+            // sum/avg/min/max would return counts. Non-count reducers fall
+            // through to the correct SQL `GROUP BY` scan below.
+            if (agg.op === "count" && definition.aggregateIndexes && !groupOptions.baseWhere) {
                 const planned = selectIndexForGroupBy(
                     definition.aggregateIndexes,
                     agg.op,
@@ -939,7 +1021,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             if (agg.op === "count") {
                 select.push(`COUNT(*) AS value`);
             } else {
-                select.push(`${agg.op.toUpperCase()}(${columnRef(agg.field!)}) AS value`);
+                select.push(`${aggregateSqlFunction(agg.op)}(${columnRef(agg.field!)}) AS value`);
             }
 
             let querySql = `SELECT ${select.join(", ")} FROM ${quoteIdentifier(tableName)}`;
@@ -1226,8 +1308,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             // Apply declared `onDelete` actions to holder rows before the
-            // physical delete, mirroring the DO path.
-            const existing = await writer.get(id);
+            // physical delete, mirroring the DO path. Snapshot the RAW stored
+            // row up front so the optimistic-concurrency CAS below compares
+            // stored-value to stored-value across the cascade `await` window.
+            const definition = schema.tables[tableName]!;
+            const snapshot = await rawRow(tableName, id);
+            const existing = decodeRow(definition, snapshot);
 
             // `before` fires ahead of cascade resolution so a throwing guard
             // aborts the delete before any holder rows are touched.
@@ -1265,7 +1351,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             await ensureBackfilledForTable(tableName);
             await ensureRankBackfilledForTable(tableName);
 
-            await runWrite(tableName, `DELETE FROM ${quoteIdentifier(tableName)} WHERE "id" = ?`, [id]);
+            await runGuardedWrite(tableName, "DELETE", "", [], snapshot);
+
+            // The id no longer lives in `tableName`; drop the stale cache entry
+            // so a later re-insert of the same id into a different global table
+            // re-probes instead of resolving to the now-empty original table.
+            tableNameCache.delete(id);
 
             await syncAggregates(tableName, existing ?? undefined, undefined);
             await syncRanks(tableName, id, existing ?? undefined, undefined);
@@ -1373,15 +1464,16 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         },
 
         /**
-         * Insert a document. When the document carries `_id`, that value is
-         * used as the row's primary key (required for snapshot import + tests
-         * that pin ids). **Security note for callers:** never pass an `_id`
-         * sourced from untrusted client input — a caller able to choose its own
-         * id can collide with peer rows, defeat unique constraints, and forge
-         * references in foreign tables. Strip `_id` from client payloads in
-         * mutations and only allow it on dev/admin import paths.
+         * Insert a document. A client-chosen `_id` is **ignored** by default —
+         * a caller able to pick its own id can collide with peer rows, defeat
+         * unique constraints, and forge references in foreign tables. Only the
+         * dev/admin import path (which round-trips a trusted snapshot) may opt
+         * in via `options.allowExplicitId`, in which case a string `_id` on
+         * `document` is used as the row's primary key. The default mutation
+         * path always generates a fresh id even if a handler forwards a raw
+         * client payload.
          */
-        async insert(tableName, document) {
+        async insert(tableName, document, insertOptions) {
             const definition = schema.tables[tableName];
 
             if (!definition) {
@@ -1394,7 +1486,8 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             // post-default row so a defaulted value still passes its checks.
             runRowValidators(definition, withDefaults);
 
-            const id = typeof withDefaults["_id"] === "string" ? (withDefaults["_id"] as string) : generateId();
+            const usedExplicitId = Boolean(insertOptions?.allowExplicitId) && typeof withDefaults["_id"] === "string";
+            const id = usedExplicitId ? (withDefaults["_id"] as string) : generateId();
             const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"] as number) : clock();
 
             const docWithMeta: Record<string, unknown> = { ...withDefaults, _id: id, _creationTime: creationTime };
@@ -1415,6 +1508,15 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             await runWrite(tableName, `INSERT INTO ${quoteIdentifier(tableName)} (${columns.join(", ")}) VALUES (${placeholders})`, values);
 
+            // A caller-pinned id may collide with a stale cache entry from a
+            // prior delete/re-insert in this ctx-db lifetime; point the cache
+            // at the table the row now actually lives in. (Generated ids are
+            // random and never pre-seeded, so this only matters for the
+            // explicit-id import path.)
+            if (usedExplicitId) {
+                tableNameCache.set(id, tableName);
+            }
+
             await syncAggregates(tableName, undefined, docWithMeta);
             await syncRanks(tableName, id, undefined, docWithMeta);
 
@@ -1433,7 +1535,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             const definition = schema.tables[tableName]!;
-            const existing = await writer.get(id);
+            // Capture the RAW stored row alongside the decoded `existing` — the
+            // raw values seed the optimistic-concurrency CAS below, before the
+            // before-update trigger's `await` window can let a concurrent write
+            // slip in.
+            const snapshot = await rawRow(tableName, id);
+            const existing = decodeRow(definition, snapshot);
 
             if (!existing) {
                 throw new Error(`document not found: ${id}`);
@@ -1456,9 +1563,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             const fields = Object.keys(definition.shape);
             const assignments = fields.map((field) => `${quoteIdentifier(field)} = ?`).join(", ");
-            const values = [...fields.map((field) => serializeColumnValue(merged[field] ?? null)), id];
+            const values = fields.map((field) => serializeColumnValue(merged[field] ?? null));
 
-            await runWrite(tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${assignments} WHERE "id" = ?`, values);
+            await runGuardedWrite(tableName, "UPDATE", assignments, values, snapshot);
 
             await syncAggregates(tableName, existing, merged);
             await syncRanks(tableName, id, existing, merged);
@@ -1480,9 +1587,20 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             const definition = schema.tables[tableName]!;
+            // Always snapshot the RAW stored row — it seeds the optimistic-
+            // concurrency CAS below. `previous` (the decoded prior doc) is only
+            // needed when a trigger or an aggregate/rank index has to step the
+            // old `by`-tuple; decode it from the same snapshot to avoid a second
+            // round-trip.
+            const snapshot = await rawRow(tableName, id);
+
+            if (snapshot === undefined) {
+                throw new Error(`document not found: ${id}`);
+            }
+
             const needsPrevious =
                 hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
-            const previous = needsPrevious ? ((await writer.get(id)) ?? undefined) : undefined;
+            const previous = needsPrevious ? (decodeRow(definition, snapshot) ?? undefined) : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
@@ -1501,9 +1619,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             const fields = Object.keys(definition.shape);
             const assignments = ['"_creationTime" = ?', ...fields.map((field) => `${quoteIdentifier(field)} = ?`)].join(", ");
-            const values = [creationTime, ...fields.map((field) => serializeColumnValue(replaced[field] ?? null)), id];
+            const values = [creationTime, ...fields.map((field) => serializeColumnValue(replaced[field] ?? null))];
 
-            await runWrite(tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${assignments} WHERE "id" = ?`, values);
+            await runGuardedWrite(tableName, "UPDATE", assignments, values, snapshot);
 
             await syncAggregates(tableName, previous, replaced);
             await syncRanks(tableName, id, previous, replaced);

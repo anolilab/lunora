@@ -69,9 +69,9 @@ describe("d1 rankIndex parity", () => {
     test("rank() returns 1-based position + partition total", async () => {
         const writer = await setupWriter(makeSchema(byChannel));
 
-        await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 });
-        await writer.insert("messages", { _creationTime: 200, _id: "m2", archived: false, channelId: "c1", score: 0 });
-        await writer.insert("messages", { _creationTime: 150, _id: "m3", archived: false, channelId: "c2", score: 0 });
+        await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
+        await writer.insert("messages", { _creationTime: 200, _id: "m2", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
+        await writer.insert("messages", { _creationTime: 150, _id: "m3", archived: false, channelId: "c2", score: 0 }, { allowExplicitId: true });
 
         await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 2 });
         await expect(writer.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 2, total: 2 });
@@ -81,8 +81,8 @@ describe("d1 rankIndex parity", () => {
     test("update / delete keeps the companion in step", async () => {
         const writer = await setupWriter(makeSchema(byChannel));
 
-        await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 });
-        await writer.insert("messages", { _creationTime: 200, _id: "m2", archived: false, channelId: "c1", score: 0 });
+        await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
+        await writer.insert("messages", { _creationTime: 200, _id: "m2", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
 
         await writer.patch("m2", { channelId: "c2" });
 
@@ -97,9 +97,9 @@ describe("d1 rankIndex parity", () => {
     test("desc sort returns the highest first", async () => {
         const writer = await setupWriter(makeSchema(byScoreDesc));
 
-        await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 });
-        await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 50 });
-        await writer.insert("messages", { _id: "m3", archived: false, channelId: "c1", score: 30 });
+        await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 50 }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m3", archived: false, channelId: "c1", score: 30 }, { allowExplicitId: true });
 
         await expect(writer.rank("messages", "leaderboard", { row: "m2" })).resolves.toEqual({ position: 1, total: 3 });
         await expect(writer.rank("messages", "leaderboard", { row: "m3" })).resolves.toEqual({ position: 2, total: 3 });
@@ -109,7 +109,7 @@ describe("d1 rankIndex parity", () => {
     test("restrictsCounts throws COUNT_RLS_UNSUPPORTED", async () => {
         const writer = await setupWriter(makeSchema(byChannel));
 
-        await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 0 });
+        await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
 
         await expect(writer.rank("messages", "byChannel", { restrictsCounts: true, row: "m1" })).rejects.toMatchObject({
             code: "COUNT_RLS_UNSUPPORTED",
@@ -119,9 +119,9 @@ describe("d1 rankIndex parity", () => {
     test("rankPage walks the companion in declared sort order", async () => {
         const writer = await setupWriter(makeSchema(byScoreDesc));
 
-        await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 });
-        await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 50 });
-        await writer.insert("messages", { _id: "m3", archived: false, channelId: "c1", score: 30 });
+        await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 50 }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m3", archived: false, channelId: "c1", score: 30 }, { allowExplicitId: true });
 
         const page = await writer.rankPage("messages", "leaderboard", { take: 10 });
 
@@ -132,9 +132,9 @@ describe("d1 rankIndex parity", () => {
     test("rankPage scoped by partition `where`", async () => {
         const writer = await setupWriter(makeSchema(byChannel));
 
-        await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 });
-        await writer.insert("messages", { _creationTime: 200, _id: "m2", archived: false, channelId: "c2", score: 0 });
-        await writer.insert("messages", { _creationTime: 300, _id: "m3", archived: false, channelId: "c1", score: 0 });
+        await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
+        await writer.insert("messages", { _creationTime: 200, _id: "m2", archived: false, channelId: "c2", score: 0 }, { allowExplicitId: true });
+        await writer.insert("messages", { _creationTime: 300, _id: "m3", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
 
         const page = await writer.rankPage("messages", "byChannel", { take: 10, where: { channelId: "c1" } });
 
@@ -156,7 +156,7 @@ describe("d1 rankIndex parity", () => {
         const schema = makeSchema(byChannel);
         const writer = createD1CtxDb({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
 
-        await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 0 });
+        await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
 
         await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toBeNull();
     });

@@ -208,7 +208,13 @@ export const emitDataModel = (schema: SchemaIR): string => {
     // overload per table.
     const indexNamesByTable = schema.tables
         .map((table) => {
-            const names = table.indexes.map((index) => `"${index.name}"`).join(" | ");
+            const names = table.indexes
+                // Index names are emitted as string-literal members of a union
+                // type, so they may legitimately be non-identifiers (e.g.
+                // "by-author"). JSON.stringify quotes + escapes them safely,
+                // which closes the injection vector without rejecting hyphens.
+                .map((index) => JSON.stringify(index.name))
+                .join(" | ");
 
             return `    ${table.name}: ${names || "never"};`;
         })
@@ -216,13 +222,13 @@ export const emitDataModel = (schema: SchemaIR): string => {
 
     const searchIndexNamesByTable = schema.tables
         .map((table) => {
-            const names = table.searchIndexes.map((index) => `"${index.name}"`).join(" | ");
+            const names = table.searchIndexes.map((index) => JSON.stringify(index.name)).join(" | ");
 
             return `    ${table.name}: ${names || "never"};`;
         })
         .join("\n");
 
-    const vectorIndexNames = schema.vectorIndexes.map((index) => `"${index.name}"`).join(" | ") || "never";
+    const vectorIndexNames = schema.vectorIndexes.map((index) => JSON.stringify(index.name)).join(" | ") || "never";
 
     const insertInterfaces = schema.tables.map((table) => renderInsertInterface(table)).join("\n\n");
     const insertMap = schema.tables.map((table) => `    ${table.name}: Insert_${table.name};`).join("\n");
@@ -232,7 +238,16 @@ export const emitDataModel = (schema: SchemaIR): string => {
     const relationsMap = schema.tables
         .map((table) => {
             const entries = table.relations
-                .map((relation) => `        ${relation.name}: ${relation.kind === "one" ? "OneRelation" : "ManyRelation"}<"${relation.table}">;`)
+                .map((relation) => {
+                    // The target table name is interpolated into a `<"...">` type
+                    // argument, so it must be a valid identifier like every other
+                    // table name. The accessor name becomes a property key — route
+                    // it through `renderPropertyKey` so a non-identifier accessor is
+                    // quoted rather than emitted as bare (and thus invalid) source.
+                    assertIdentifier(relation.table, "relation target table");
+
+                    return `        ${renderPropertyKey(relation.name)}: ${relation.kind === "one" ? "OneRelation" : "ManyRelation"}<"${relation.table}">;`;
+                })
                 .join("\n");
 
             return entries ? `    ${table.name}: {\n${entries}\n    };` : `    ${table.name}: {};`;
@@ -1532,6 +1547,11 @@ const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
 };
 
 const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: ReadonlySet<string>): string => {
+    // The column name is emitted as a bare object key (`<name>: …`) and a
+    // `builder("<name>")` literal, so it must be a valid identifier like the
+    // table/index names — reject unescaped source at the same boundary.
+    assertIdentifier(name, "drizzle column name");
+
     const column = validatorToDrizzleColumn(validator);
     const isOptional = validator.kind === "optional";
     const innerValidator = isOptional && validator.inner ? validator.inner : validator;
@@ -1557,13 +1577,30 @@ const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: 
 };
 
 const renderIndexEntry = (index: IndexIR): string => {
+    // drizzle.*.ts is runtime-executed, so every slot here must be a valid JS
+    // identifier: `index.name` is both a bare object key and a string literal,
+    // and each field is a bare `t.<field>` column accessor. Reject anything
+    // outside the identifier allowlist rather than embed unescaped source.
+    assertIdentifier(index.name, "drizzle index name");
+
     const constructor = index.unique ? "uniqueIndex" : "index";
-    const fields = index.fields.map((field) => `t.${field}`).join(", ");
+    const fields = index.fields
+        .map((field) => {
+            assertIdentifier(field, "drizzle index field");
+
+            return `t.${field}`;
+        })
+        .join(", ");
 
     return `    ${index.name}: ${constructor}("${index.name}").on(${fields}),`;
 };
 
 const renderDrizzleTable = (table: TableIR, knownTables: ReadonlySet<string>): string => {
+    // `table.name` is emitted as a bare `export const <name>` binding and a
+    // `sqliteTable("<name>")` literal, so the Drizzle emitter validates it too
+    // rather than relying on an upstream caller having done so.
+    assertIdentifier(table.name, "table name");
+
     const columns = [
         `    _id: text("_id").primaryKey(),`,
         `    _creationTime: integer("_creationTime").notNull(),`,

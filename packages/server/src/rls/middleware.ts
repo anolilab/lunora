@@ -150,14 +150,17 @@ const indexByTable = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Map<string, Ar
  *  - any `true`        → unrestricted (return `undefined`).
  *  - any `WhereInput`  → OR them (multiple policies broaden access).
  *  - all `false`/empty → deny (return the FALSE sentinel).
+ *  - all `undefined`   → deny (the table is read-guarded but every policy
+ *                        abstained — fail CLOSED, never reveal every row).
  *
  * The Convex / kitcn convention is "any matching policy reveals the row";
- * we mirror that by OR-ing the predicates.
+ * we mirror that by OR-ing the predicates. This function is only ever reached
+ * when the table has at least one read policy (see `readBase`), so abstention
+ * by every policy must DENY rather than fall through unrestricted.
  */
 const computeReadBaseWhere = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>, context: PolicyContext<Ctx>): undefined | WhereInput => {
     const predicates: WhereInput[] = [];
     let sawTrue = false;
-    let sawDecision = false;
 
     for (const policy of policies) {
         if (policy.on !== "read") {
@@ -169,8 +172,6 @@ const computeReadBaseWhere = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>, context
         if (decision === undefined) {
             continue;
         }
-
-        sawDecision = true;
 
         if (decision === true) {
             sawTrue = true;
@@ -184,14 +185,11 @@ const computeReadBaseWhere = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>, context
         predicates.push(decision);
     }
 
-    if (!sawDecision) {
-        return undefined;
-    }
-
     if (sawTrue) {
         return undefined;
     }
 
+    // No granting decision (every policy abstained or denied): fail closed.
     if (predicates.length === 0) {
         return FALSE_PREDICATE;
     }
@@ -218,16 +216,32 @@ const computeReadBaseWhere = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>, context
  *                        case — the wrapper always passes one) denies.
  *  - `undefined`       → policy opts out; doesn't count as a decision.
  *
- * If no write policy matches the op, the write is *allowed by default* —
- * RLS guards declared reads; unguarded writes flow through. Authors who
- * want every write to be policy-gated should declare a matching write
- * policy explicitly.
+ * Default-DENY: once a table participates in RLS (has any policy attached) a
+ * write op with NO matching write policy is denied. Read policies do NOT
+ * authorize writes — a table that declares only read policies would otherwise
+ * allow any caller to patch/delete its rows by id (cross-tenant write).
+ * Authors must declare an explicit `insert`/`update`/`delete` policy for every
+ * write op they want to permit on a policy-gated table.
+ *
+ * WITH CHECK: for update ops the predicate is evaluated against BOTH the
+ * pre-write row (USING) and, when supplied, the post-image `nextRow` (WITH
+ * CHECK) so a policy cannot be satisfied by the old row while the patch
+ * reassigns the row to another tenant.
  */
-const evaluateWrite = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>, op: Exclude<Policy["on"], "read">, context: PolicyContext<Ctx>): boolean => {
+const evaluateWrite = <Ctx>(
+    policies: ReadonlyArray<Policy<Ctx>>,
+    op: Exclude<Policy["on"], "read">,
+    context: PolicyContext<Ctx>,
+    nextRow?: Record<string, unknown>,
+): boolean => {
+    let sawWritePolicy = false;
+
     for (const policy of policies) {
         if (policy.on !== op) {
             continue;
         }
+
+        sawWritePolicy = true;
 
         const decision = policy.when(context);
 
@@ -246,9 +260,16 @@ const evaluateWrite = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>, op: Exclude<Po
         if (!context.row || !matchesWhere(context.row, decision)) {
             return false;
         }
+
+        // WITH CHECK: the resulting row must also satisfy the policy, so an
+        // update cannot reassign the row out of the caller's tenant.
+        if (nextRow !== undefined && !matchesWhere(nextRow, decision)) {
+            return false;
+        }
     }
 
-    return true;
+    // Participating table, no matching write policy for this op → deny.
+    return sawWritePolicy;
 };
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -362,11 +383,29 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
 
     /**
      * Locate the row + table, evaluate the matching write policy against the
-     * pre-write row, then perform the underlying mutation. Shared by
-     * `delete`/`patch`/`replace` so the three id-keyed write paths agree on
-     * deny semantics and on the "no policy → pass through" fast path.
+     * pre-write row (and the post-image for updates), then perform the
+     * underlying mutation. Shared by `delete`/`patch`/`replace` so the three
+     * id-keyed write paths agree on deny semantics and on the "no policy →
+     * pass through" fast path.
+     *
+     * `computeNextRow`, when supplied (patch/replace), yields the WITH-CHECK
+     * post-image so a policy can't be satisfied by the old row while the write
+     * reassigns it to another tenant.
+     *
+     * TOCTOU note: the locate → policy-check → `perform()` sequence is not
+     * atomic — a concurrent write to the same row can land between the policy
+     * decision and the mutation. The underlying writer guards the actual data
+     * race with optimistic concurrency (raising `ConflictError` on a clobbered
+     * row), which bounds this window; the policy verdict itself is still taken
+     * against the pre-write snapshot. A fully atomic check requires a storage
+     * transaction primitive the generic writer interface does not expose.
      */
-    const gateById = async <R>(id: string, op: Exclude<Policy["on"], "insert" | "read">, perform: () => Promise<R>): Promise<R> => {
+    const gateById = async <R>(
+        id: string,
+        op: Exclude<Policy["on"], "insert" | "read">,
+        perform: () => Promise<R>,
+        computeNextRow?: (preRow: Record<string, unknown>) => Record<string, unknown>,
+    ): Promise<R> => {
         const located = await findRowTable(id);
 
         if (!located) {
@@ -376,7 +415,8 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
         const policies = perTable.get(located.tableName);
 
         if (policies) {
-            const writeOk = evaluateWrite(policies, op, { ...context, row: located.row });
+            const nextRow = computeNextRow ? computeNextRow(located.row) : undefined;
+            const writeOk = evaluateWrite(policies, op, { ...context, row: located.row }, nextRow);
 
             if (!writeOk) {
                 throw new CirrusError("FORBIDDEN", `${op} on "${located.tableName}" denied by policy`);
@@ -480,7 +520,13 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
             return base.insert(tableName, document);
         },
 
-        patch: (id, patch) => gateById(id, "update", () => base.patch(id, patch)),
+        patch: (id, patch) =>
+            gateById(
+                id,
+                "update",
+                () => base.patch(id, patch),
+                (preRow) => ({ ...preRow, ...(patch as Record<string, unknown>) }),
+            ),
 
         query(tableName) {
             const { baseWhere } = readBase(tableName);
@@ -500,7 +546,21 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
             return reader.filter((document) => matchesWhere(document, baseWhere));
         },
 
-        replace: (id, document) => gateById(id, "update", () => base.replace(id, document)),
+        replace: (id, document) =>
+            gateById(
+                id,
+                "update",
+                () => base.replace(id, document),
+                // Mirror the writer's post-image: `_id` always comes from the
+                // existing row; `_creationTime` honors a caller-supplied value
+                // (the writer keeps `document._creationTime` when present) and
+                // otherwise falls back to the existing row's value.
+                (preRow) => ({
+                    ...(document as Record<string, unknown>),
+                    _creationTime: (document as Record<string, unknown>)["_creationTime"] ?? preRow["_creationTime"],
+                    _id: preRow["_id"],
+                }),
+            ),
     };
 };
 

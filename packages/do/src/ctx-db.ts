@@ -28,7 +28,7 @@
  */
 
 import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates.js";
-import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates.js";
+import { CountRlsUnsupportedError, mergeWhere, selectIndexForCount, selectIndexForGroupBy } from "./aggregates.js";
 import { SCAN_DEP } from "./dependency-tracker.js";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
@@ -285,7 +285,17 @@ export interface DatabaseWriterLike {
      * answered from the counter table.
      */
     groupBy: (tableName: string, options: GroupByOptions) => Promise<ReadonlyArray<GroupByEntry>>;
-    insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    /**
+     * Insert a document, returning its generated id.
+     *
+     * Security: a client-chosen `_id` is **ignored** by default — a caller
+     * able to pick its own id could collide with peer rows, defeat unique
+     * constraints, or forge cross-table references. Only the dev/admin import
+     * path (which round-trips a trusted snapshot) may opt in via
+     * `options.allowExplicitId`, in which case a string `_id` on `document`
+     * becomes the row's primary key.
+     */
+    insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean }) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
     /**
@@ -423,6 +433,26 @@ const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, un
     }
 
     return JSON.stringify(ordered);
+};
+
+/**
+ * Closed allowlist mapping each reducer `op` to the literal SQL function it may
+ * emit. `AggregateOp` is a compile-time type only — a caller reaching the
+ * runtime with an off-list `op` (forged wire payload, `as any`) would otherwise
+ * have it concatenated straight into the SQL string. Routing every reducer
+ * through this table guarantees only a known function name reaches the query.
+ */
+const AGGREGATE_SQL_FUNCTION: Record<string, string> = { avg: "AVG", count: "COUNT", max: "MAX", min: "MIN", sum: "SUM" };
+
+/** Resolve a reducer `op` to its SQL function, throwing on an off-allowlist op. */
+const aggregateSqlFunction = (op: string): string => {
+    const fn = AGGREGATE_SQL_FUNCTION[op];
+
+    if (fn === undefined) {
+        throw new Error(`unknown aggregate op "${op}": expected one of ${Object.keys(AGGREGATE_SQL_FUNCTION).join(", ")}`);
+    }
+
+    return fn;
 };
 
 /** Indirection that lets us call `exec` without typing the literal. */
@@ -1102,6 +1132,24 @@ const runWrite = (sql: SqlExec, table: string, query: string, ...params: unknown
     }
 };
 
+/**
+ * Run an optimistic-concurrency-guarded write (a CAS whose `WHERE` includes
+ * the row's read-time `__doc__` snapshot) and raise {@link ConflictError} when
+ * it touches zero rows — meaning a concurrent write committed during the
+ * intervening `await` (before-update trigger / onDelete cascade) and clobbered
+ * the snapshot. `changes()` reports the row count of the most recent
+ * INSERT/UPDATE/DELETE, available in both workerd SQLite and `node:sqlite`.
+ */
+const runGuardedWrite = (sql: SqlExec, table: string, query: string, ...params: unknown[]): void => {
+    runWrite(sql, table, query, ...params);
+
+    const changedRow = runSql<{ changed: number }>(sql, `SELECT changes() AS changed`).one();
+
+    if (Number(changedRow.changed) === 0) {
+        throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`);
+    }
+};
+
 export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
@@ -1463,7 +1511,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * Routing every writer through this helper collapses the lookup to a
      * single probe loop that returns the row when it hits.
      */
-    const lookupById = (id: string): { row: Record<string, unknown>; tableName: string } | undefined => {
+    const lookupById = (id: string): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
         for (const [tableName, definition] of Object.entries(schema.tables)) {
             if (definition.shardMode?.kind === "global") {
                 continue;
@@ -1475,7 +1523,15 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const row = rowToDoc(rows[0]);
 
                 if (row) {
-                    return { row, tableName };
+                    // Capture the exact stored blob at read time so a
+                    // read-modify-write that spans an `await` (before-update
+                    // trigger / onDelete cascade) can compare-and-swap on it —
+                    // a concurrent write that changed the row flips the blob
+                    // and the guarded UPDATE/DELETE matches zero rows.
+                    const rawDoc = rows[0]![DOC_COLUMN];
+                    const docJson = typeof rawDoc === "string" ? rawDoc : JSON.stringify(rawDoc ?? {});
+
+                    return { docJson, row, tableName };
                 }
             }
         }
@@ -1701,6 +1757,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
+            // Reject an off-allowlist `op` up front (it's a compile-time-only
+            // type) before it can reach any SQL-emitting path.
+            aggregateSqlFunction(aggOptions.op);
+
             if (aggOptions.op === "count") {
                 // `aggregate({ op: "count" })` is just `count()` — keep the
                 // surface uniform so callers don't special-case it.
@@ -1717,43 +1777,18 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             onRead(tableName, SCAN_DEP);
 
-            // Indexed path: same shape as count(). When no baseWhere is set
-            // and an aggregateIndex with matching (op, field, by) covers the
-            // request, route to the counter table — one row read regardless
-            // of N. baseWhere falls through to scan so the RLS predicate
-            // participates uniformly.
-            if (definition.aggregateIndexes && !aggOptions.baseWhere) {
-                const planned = selectIndexForAggregate(
-                    definition.aggregateIndexes,
-                    aggOptions.op,
-                    aggOptions.field,
-                    aggOptions.where as Record<string, unknown> | undefined,
-                );
-
-                if (planned) {
-                    ensureBackfilled(tableName, planned.index);
-
-                    const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
-                    const aggTable = aggregateTableName(tableName, planned.index.name);
-                    const indexedRow = runSql<{ value: null | number }>(
-                        sql,
-                        `SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
-                        encoded,
-                    ).toArray();
-
-                    if (indexedRow.length === 0) {
-                        return null;
-                    }
-
-                    const indexedValue = indexedRow[0]?.value;
-
-                    return indexedValue === null || indexedValue === undefined ? null : Number(indexedValue);
-                }
-            }
-
+            // No indexed fast-path for non-count reducers: the `__agg_`
+            // counter stores a *row count* per `by`-group (stepped by ±1 and
+            // backfilled by tallying +1/row, regardless of the index's
+            // declared `op`). Reading it for sum/avg/min/max would return the
+            // row COUNT, not the reduction. Until the counter is made
+            // reducer-aware, sum/avg/min/max always fall through to the SQL
+            // scan below, which computes the correct value. `count` never
+            // reaches here (it early-returns to `writer.count` above, which
+            // does use the counter).
             const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
-            const aggregateSql = aggOptions.op.toUpperCase();
+            const aggregateSql = aggregateSqlFunction(aggOptions.op);
             const ref = jsonPath(aggOptions.field);
 
             let querySql = `SELECT ${aggregateSql}(${ref}) AS value FROM ${quoteIdentifier(tableName)}`;
@@ -1783,17 +1818,25 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const agg = groupOptions.agg ?? { op: "count" };
 
+            // Reject an off-allowlist reducer `op` before any SQL is emitted.
+            aggregateSqlFunction(agg.op);
+
             if (agg.op !== "count" && !agg.field) {
                 throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
             }
 
             // Indexed path: when no baseWhere is set and an aggregateIndex's
-            // `by` exactly matches `groupOptions.by` (op + field too, when
-            // not `count`), every group answer is already in the companion
-            // table — read every row and decode the key. One SELECT, no
-            // SQL `GROUP BY`. baseWhere falls through to scan so RLS
-            // composes uniformly.
-            if (definition.aggregateIndexes && !groupOptions.baseWhere) {
+            // `by` exactly matches `groupOptions.by`, every group answer is
+            // already in the companion table — read every row and decode the
+            // key. One SELECT, no SQL `GROUP BY`. baseWhere falls through to
+            // scan so RLS composes uniformly.
+            //
+            // Restricted to `count`: the `__agg_` counter stores a *row count*
+            // per group regardless of the index's declared `op` (see
+            // `stepAggregate`/`ensureBackfilled`), so reading it for
+            // sum/avg/min/max would return counts. Non-count reducers fall
+            // through to the correct SQL `GROUP BY` scan below.
+            if (agg.op === "count" && definition.aggregateIndexes && !groupOptions.baseWhere) {
                 const planned = selectIndexForGroupBy(
                     definition.aggregateIndexes,
                     agg.op,
@@ -1857,7 +1900,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (agg.op === "count") {
                 select.push(`COUNT(*) AS value`);
             } else {
-                select.push(`${agg.op.toUpperCase()}(${jsonPath(agg.field!)}) AS value`);
+                select.push(`${aggregateSqlFunction(agg.op)}(${jsonPath(agg.field!)}) AS value`);
             }
 
             let querySql = `SELECT ${select.join(", ")} FROM ${quoteIdentifier(tableName)}`;
@@ -2122,7 +2165,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return { continueCursor, isDone: !hasMore, page: docs };
         },
 
-        async insert(tableName, document) {
+        async insert(tableName, document, insertOptions) {
             const definition = schema.tables[tableName];
 
             if (!definition) {
@@ -2135,7 +2178,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // post-default row so a defaulted value still passes its checks.
             runRowValidators(definition, withDefaults);
 
-            const id = typeof withDefaults["_id"] === "string" ? (withDefaults["_id"] as string) : generateId();
+            // A client-chosen `_id` is only honored on the trusted dev/admin
+            // import path (`allowExplicitId`); the default mutation path always
+            // generates a fresh id even if a handler forwards a raw payload.
+            const id = insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string" ? (withDefaults["_id"] as string) : generateId();
             const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"] as number) : clock();
 
             const docWithMeta: Record<string, unknown> = { ...withDefaults, _id: id, _creationTime: creationTime };
@@ -2196,7 +2242,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`document not found: ${id}`);
             }
 
-            const { row: existing, tableName } = located;
+            const { docJson: existingJson, row: existing, tableName } = located;
 
             onRead(tableName, id);
 
@@ -2216,7 +2262,21 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
 
-            runWrite(sql, tableName, `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ?`, JSON.stringify(merged), id);
+            // Optimistic-concurrency guard: CAS on the read-time `__doc__`
+            // snapshot. The before-update trigger above spans an `await`, so a
+            // concurrent write could have committed in between; the
+            // `AND ${DOC_COLUMN} = ?` clause makes that write match zero rows
+            // and raise ConflictError instead of silently clobbering it (and
+            // keeps `existing` — used for the aggregate/rank -prev steps — in
+            // sync with what is actually on disk).
+            runGuardedWrite(
+                sql,
+                tableName,
+                `UPDATE ${quoteIdentifier(tableName)} SET ${DOC_COLUMN} = ? WHERE id = ? AND ${DOC_COLUMN} = ?`,
+                JSON.stringify(merged),
+                id,
+                existingJson,
+            );
 
             syncSearch(tableName, id, merged);
             syncAggregates(tableName, existing, merged);
@@ -2306,7 +2366,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 return;
             }
 
-            const { tableName, row: existing } = located;
+            const { docJson: existingJson, tableName, row: existing } = located;
 
             // `before` fires ahead of cascade resolution so a throwing guard
             // aborts the delete before any holder rows are touched.
@@ -2339,7 +2399,14 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
 
-            runSql(sql, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id);
+            // Optimistic-concurrency guard over the (wide) cascade window: the
+            // `applyOnDelete` await above can let a concurrent write commit, so
+            // CAS on the read-time `__doc__` snapshot. A row that was updated
+            // out from under us (blob changed) or already removed matches zero
+            // rows and raises ConflictError rather than clobbering that write —
+            // and keeps `existing` (used for the aggregate/rank -prev steps) in
+            // sync with what was actually on disk.
+            runGuardedWrite(sql, tableName, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ? AND ${DOC_COLUMN} = ?`, id, existingJson);
 
             syncSearch(tableName, id, undefined);
             syncAggregates(tableName, existing ?? undefined, undefined);

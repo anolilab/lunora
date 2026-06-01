@@ -219,20 +219,23 @@ describe("sharding", () => {
         await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: false, reason: "rate" });
     });
 
-    test("getValue aggregates the remaining capacity of every shard", async () => {
+    test("getValue reflects the single shard the key routes to", async () => {
         const limiter = shardedLimiter();
 
         const full = await limiter.getValue("hits", { key: "alice" });
 
-        // Two shards, each full at 2 — aggregate is 4.
-        expect(full.value).toBe(4);
+        // Per-shard capacity is rate/shards = 2. getValue routes to the SAME
+        // single shard limit()/run() use for this key, so it reports that
+        // bucket's capacity (2) — NOT the summed capacity of every shard.
+        // Summing would over-report what `alice` can actually consume.
+        expect(full.value).toBe(2);
         expect(full.config).toMatchObject({ rate: 4, shards: 2 });
 
         await limiter.limit("hits", { key: "alice" });
         await limiter.limit("hits", { key: "alice" });
 
-        // Alice's shard is drained (0); the other shard is untouched (2).
-        expect((await limiter.getValue("hits", { key: "alice" })).value).toBe(2);
+        // Alice's shard is now drained, so getValue for her key reports 0.
+        expect((await limiter.getValue("hits", { key: "alice" })).value).toBe(0);
     });
 
     test("reset clears every shard", async () => {

@@ -232,6 +232,20 @@ export interface WorkerOptions {
      */
     adminToken?: string;
     /**
+     * Acknowledge — explicitly — that sharded and fan-out access may be
+     * exercised by any caller (including unauthenticated ones) because no
+     * authorization callback is configured. When neither {@link authorizeShard}
+     * nor {@link authorizeFanOut} is set, naming a non-default shard or sending
+     * a fan-out envelope is authorization-open: this is the historical posture,
+     * preserved for backward compatibility. The runtime emits a single loud
+     * `console.warn` the first time such a request is seen so the gap is
+     * visible in logs. Set this to `true` to assert the posture is intentional
+     * and silence that warning. It does NOT change behaviour — it is purely an
+     * acknowledgement flag — and has no effect once an `authorize*` callback is
+     * configured.
+     */
+    allowUnauthenticatedShardAccess?: boolean;
+    /**
      * Read-only introspector for the auth store's users and sessions, backing
      * the dashboard's users panel via `GET /_cirrus/admin/auth/users` and
      * `/_cirrus/admin/auth/sessions`. Omit it and those endpoints respond
@@ -385,15 +399,64 @@ export interface RpcContext {
 
 /**
  * Maximum body size (in bytes) accepted by any POST/PUT path the worker
- * exposes. Larger payloads are rejected at the entry point with a 413
- * before any parsing happens — neither `parseEnvelope`, `parseMigrateRequest`,
- * `parseExportBody`, nor `streamingImport` will ever see them.
+ * exposes. Enforced in two layers: a cheap (forgeable) `Content-Length`
+ * fast-path at the entry point, and an authoritative byte budget applied while
+ * reading the body — `parseEnvelope`, `parseMigrateRequest`, `parseExportBody`,
+ * and `streamingImport` all abort with a 413 once cumulative bytes exceed this
+ * cap, so a chunked or length-stripped payload can't slip past.
  */
 const MAX_BODY_BYTES = 1_048_576;
+
+/**
+ * Read a request body fully into text while enforcing a hard byte budget as the
+ * bytes arrive. `Content-Length` is forgeable — a chunked request omits it
+ * (so the header guard sees `0`) and a non-numeric value makes the header guard
+ * `NaN` (so the guard is skipped) — therefore the cap MUST be re-checked while
+ * reading, not only from the header. Aborts with a 413 the moment cumulative
+ * bytes exceed {@link MAX_BODY_BYTES}, before the oversized payload is buffered.
+ *
+ * A `null` body (GET-style request with no body) decodes to `""`.
+ */
+const readBodyTextWithLimit = async (request: Request, limit: number = MAX_BODY_BYTES): Promise<string> => {
+    if (!request.body) {
+        return "";
+    }
+
+    const reader = request.body.getReader();
+    const decoder = new TextDecoder();
+    let total = 0;
+    let text = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        if (value) {
+            total += value.byteLength;
+
+            if (total > limit) {
+                // Stop pulling more bytes; release the underlying stream.
+                await reader.cancel().catch(() => {});
+
+                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+            }
+
+            text += decoder.decode(value, { stream: true });
+        }
+    }
+
+    text += decoder.decode();
+
+    return text;
+};
 
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 const MIGRATE_PATH = "/_cirrus/migrate";
+const SCHEDULER_DISPATCH_PATH = "/_cirrus/scheduler/dispatch";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
@@ -420,14 +483,43 @@ const MIGRATION_ADMIN_OPS = new Set<string>(["__cirrus_admin__:migrationStatus",
 export const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> } => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
+    // Fan-out and non-default shard routing are authorization-open when neither
+    // `authorizeShard` nor `authorizeFanOut` is configured — any caller can name
+    // any shard or fan a function across every shard for a table. That's the
+    // historical posture, kept for backward compatibility, but it's a footgun in
+    // production. Warn loudly exactly once (per worker instance) when such a
+    // request is actually seen, unless the operator has acknowledged the posture
+    // via `allowUnauthenticatedShardAccess`.
+    const hasAnyShardAuth = Boolean(options.authorizeShard) || Boolean(options.authorizeFanOut);
+    let warnedUnauthenticatedShardAccess = false;
+
+    const warnUnauthenticatedShardAccessOnce = (kind: "fan-out" | "shard"): void => {
+        if (hasAnyShardAuth || options.allowUnauthenticatedShardAccess || warnedUnauthenticatedShardAccess) {
+            return;
+        }
+
+        warnedUnauthenticatedShardAccess = true;
+
+        // eslint-disable-next-line no-console -- surface the open authorization posture in logs
+        console.warn(
+            `[cirrus] SECURITY: received ${kind} access but neither \`authorizeShard\` nor \`authorizeFanOut\` is configured — ` +
+            `any caller (including unauthenticated ones) can target any shard / fan out across the table. ` +
+            `Configure \`authorizeShard\`/\`authorizeFanOut\`, or set \`allowUnauthenticatedShardAccess: true\` to acknowledge this posture and silence this warning.`,
+        );
+    };
+
     const handle = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<Response> => {
         const url = new URL(request.url);
 
-        // Cap inbound body size on POST/PUT before any parser runs. The check
-        // is a header read (no body materialization) so it costs nothing and
-        // protects every body-consuming endpoint uniformly.
+        // Fast-path reject on a declared `Content-Length` over the cap — cheap
+        // (a header read, no body materialization) but NOT authoritative:
+        // `Content-Length` is forgeable. A chunked body omits it and a
+        // non-numeric value parses to `NaN`, so a missing/unparseable length is
+        // treated as "unknown" (let the request through here) — the real
+        // enforcement happens in `readBodyTextWithLimit` / the streaming import
+        // reader, which abort with 413 once cumulative bytes exceed the cap.
         if (request.method === "POST" || request.method === "PUT") {
-            const len = Number(request.headers.get("content-length") ?? 0);
+            const len = Number(request.headers.get("content-length") ?? "");
 
             if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
                 throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
@@ -461,6 +553,8 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                 if (!allowed) {
                     throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
                 }
+            } else if (shardKey !== defaultShard) {
+                warnUnauthenticatedShardAccessOnce("shard");
             }
 
             return forwardToShard(options.shardDO, shardKey, request);
@@ -515,6 +609,9 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                         code: "FORBIDDEN_FANOUT",
                         status: 403,
                     });
+                } else {
+                    // Neither callback configured: fan-out is authorization-open.
+                    warnUnauthenticatedShardAccessOnce("fan-out");
                 }
             } else if (options.authorizeShard) {
                 const shardKeyForAuth = envelope.shardKey ?? defaultShard;
@@ -523,6 +620,9 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                 if (!allowed) {
                     throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
                 }
+            } else if (envelope.shardKey !== undefined && envelope.shardKey !== defaultShard) {
+                // No per-shard gate and the caller named a non-default shard.
+                warnUnauthenticatedShardAccessOnce("shard");
             }
 
             // Timing wraps the dispatch only — envelope parse + coordinator
@@ -607,6 +707,10 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                 emitRpcEvent(observability, buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { shardKey }));
                 throw error;
             }
+        }
+
+        if (url.pathname === SCHEDULER_DISPATCH_PATH) {
+            return handleSchedulerDispatch(request, env);
         }
 
         if (url.pathname === MIGRATE_PATH) {
@@ -699,6 +803,90 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             headers: { "content-type": "application/json" },
             status: 200,
         });
+    };
+
+    /**
+     * Receiver for the `SchedulerDO`'s scheduled-job dispatch. The scheduler DO
+     * POSTs `{ functionPath, args, shardKey, scheduledFor, id }` as raw JSON,
+     * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
+     * in the `x-cirrus-scheduler-signature` header (secret in
+     * `env.CIRRUS_SCHEDULER_SECRET`), or — when no HMAC secret is configured on
+     * the scheduler — an `authorization: Bearer <admin token>` fallback. An
+     * unsigned/forged request is rejected with 403; we never run a job we can't
+     * authenticate.
+     *
+     * On success the job is dispatched through the SAME shard-forward path as
+     * `/_cirrus/rpc` (re-applying `authorizeShard` for the named shard so the
+     * scheduler cannot bypass per-shard auth), and the shard's response is
+     * propagated.
+     */
+    const handleSchedulerDispatch = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Scheduler dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        // Read the raw body verbatim (byte-budgeted) — the HMAC is computed over
+        // these exact bytes, so we must verify before re-encoding/parsing.
+        const rawBody = await readBodyTextWithLimit(request);
+
+        const envRecord = (env ?? {}) as Record<string, unknown>;
+        const schedulerSecret = typeof envRecord["CIRRUS_SCHEDULER_SECRET"] === "string" ? (envRecord["CIRRUS_SCHEDULER_SECRET"] as string) : undefined;
+        const adminBearer =
+            options.adminToken ?? (typeof envRecord["CIRRUS_ADMIN_TOKEN"] === "string" ? (envRecord["CIRRUS_ADMIN_TOKEN"] as string) : undefined);
+
+        const signatureHeader = request.headers.get("x-cirrus-scheduler-signature");
+
+        let authenticated = false;
+
+        if (signatureHeader && schedulerSecret) {
+            authenticated = await verifyHmacSignature(schedulerSecret, rawBody, signatureHeader);
+        } else if (adminBearer) {
+            // Fallback bearer path — the scheduler uses this only when no HMAC
+            // secret is configured on its side.
+            authenticated = checkAdminAuth(request, adminBearer);
+        }
+
+        if (!authenticated) {
+            throw new CirrusError("Scheduler dispatch requires a valid signature or admin bearer", { code: "FORBIDDEN", status: 403 });
+        }
+
+        let body: unknown;
+
+        try {
+            body = JSON.parse(rawBody);
+        } catch {
+            throw new CirrusError("Scheduler dispatch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; shardKey?: unknown };
+
+        if (typeof candidate.functionPath !== "string" || candidate.functionPath.length === 0) {
+            throw new CirrusError("Scheduler dispatch is missing `functionPath`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const args = (candidate.args ?? {}) as Record<string, unknown>;
+        const shardKey = typeof candidate.shardKey === "string" && candidate.shardKey.length > 0 ? candidate.shardKey : defaultShard;
+
+        // Re-apply per-shard authorization so a scheduled job cannot reach a
+        // shard a direct RPC for the same shard would be denied. The scheduler
+        // runs jobs server-side with no end-user identity, so authorize with a
+        // `null` identity — the host's callback decides whether system-initiated
+        // dispatch is permitted for the shard.
+        if (options.authorizeShard) {
+            const allowed = await options.authorizeShard(null, shardKey);
+
+            if (!allowed) {
+                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+            }
+        }
+
+        const forwarded = new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: candidate.functionPath }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+
+        return forwardToShard(options.shardDO, shardKey, forwarded);
     };
 
     const handleExport = async (request: Request, env: unknown): Promise<Response> => {
@@ -1205,10 +1393,14 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
 };
 
 const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
+    // Read with a byte budget so a chunked / Content-Length-stripped body can't
+    // bypass the size cap the header fast-path only loosely enforces.
+    const text = await readBodyTextWithLimit(request);
+
     let body: unknown;
 
     try {
-        body = await request.json();
+        body = JSON.parse(text);
     } catch {
         throw new CirrusError("RPC body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
@@ -1242,8 +1434,14 @@ const parseMigrateRequest = async (request: Request): Promise<MigrateRequest> =>
     let body: unknown;
 
     try {
-        body = await request.json();
-    } catch {
+        const text = await readBodyTextWithLimit(request);
+
+        body = text === "" ? {} : JSON.parse(text);
+    } catch (error) {
+        if (error instanceof CirrusError) {
+            throw error;
+        }
+
         throw new CirrusError("Migration body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 
@@ -1278,10 +1476,14 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
     let body: unknown;
 
     try {
-        const text = await request.text();
+        const text = await readBodyTextWithLimit(request);
 
         body = text === "" ? {} : JSON.parse(text);
-    } catch {
+    } catch (error) {
+        if (error instanceof CirrusError) {
+            throw error;
+        }
+
         throw new CirrusError("Export body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 
@@ -1358,6 +1560,10 @@ const streamingImport = async (
     const reader = request.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    // Enforce the body-size cap as bytes arrive — `Content-Length` is forgeable
+    // and an NDJSON import is exactly the streaming/chunked shape that bypasses
+    // the header fast-path. Abort with 413 once cumulative bytes exceed the cap.
+    let totalBytes = 0;
 
     const handleLine = (line: string): void => {
         const trimmed = line.trim();
@@ -1444,6 +1650,16 @@ const streamingImport = async (
 
         if (done) {
             break;
+        }
+
+        if (value) {
+            totalBytes += value.byteLength;
+
+            if (totalBytes > MAX_BODY_BYTES) {
+                await reader.cancel().catch(() => {});
+
+                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+            }
         }
 
         buffer += decoder.decode(value, { stream: true });
@@ -1540,6 +1756,33 @@ const constantTimeEqual = (expected: string, supplied: string): boolean => {
     }
 
     return diff === 0;
+};
+
+/**
+ * Verify an HMAC-SHA-256 (base64url, unpadded) signature over `body` against
+ * `secret`. Mirrors `@cirrus/scheduler`'s `signDispatch` and `@cirrus/storage`'s
+ * signed-URL HMAC pattern (WebCrypto `crypto.subtle`). We re-derive the expected
+ * signature and constant-time compare the encoded strings so a forged or absent
+ * signature can never authenticate a dispatch.
+ */
+const verifyHmacSignature = async (secret: string, body: string, suppliedSignature: string): Promise<boolean> => {
+    if (secret.length === 0 || suppliedSignature.length === 0) {
+        return false;
+    }
+
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+    const bytes = new Uint8Array(signature);
+    let binary = "";
+
+    for (const byte of bytes) {
+        binary += String.fromCodePoint(byte);
+    }
+
+    const expected = btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+
+    return constantTimeEqual(expected, suppliedSignature);
 };
 
 const checkAdminAuth = (request: Request, expected: string | undefined): boolean => {

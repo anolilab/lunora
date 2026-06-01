@@ -62,15 +62,20 @@ export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
         configureServer(server: ViteDevServer) {
             server.watcher.add(absoluteSchemaDirectory);
 
+            // True only for the directory itself or a real descendant — a bare
+            // `startsWith` would also match a sibling whose name shares the
+            // prefix (e.g. `cirrus-foo/` for schemaDir `cirrus`).
+            const isInside = (path: string, directory: string): boolean => path === directory || path.startsWith(directory + sep);
+
             const onChange = (file: string): void => {
                 // Only react to changes inside the schema dir, and ignore generated output.
                 const normalized = resolve(file);
 
-                if (!normalized.startsWith(absoluteSchemaDirectory)) {
+                if (!isInside(normalized, absoluteSchemaDirectory)) {
                     return;
                 }
 
-                if (normalized.startsWith(absoluteGeneratedDirectory)) {
+                if (isInside(normalized, absoluteGeneratedDirectory)) {
                     return;
                 }
 
@@ -101,7 +106,7 @@ export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                     if (ok) {
                         // Invalidate generated modules so the dev server picks up new types/values.
                         for (const moduleEntry of server.moduleGraph.idToModuleMap.values()) {
-                            if (moduleEntry.id && moduleEntry.id.startsWith(absoluteGeneratedDirectory)) {
+                            if (moduleEntry.id && isInside(moduleEntry.id, absoluteGeneratedDirectory)) {
                                 server.moduleGraph.invalidateModule(moduleEntry);
                             }
                         }

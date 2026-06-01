@@ -467,7 +467,7 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
         // First HTTP dispatch lands the entry.
         await shard.handleRpc("users:list", {});
         // Subscribe explicitly on the cache key so the entry is pinned.
-        const key = reactiveCacheKey("users:list", {});
+        const key = reactiveCacheKey("users:list", {}, null);
 
         shard.cacheRef()?.subscribe(key, "sub-a");
 

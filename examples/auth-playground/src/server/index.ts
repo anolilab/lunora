@@ -2,8 +2,8 @@ import { ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { ExecutionContextLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 
-import { buildAuth } from "../../cirrus/auth.js";
 import { createShardDO } from "../../cirrus/_generated/shard.js";
+import { buildAuth } from "../../cirrus/auth.js";
 
 export const ShardDO = createShardDO();
 
@@ -46,7 +46,16 @@ export default {
         }
 
         if (!worker) {
-            worker = createWorker({ shardDO: env.SHARD });
+            worker = createWorker({
+                resolveIdentity: async (identityRequest) => {
+                    // `authInstance` is always set by the time we reach here — it is built
+                    // at the top of `fetch` before any request work happens.
+                    const session = await authInstance!.api.getSession({ headers: identityRequest.headers });
+
+                    return session?.user?.id ? { userId: session.user.id } : null;
+                },
+                shardDO: env.SHARD,
+            });
         }
 
         return worker.fetch(request, env, ctx);

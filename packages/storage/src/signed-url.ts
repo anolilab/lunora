@@ -113,9 +113,20 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
     }
 
     // Pathname is `/<key>`. Strip the leading slash and decode each segment.
-    const key = url.pathname.replace(/^\//, "").split("/").map(decodeURIComponent).join("/");
+    // A malformed percent-escape (decodeURIComponent) or a non-base64url `sig`
+    // (atob) throws — treat either as `malformed` rather than letting it
+    // propagate as an uncaught rejection.
+    let key: string;
+    let sigBytes: Uint8Array;
+
+    try {
+        key = url.pathname.replace(/^\//, "").split("/").map(decodeURIComponent).join("/");
+        sigBytes = fromBase64Url(sig);
+    } catch {
+        return { valid: false, reason: "malformed" };
+    }
+
     const cryptoKey = await importHmacKey(secret);
-    const sigBytes = fromBase64Url(sig);
     const valid = await crypto.subtle.verify(
         "HMAC",
         cryptoKey,

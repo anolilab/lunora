@@ -115,11 +115,15 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         writer = createShardCtxDb({ schema: usersSchema, sql: db.sql });
 
         for (let index = 1; index <= 3; index += 1) {
-            await writer.insert("users", { _id: `u${String(index)}`, name: `user ${String(index)}`, email: `u${String(index)}@x.io` });
+            await writer.insert(
+                "users",
+                { _id: `u${String(index)}`, name: `user ${String(index)}`, email: `u${String(index)}@x.io` },
+                { allowExplicitId: true },
+            );
         }
 
         for (let index = 1; index <= 2; index += 1) {
-            await writer.insert("messages", { _id: `m${String(index)}`, channelId: "c1", text: `msg ${String(index)}` });
+            await writer.insert("messages", { _id: `m${String(index)}`, channelId: "c1", text: `msg ${String(index)}` }, { allowExplicitId: true });
         }
     });
 
@@ -286,8 +290,8 @@ describe("shardDO admin export/import dispatch", () => {
 
         const writer = createShardCtxDb({ schema: usersSchema, sql: db.sql });
 
-        await writer.insert("users", { _id: "u1", email: "a@b.com", name: "Alice" });
-        await writer.insert("messages", { _id: "m1", channelId: "c1", text: "hi" });
+        await writer.insert("users", { _id: "u1", email: "a@b.com", name: "Alice" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m1", channelId: "c1", text: "hi" }, { allowExplicitId: true });
 
         state = {
             acceptWebSocket() {},

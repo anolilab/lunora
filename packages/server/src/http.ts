@@ -400,6 +400,24 @@ type LooseStreamHandler = (options: {
 }) => AsyncGenerator<unknown, void, void> | AsyncIterable<unknown>;
 
 /**
+ * Structural match for a {@link CirrusError} that survives cross-package class
+ * identity. A handler may throw a `CirrusError` minted by a different copy of
+ * `@cirrus/server` (duplicated in the dep graph), so `instanceof` is unreliable
+ * — key off the public shape (`name === "CirrusError"` + string `code`) the way
+ * `@cirrus/runtime`'s `toErrorResponse` does. Only such known-safe errors get
+ * their `code`/`message` echoed to the client.
+ */
+const isCirrusErrorLike = (error: unknown): error is { code: string; message: string } => {
+    if (!error || typeof error !== "object") {
+        return false;
+    }
+
+    const candidate = error as { code?: unknown; message?: unknown; name?: unknown };
+
+    return candidate.name === "CirrusError" && typeof candidate.code === "string" && typeof candidate.message === "string";
+};
+
+/**
  * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
  * separator. `event:` is omitted for `data` (the default event name); we use
  * named events only for the terminal sentinels (`complete`, `error`).
@@ -456,10 +474,20 @@ const buildStreamHandler =
 
                         controller.enqueue(encoder.encode(sseFrame({}, "complete")));
                     } catch (error: unknown) {
-                        const payload =
-                            error instanceof CirrusError
-                                ? { code: error.code, message: error.message }
-                                : { code: "INTERNAL_SERVER_ERROR", message: error instanceof Error ? error.message : String(error) };
+                    // Mirror `@cirrus/runtime`'s `toErrorResponse` policy: only a
+                    // known-safe CirrusError-shaped value gets its `code`/`message`
+                    // echoed to the client. Everything else (which may carry stack
+                    // traces, file paths, or internal identifiers in `.message`) is
+                    // logged server-side and replaced with a generic frame.
+                        let payload: { code: string; message: string };
+
+                        if (isCirrusErrorLike(error)) {
+                            payload = { code: error.code, message: error.message };
+                        } else {
+                        // eslint-disable-next-line no-console -- log internal errors server-side; never echo raw details to the client
+                            console.error("[cirrus] unhandled stream handler error:", error);
+                            payload = { code: "INTERNAL_SERVER_ERROR", message: "Internal error" };
+                        }
 
                         controller.enqueue(encoder.encode(sseFrame(payload, "error")));
                     } finally {

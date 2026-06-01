@@ -43,7 +43,7 @@ const setupWriter = (): DatabaseWriterLike => {
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let index = 1; index <= 5; index += 1) {
         // eslint-disable-next-line no-await-in-loop -- inserts share one SQLite handle; sequential keeps ids deterministic.
-        await writer.insert("users", { _id: `u${String(index)}`, name: `user ${String(index)}`, score: index * 10, version: 0 });
+        await writer.insert("users", { _id: `u${String(index)}`, name: `user ${String(index)}`, score: index * 10, version: 0 }, { allowExplicitId: true });
     }
 };
 

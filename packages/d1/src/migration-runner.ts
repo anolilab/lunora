@@ -87,25 +87,29 @@ export class MigrationRunner {
 
         const statementText = migration.sql.replace(/;\s*$/u, "").trim();
 
-        // Atomically apply the migration body via drizzle's batch — same as
-        // before. The tracking row (`hash`, `created_at`) is then written via
-        // a *bound* D1 prepared statement so neither value is interpolated
-        // into SQL. Although `hash` is hex from SHA-256 and structurally safe,
-        // string-inlining sets a fragile precedent and breaks if a future
-        // field is user-supplied. We can't keep this INSERT inside the same
-        // `client.batch(...)` call because drizzle's d1 batch path crashes on
-        // a `SQLiteRaw` whose `params.length > 0` (it has no `.stmt` to bind
-        // against). The cost: if the migration body succeeds but the tracking
-        // INSERT fails (network blip), the migration will be re-applied on
-        // the next run — matching drizzle's own migrator behavior and relying
-        // on user SQL being idempotent (`CREATE TABLE IF NOT EXISTS`, etc.).
-        const items = [this.client.drizzle.run(sql.raw(statementText))];
+        // Apply the migration body AND write the tracking row in a single
+        // atomic `client.batch(...)` so they commit (or roll back) together —
+        // D1's `batch` runs as an implicit transaction. If they were two
+        // separate statements, a body that committed before a failing tracking
+        // INSERT would re-apply on the next run (bad for non-idempotent
+        // migrations).
+        //
+        // drizzle's d1 batch path crashes on a `SQLiteRaw` whose
+        // `params.length > 0` (it has no `.stmt` to bind against), so the
+        // tracking row can't use bound `?` params here. We inline the two
+        // values into the `sql.raw` literal instead — safe because both are
+        // engine-controlled, not user-supplied: `hash` is a 64-char SHA-256
+        // hex string (asserted below) and `created_at` is a numeric clock
+        // reading. The hash assertion guarantees no quote/escape can slip in.
+        if (!/^[0-9a-f]{64}$/u.test(hash)) {
+            throw new Error(`migration "${migration.name}" produced a non-hex hash; refusing to inline into SQL`);
+        }
+
+        const trackingInsertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at) VALUES ('${hash}', ${Date.now()})`;
+
+        const items = [this.client.drizzle.run(sql.raw(statementText)), this.client.drizzle.run(sql.raw(trackingInsertSql))];
 
         await this.client.batch(items as unknown as Parameters<typeof this.client.batch>[0]);
-
-        const insertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at) VALUES (?, ?)`;
-
-        await this.client.raw.prepare(insertSql).bind(hash, Date.now()).run();
     }
 
     private assertUniqueVersions(): void {
