@@ -32,7 +32,7 @@ const isInteractive = (options: DeployCommandOptions): boolean => {
         return options.interactive;
     }
 
-    return Boolean(process.stdout.isTTY) && !process.env.CI;
+    return process.stdout.isTTY === true && !process.env.CI;
 };
 
 export const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {

@@ -21,7 +21,7 @@ export const preloadQuery = async <F extends FunctionReference>(
 
     return {
         __cirrusPreloaded: true,
-        args: (args ?? {}) as Record<string, unknown>,
+        args: args ?? {},
         functionPath: fn.__cirrusRef,
         shardKey: opts.shardKey,
         value,

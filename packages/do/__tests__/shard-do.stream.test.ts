@@ -107,7 +107,7 @@ describe("shardDO streaming queries", () => {
             getWebSockets(): WebSocket[] {
                 return sockets as unknown as WebSocket[];
             },
-        } as unknown as ShardDOState;
+        };
     });
 
     afterEach(() => {

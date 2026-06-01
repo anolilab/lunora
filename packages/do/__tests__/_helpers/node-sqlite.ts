@@ -47,6 +47,6 @@ export const createSqliteExec = (): { close: () => void; raw: (query: string, ..
             db.close();
         },
         raw: (query, ...params) => run(query, ...params).toArray(),
-        sql: { exec: run as SqlExec["exec"] },
+        sql: { exec: run },
     };
 };

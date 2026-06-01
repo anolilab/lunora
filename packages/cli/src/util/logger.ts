@@ -58,7 +58,7 @@ const wantJson = (): boolean => {
 };
 
 const buildReporter = (): PailReporter => {
-    const Reporter: PailReporterConstructor = (wantJson() ? JsonReporter : PrettyReporter) as unknown as PailReporterConstructor;
+    const Reporter: PailReporterConstructor = (wantJson() ? JsonReporter : PrettyReporter) as PailReporterConstructor;
 
     return new Reporter();
 };
@@ -68,7 +68,7 @@ const sharedPail: PailLogger = createPail({
     scope: ["cirrus"],
     stderr: process.stderr,
     stdout: process.stdout,
-}) as unknown as PailLogger;
+}) as PailLogger;
 
 export const createLogger = (): Logger => {
     return {

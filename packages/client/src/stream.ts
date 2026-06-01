@@ -81,7 +81,7 @@ export const createStream = <T>(options: { maxBuffer?: number; onCancel: () => v
         }
 
         if (done) {
-            waiter.resolve({ done: true, value: undefined as unknown as T });
+            waiter.resolve({ done: true, value: undefined });
 
             return true;
         }

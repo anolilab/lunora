@@ -123,6 +123,6 @@ export const withAuthPlugins = <Auth extends CirrusAuth>(auth: Auth): WithAuthPl
     return async <CtxIn>({ next }: { ctx: CtxIn; next: MiddlewareNext<CtxIn> }): Promise<CirrusAuthApiContext<Auth> & CtxIn> => {
         const extended = await next({ ctx: { authApi: auth.api } });
 
-        return extended as CirrusAuthApiContext<Auth> & CtxIn;
+        return extended;
     };
 };

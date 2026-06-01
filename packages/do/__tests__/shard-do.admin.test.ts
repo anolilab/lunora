@@ -285,7 +285,7 @@ describe("shardDO admin data migrations", () => {
         await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, { id: "bump-version" }));
 
         const after = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.migrationStatus, { id: "bump-version" }));
-        const body = (await after.json()) as { result: { migrations: Record<string, unknown>[] } };
+        const body = await after.json<{ result: { migrations: Record<string, unknown>[] } }>();
 
         expect(body.result.migrations).toHaveLength(1);
         expect(body.result.migrations[0]).toMatchObject({ changed: 3, direction: "up", id: "bump-version", processed: 3, status: "completed" });
@@ -327,7 +327,7 @@ describe("shardDO admin data migrations", () => {
 
         expect(response.status).toBe(200);
 
-        const body = (await response.json()) as { result: { cache: unknown; errors: number; requests: number; shard: string } };
+        const body = await response.json<{ result: { cache: unknown; errors: number; requests: number; shard: string } }>();
 
         expect(body.result.requests).toBe(2);
         expect(body.result.errors).toBe(1);
@@ -349,7 +349,7 @@ describe("shardDO admin data migrations", () => {
 
         expect(response.status).toBe(200);
 
-        const body = (await response.json()) as { result: { entries: { functionPath?: string; level: string; message: string }[] } };
+        const body = await response.json<{ result: { entries: { functionPath?: string; level: string; message: string }[] } }>();
 
         expect(body.result.entries).toHaveLength(1);
         expect(body.result.entries[0]).toMatchObject({ functionPath: "boom:explode", level: "error", message: "boom" });
@@ -436,7 +436,7 @@ describe("shardDO admin row writes", () => {
 
         expect(response.status).toBe(200);
 
-        const body = (await response.json()) as { result: RunShardWriteResult };
+        const body = await response.json<{ result: RunShardWriteResult }>();
 
         expect(body.result.op).toBe("insert");
 

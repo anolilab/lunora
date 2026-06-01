@@ -66,14 +66,14 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
 
     // Live channel: while toggled on, each server push refreshes the run-state
     // table so an in-progress migration's processed/changed counts update live.
-    useLiveAdmin<{ migrations: MigrationStatusRow[] }>(
+    useLiveAdmin(
         ADMIN_FUNCTIONS.migrationStatus,
         {},
         shardKey,
         (result) => {
             setStatusError(null);
             setLiveError(null);
-            setRows(result.migrations);
+            setRows((result as { migrations: MigrationStatusRow[] }).migrations);
         },
         live,
         setLiveError,

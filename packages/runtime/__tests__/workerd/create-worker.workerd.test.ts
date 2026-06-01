@@ -30,12 +30,12 @@ describe("createWorker (workerd)", () => {
 
         expect(response.status).toBe(200);
 
-        const forwarded = (await response.json()) as {
+        const forwarded: {
             authorization: string | null;
             body: { args: Record<string, unknown>; functionPath: string } | null;
             bookmark: string | null;
             cookie: string | null;
-        };
+        } = await response.json();
 
         expect(forwarded.authorization).toBe("Bearer test-token");
         expect(forwarded.cookie).toBe("session=abc");
@@ -58,7 +58,7 @@ describe("createWorker (workerd)", () => {
         // The DO echoes only authorization/cookie/bookmark. Anything else
         // must be absent on the shard side. The structural assertion is
         // enough — we don't need to enumerate every disallowed header.
-        const forwarded = (await response.json()) as { authorization: string | null; bookmark: string | null; cookie: string | null };
+        const forwarded: { authorization: string | null; bookmark: string | null; cookie: string | null } = await response.json();
 
         expect(forwarded.authorization).toBeNull();
         expect(forwarded.cookie).toBeNull();
@@ -104,7 +104,7 @@ describe("createWorker (workerd)", () => {
 
         expect(rightMethod.status).toBe(200);
 
-        const echoed = (await rightMethod.json()) as { method: string; path: string };
+        const echoed = await rightMethod.json();
 
         expect(echoed).toEqual({ method: "POST", path: "/echo-method" });
     });
@@ -121,7 +121,7 @@ describe("createWorker (workerd)", () => {
 
         expect(generic.status).toBe(500);
 
-        const body = (await generic.json()) as { error: { code: string; message: string } };
+        const body: { error: { code: string; message: string } } = await generic.json();
 
         // Per audit H10: must NOT echo internal error.message contents.
         expect(body.error.code).toBe("INTERNAL");

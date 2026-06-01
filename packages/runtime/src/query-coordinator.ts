@@ -329,7 +329,7 @@ const DEFAULT_TIMEOUT_MS = 5000;
 
 /** Admin RPCs wrap their payload in `{ result }`; peel it so callers see the runner's value. */
 function unwrapResult(value: unknown): unknown {
-    return value !== null && typeof value === "object" && "result" in value ? (value as { result: unknown }).result : value;
+    return value !== null && typeof value === "object" && "result" in value ? value.result : value;
 }
 
 /** Numeric counts + status read defensively off a `MigrationRunResult`-shaped payload. */
@@ -449,7 +449,7 @@ function rollUpImport(results: readonly ShardRpcOutcome[]): ImportFanOutResult {
         const shardInserted = payload?.inserted ?? {};
 
         for (const [table, count] of Object.entries(shardInserted)) {
-            inserted[table] = (inserted[table] ?? 0) + Number(count);
+            inserted[table] = (inserted[table] ?? 0) + count;
         }
 
         const payloadErrors = payload?.errors;
@@ -458,11 +458,11 @@ function rollUpImport(results: readonly ShardRpcOutcome[]): ImportFanOutResult {
             errors.push(...(payloadErrors as ReadonlyArray<{ code: string; line: number; message: string; table: string }>));
         }
 
-        conflicts += Number(payload?.conflicts ?? 0);
+        conflicts += payload?.conflicts ?? 0;
 
         shards.push({
             result: {
-                conflicts: Number(payload?.conflicts ?? 0),
+                conflicts: payload?.conflicts ?? 0,
                 errors: payload?.errors ?? [],
                 inserted: shardInserted,
             },
@@ -547,7 +547,7 @@ async function callOneShard(namespace: ShardNamespaceLike, shardKey: string, pre
                 return { kind: "err", message: `shard "${shardKey}" returned ${response.status}`, shardKey, timedOut: false };
             }
 
-            const value = (await response.json()) as unknown;
+            const value = await response.json();
 
             return { kind: "ok", shardKey, value };
         } catch (error: unknown) {

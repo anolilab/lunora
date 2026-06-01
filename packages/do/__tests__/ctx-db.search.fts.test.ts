@@ -71,7 +71,7 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
         return cursor(rows);
     };
 
-    return { sql: { exec: exec as SqlExec["exec"] }, statements };
+    return { sql: { exec }, statements };
 };
 
 const searchSchema: SchemaLike = {

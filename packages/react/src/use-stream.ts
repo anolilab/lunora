@@ -100,7 +100,7 @@ export function useStream<F extends FunctionReference>(fn: F, args: "skip" | Arg
 
         let stillMounted = true;
         let cancelled = false;
-        const iterable = client.stream(fn, args as ArgsOf<F>, { maxBuffer: options.maxBuffer, shardKey: options.shardKey });
+        const iterable = client.stream(fn, args, { maxBuffer: options.maxBuffer, shardKey: options.shardKey });
         const cancel = (): void => {
             if (cancelled) {
                 return;
@@ -123,7 +123,7 @@ export function useStream<F extends FunctionReference>(fn: F, args: "skip" | Arg
                         return;
                     }
 
-                    dispatch({ type: "chunk", chunk: chunk as ReturnOf<F> });
+                    dispatch({ type: "chunk", chunk });
                 }
 
                 if (stillMounted) {

@@ -34,7 +34,7 @@ export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
         // re-fetch. TanStack treats `initialData` as fresh — the WS push from
         // the registry is what supplies subsequent updates.
         initialData: value,
-        queryFn: () => client.query(fn, args as Record<string, never>, { shardKey }) as Promise<T>,
+        queryFn: () => client.query(fn, args, { shardKey }) as Promise<T>,
         queryKey,
         staleTime: Number.POSITIVE_INFINITY,
     });

@@ -73,7 +73,7 @@ interface SessionDOState {
     storage: {
         delete: (key: string) => Promise<boolean | number>;
         get: <T = unknown>(key: string) => Promise<T | undefined>;
-        put: <T = unknown>(key: string, value: T) => Promise<void>;
+        put: (key: string, value: unknown) => Promise<void>;
     };
 }
 
@@ -182,7 +182,7 @@ export class SessionDO {
             let body: { token?: unknown; ttlSeconds?: unknown; userId?: unknown };
 
             try {
-                body = (await request.json()) as typeof body;
+                body = (await request.json());
             } catch {
                 return jsonResponse(400, { error: "invalid_request" });
             }

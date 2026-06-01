@@ -79,7 +79,7 @@ export class TestSessionDO extends DurableObject<Env> {
 
     constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
-        this.session = new SessionDO(ctx as unknown as DurableObjectState, env);
+        this.session = new SessionDO(ctx, env);
     }
 
     public override fetch(request: Request): Promise<Response> {

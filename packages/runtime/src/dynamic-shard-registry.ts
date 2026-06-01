@@ -104,7 +104,7 @@ interface CacheEntry {
 const decodeJson = async <T>(response: Response): Promise<T> => {
     // Response.json() throws on non-JSON; the DO always returns JSON so this
     // only surfaces if the DO route is misbehaving — let it bubble.
-    return (await response.json()) as T;
+    return await response.json();
 };
 
 export const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): DynamicShardRegistry => {

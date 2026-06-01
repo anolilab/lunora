@@ -10,7 +10,7 @@ const createFakeState = (initial: Record<string, unknown> = {}) => {
         blockConcurrencyWhile: async <T>(callback: () => Promise<T>): Promise<T> => callback(),
         storage: {
             get: async <T>(key: string): Promise<T | undefined> => storage.get(key) as T | undefined,
-            put: async <T>(key: string, value: T): Promise<void> => {
+            put: async (key: string, value: unknown): Promise<void> => {
                 storage.set(key, value);
             },
         },
@@ -70,7 +70,7 @@ describe("shardRegistryDO", () => {
         }
 
         const list = await registry.fetch(get("/list?table=messages"));
-        const body = (await list.json()) as { shardKeys: string[] };
+        const body = await list.json<{ shardKeys: string[] }>();
 
         expect(body.shardKeys.toSorted()).toEqual(["channel-1", "channel-2", "channel-3"]);
     });
@@ -126,7 +126,7 @@ describe("shardRegistryDO", () => {
 
         expect(response.status).toBe(400);
 
-        const body = (await response.json()) as { error: { code: string } };
+        const body = await response.json<{ error: { code: string } }>();
 
         expect(body.error.code).toBe("BAD_REQUEST");
     });
@@ -181,7 +181,7 @@ describe("shardRegistryDO", () => {
         await registry.fetch(post("/register", { shardKey: "c", table: "tasks" }));
 
         const response = await registry.fetch(get("/snapshot"));
-        const body = (await response.json()) as { tables: Record<string, string[]> };
+        const body = await response.json<{ tables: Record<string, string[]> }>();
 
         expect(body.tables["messages"]!.toSorted()).toEqual(["a", "b"]);
         expect(body.tables["tasks"]).toEqual(["c"]);

@@ -67,7 +67,7 @@ const buildSqliteSql = (): { close: () => void; sql: ShardDOState["storage"]["sq
         close: () => {
             database.close();
         },
-        sql: sqlSurface as ShardDOState["storage"]["sql"],
+        sql: sqlSurface,
     };
 };
 
@@ -214,7 +214,7 @@ describe("admin roundtrip — 3 shards", () => {
 
         expect(importResponse.status).toBe(200);
 
-        const body = (await importResponse.json()) as { errors: unknown[]; inserted: Record<string, number> };
+        const body: { errors: unknown[]; inserted: Record<string, number> } = await importResponse.json();
 
         expect(body.errors).toEqual([]);
         expect(body.inserted).toEqual({ messages: 12 });

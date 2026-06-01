@@ -213,7 +213,7 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
         }
 
         const relation = requireRelation(name);
-        const nested: NestedWith = value === true ? {} : (value as NestedWith);
+        const nested: NestedWith = value === true ? {} : (value);
 
         await (relation.kind === "one" ? loadOne(name, relation, nested) : loadMany(name, relation, nested));
     }

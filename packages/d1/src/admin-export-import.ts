@@ -5,7 +5,7 @@
  * an async `D1Exec` call (real columns instead of JSON blobs). The worker
  * stitches D1 globals and per-shard DO output into a single NDJSON stream.
  */
-import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { DatabaseWriterLike, SchemaLike } from "@cirrus/do";
 
 import type { D1Exec } from "./d1-ctx-db.js";
 
@@ -58,7 +58,7 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
     const doc: Record<string, unknown> = {};
 
     if (definition) {
-        for (const [field, validator] of Object.entries(definition.shape) as Array<[string, ValidatorLike]>) {
+        for (const [field, validator] of Object.entries(definition.shape)) {
             const raw = row[field];
 
             if (raw === undefined) {
@@ -126,7 +126,7 @@ const validateRow = (schema: SchemaLike, table: string, doc: Record<string, unkn
     void _creationTime;
     void _id;
 
-    for (const [field, validator] of Object.entries(definition.shape) as Array<[string, ValidatorLike]>) {
+    for (const [field, validator] of Object.entries(definition.shape)) {
         const candidate = (payload as Record<string, unknown>)[field];
         const optional = validator.kind === "optional";
 
@@ -207,7 +207,7 @@ export const importGlobalRows = async (writer: DatabaseWriterLike, schema: Schem
             continue;
         }
 
-        const explicitId = typeof doc["_id"] === "string" ? (doc["_id"] as string) : undefined;
+        const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
 
         if (explicitId !== undefined) {
             try {
@@ -242,7 +242,7 @@ export const importGlobalRows = async (writer: DatabaseWriterLike, schema: Schem
             const code = (error as { code?: string }).code ?? "INSERT_FAILED";
             const message = error instanceof Error ? error.message : String(error);
 
-            errors.push({ code: String(code), line, message, table });
+            errors.push({ code, line, message, table });
         }
     }
 

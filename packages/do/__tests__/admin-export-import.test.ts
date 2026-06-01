@@ -207,7 +207,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
 
         const rows: ExportRow[] = [
             { doc: { _id: "u9", email: "ok@x.io", name: "Nina" }, table: "users" },
-            { doc: { _id: "u10", email: 42, name: "Kai" }, table: "users" } as unknown as ExportRow,
+            { doc: { _id: "u10", email: 42, name: "Kai" }, table: "users" },
             { doc: { _id: "u11", email: "ok@x.io", name: "May" }, table: "users" },
         ];
 
@@ -234,7 +234,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         expect(result.inserted).toEqual({ users: 1 });
 
         // The original row is still there, unchanged.
-        const existing = (await writer.get("u1")) as Record<string, unknown> | null;
+        const existing = await writer.get("u1");
 
         expect(existing).toMatchObject({ email: "u1@x.io" });
     });
@@ -261,7 +261,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
 
         for (const original of exported) {
             const id = original.doc["_id"] as string;
-            const reloaded = (await freshWriter.get(id)) as Record<string, unknown> | null;
+            const reloaded = await freshWriter.get(id);
 
             expect(reloaded).not.toBeNull();
             expect(reloaded!["_id"]).toBe(id);
@@ -348,7 +348,7 @@ describe("shardDO admin export/import dispatch", () => {
 
         expect(response.status).toBe(200);
 
-        const body = (await response.json()) as { result: { rows: ExportRow[] } };
+        const body = await response.json<{ result: { rows: ExportRow[] } }>();
 
         expect(body.result.rows).toHaveLength(2);
         expect(body.result.rows.map((r) => r.table).sort()).toEqual(["messages", "users"]);
@@ -367,7 +367,7 @@ describe("shardDO admin export/import dispatch", () => {
 
         expect(response.status).toBe(200);
 
-        const body = (await response.json()) as { result: { errors: unknown[]; inserted: Record<string, number> } };
+        const body = await response.json<{ result: { errors: unknown[]; inserted: Record<string, number> } }>();
 
         expect(body.result.inserted).toEqual({ users: 1 });
         expect(body.result.errors).toEqual([]);

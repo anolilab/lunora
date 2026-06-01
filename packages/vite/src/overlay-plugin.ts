@@ -12,7 +12,7 @@ export const overlayPlugin = async (): Promise<Plugin | ReadonlyArray<Plugin>> =
     let warned = false;
 
     try {
-        const moduleExports: Record<string, unknown> = (await import("@visulima/vite-overlay")) as Record<string, unknown>;
+        const moduleExports: Record<string, unknown> = await import("@visulima/vite-overlay");
 
         type OverlayFactory = (...args: ReadonlyArray<unknown>) => Plugin | ReadonlyArray<Plugin>;
 

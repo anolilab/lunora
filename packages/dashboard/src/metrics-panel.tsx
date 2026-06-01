@@ -180,13 +180,13 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
     }, [refresh, initialShardKey]);
 
     // Live channel: while toggled on, each server push folds in like a refresh.
-    useLiveAdmin<ShardMetrics>(
+    useLiveAdmin(
         ADMIN_FUNCTIONS.getMetrics,
         {},
         shardKey,
         (next) => {
             if (mountedRef.current) {
-                applySample(next);
+                applySample(next as ShardMetrics);
             }
         },
         live,

@@ -81,16 +81,16 @@ const runMiddleware = async (middlewares: ReadonlyArray<Middleware<unknown, unkn
  * than as malformed data downstream.
  */
 const makeHandler =
-    <Args extends ArgsValidator, Ctx, R>(
+    <Args extends ArgsValidator, R>(
         args: Args,
         middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
-        userHandler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R,
+        userHandler: (options: { args: InferArgs<Args>; ctx: unknown }) => Promise<R> | R,
         output?: Validator,
     ) =>
     async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
         const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
         const ctx = await runMiddleware(middlewares, context);
-        const result = await userHandler({ args: parsed, ctx: ctx as Ctx });
+        const result = await userHandler({ args: parsed, ctx });
 
         return (output ? output.parse(result) : result) as Awaited<R>;
     };
@@ -103,10 +103,10 @@ const makeHandler =
  * honour it (or to wire it into any awaited I/O).
  */
 const makeStreamHandler =
-    <Args extends ArgsValidator, Ctx, R>(
+    <Args extends ArgsValidator, R>(
         args: Args,
         middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
-        userHandler: (options: { args: InferArgs<Args>; ctx: Ctx; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+        userHandler: (options: { args: InferArgs<Args>; ctx: unknown; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
     ) =>
     (context: unknown, rawArgs: InferArgs<Args>, signal: AbortSignal): AsyncIterable<R> => {
         // Args validation runs synchronously at call time so a bad envelope
@@ -118,7 +118,7 @@ const makeStreamHandler =
         // `next()` pump by wrapping the iterator with an outer async generator.
         return (async function* drive(): AsyncGenerator<R, void, void> {
             const ctx = await runMiddleware(middlewares, context);
-            const iterator = userHandler({ args: parsed, ctx: ctx as Ctx, signal });
+            const iterator = userHandler({ args: parsed, ctx, signal });
 
             for await (const chunk of iterator) {
                 yield chunk;

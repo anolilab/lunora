@@ -58,7 +58,7 @@ describe("sessionDO", () => {
 
         expect(response.status).toBe(201);
 
-        const body = (await response.json()) as { expiresAt: number; userId: string };
+        const body = await response.json<{ expiresAt: number; userId: string }>();
 
         expect(body.userId).toBe("u1");
         expect(body.expiresAt).toBeGreaterThan(Date.now());
@@ -195,7 +195,7 @@ describe("sessionDO", () => {
                 body: JSON.stringify({ token: TOK_1, userId: "u" }),
             }),
         );
-        const body = (await response.json()) as { createdAt: number; expiresAt: number };
+        const body = await response.json<{ createdAt: number; expiresAt: number }>();
         const ttlMs = body.expiresAt - body.createdAt;
 
         expect(ttlMs).toBe(SESSION_DO_TTL_DEFAULT * 1000);

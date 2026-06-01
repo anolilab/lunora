@@ -128,7 +128,7 @@ export const matchesRankStaticWhere = (document: Record<string, unknown>, predic
         const actual = document[field];
 
         if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
-            const operatorKeys = Object.keys(expected as Record<string, unknown>);
+            const operatorKeys = Object.keys(expected);
 
             if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
                 if (actual !== (expected as { eq: unknown }).eq) {
@@ -173,10 +173,10 @@ export const resolveRankPartition = (index: RankIndexDefinitionLike, where: Reco
 
     for (const field of partitionBy) {
         if (field in requested) {
-            const value = (requested as Record<string, unknown>)[field];
+            const value = (requested)[field];
 
             if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-                const operatorKeys = Object.keys(value as Record<string, unknown>);
+                const operatorKeys = Object.keys(value);
 
                 if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
                     resolved[field] = (value as { eq: unknown }).eq;

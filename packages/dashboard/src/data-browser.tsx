@@ -108,11 +108,22 @@ const formatCell = (value: unknown): string => {
         return "";
     }
 
-    if (typeof value === "object") {
-        return JSON.stringify(value);
+    switch (typeof value) {
+        case "bigint":
+        case "boolean":
+        case "number": {
+            return value.toString();
+        }
+        case "string": {
+            return value;
+        }
+        case "symbol": {
+            return value.toString();
+        }
+        default: {
+            return JSON.stringify(value) ?? "";
+        }
     }
-
-    return String(value);
 };
 
 /** The header glyph for a column given react-table's sort state: ` ▲`, ` ▼`, or empty. */
@@ -227,14 +238,14 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     // the `loaded` descriptor so it tracks exactly the displayed shard/table/page
     // — never a half-typed shard key or a table switch whose offset reset is
     // still pending — and only runs once a page has actually loaded.
-    useLiveAdmin<TablePage>(
+    useLiveAdmin(
         ADMIN_FUNCTIONS.readTablePage,
         { limit: pageSize, offset: loaded?.offset ?? 0, search: loaded?.search ?? "", table: loaded?.table ?? "" },
         loaded?.shard ?? "",
         (result) => {
             setPageError(null);
             setLiveError(null);
-            setPage(result);
+            setPage(result as TablePage);
         },
         live && loaded !== null,
         setLiveError,
@@ -244,14 +255,14 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     // table (or changes a row count) reflects without a manual "Load tables".
     // `listTables` is shard-scoped; key it on the loaded shard so it follows the
     // same shard as the page rather than the shard-input box as it's typed.
-    useLiveAdmin<TableInfo[]>(
+    useLiveAdmin(
         ADMIN_FUNCTIONS.listTables,
         {},
         loaded?.shard ?? "",
         (result) => {
             setTablesError(null);
             setLiveError(null);
-            setTables(result);
+            setTables(result as TableInfo[]);
         },
         live && loaded !== null,
         setLiveError,

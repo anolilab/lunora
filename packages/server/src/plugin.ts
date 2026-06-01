@@ -215,7 +215,7 @@ export const defineComponent = <
 
     return {
         ...plugin,
-        functions: (options.functions ?? ({} as F)) as F,
+        functions: options.functions ?? ({} as F),
     };
 };
 

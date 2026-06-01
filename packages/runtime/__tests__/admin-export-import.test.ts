@@ -22,10 +22,10 @@ describe("createWorker — admin export endpoint", () => {
 
         const worker = createWorker({
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -50,10 +50,10 @@ describe("createWorker — admin export endpoint", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -70,10 +70,10 @@ describe("createWorker — admin export endpoint", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -104,10 +104,10 @@ describe("createWorker — admin export endpoint", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
                 orchestrateExport: orchestrateExport as never,
-                orchestrateImport: vi.fn<() => never>() as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -151,10 +151,10 @@ describe("createWorker — admin export endpoint", () => {
             adminToken: ADMIN_TOKEN,
             exportGlobals: exportGlobals as never,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
                 orchestrateExport: orchestrateExport as never,
-                orchestrateImport: vi.fn<() => never>() as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
@@ -188,7 +188,7 @@ describe("createWorker — admin import endpoint", () => {
         captured = null;
         orchestrateImport = vi.fn<(namespace: unknown, request: { batches: Exclude<typeof captured, null>["batches"] }) => Promise<unknown>>(
             async (_namespace: unknown, request: { batches: typeof captured extends null ? never : Exclude<typeof captured, null>["batches"] }) => {
-                captured = { batches: request.batches as Exclude<typeof captured, null>["batches"] };
+                captured = { batches: request.batches };
 
                 const inserted: Record<string, number> = {};
 
@@ -216,10 +216,10 @@ describe("createWorker — admin import endpoint", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -236,10 +236,10 @@ describe("createWorker — admin import endpoint", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
@@ -266,7 +266,7 @@ describe("createWorker — admin import endpoint", () => {
 
         expect(response.status).toBe(200);
 
-        const body = (await response.json()) as { errors: unknown[]; inserted: Record<string, number> };
+        const body: { errors: unknown[]; inserted: Record<string, number> } = await response.json();
 
         expect(body.inserted).toEqual({ messages: 2, users: 2 });
         expect(orchestrateImport).toHaveBeenCalledTimes(1);
@@ -285,10 +285,10 @@ describe("createWorker — admin import endpoint", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -310,7 +310,7 @@ describe("createWorker — admin import endpoint", () => {
             fakeCtx,
         );
 
-        const body = (await response.json()) as { errors: { code: string; line: number }[]; inserted: Record<string, number> };
+        const body: { errors: { code: string; line: number }[]; inserted: Record<string, number> } = await response.json();
 
         expect(body.inserted).toEqual({ users: 2 });
         expect(body.errors).toHaveLength(1);
@@ -330,10 +330,10 @@ describe("createWorker — admin import endpoint", () => {
             adminToken: ADMIN_TOKEN,
             importGlobals: importGlobals as never,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
@@ -356,7 +356,7 @@ describe("createWorker — admin import endpoint", () => {
             fakeCtx,
         );
 
-        const body = (await response.json()) as { inserted: Record<string, number> };
+        const body: { inserted: Record<string, number> } = await response.json();
 
         expect(body.inserted).toEqual({ settings: 2 });
         expect(importGlobals).toHaveBeenCalledTimes(1);
@@ -369,10 +369,10 @@ describe("createWorker — admin import endpoint", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
@@ -392,7 +392,7 @@ describe("createWorker — admin import endpoint", () => {
             fakeCtx,
         );
 
-        const body = (await response.json()) as { errors: { code: string }[] };
+        const body: { errors: { code: string }[] } = await response.json();
 
         expect(body.errors).toHaveLength(1);
         expect(body.errors[0]!.code).toBe("GLOBAL_NOT_CONFIGURED");
@@ -427,10 +427,10 @@ describe("import streaming — large body", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -452,7 +452,7 @@ describe("import streaming — large body", () => {
             fakeCtx,
         );
 
-        const body = (await response.json()) as { inserted: Record<string, number> };
+        const body: { inserted: Record<string, number> } = await response.json();
 
         expect(body.inserted).toEqual({ users: 10_000 });
     });
@@ -475,10 +475,10 @@ describe("import streaming — large body", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
                 orchestrateExport: orchestrateExport as never,
-                orchestrateImport: vi.fn<() => never>() as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: noopNamespace,

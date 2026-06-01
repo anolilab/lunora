@@ -1076,7 +1076,7 @@ export class CirrusClient {
         let body: RpcResponseBody;
 
         try {
-            body = (await response.json()) as RpcResponseBody;
+            body = await response.json();
         } catch {
             throw new Error(`CirrusClient: response was not JSON (status ${response.status})`);
         }
@@ -1121,7 +1121,7 @@ export class CirrusClient {
         let body: Record<string, unknown>;
 
         try {
-            body = (await response.json()) as Record<string, unknown>;
+            body = await response.json();
         } catch {
             throw new Error(`CirrusClient: response was not JSON (status ${response.status})`);
         }

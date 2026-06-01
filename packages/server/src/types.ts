@@ -233,7 +233,7 @@ export interface RegisteredStream<A extends ArgsValidator, R> {
  */
 export interface DatabaseReader {
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
-    query: <T extends string>(tableName: T) => TableReader;
+    query: (tableName: string) => TableReader;
 }
 
 /** Options for {@link TableReader.paginate} — Convex-compatible page request. */
@@ -614,7 +614,7 @@ export type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValida
 // identity per render would re-run effects every render and loop forever.
 const namespaceCache = new Map<PropertyKey, Record<string, unknown>>();
 
-export const anyApi: AnyApi = new Proxy({} as AnyApi, {
+export const anyApi: AnyApi = new Proxy({}, {
     get(_target, namespace: PropertyKey) {
         const cached = namespaceCache.get(namespace);
 
@@ -623,7 +623,7 @@ export const anyApi: AnyApi = new Proxy({} as AnyApi, {
         }
 
         const refCache = new Map<PropertyKey, { __cirrusRef: string }>();
-        const nsProxy = new Proxy({} as Record<string, unknown>, {
+        const nsProxy = new Proxy({}, {
             get(_inner, functionName: PropertyKey) {
                 const cachedRef = refCache.get(functionName);
 

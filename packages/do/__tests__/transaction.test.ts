@@ -13,7 +13,7 @@ interface FakeState extends ShardDOState {
     storage: { sql: { exec: ExecMock } };
 }
 
-const createFakeState = (sqlExec: ExecMock = vi.fn<(query: string) => unknown>() as unknown as ExecMock): FakeState => {
+const createFakeState = (sqlExec: ExecMock = vi.fn<(query: string) => unknown>()): FakeState => {
     const state: FakeState = {
         sockets: [],
         storage: { sql: { exec: sqlExec } },
@@ -69,7 +69,7 @@ describe("shardDO.runInTransaction", () => {
     let shard: TestShardDO;
 
     beforeEach(() => {
-        exec = vi.fn<(query: string) => unknown>() as unknown as ExecMock;
+        exec = vi.fn<(query: string) => unknown>();
         shard = new TestShardDO(createFakeState(exec));
     });
 
@@ -178,7 +178,7 @@ describe("shardDO.errorToResponse — ConflictError", () => {
 
         expect(response.status).toBe(409);
 
-        const body = (await response.json()) as { error: { code: string; message: string } };
+        const body = await response.json<{ error: { code: string; message: string } }>();
 
         expect(body.error.code).toBe("CONFLICT");
         expect(body.error.message).toBe("version mismatch");

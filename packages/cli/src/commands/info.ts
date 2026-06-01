@@ -70,20 +70,20 @@ const stringField = (record: unknown, key: string): string | undefined => {
     return typeof value === "string" && value.length > 0 ? value : undefined;
 };
 
-const arrayField = <T>(record: unknown, key: string): ReadonlyArray<T> => {
+const arrayField = (record: unknown, key: string): ReadonlyArray<unknown> => {
     if (record === null || typeof record !== "object") {
         return [];
     }
 
     const value = (record as Record<string, unknown>)[key];
 
-    return Array.isArray(value) ? (value as T[]) : [];
+    return Array.isArray(value) ? value : [];
 };
 
 const summariseWrangler = (raw: unknown): WranglerSummary => {
-    const durableObjectBindings = arrayField<Record<string, unknown>>((raw as Record<string, unknown>).durable_objects ?? {}, "bindings");
-    const d1 = arrayField<Record<string, unknown>>(raw, "d1_databases");
-    const vectorize = arrayField<Record<string, unknown>>(raw, "vectorize");
+    const durableObjectBindings = arrayField((raw as Record<string, unknown>).durable_objects ?? {}, "bindings");
+    const d1 = arrayField(raw, "d1_databases");
+    const vectorize = arrayField(raw, "vectorize");
 
     return {
         bindings: {
@@ -92,7 +92,7 @@ const summariseWrangler = (raw: unknown): WranglerSummary => {
             vectorize: vectorize.map((entry) => stringField(entry, "binding") ?? "<unnamed>"),
         },
         compatibilityDate: stringField(raw, "compatibility_date"),
-        compatibilityFlags: arrayField<string>(raw, "compatibility_flags"),
+        compatibilityFlags: arrayField(raw, "compatibility_flags").filter((entry): entry is string => typeof entry === "string"),
         main: stringField(raw, "main"),
         name: stringField(raw, "name"),
     };

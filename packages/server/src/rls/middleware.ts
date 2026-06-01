@@ -256,7 +256,7 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
         const docValue = document[key];
 
         if (isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k))) {
-            const operators = value as Record<string, unknown>;
+            const operators = value;
 
             if ("eq" in operators && docValue !== operators["eq"]) {
                 return false;
@@ -651,7 +651,7 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
                 id,
                 "update",
                 () => base.patch(id, patch),
-                (preRow) => ({ ...preRow, ...(patch as Record<string, unknown>) }),
+                (preRow) => ({ ...preRow, ...patch }),
             ),
 
         query(tableName) {
@@ -682,8 +682,8 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
                 // (the writer keeps `document._creationTime` when present) and
                 // otherwise falls back to the existing row's value.
                 (preRow) => ({
-                    ...(document as Record<string, unknown>),
-                    _creationTime: (document as Record<string, unknown>)["_creationTime"] ?? preRow["_creationTime"],
+                    ...document,
+                    _creationTime: document["_creationTime"] ?? preRow["_creationTime"],
                     _id: preRow["_id"],
                 }),
             ),
@@ -726,6 +726,6 @@ export const rls = <Ctx extends RlsCtxIn = RlsCtxIn>(policies: ReadonlyArray<Pol
         // the builder's typed surface.
         const extension = { db: wrapped } as unknown as Record<string, unknown>;
 
-        return next({ ctx: extension }) as Promise<Ctx>;
+        return next({ ctx: extension });
     };
 };

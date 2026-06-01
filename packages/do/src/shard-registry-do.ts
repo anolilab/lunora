@@ -59,7 +59,7 @@ interface ShardRegistryDOState {
     blockConcurrencyWhile: <T>(callback: () => Promise<T>) => Promise<T>;
     storage: {
         get: <T = unknown>(key: string) => Promise<T | undefined>;
-        put: <T = unknown>(key: string, value: T) => Promise<void>;
+        put: (key: string, value: unknown) => Promise<void>;
     };
 }
 
@@ -79,7 +79,7 @@ const readTableShardBody = async (
     let body: { shardKey?: unknown; table?: unknown };
 
     try {
-        body = (await request.json()) as typeof body;
+        body = (await request.json());
     } catch {
         return { kind: "error", response: jsonResponse(400, { error: { code: "BAD_REQUEST", message: "invalid JSON body" } }) };
     }

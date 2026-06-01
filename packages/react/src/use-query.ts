@@ -33,7 +33,7 @@ export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<ReturnOf<F>>({
         enabled: !skipped,
-        queryFn: () => client.query<F>(fn, argsRecord as ArgsOf<F>, { shardKey }) as Promise<ReturnOf<F>>,
+        queryFn: () => client.query<F>(fn, argsRecord as ArgsOf<F>, { shardKey }),
         queryKey,
         // Cirrus is push-driven: once the initial fetch resolves, the WS owns
         // freshness. Staleness only matters when the subscription is missing,

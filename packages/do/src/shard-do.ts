@@ -643,7 +643,7 @@ export abstract class ShardDO {
             let payload: RpcRequest;
 
             try {
-                payload = (await request.json()) as RpcRequest;
+                payload = (await request.json());
             } catch {
                 return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
             }
@@ -1807,7 +1807,7 @@ export abstract class ShardDO {
         // their own) can be gated without re-checking a token per message.
         (server as HibernatableWebSocket).serializeAttachment?.({ admin: this.isAdminSocket(request), subs: {} } satisfies SocketAttachment);
 
-        return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
+        return new Response(null, { status: 101, webSocket: client });
     }
 
     private readAttachment(ws: WebSocket): SocketAttachment {

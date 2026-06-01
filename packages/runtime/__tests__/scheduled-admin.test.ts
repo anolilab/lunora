@@ -74,7 +74,10 @@ describe("createWorker — scheduled admin endpoints", () => {
         );
 
         expect(response.status).toBe(400);
-        expect(((await response.json()) as { error: { code: string } }).error.code).toBe("SCHEDULER_NOT_CONFIGURED");
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("SCHEDULER_NOT_CONFIGURED");
     });
 
     test("list forwards GET /list to the default scheduler instance", async () => {
@@ -90,7 +93,10 @@ describe("createWorker — scheduled admin endpoints", () => {
         );
 
         expect(response.status).toBe(200);
-        expect(((await response.json()) as { records: unknown }).records).toEqual(RECORDS);
+
+        const body: { records: unknown } = await response.json();
+
+        expect(body.records).toEqual(RECORDS);
         expect(calls).toEqual([{ body: "", method: "GET", pathname: "/list" }]);
         expect(idArgs).toEqual(["default"]);
     });
@@ -142,7 +148,10 @@ describe("createWorker — scheduled admin endpoints", () => {
         );
 
         expect(response.status).toBe(200);
-        expect(((await response.json()) as { cancelled: boolean }).cancelled).toBe(true);
+
+        const body: { cancelled: boolean } = await response.json();
+
+        expect(body.cancelled).toBe(true);
         expect(calls).toEqual([{ body: JSON.stringify({ id: "j1" }), method: "POST", pathname: "/cancel" }]);
     });
 

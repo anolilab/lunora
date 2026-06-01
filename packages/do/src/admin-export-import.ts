@@ -11,7 +11,7 @@
  * deliberately skips them — the worker reads them through `@cirrus/d1`'s
  * sibling helpers and concatenates the two streams.
  */
-import type { DatabaseWriterLike, SchemaLike, SqlExec, ValidatorLike } from "./ctx-db.js";
+import type { DatabaseWriterLike, SchemaLike, SqlExec } from "./ctx-db.js";
 
 /** One NDJSON line: a row from `table` shaped per its schema. */
 export interface ExportRow {
@@ -187,7 +187,7 @@ export const validateImportRow = (schema: SchemaLike, table: string, doc: Record
         }
     }
 
-    for (const [field, validator] of Object.entries(definition.shape) as Array<[string, ValidatorLike]>) {
+    for (const [field, validator] of Object.entries(definition.shape)) {
         const candidate = (payload as Record<string, unknown>)[field];
         const optional = validator.kind === "optional";
 
@@ -238,7 +238,7 @@ export const importShardRows = async (writer: DatabaseWriterLike, schema: Schema
         const { doc, table } = row;
 
         if (typeof table !== "string" || table.length === 0) {
-            errors.push({ code: "BAD_ROW", line, message: "row is missing `table`", table: String(table ?? "") });
+            errors.push({ code: "BAD_ROW", line, message: "row is missing `table`", table });
             continue;
         }
 
@@ -256,7 +256,7 @@ export const importShardRows = async (writer: DatabaseWriterLike, schema: Schema
 
         // v1 mode is `append`: when `_id` collides, skip the row and surface
         // the count rather than upserting.
-        const explicitId = typeof doc["_id"] === "string" ? (doc["_id"] as string) : undefined;
+        const explicitId = typeof doc["_id"] === "string" ? (doc["_id"]) : undefined;
 
         if (explicitId !== undefined) {
             try {
@@ -282,7 +282,7 @@ export const importShardRows = async (writer: DatabaseWriterLike, schema: Schema
             const code = (error as { code?: string }).code ?? "INSERT_FAILED";
             const message = error instanceof Error ? error.message : String(error);
 
-            errors.push({ code: String(code), line, message, table });
+            errors.push({ code, line, message, table });
         }
     }
 
@@ -308,7 +308,7 @@ export interface ImportShardAdminArgs {
  */
 export const parseExportShardArgs = (args: Record<string, unknown>): ExportShardAdminArgs => {
     const tables = Array.isArray(args["tables"]) ? (args["tables"] as unknown[]).filter((entry): entry is string => typeof entry === "string") : undefined;
-    const batchSize = typeof args["batchSize"] === "number" ? (args["batchSize"] as number) : undefined;
+    const batchSize = typeof args["batchSize"] === "number" ? (args["batchSize"]) : undefined;
 
     return { batchSize, tables };
 };
@@ -328,14 +328,14 @@ export const parseImportShardArgs = (args: Record<string, unknown>): ImportShard
         if (typeof candidate.table !== "string" || !candidate.doc || typeof candidate.doc !== "object" || Array.isArray(candidate.doc)) {
             // Malformed envelope rows are rejected during validation downstream
             // — but we keep the envelope so the line numbers stay aligned.
-            rows.push({ doc: (candidate.doc as Record<string, unknown>) ?? {}, table: String(candidate.table ?? "") });
+            rows.push({ doc: (candidate.doc as Record<string, unknown>) ?? {}, table: typeof candidate.table === "string" ? candidate.table : "" });
             continue;
         }
 
         rows.push({ doc: candidate.doc as Record<string, unknown>, table: candidate.table });
     }
 
-    const startLine = typeof args["startLine"] === "number" ? (args["startLine"] as number) : undefined;
+    const startLine = typeof args["startLine"] === "number" ? (args["startLine"]) : undefined;
 
     return { rows, startLine };
 };

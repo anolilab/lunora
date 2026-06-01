@@ -109,7 +109,21 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
             });
 
             if (!result.success || !result.data) {
-                const reason = result.error instanceof Error ? result.error.message : String(result.error ?? "send failed");
+                const rawError: unknown = result.error;
+                let reason: string;
+
+                if (rawError instanceof Error) {
+                    reason = rawError.message;
+                } else if (rawError === null || rawError === undefined) {
+                    reason = "send failed";
+                } else if (typeof rawError === "string") {
+                    reason = rawError;
+                } else if (typeof rawError === "number" || typeof rawError === "boolean" || typeof rawError === "bigint") {
+                    reason = rawError.toString();
+                } else {
+                    // object | symbol | function — stringify defensively
+                    reason = JSON.stringify(rawError) ?? "send failed";
+                }
 
                 // Keep the raw provider detail in server logs only — surfacing
                 // it to callers can disclose provider internals. Throw a stable,

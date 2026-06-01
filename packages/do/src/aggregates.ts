@@ -173,11 +173,11 @@ export const planAggregateLookup = (
             return undefined;
         }
 
-        const value = (requested as Record<string, unknown>)[key];
+        const value = (requested)[key];
 
         // Only literal/`eq` comparators are routable.
         if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-            const operatorKeys = Object.keys(value as Record<string, unknown>);
+            const operatorKeys = Object.keys(value);
 
             if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
                 resolved[key] = (value as { eq: unknown }).eq;
@@ -199,7 +199,7 @@ export const planAggregateLookup = (
                     return undefined;
                 }
             } else if (key in requested) {
-                if ((requested as Record<string, unknown>)[key] !== value) {
+                if ((requested)[key] !== value) {
                     return undefined;
                 }
             } else {
@@ -241,7 +241,7 @@ const collectPartialKey = (
         }
 
         if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-            const operatorKeys = Object.keys(raw as Record<string, unknown>);
+            const operatorKeys = Object.keys(raw);
 
             if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
                 partial[key] = (raw as { eq: unknown }).eq;

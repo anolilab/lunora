@@ -12,7 +12,7 @@
  * better-auth or other application tables, and exposing those through the data
  * browser would leak data the framework doesn't own.
  */
-import type { SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { SchemaLike } from "@cirrus/do";
 
 import type { D1Exec } from "./d1-ctx-db.js";
 
@@ -56,7 +56,7 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
     const doc: Record<string, unknown> = {};
 
     if (definition) {
-        for (const [field, validator] of Object.entries(definition.shape) as Array<[string, ValidatorLike]>) {
+        for (const [field, validator] of Object.entries(definition.shape)) {
             const raw = row[field];
 
             if (raw === undefined) {

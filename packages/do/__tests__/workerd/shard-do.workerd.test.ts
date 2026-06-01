@@ -22,7 +22,7 @@ import type { TestShardDO } from "./test-worker.js";
 const newStub = (name: string): DurableObjectStub<TestShardDO> => {
     const id = env.SHARD.idFromName(name);
 
-    return env.SHARD.get(id) as DurableObjectStub<TestShardDO>;
+    return env.SHARD.get(id);
 };
 
 describe("shardDO (workerd)", () => {
@@ -112,17 +112,17 @@ describe("shardDO (workerd)", () => {
             instance.broadcast({ table: "messages", op: "insert", key: "m1", row: { id: "m1" } });
         });
 
-        await waitFor(() => subs[0]!.received.some((m) => m.includes('"type":"delta"')));
+        await waitFor(() => subs[0].received.some((m) => m.includes('"type":"delta"')));
 
-        const msgDeltas = subs[0]!.received.filter((m) => m.includes('"type":"delta"'));
-        const docDeltas = subs[1]!.received.filter((m) => m.includes('"type":"delta"'));
+        const msgDeltas = subs[0].received.filter((m) => m.includes('"type":"delta"'));
+        const docDeltas = subs[1].received.filter((m) => m.includes('"type":"delta"'));
 
         expect(msgDeltas).toHaveLength(1);
         expect(docDeltas).toHaveLength(0);
         expect(JSON.parse(msgDeltas[0]!)).toMatchObject({ type: "delta", id: "sub-msg", delta: { table: "messages", op: "insert" } });
 
-        subs[0]!.client.close(1000, "done");
-        subs[1]!.client.close(1000, "done");
+        subs[0].client.close(1000, "done");
+        subs[1].client.close(1000, "done");
     });
 
     test("broadcasts are scoped per shard — a delta emitted on shard A does not reach a subscriber on shard B", async () => {

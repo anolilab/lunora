@@ -143,7 +143,7 @@ const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record
         const actual = document[field];
 
         if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
-            const operatorKeys = Object.keys(expected as Record<string, unknown>);
+            const operatorKeys = Object.keys(expected);
 
             if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
                 if (actual !== (expected as { eq: unknown }).eq) {
@@ -176,7 +176,7 @@ const normalizeCountArg = (arg: RestrictableQueryOptions | undefined | WhereInpu
         return { where: arg as WhereInput };
     }
 
-    const keys = Object.keys(arg as Record<string, unknown>);
+    const keys = Object.keys(arg);
 
     if (keys.length === 0) {
         return {};
@@ -655,7 +655,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 const partitionKey = encodePartitionKey(index.partitionBy ?? [], doc);
                 const sortValues = index.sortBy.map((key) => serializeColumnValue(doc[key.field] ?? null));
 
-                await exec.run(insertSql, [doc["_id"] as string, partitionKey, ...sortValues]);
+                await exec.run(insertSql, [doc["_id"], partitionKey, ...sortValues]);
             }
 
             cursorId = pageRows.at(-1)?.["id"] as string | undefined;
@@ -889,7 +889,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             // We only attempt the counter when no baseWhere is set; otherwise
             // we route uniformly through SQL so the RLS predicate participates.
             if (definition.aggregateIndexes && !opts.baseWhere) {
-                const planned = selectIndexForCount(definition.aggregateIndexes, opts.where as Record<string, unknown> | undefined);
+                const planned = selectIndexForCount(definition.aggregateIndexes, opts.where);
 
                 if (planned) {
                     const counterReady = await ensureBackfilled(tableName, planned.index);
@@ -991,13 +991,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             // sum/avg/min/max would return counts. Non-count reducers fall
             // through to the correct SQL `GROUP BY` scan below.
             if (agg.op === "count" && definition.aggregateIndexes && !groupOptions.baseWhere) {
-                const planned = selectIndexForGroupBy(
-                    definition.aggregateIndexes,
-                    agg.op,
-                    agg.field,
-                    groupOptions.by,
-                    groupOptions.where as Record<string, unknown> | undefined,
-                );
+                const planned = selectIndexForGroupBy(definition.aggregateIndexes, agg.op, agg.field, groupOptions.by, groupOptions.where);
 
                 if (planned) {
                     const counterReady = await ensureBackfilled(tableName, planned.index);
@@ -1133,7 +1127,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             let partitionKey = own["__partition__"] as string;
 
             const effective = mergeWhere(rankOptions.baseWhere, rankOptions.where);
-            const partitionFromWhere = resolveRankPartition(index, effective as Record<string, unknown> | undefined);
+            const partitionFromWhere = resolveRankPartition(index, effective);
 
             if (partitionFromWhere) {
                 const requestedKey = encodePartitionKey(index.partitionBy ?? [], partitionFromWhere);
@@ -1159,7 +1153,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                     }
 
                     conditions.push(`${quoteIdentifier(prefixColumn)} IS ?`);
-                    beforeParams.push(own[prefixColumn] as unknown);
+                    beforeParams.push(own[prefixColumn]);
                 }
 
                 const column = sortColumns[pivot];
@@ -1169,7 +1163,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                     const operator = sortKey.direction === "desc" ? ">" : "<";
 
                     conditions.push(`${quoteIdentifier(column)} ${operator} ?`);
-                    beforeParams.push(own[column] as unknown);
+                    beforeParams.push(own[column]);
                 } else {
                     conditions.push(`${quoteIdentifier(RANK_TIEBREAK)} < ?`);
                     beforeParams.push(rowId);
@@ -1210,7 +1204,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
             const take = Math.max(1, Math.min(1000, Math.floor(rankPageOptions.take ?? 100)));
             const effective = mergeWhere(rankPageOptions.baseWhere, rankPageOptions.where);
-            const partitionFromWhere = resolveRankPartition(index, effective as Record<string, unknown> | undefined);
+            const partitionFromWhere = resolveRankPartition(index, effective);
 
             const orderClauses: string[] = [`"__partition__" ASC`];
 
@@ -1229,7 +1223,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             }
 
             if (rankPageOptions.cursor) {
-                const decoded = decodeCursor(rankPageOptions.cursor) as Array<unknown>;
+                const decoded = decodeCursor(rankPageOptions.cursor);
                 const expectedLength = 1 + sortColumns.length + 1;
 
                 if (decoded.length === expectedLength) {
@@ -1324,13 +1318,13 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const last = usable.at(-1);
 
             if (hasMore && last !== undefined) {
-                const cursorValues: unknown[] = [last["__partition__"] as unknown];
+                const cursorValues: unknown[] = [last["__partition__"]];
 
                 for (const column of sortColumns) {
-                    cursorValues.push(last[column] as unknown);
+                    cursorValues.push(last[column]);
                 }
 
-                cursorValues.push(last[RANK_TIEBREAK] as unknown);
+                cursorValues.push(last[RANK_TIEBREAK]);
 
                 const json = JSON.stringify(cursorValues);
                 const bytes = new TextEncoder().encode(json);
@@ -1545,7 +1539,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             const usedExplicitId = Boolean(insertOptions?.allowExplicitId) && typeof withDefaults["_id"] === "string";
             const id = usedExplicitId ? (withDefaults["_id"] as string) : generateId();
-            const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"] as number) : clock();
+            const creationTime = typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
             const docWithMeta: Record<string, unknown> = { ...withDefaults, _id: id, _creationTime: creationTime };
 
@@ -1668,7 +1662,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             const needsPrevious =
                 hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? (decodeRow(definition, snapshot) ?? undefined) : undefined;
-            const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
+            const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
             applyOnUpdate(definition, document, replaced);

@@ -156,7 +156,7 @@ export class SchedulerDO {
         // arrives over the same channel as later changes.
         server.send(JSON.stringify({ records: await this.listRecords(), type: "jobs" }));
 
-        return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
+        return new Response(null, { status: 101, webSocket: client });
     }
 
     /**

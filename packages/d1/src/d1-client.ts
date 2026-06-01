@@ -21,10 +21,14 @@ export interface D1SessionLike {
 }
 
 export interface D1PreparedStatementLike {
+    // T lets callers type result rows (e.g. `.all<{ id: string }>()`); it flows
+    // from the call site into the return, so it is intentionally caller-supplied.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
     all: <T = unknown>() => Promise<{ results: T[]; success: boolean }>;
     bind: (...values: unknown[]) => D1PreparedStatementLike;
     first: <T = unknown>(column?: string) => Promise<T | null>;
     raw: <T = unknown>() => Promise<T[][]>;
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
     run: <T = unknown>() => Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }>;
 }
 
@@ -83,12 +87,14 @@ export class D1Session {
         return stmt;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
     public async run<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }> {
         return this.prepare(sql)
             .bind(...binds)
             .run<T>();
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
     public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ results: T[]; success: boolean }> {
         return this.prepare(sql)
             .bind(...binds)

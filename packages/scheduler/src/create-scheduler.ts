@@ -14,7 +14,7 @@ const callDO = async <T>(options: CirrusSchedulerOptions, path: string, body: un
         throw new Error(`@cirrus/scheduler: SchedulerDO ${path} failed (${response.status}): ${text}`);
     }
 
-    return (await response.json()) as T;
+    return await response.json();
 };
 
 /**

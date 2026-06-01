@@ -45,7 +45,10 @@ describe("createWorker — auth introspection endpoints", () => {
         const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users"), {}, fakeCtx);
 
         expect(response.status).toBe(400);
-        expect(((await response.json()) as { error: { code: string } }).error.code).toBe("AUTH_NOT_CONFIGURED");
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("AUTH_NOT_CONFIGURED");
     });
 
     test("users returns the introspector's page and forwards paging", async () => {

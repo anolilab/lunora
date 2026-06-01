@@ -41,7 +41,10 @@ describe("createWorker — storage admin endpoint", () => {
         );
 
         expect(response.status).toBe(400);
-        expect(((await response.json()) as { error: { code: string } }).error.code).toBe("STORAGE_NOT_CONFIGURED");
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_NOT_CONFIGURED");
     });
 
     test("forwards prefix / cursor / limit to the lister and returns the page", async () => {

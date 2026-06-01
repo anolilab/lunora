@@ -252,11 +252,11 @@ describe("ctx-db constraints", () => {
          * runtime dep on `@cirrus/values` (kept light on purpose), so unit tests
          * pass a structural fake — same shape, hand-rolled `parse`.
          */
-        const checked = <T>(kind: string, predicate: (value: T) => boolean, message: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({
+        const checked = (kind: string, predicate: (value: unknown) => boolean, message: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({
             _meta: { column: { notNull: true, ...column } },
             kind,
             parse(value) {
-                if (!predicate(value as T)) {
+                if (!predicate(value)) {
                     const error: Error & { code?: string } = new Error(message);
 
                     error.code = "VALIDATION";
@@ -274,7 +274,7 @@ describe("ctx-db constraints", () => {
                     orders: {
                         indexes: [],
                         shape: {
-                            amount: checked<number>("number", (n) => n >= 0, "amount must be non-negative"),
+                            amount: checked("number", (n) => typeof n === "number" && n >= 0, "amount must be non-negative"),
                             sku: col("string"),
                             status: col("string", { defaultValue: "pending" }),
                         },

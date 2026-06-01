@@ -47,7 +47,10 @@ describe("createWorker — global introspection endpoints", () => {
         );
 
         expect(response.status).toBe(400);
-        expect(((await response.json()) as { error: { code: string } }).error.code).toBe("GLOBALS_NOT_CONFIGURED");
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("GLOBALS_NOT_CONFIGURED");
     });
 
     test("tables returns the introspector's table list", async () => {

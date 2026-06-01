@@ -362,7 +362,7 @@ const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record
         const actual = document[field];
 
         if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
-            const operatorKeys = Object.keys(expected as Record<string, unknown>);
+            const operatorKeys = Object.keys(expected);
 
             if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
                 if (actual !== (expected as { eq: unknown }).eq) {
@@ -402,7 +402,7 @@ const normalizeCountArg = (arg: RestrictableQueryOptions | undefined | WhereInpu
         return { where: arg as WhereInput };
     }
 
-    const keys = Object.keys(arg as Record<string, unknown>);
+    const keys = Object.keys(arg);
 
     if (keys.length === 0) {
         return {};
@@ -512,7 +512,13 @@ const stringifySearchText = (value: unknown): string => {
         return "";
     }
 
-    return String(value);
+    if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+        return String(value);
+    }
+
+    // Objects/arrays (and any other non-primitive) are serialized as JSON so
+    // they contribute real text to the scan instead of `[object Object]`.
+    return JSON.stringify(value) ?? "";
 };
 
 /**
@@ -802,7 +808,7 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
         const score = scoreDoc(stringifySearchText(doc[search.field]), tokens);
 
         if (score > 0) {
-            scored.push({ creationTime: typeof doc["_creationTime"] === "number" ? (doc["_creationTime"] as number) : 0, doc, score });
+            scored.push({ creationTime: typeof doc["_creationTime"] === "number" ? (doc["_creationTime"]) : 0, doc, score });
         }
     }
 
@@ -1149,7 +1155,7 @@ const runGuardedWrite = (sql: SqlExec, table: string, query: string, ...params: 
 
     const changedRow = runSql<{ changed: number }>(sql, `SELECT changes() AS changed`).one();
 
-    if (Number(changedRow.changed) === 0) {
+    if (changedRow.changed === 0) {
         throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`);
     }
 };
@@ -1657,7 +1663,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // them actually changes. Full scans already stamped
                     // `*scan` above (which subsumes per-row deps).
                     if (!isFullScan && typeof doc["_id"] === "string") {
-                        onRead(tableName, doc["_id"] as string);
+                        onRead(tableName, doc["_id"]);
                     }
                 }
             }
@@ -1732,7 +1738,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // pure equality conjunction; if `baseWhere` is set we fall through
             // to the scan so SQL handles it uniformly.
             if (definition.aggregateIndexes && !opts.baseWhere) {
-                const planned = selectIndexForCount(definition.aggregateIndexes, opts.where as Record<string, unknown> | undefined);
+                const planned = selectIndexForCount(definition.aggregateIndexes, opts.where);
 
                 if (planned) {
                     ensureBackfilled(tableName, planned.index);
@@ -1745,7 +1751,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         encoded,
                     ).toArray();
 
-                    return row[0] === undefined ? 0 : Number(row[0].value ?? 0);
+                    return row[0] === undefined ? 0 : (row[0].value ?? 0);
                 }
             }
 
@@ -1759,7 +1765,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const row = runSql<{ count: number }>(sql, querySql, ...params).one();
 
-            return Number(row.count);
+            return row.count;
         },
 
         async aggregate(tableName, aggOptions) {
@@ -1816,7 +1822,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 return null;
             }
 
-            return Number(value);
+            return value;
         },
 
         async groupBy(tableName, groupOptions) {
@@ -1854,7 +1860,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     agg.op,
                     agg.field,
                     groupOptions.by,
-                    groupOptions.where as Record<string, unknown> | undefined,
+                    groupOptions.where,
                 );
 
                 if (planned) {
@@ -1878,7 +1884,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                             indexedResult.push({
                                 key: { ...planned.partial },
-                                value: value === null || value === undefined ? null : Number(value),
+                                value: value ?? null,
                             });
                         }
 
@@ -1897,7 +1903,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         const decoded = JSON.parse(row.key) as Record<string, unknown>;
                         const { value } = row;
 
-                        indexedResult.push({ key: decoded, value: value == null ? null : Number(value) });
+                        indexedResult.push({ key: decoded, value: value ?? null });
                     }
 
                     return indexedResult;
@@ -2001,7 +2007,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // to scope the rank — but only when it matches the row's stored
             // partition (otherwise the row isn't in the requested scope).
             const effective = mergeWhere(rankOptions.baseWhere, rankOptions.where);
-            const partitionFromWhere = resolveRankPartition(index, effective as Record<string, unknown> | undefined);
+            const partitionFromWhere = resolveRankPartition(index, effective);
 
             if (partitionFromWhere) {
                 const requestedKey = encodePartitionKey(index.partitionBy ?? [], partitionFromWhere);
@@ -2028,7 +2034,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                 for (const prefixColumn of sortColumns.slice(0, pivot)) {
                     conditions.push(`${quoteIdentifier(prefixColumn)} IS ?`);
-                    beforeParams.push(own[prefixColumn] as unknown);
+                    beforeParams.push(own[prefixColumn]);
                 }
 
                 const column = sortColumns[pivot];
@@ -2038,7 +2044,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     const operator = sortKey.direction === "desc" ? ">" : "<";
 
                     conditions.push(`${quoteIdentifier(column)} ${operator} ?`);
-                    beforeParams.push(own[column] as unknown);
+                    beforeParams.push(own[column]);
                 } else {
                     // Final pivot is the `__id__` ASC tiebreak.
                     conditions.push(`${quoteIdentifier(RANK_TIEBREAK)} < ?`);
@@ -2064,7 +2070,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 partitionKey,
             ).one();
 
-            return { position: Number(beforeRow.c) + 1, total: Number(totalRow.c) };
+            return { position: beforeRow.c + 1, total: totalRow.c };
         },
 
         async rankPage(tableName, indexName, rankPageOptions = {}) {
@@ -2091,7 +2097,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
             const take = Math.max(1, Math.min(1000, Math.floor(rankPageOptions.take ?? 100)));
             const effective = mergeWhere(rankPageOptions.baseWhere, rankPageOptions.where);
-            const partitionFromWhere = resolveRankPartition(index, effective as Record<string, unknown> | undefined);
+            const partitionFromWhere = resolveRankPartition(index, effective);
 
             const orderClauses: string[] = [`"__partition__" ASC`];
 
@@ -2112,7 +2118,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             if (rankPageOptions.cursor) {
-                const decoded = decodeCursor(rankPageOptions.cursor) as Array<unknown>;
+                const decoded = decodeCursor(rankPageOptions.cursor);
                 // Same shape we encode below: [partitionKey, ...sortValues, id]
                 const expectedLength = 1 + sortColumns.length + 1;
 
@@ -2180,13 +2186,13 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const last = usable.at(-1);
 
             if (hasMore && last !== undefined) {
-                const cursorValues: unknown[] = [last["__partition__"] as unknown];
+                const cursorValues: unknown[] = [last["__partition__"]];
 
                 for (const column of sortColumns) {
-                    cursorValues.push(last[column] as unknown);
+                    cursorValues.push(last[column]);
                 }
 
-                cursorValues.push(last[RANK_TIEBREAK] as unknown);
+                cursorValues.push(last[RANK_TIEBREAK]);
 
                 // Match the format `decodeCursor` expects (base64 of JSON).
                 continueCursor = encodeRankCursor(cursorValues);
@@ -2211,8 +2217,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // A client-chosen `_id` is only honored on the trusted dev/admin
             // import path (`allowExplicitId`); the default mutation path always
             // generates a fresh id even if a handler forwards a raw payload.
-            const id = insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string" ? (withDefaults["_id"] as string) : generateId();
-            const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"] as number) : clock();
+            const id = insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string" ? (withDefaults["_id"]) : generateId();
+            const creationTime = typeof withDefaults["_creationTime"] === "number" ? (withDefaults["_creationTime"]) : clock();
 
             const docWithMeta: Record<string, unknown> = { ...withDefaults, _id: id, _creationTime: creationTime };
 
@@ -2358,7 +2364,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 (tableDefinition.aggregateIndexes ?? []).length > 0 ||
                 (tableDefinition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? lookupById(id)?.row : undefined;
-            const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
+            const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"]) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
             applyOnUpdate(tableDefinition, document, replaced);
@@ -2614,7 +2620,7 @@ export const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void
             const aggTable = aggregateTableName(tableName, index.name);
             const existing = runSql<{ count: number }>(sql, `SELECT COUNT(*) AS count FROM ${quoteIdentifier(aggTable)}`).one();
 
-            if (Number(existing.count) > 0) {
+            if (existing.count > 0) {
                 continue;
             }
 
@@ -2673,7 +2679,7 @@ export const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
             const rankTable = rankTableName(tableName, index.name);
             const existing = runSql<{ count: number }>(sql, `SELECT COUNT(*) AS count FROM ${quoteIdentifier(rankTable)}`).one();
 
-            if (Number(existing.count) > 0) {
+            if (existing.count > 0) {
                 continue;
             }
 

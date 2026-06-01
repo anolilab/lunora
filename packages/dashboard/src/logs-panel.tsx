@@ -120,14 +120,14 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
 
     // Live channel: while toggled on, each server push replaces the buffer so
     // new log lines appear without a manual refresh.
-    useLiveAdmin<LogsResult>(
+    useLiveAdmin(
         ADMIN_FUNCTIONS.getLogs,
         {},
         shardKey,
         (result) => {
             setError(null);
             setLiveError(null);
-            setEntries(result.entries);
+            setEntries((result as LogsResult).entries);
         },
         live,
         setLiveError,

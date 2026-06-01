@@ -19,11 +19,11 @@ import { adminRef, callOptions } from "./internal.js";
  * `onError` are held in refs so a fresh closure each render doesn't churn the
  * subscription; only the path/args/shard identity does.
  */
-export function useLiveAdmin<T>(
+export function useLiveAdmin(
     functionPath: string,
     args: Record<string, unknown>,
     shardKey: string,
-    onValue: (value: T) => void,
+    onValue: (value: unknown) => void,
     enabled = true,
     onError?: (message: string) => void,
 ): void {
@@ -51,7 +51,7 @@ export function useLiveAdmin<T>(
             adminRef(functionPath),
             argsRef.current,
             (value) => {
-                callbackRef.current(value as T);
+                callbackRef.current(value);
             },
             {
                 ...callOptions(shardKey),

@@ -46,7 +46,10 @@ describe("createWorker — functions admin endpoint", () => {
         );
 
         expect(response.status).toBe(400);
-        expect(((await response.json()) as { error: { code: string } }).error.code).toBe("FUNCTIONS_NOT_CONFIGURED");
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("FUNCTIONS_NOT_CONFIGURED");
     });
 
     test("returns public functions sorted by path, omitting internal ones", async () => {
@@ -61,7 +64,7 @@ describe("createWorker — functions admin endpoint", () => {
         );
 
         expect(response.status).toBe(200);
-        expect((await response.json()) as { functions: unknown }).toEqual({
+        await expect(response.json()).resolves.toEqual({
             functions: [
                 { kind: "action", path: "billing:sync" },
                 { kind: "query", path: "messages:list" },

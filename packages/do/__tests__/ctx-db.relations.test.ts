@@ -322,7 +322,7 @@ describe("ctx-db relations", () => {
                     return { continueCursor: null, isDone: true, page };
                 },
                 async insert(_table: string, doc: Record<string, unknown>) {
-                    const id = String(doc["_id"] ?? `m_${rows.size + 1}`);
+                    const id = typeof doc["_id"] === "string" ? doc["_id"] : `m_${rows.size + 1}`;
 
                     rows.set(id, { ...doc, _id: id });
 

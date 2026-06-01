@@ -18,7 +18,7 @@ const createShardSpy = (handler: (shardKey: string, body: { args: Record<string,
 
     const stubFor = (shardKey: string) => ({
         async fetch(request: Request): Promise<Response> {
-            const body = (await request.json()) as { args: Record<string, unknown>; functionPath: string };
+            const body: { args: Record<string, unknown>; functionPath: string } = await request.json();
 
             calls.push({ body, shardKey });
 

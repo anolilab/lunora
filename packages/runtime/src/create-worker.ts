@@ -501,9 +501,9 @@ const buildErrorEvent = (
     extra: { fanOut?: { table: string }; shardKey?: string },
 ): ObservabilityEvent => {
     const isCirrus = error instanceof Error && error.name === "CirrusError";
-    const errorRecord = error as unknown as Record<string, unknown>;
-    const code = isCirrus && typeof errorRecord["code"] === "string" ? (errorRecord["code"] as string) : "INTERNAL_SERVER_ERROR";
-    const status = isCirrus && typeof errorRecord["status"] === "number" ? (errorRecord["status"] as number) : 500;
+    const errorRecord = error as Record<string, unknown>;
+    const code = isCirrus && typeof errorRecord["code"] === "string" ? errorRecord["code"] : "INTERNAL_SERVER_ERROR";
+    const status = isCirrus && typeof errorRecord["status"] === "number" ? errorRecord["status"] : 500;
     const message = error instanceof Error ? error.message : String(error);
 
     return {
@@ -805,7 +805,7 @@ const streamingImport = async (
                 return;
             }
 
-            shardKey = String(raw);
+            shardKey = typeof raw === "string" ? raw : JSON.stringify(raw);
         }
 
         const existing = perShard.get(shardKey);
@@ -1087,9 +1087,8 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
         const rawBody = await readBodyTextWithLimit(request);
 
         const envRecord = (env ?? {}) as Record<string, unknown>;
-        const schedulerSecret = typeof envRecord["CIRRUS_SCHEDULER_SECRET"] === "string" ? (envRecord["CIRRUS_SCHEDULER_SECRET"] as string) : undefined;
-        const adminBearer =
-            options.adminToken ?? (typeof envRecord["CIRRUS_ADMIN_TOKEN"] === "string" ? (envRecord["CIRRUS_ADMIN_TOKEN"] as string) : undefined);
+        const schedulerSecret = typeof envRecord["CIRRUS_SCHEDULER_SECRET"] === "string" ? envRecord["CIRRUS_SCHEDULER_SECRET"] : undefined;
+        const adminBearer = options.adminToken ?? (typeof envRecord["CIRRUS_ADMIN_TOKEN"] === "string" ? envRecord["CIRRUS_ADMIN_TOKEN"] : undefined);
 
         const signatureHeader = request.headers.get("x-cirrus-scheduler-signature");
 
@@ -1510,7 +1509,7 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
             });
 
             const response = await forwardToShard(options.shardDO, defaultShard, forwarded);
-            const payload = (await response.json()) as { error?: { code?: string; message?: string }; result?: unknown };
+            const payload: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
 
             if (payload.error) {
                 throw new CirrusError(payload.error.message ?? "shard RPC failed", {

@@ -17,11 +17,22 @@ const formatCell = (value: unknown): string => {
         return "";
     }
 
-    if (typeof value === "object") {
-        return JSON.stringify(value);
+    switch (typeof value) {
+        case "bigint":
+        case "boolean":
+        case "number": {
+            return value.toString();
+        }
+        case "string": {
+            return value;
+        }
+        case "symbol": {
+            return value.toString();
+        }
+        default: {
+            return JSON.stringify(value) ?? "";
+        }
     }
-
-    return String(value);
 };
 
 /**

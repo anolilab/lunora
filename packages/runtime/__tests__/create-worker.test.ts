@@ -312,8 +312,8 @@ describe("createWorker", () => {
             queryCoordinator: {
                 fanOut: fanOut as never,
                 orchestrateMigration: fanOut as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
                 registry: {} as never,
             },
             resolveIdentity: () => ({ userId: "user_42", email: "u@example.com" }),
@@ -343,10 +343,10 @@ describe("createWorker", () => {
         const worker = createWorker({
             shardDO: shard.namespace,
             queryCoordinator: {
-                fanOut: fanOut as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
+                fanOut,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
                 registry: {} as never,
             },
             authorizeShard: () => true,
@@ -375,9 +375,9 @@ describe("createWorker", () => {
             shardDO: shard.namespace,
             queryCoordinator: {
                 fanOut: fanOut as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
                 registry: {} as never,
             },
             authorizeFanOut,
@@ -405,10 +405,10 @@ describe("createWorker", () => {
         const worker = createWorker({
             shardDO: shard.namespace,
             queryCoordinator: {
-                fanOut: fanOut as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
+                fanOut,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
                 registry: {} as never,
             },
             authorizeFanOut: () => false,
@@ -459,10 +459,10 @@ describe("createWorker — migration endpoint", () => {
         const worker = createWorker({
             adminToken: "s3cret",
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
                 orchestrateMigration: orchestrateMigration as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: shard.namespace,
@@ -507,10 +507,10 @@ describe("createWorker — migration endpoint", () => {
         const worker = createWorker({
             adminToken: "s3cret",
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: shard.namespace,
@@ -527,10 +527,10 @@ describe("createWorker — migration endpoint", () => {
         const worker = createWorker({
             adminToken: "s3cret",
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: shard.namespace,
@@ -546,10 +546,10 @@ describe("createWorker — migration endpoint", () => {
 
         const worker = createWorker({
             queryCoordinator: {
-                fanOut: vi.fn<() => never>() as never,
-                orchestrateMigration: vi.fn<() => never>() as never,
-                orchestrateExport: vi.fn<() => never>() as never,
-                orchestrateImport: vi.fn<() => never>() as never,
+                fanOut: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
                 registry: {} as never,
             },
             shardDO: shard.namespace,
@@ -624,7 +624,7 @@ describe("createWorker — HTTP actions", () => {
         const worker = createWorker({
             httpRouter: honoApp((app) =>
                 app.post("/webhook", async (c) => {
-                    const body = (await c.req.json()) as Record<string, unknown>;
+                    const body = await c.req.json();
                     const created = await c.var.cirrus.runMutation({ __cirrusRef: "messages:send" }, { body });
 
                     return Response.json({ created });
@@ -640,7 +640,7 @@ describe("createWorker — HTTP actions", () => {
         expect(shard.calls).toHaveLength(1);
         expect(shard.calls[0]!.shardKey).toBe("__root__");
 
-        const forwarded = (await shard.calls[0]!.request.json()) as { args: unknown; functionPath: string };
+        const forwarded: { args: Record<string, unknown>; functionPath: string } = await shard.calls[0]!.request.json();
 
         expect(forwarded.functionPath).toBe("messages:send");
         expect(forwarded.args).toEqual({ body: { text: "hi" } });
