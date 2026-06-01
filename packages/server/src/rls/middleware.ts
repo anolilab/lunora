@@ -322,7 +322,7 @@ const matchesCombinator = (
 const isCombinatorKey = (key: string): key is "AND" | "NOT" | "OR" => key === "AND" || key === "OR" || key === "NOT";
 
 const isOperatorBag = (value: unknown): value is Record<string, unknown> =>
-    (isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k)));
+    isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k));
 
 /**
  * JS-side `WhereInput` evaluator. Used by the legacy `query()` wrapper to
@@ -754,7 +754,7 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
         // policy paying for its own `getIdentity()` call. `null` covers both
         // the anonymous case and the no-resolver case (older auth states).
         // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.identity is a public type carrying `null` for the anonymous/no-resolver case
-        const identity = await auth.getIdentity?.() ?? null;
+        const identity = (await auth.getIdentity?.()) ?? null;
         const policyContext: PolicyContext<Context> = {
             auth: {
                 identity,

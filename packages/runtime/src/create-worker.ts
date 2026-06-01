@@ -534,8 +534,8 @@ const buildErrorEvent = (
         error: { code, message, status },
         functionPath,
         ok: false,
-        ...extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {},
-        ...extra.shardKey ? { shardKey: extra.shardKey } : {},
+        ...(extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {}),
+        ...(extra.shardKey ? { shardKey: extra.shardKey } : {}),
     };
 };
 
@@ -776,7 +776,10 @@ const resolveImportShardKey = (
         const raw = documentRow[info.mode.field];
 
         if (raw === undefined || raw === null) {
-            return { error: { code: "BAD_ROW", line: lineNumber, message: `row missing shard field "${info.mode.field}" for table "${table}"`, table }, ok: false };
+            return {
+                error: { code: "BAD_ROW", line: lineNumber, message: `row missing shard field "${info.mode.field}" for table "${table}"`, table },
+                ok: false,
+            };
         }
 
         return { ok: true, shardKey: typeof raw === "string" ? raw : JSON.stringify(raw) };
@@ -915,7 +918,10 @@ interface ImportTotals {
  * running totals, mutating them in place. `totals` is an accumulator the caller
  * owns — by design it threads one mutable record through both storage planes.
  */
-const mergeImportResult = (totals: ImportTotals, result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> }): void => {
+const mergeImportResult = (
+    totals: ImportTotals,
+    result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> },
+): void => {
     for (const [table, count] of Object.entries(result.inserted)) {
         // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
         totals.inserted[table] = (totals.inserted[table] ?? 0) + count;
@@ -1661,7 +1667,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         // the authorization decision.
         if (options.authorizeShard) {
             // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`
-            const identity = options.resolveIdentity ? (await options.resolveIdentity(request, env)) ?? null : null;
+            const identity = options.resolveIdentity ? ((await options.resolveIdentity(request, env)) ?? null) : null;
             const allowed = await options.authorizeShard(identity, shardKey);
 
             if (!allowed) {
@@ -1824,7 +1830,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
                     functionPath: envelope.functionPath,
                     ok: response.ok,
                     shardKey,
-                    ...response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } },
+                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
                 });
 
                 // Propagate the DO's bookmark header so the client can pin reads

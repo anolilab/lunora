@@ -198,7 +198,7 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
                 const counts = (parent["_count"] as Record<string, number> | undefined) ?? {};
                 const parentValue = parent[parentField];
 
-                counts[name] = parentValue === null || parentValue === undefined ? 0 : countByValue.get(parentValue) ?? 0;
+                counts[name] = parentValue === null || parentValue === undefined ? 0 : (countByValue.get(parentValue) ?? 0);
                 parent["_count"] = counts;
             }
         }

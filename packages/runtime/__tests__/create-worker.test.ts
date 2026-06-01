@@ -536,7 +536,11 @@ describe("createWorker — migration endpoint", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(migrateRequest({ functionPath: "messages:list", table: "messages" }, { authorization: "Bearer s3cret" }), {}, fakeContext);
+        const res = await worker.fetch(
+            migrateRequest({ functionPath: "messages:list", table: "messages" }, { authorization: "Bearer s3cret" }),
+            {},
+            fakeContext,
+        );
 
         expect(res.status).toBe(400);
     });

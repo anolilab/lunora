@@ -43,8 +43,8 @@ const createBrowserClient = (): MockClientHooks =>
 
             // Mirror the server's whole-table substring filter across all cells.
             const needle = search.trim().toLowerCase();
-            const matched
-                = needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
+            const matched =
+                needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
 
             return { columns: ["__id__", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
         },
@@ -391,15 +391,15 @@ describe("dataBrowser — editable", () => {
                 if (reference === ADMIN_FUNCTIONS.writeRow) {
                     const { id, op } = args as { id?: string; op: string };
 
-                    const resultId = op === "insert" ? "m4" : id ?? null;
+                    const resultId = op === "insert" ? "m4" : (id ?? null);
 
                     return { id: resultId, op };
                 }
 
                 const { limit = 50, offset = 0, search = "" } = args as PageArgs;
                 const needle = search.trim().toLowerCase();
-                const matched
-                    = needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
+                const matched =
+                    needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
 
                 return { columns: ["__id__", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
             },
@@ -465,7 +465,7 @@ describe("dataBrowser — editable", () => {
         await openMessages(mock);
 
         fireEvent.click(screen.getByTestId("db-add-row"));
-        fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: "{ \"text\": \"fresh\" }" } });
+        fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: '{ "text": "fresh" }' } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
@@ -510,7 +510,7 @@ describe("dataBrowser — editable", () => {
 
         expect(JSON.parse(editor.value)).toEqual({ text: "hello" });
 
-        fireEvent.change(editor, { target: { value: "{ \"text\": \"edited\" }" } });
+        fireEvent.change(editor, { target: { value: '{ "text": "edited" }' } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
@@ -558,7 +558,7 @@ describe("dataBrowser — editable", () => {
 
         expect(JSON.parse(editor.value)).toEqual({ text: "world" });
 
-        fireEvent.change(editor, { target: { value: "{ \"text\": \"patched\" }" } });
+        fireEvent.change(editor, { target: { value: '{ "text": "patched" }' } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
@@ -665,7 +665,7 @@ describe("dataBrowser — editable", () => {
                 const { search = "", table } = args as { search?: string; table: string };
                 const needle = search.trim().toLowerCase();
                 const match = <T extends Record<string, unknown>>(source: T[]): T[] =>
-                    (needle === "" ? source : source.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle))));
+                    needle === "" ? source : source.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle)));
 
                 if (table === "posts") {
                     return { columns: ["id", "title", "authorId"], refs: { authorId: "users" }, rows: match(POSTS), total: match(POSTS).length };

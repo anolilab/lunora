@@ -268,7 +268,8 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
     }
 
     const id = typeof args["id"] === "string" ? args["id"] : undefined;
-    const record = typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
+    const record =
+        typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
 
     if (op !== "insert" && (id === undefined || id === "")) {
         throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
@@ -640,8 +641,8 @@ abstract class ShardDO {
 
             if (status !== "ok") {
                 const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-                const errorMessage
-                    = status === "too_many"
+                const errorMessage =
+                    status === "too_many"
                         ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
                         : "failed to persist subscription attachment";
 

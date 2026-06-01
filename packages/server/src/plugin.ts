@@ -129,8 +129,8 @@ export const definePlugin = <TExtension extends Record<string, TableDefinition>,
 
     return {
         key,
-        ...options.extension ? { extension: options.extension } : {},
-        ...options.middleware ? { middleware: options.middleware } : {},
+        ...(options.extension ? { extension: options.extension } : {}),
+        ...(options.middleware ? { middleware: options.middleware } : {}),
     };
 };
 
@@ -210,8 +210,8 @@ export const defineComponent = <
     options: DefineComponentOptions<TExtension, TContextIn, TContextOut, F>,
 ): Component<TExtension, TContextIn, TContextOut, F> => {
     const plugin = definePlugin(key, {
-        ...options.extension ? { extension: options.extension } : {},
-        ...options.middleware ? { middleware: options.middleware } : {},
+        ...(options.extension ? { extension: options.extension } : {}),
+        ...(options.middleware ? { middleware: options.middleware } : {}),
     });
 
     return {

@@ -53,7 +53,7 @@ describe("useSubscription", () => {
         expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 7 }));
     });
 
-    it("\"skip\" short-circuits — no subscribe call", () => {
+    it('"skip" short-circuits — no subscribe call', () => {
         expect.assertions(2);
 
         const mock = createMockClient();

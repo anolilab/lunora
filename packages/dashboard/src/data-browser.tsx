@@ -149,9 +149,7 @@ const RefCell = ({
 
     return (
         <button data-testid={`db-ref-${column}`} onClick={onClick} title={`Open ${target} ${id}`} type="button">
-            {id}
-{" "}
-↗
+            {id} ↗
         </button>
     );
 };
@@ -374,7 +372,11 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
             }
 
             try {
-                (await client.query(WRITE_ROW, { doc: parsedDocument, id: id ?? undefined, op, table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
+                (await client.query(
+                    WRITE_ROW,
+                    { doc: parsedDocument, id: id ?? undefined, op, table: selectedTable },
+                    callOptions(shardKey),
+                )) as WriteRowResult;
                 setEditing(null);
                 await fetchPage(shardKey, selectedTable, offset, search);
             } catch (error) {
@@ -513,12 +515,9 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         setEditing({ docText: "{}", id: "" });
     }, []);
 
-    const onEditorDocumentChange = useCallback(
-        (event: React.ChangeEvent<HTMLTextAreaElement>): void => {
-            setEditing((current) => (current === null ? current : { docText: event.target.value, id: current.id }));
-        },
-        [],
-    );
+    const onEditorDocumentChange = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>): void => {
+        setEditing((current) => (current === null ? current : { docText: event.target.value, id: current.id }));
+    }, []);
 
     const saveEdit = useCallback((): void => {
         if (editing === null) {
@@ -619,11 +618,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                                 }}
                                 type="button"
                             >
-                                {tableInfo.name}
-{" "}
-(
-{tableInfo.rowCount}
-)
+                                {tableInfo.name} ({tableInfo.rowCount})
                             </button>
                         </li>
                     ))}

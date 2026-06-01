@@ -73,7 +73,7 @@ export const DashboardApp = ({ adminToken, baseUrl, dashboard }: DashboardAppPro
         // The token doubles as the WS credential (`wsToken`) so live admin
         // subscriptions clear the upgrade's admin gate, mirroring the bearer the
         // HTTP admin RPCs already send.
-        const created = new CirrusClient({ url: resolveBaseUrl(baseUrl), ...token === "" ? {} : { wsToken: token } });
+        const created = new CirrusClient({ url: resolveBaseUrl(baseUrl), ...(token === "" ? {} : { wsToken: token }) });
 
         if (token !== "") {
             created.setAuthToken(token);

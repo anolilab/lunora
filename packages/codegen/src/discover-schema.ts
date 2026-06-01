@@ -55,11 +55,10 @@ const getStringArrayProperty = (object: ObjectLiteralExpression, key: string): s
     return undefined;
 };
 
-const asMetric = (value: string | undefined): VectorIndexIR["metric"] =>
-    (value && VECTOR_METRICS.has(value) ? (value as VectorIndexIR["metric"]) : undefined);
+const asMetric = (value: string | undefined): VectorIndexIR["metric"] => (value && VECTOR_METRICS.has(value) ? (value as VectorIndexIR["metric"]) : undefined);
 
 const asOnDelete = (value: string | undefined): RelationIR["onDelete"] =>
-    (value && ON_DELETE_ACTIONS.has(value) ? (value as RelationIR["onDelete"]) : undefined);
+    value && ON_DELETE_ACTIONS.has(value) ? (value as RelationIR["onDelete"]) : undefined;
 
 /**
  * Unwrap a `.relations((r) => …)` arrow body to the object literal it returns,
@@ -78,7 +77,7 @@ const relationsObjectBody = (argument: Node): ObjectLiteralExpression | undefine
     } else if (Node.isBlock(body)) {
         const returnStatement = body.getStatements().find((statement) => Node.isReturnStatement(statement));
 
-        body = returnStatement && Node.isReturnStatement(returnStatement) ? returnStatement.getExpression() ?? body : body;
+        body = returnStatement && Node.isReturnStatement(returnStatement) ? (returnStatement.getExpression() ?? body) : body;
     }
 
     return Node.isObjectLiteralExpression(body) ? body : undefined;
@@ -152,7 +151,7 @@ const parseRelations = (argument: Node): RelationIR[] => {
 
 /** Read the literal name of an index/search/vector builder's first string argument, or `"_unnamed_"`. */
 const indexNameOf = (nameArgument: Node | undefined): string =>
-    (nameArgument && Node.isStringLiteral(nameArgument) ? nameArgument.getLiteralText() : "_unnamed_");
+    nameArgument && Node.isStringLiteral(nameArgument) ? nameArgument.getLiteralText() : "_unnamed_";
 
 /** Parse a `.index(name, [fields], { unique? })` call into an {@link IndexIR}. */
 const parseIndexCall = (args: ReadonlyArray<Node>): IndexIR => {
@@ -167,12 +166,12 @@ const parseIndexCall = (args: ReadonlyArray<Node>): IndexIR => {
         }
     }
 
-    const fields
-        = fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression)
+    const fields =
+        fieldsExpression && Node.isArrayLiteralExpression(fieldsExpression)
             ? fieldsExpression
-                .getElements()
-                .filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element))
-                .map((element) => element.getLiteralText())
+                  .getElements()
+                  .filter((element): element is Expression & { getLiteralText: () => string } => Node.isStringLiteral(element))
+                  .map((element) => element.getLiteralText())
             : [];
 
     return { fields, name: indexNameOf(indexName), unique };
@@ -423,8 +422,8 @@ const discoverSchema = (project: Project, schemaPath: string): SchemaIR => {
 
     // Standalone vector indexes live in the optional second argument (Shape B).
     const standaloneArgument = defineSchemaCall.getArguments()[1];
-    const standaloneVectorIndexes
-        = standaloneArgument && Node.isObjectLiteralExpression(standaloneArgument) ? parseStandaloneVectorIndexes(standaloneArgument) : [];
+    const standaloneVectorIndexes =
+        standaloneArgument && Node.isObjectLiteralExpression(standaloneArgument) ? parseStandaloneVectorIndexes(standaloneArgument) : [];
 
     // Flatten inline Shape A indexes (hoisted with their owning table) plus Shape B.
     const vectorIndexes: VectorIndexIR[] = [...tables.flatMap((table) => table.vectorIndexes), ...standaloneVectorIndexes];

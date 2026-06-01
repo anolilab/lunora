@@ -160,11 +160,7 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
                                 }}
                                 type="button"
                             >
-                                {table.name}
-{" "}
-(
-{table.rowCount}
-)
+                                {table.name} ({table.rowCount})
                             </button>
                         </li>
                     ))}

@@ -206,12 +206,9 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
             {runResult !== null && (
                 <p data-testid="mg-run-result">
                     {runResult.dryRun ? "Dry run: " : ""}
-                    {runResult.status}
-{" "}
-— processed
-{runResult.processed}
-, changed
-{runResult.changed}
+                    {runResult.status} — processed
+                    {runResult.processed}, changed
+                    {runResult.changed}
                 </p>
             )}
         </div>

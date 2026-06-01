@@ -136,7 +136,7 @@ describe("createScheduler", () => {
 
         expect(snippet.crons).toEqual(["0 * * * *"]);
         expect(snippet.dispatcher).toEqual({ args: { tenant: "acme" }, functionPath: "messages.send" });
-        expect(snippet.wranglerJsonc).toContain("\"0 * * * *\"");
+        expect(snippet.wranglerJsonc).toContain('"0 * * * *"');
     });
 
     it("createCronTrigger validates inputs", () => {

@@ -108,7 +108,7 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
 
 /** Parse an argument node as a nested validator, or fall back when it isn't an expression. */
 const parseArgument = (argument: Node | undefined, fallback: ValidatorIR): ValidatorIR =>
-    (argument && Node.isExpression(argument) ? parseValidator(argument) : fallback);
+    argument && Node.isExpression(argument) ? parseValidator(argument) : fallback;
 
 /** Parse a single `v.NAME(...)` builder call, dispatching on the member name. */
 const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): ValidatorIR => {

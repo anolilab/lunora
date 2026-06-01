@@ -74,8 +74,8 @@ describe("cirrus init", () => {
             const wrangler = readFileSync(join(workdir, "rainbow", "wrangler.jsonc"), "utf8");
             const main = readFileSync(join(workdir, "rainbow", "src", "main.tsx"), "utf8");
 
-            expect(pkg).toContain("\"name\": \"rainbow\"");
-            expect(wrangler).toContain("\"name\": \"rainbow\"");
+            expect(pkg).toContain('"name": "rainbow"');
+            expect(wrangler).toContain('"name": "rainbow"');
             expect(main).toContain("rainbow");
         });
 
@@ -152,7 +152,7 @@ describe("cirrus init", () => {
             expect(pkg).toContain("@tanstack/react-start");
             expect(pkg).toContain("@tanstack/react-router");
             expect(pkg).toContain("@tanstack/react-query");
-            expect(pkg).toContain("\"name\": \"starter\"");
+            expect(pkg).toContain('"name": "starter"');
         });
 
         it("next template is not yet available", async () => {

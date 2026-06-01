@@ -75,13 +75,7 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     return (
         <div data-testid="cirrus-file-browser">
             <div>
-                <input
-                    aria-label="Key prefix"
-                    data-testid="fb-prefix-input"
-                    onChange={onPrefixChange}
-                    placeholder="key prefix (optional)"
-                    value={prefix}
-                />
+                <input aria-label="Key prefix" data-testid="fb-prefix-input" onChange={onPrefixChange} placeholder="key prefix (optional)" value={prefix} />
                 <button data-testid="fb-list" disabled={busy} onClick={listFirst} type="button">
                     List
                 </button>

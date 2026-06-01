@@ -31,11 +31,11 @@ describe("run-codegen", () => {
 
             const result = runCodegen({ projectRoot: workdir });
 
-            expect(result.generated.dataModel).toContain("TableName = \"messages\" | \"users\"");
+            expect(result.generated.dataModel).toContain('TableName = "messages" | "users"');
             expect(result.generated.dataModel).toContain("export interface Doc_messages");
             expect(result.generated.dataModel).toContain("export interface Doc_users");
-            expect(result.generated.dataModel).toContain("_id: Id<\"messages\">");
-            expect(result.generated.dataModel).toContain("channelId: Id<\"channels\">;");
+            expect(result.generated.dataModel).toContain('_id: Id<"messages">');
+            expect(result.generated.dataModel).toContain('channelId: Id<"channels">;');
             expect(result.generated.dataModel).toContain("text: string;");
         });
 
@@ -46,9 +46,9 @@ describe("run-codegen", () => {
 
             expect(result.generated.api).toContain("export interface ApiTypes");
             expect(result.generated.api).toContain("messages:");
-            expect(result.generated.api).toContain("list: FunctionReference<\"query\"");
-            expect(result.generated.api).toContain("send: FunctionReference<\"mutation\"");
-            expect(result.generated.api).toContain("channelId: Id<\"channels\">");
+            expect(result.generated.api).toContain('list: FunctionReference<"query"');
+            expect(result.generated.api).toContain('send: FunctionReference<"mutation"');
+            expect(result.generated.api).toContain('channelId: Id<"channels">');
             expect(result.generated.api).toContain("limit?: number");
             expect(result.generated.api).not.toContain("| undefined");
             expect(result.generated.api).toContain("export const api = anyApi as unknown as ApiTypes;");
@@ -67,14 +67,14 @@ describe("run-codegen", () => {
             expect(publicHalf).not.toContain("purge:");
 
             // …and it must appear in the internal half, typed as a mutation.
-            expect(internalHalf).toContain("purge: FunctionReference<\"mutation\"");
+            expect(internalHalf).toContain('purge: FunctionReference<"mutation"');
             expect(result.generated.api).toContain("export const internal = anyApi as unknown as InternalApiTypes;");
 
             // The dispatch table still registers it (so `ctx.runMutation` can reach it),
             // and the external paths gate on `visibility`.
-            expect(result.generated.server).toContain("\"messages:purge\": cirrus_messages_0.purge");
-            expect(result.generated.server).toContain("visibility?: \"internal\" | \"public\";");
-            expect(result.generated.shard).toContain("registered.visibility === \"internal\"");
+            expect(result.generated.server).toContain('"messages:purge": cirrus_messages_0.purge');
+            expect(result.generated.server).toContain('visibility?: "internal" | "public";');
+            expect(result.generated.shard).toContain('registered.visibility === "internal"');
         });
 
         it("emits per-table index and searchIndex name unions in dataModel.ts", () => {
@@ -84,13 +84,13 @@ describe("run-codegen", () => {
 
             // Indexes: messages -> "by_channel", users -> "by_email".
             expect(result.generated.dataModel).toContain("export interface IndexNamesByTable");
-            expect(result.generated.dataModel).toContain("messages: \"by_channel\";");
-            expect(result.generated.dataModel).toContain("users: \"by_email\";");
+            expect(result.generated.dataModel).toContain('messages: "by_channel";');
+            expect(result.generated.dataModel).toContain('users: "by_email";');
             expect(result.generated.dataModel).toContain("export type IndexName<T extends keyof DataModel>");
 
             // Search indexes: messages -> "by_text", users -> never.
             expect(result.generated.dataModel).toContain("export interface SearchIndexNamesByTable");
-            expect(result.generated.dataModel).toContain("messages: \"by_text\";");
+            expect(result.generated.dataModel).toContain('messages: "by_text";');
             expect(result.generated.dataModel).toContain("users: never;");
             expect(result.generated.dataModel).toContain("export type SearchIndexName<T extends keyof DataModel>");
         });
@@ -101,11 +101,11 @@ describe("run-codegen", () => {
             const result = runCodegen({ projectRoot: workdir });
 
             // dataModel.ts: literal -> "admin", record -> Record<string, string>.
-            expect(result.generated.dataModel).toContain("role: \"admin\";");
+            expect(result.generated.dataModel).toContain('role: "admin";');
             expect(result.generated.dataModel).toContain("prefs: Record<string, string>;");
 
             // api.ts: literal inside a union -> "text" | "image"; record passes through.
-            expect(result.generated.api).toContain("kind: \"text\" | \"image\"");
+            expect(result.generated.api).toContain('kind: "text" | "image"');
             expect(result.generated.api).toContain("tags: Record<string, string>");
 
             // Regression guard: if either kind ever falls through to the default
@@ -124,7 +124,7 @@ describe("run-codegen", () => {
             expect(result.generated.server).toContain("action as actionBase,");
             expect(result.generated.server).toContain("mutation as mutationBase,");
             expect(result.generated.server).toContain("query as queryBase,");
-            expect(result.generated.server).toContain("} from \"@cirrus/server\";");
+            expect(result.generated.server).toContain('} from "@cirrus/server";');
             expect(result.generated.server).toContain("export const query = queryBase as unknown as");
             expect(result.generated.server).toContain("export const mutation = mutationBase as unknown as");
             expect(result.generated.server).toContain("export const action = actionBase as unknown as");
@@ -137,13 +137,13 @@ describe("run-codegen", () => {
 
             // The typed contexts widen `db` to the generated per-table facade while
             // intersecting the legacy structural reader/writer for back-compat.
-            expect(result.generated.server).toContain("export interface QueryCtx extends Omit<QueryCtxBase, \"db\">");
+            expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db">');
             expect(result.generated.server).toContain("readonly db: DatabaseReader & DatabaseReaderFacade;");
             expect(result.generated.server).toContain("readonly db: DatabaseWriter & DatabaseWriterFacade;");
             // `Id` is pulled into the facade import because the typed `Caller` arg
             // types reference it (the `messages:*` functions take `Id<"channels">`).
             expect(result.generated.server).toContain(
-                "import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, OrmReader, OrmWriter } from \"./dataModel.js\"",
+                'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, OrmReader, OrmWriter } from "./dataModel.js"',
             );
         });
 
@@ -157,15 +157,15 @@ describe("run-codegen", () => {
             expect(result.generated.server).toContain("export const createCaller = (context: CallerCtx): Caller =>");
 
             // Every leaf dispatches through the shared `callRegistered` helper.
-            expect(result.generated.server).toContain("list: (args) => callRegistered(context, \"messages:list\", args),");
+            expect(result.generated.server).toContain('list: (args) => callRegistered(context, "messages:list", args),');
 
             // The caller reaches internal functions (server-to-server), unlike the
             // public `api`: `purge` (an internalMutation) is present here.
-            expect(result.generated.server).toContain("purge: (args: { channelId: Id<\"channels\"> }) => Promise<unknown>;");
-            expect(result.generated.server).toContain("purge: (args) => callRegistered(context, \"messages:purge\", args),");
+            expect(result.generated.server).toContain('purge: (args: { channelId: Id<"channels"> }) => Promise<unknown>;');
+            expect(result.generated.server).toContain('purge: (args) => callRegistered(context, "messages:purge", args),');
 
             // Args are required when the function declares any, typed against dataModel.
-            expect(result.generated.server).toContain("list: (args: { channelId: Id<\"channels\">; limit?: number }) => Promise<unknown>;");
+            expect(result.generated.server).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
         });
 
         it("emits per-table ctx.db facade types in dataModel.ts", () => {
@@ -221,10 +221,10 @@ describe("run-codegen", () => {
 
             // The namespace must match the sanitized form `emitApi` uses so the
             // client-side `__cirrusRef` and the server-side dispatch key agree.
-            expect(result.generated.server).toContain("import * as cirrus_messages_0 from \"../messages.js\"");
+            expect(result.generated.server).toContain('import * as cirrus_messages_0 from "../messages.js"');
             expect(result.generated.server).toContain("export const CIRRUS_FUNCTIONS:");
-            expect(result.generated.server).toContain("\"messages:list\": cirrus_messages_0.list");
-            expect(result.generated.server).toContain("\"messages:send\": cirrus_messages_0.send");
+            expect(result.generated.server).toContain('"messages:list": cirrus_messages_0.list');
+            expect(result.generated.server).toContain('"messages:send": cirrus_messages_0.send');
             expect(result.generated.server).toContain("export const dispatchCirrusFunction =");
             expect(result.generated.server).toContain("FUNCTION_NOT_FOUND");
         });
@@ -250,11 +250,11 @@ describe("run-codegen", () => {
             const result = runCodegen({ projectRoot: workdir });
 
             // `users` is .global() — must appear here.
-            expect(result.generated.drizzleGlobal).toContain("export const users = sqliteTable(\"users\"");
-            expect(result.generated.drizzleGlobal).toContain("uniqueIndex(\"by_email\").on(t.email)");
+            expect(result.generated.drizzleGlobal).toContain('export const users = sqliteTable("users"');
+            expect(result.generated.drizzleGlobal).toContain('uniqueIndex("by_email").on(t.email)');
 
             // `messages` is shardBy — must NOT appear in global file.
-            expect(result.generated.drizzleGlobal).not.toContain("sqliteTable(\"messages\"");
+            expect(result.generated.drizzleGlobal).not.toContain('sqliteTable("messages"');
         });
 
         it("emits drizzle column mappings for optional/array/bigint/bytes", () => {
@@ -263,23 +263,23 @@ describe("run-codegen", () => {
             const result = runCodegen({ projectRoot: workdir });
 
             // `attachments` table covers the long-tail validator → drizzle column mappings.
-            expect(result.generated.drizzleGlobal).toContain("export const attachments = sqliteTable(\"attachments\"");
+            expect(result.generated.drizzleGlobal).toContain('export const attachments = sqliteTable("attachments"');
 
             // v.bytes() → blob with mode: "buffer".
-            expect(result.generated.drizzleGlobal).toContain("bytes: blob(\"bytes\", { mode: \"buffer\" }).notNull()");
+            expect(result.generated.drizzleGlobal).toContain('bytes: blob("bytes", { mode: "buffer" }).notNull()');
 
             // v.bigint() → blob with mode: "bigint".
-            expect(result.generated.drizzleGlobal).toContain("size: blob(\"size\", { mode: \"bigint\" }).notNull()");
+            expect(result.generated.drizzleGlobal).toContain('size: blob("size", { mode: "bigint" }).notNull()');
 
             // v.array(...) → json text column with `.$type<Array<…>>()`.
-            expect(result.generated.drizzleGlobal).toContain("tags: text(\"tags\", { mode: \"json\" }).$type<Array<string>>().notNull()");
+            expect(result.generated.drizzleGlobal).toContain('tags: text("tags", { mode: "json" }).$type<Array<string>>().notNull()');
 
             // v.optional(...) drops `.notNull()`.
-            expect(result.generated.drizzleGlobal).toContain("title: text(\"title\"),");
-            expect(result.generated.drizzleGlobal).not.toContain("title: text(\"title\").notNull()");
+            expect(result.generated.drizzleGlobal).toContain('title: text("title"),');
+            expect(result.generated.drizzleGlobal).not.toContain('title: text("title").notNull()');
 
             // v.id("users") inside a same-bucket table → `.references(() => users._id)`.
-            expect(result.generated.drizzleGlobal).toContain("ownerId: text(\"ownerId\").references(() => users._id).notNull()");
+            expect(result.generated.drizzleGlobal).toContain('ownerId: text("ownerId").references(() => users._id).notNull()');
         });
 
         it("emits drizzle.shard.ts containing shardBy/root tables", () => {
@@ -287,15 +287,15 @@ describe("run-codegen", () => {
 
             const result = runCodegen({ projectRoot: workdir });
 
-            expect(result.generated.drizzleShard).toContain("export const messages = sqliteTable(\"messages\"");
-            expect(result.generated.drizzleShard).toContain("index(\"by_channel\").on(t.channelId)");
+            expect(result.generated.drizzleShard).toContain('export const messages = sqliteTable("messages"');
+            expect(result.generated.drizzleShard).toContain('index("by_channel").on(t.channelId)');
 
             // Implicit _id + _creationTime columns are always emitted.
-            expect(result.generated.drizzleShard).toContain("_id: text(\"_id\").primaryKey()");
-            expect(result.generated.drizzleShard).toContain("_creationTime: integer(\"_creationTime\").notNull()");
+            expect(result.generated.drizzleShard).toContain('_id: text("_id").primaryKey()');
+            expect(result.generated.drizzleShard).toContain('_creationTime: integer("_creationTime").notNull()');
 
             // `users` is global — must NOT appear in shard file.
-            expect(result.generated.drizzleShard).not.toContain("sqliteTable(\"users\"");
+            expect(result.generated.drizzleShard).not.toContain('sqliteTable("users"');
         });
 
         it("output matches committed expected/ files (snapshot)", () => {
@@ -324,8 +324,8 @@ describe("run-codegen", () => {
             const result = runCodegen({ projectRoot: workdir });
 
             expect(result.generated.shard).toContain("export const createShardDO");
-            expect(result.generated.shard).toContain("import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from \"./server.js\"");
-            expect(result.generated.shard).toContain("import schema from \"../schema.js\"");
+            expect(result.generated.shard).toContain('import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./server.js"');
+            expect(result.generated.shard).toContain('import schema from "../schema.js"');
             expect(result.generated.shard).toContain("class extends ShardDOBase");
             expect(result.generated.shard).toContain("runShardMigrations");
             expect(result.generated.shard).toContain("createShardCtxDb");
@@ -364,9 +364,9 @@ describe("run-codegen", () => {
         it("imports Doc when a return type references it", () => {
             expect.assertions(3);
 
-            const output = emitApi([function_({ returnType: "Doc<\"posts\">[]" })]);
+            const output = emitApi([function_({ returnType: 'Doc<"posts">[]' })]);
 
-            expect(output).toContain("import type { Doc } from \"./dataModel.js\";");
+            expect(output).toContain('import type { Doc } from "./dataModel.js";');
             expect(output).not.toContain("import type { Id }");
             expect(output).not.toContain("import type { Doc, Id }");
         });
@@ -374,9 +374,9 @@ describe("run-codegen", () => {
         it("imports both Doc and Id when both are referenced", () => {
             expect.assertions(1);
 
-            const output = emitApi([function_({ args: { id: { kind: "id", tableName: "posts" } }, returnType: "Doc<\"posts\">" })]);
+            const output = emitApi([function_({ args: { id: { kind: "id", tableName: "posts" } }, returnType: 'Doc<"posts">' })]);
 
-            expect(output).toContain("import type { Doc, Id } from \"./dataModel.js\";");
+            expect(output).toContain('import type { Doc, Id } from "./dataModel.js";');
         });
 
         it("imports only Id when no Doc is referenced", () => {
@@ -384,7 +384,7 @@ describe("run-codegen", () => {
 
             const output = emitApi([function_({ args: { id: { kind: "id", tableName: "posts" } }, returnType: "{ ok: boolean }" })]);
 
-            expect(output).toContain("import type { Id } from \"./dataModel.js\";");
+            expect(output).toContain('import type { Id } from "./dataModel.js";');
             expect(output).not.toContain("Doc");
         });
 
@@ -419,7 +419,7 @@ describe("run-codegen", () => {
             const output = emitShard(schema);
 
             // Vectors variant: pull the adapters + the Vectorize binding type.
-            expect(output).toContain("import { createCtxVectors, createVectors, createVectorSyncHook } from \"@cirrus/vectors\"");
+            expect(output).toContain('import { createCtxVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors"');
             expect(output).toContain("VectorizeIndexLike");
             expect(output).toContain("WriteHook");
 
@@ -491,8 +491,8 @@ describe("run-codegen", () => {
             expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;");
 
             // Backend selection by shardMode: shard table → DO writer, global table → D1 facade.
-            expect(output).toContain("facade[\"messages\"] = bindTable(db, \"messages\");");
-            expect(output).toContain("facade[\"users\"] = bindTable(globalDb, \"users\");");
+            expect(output).toContain('facade["messages"] = bindTable(db, "messages");');
+            expect(output).toContain('facade["users"] = bindTable(globalDb, "users");');
         });
 
         it("omits the D1 facade plumbing when no table is `.global()`", () => {
@@ -518,7 +518,7 @@ describe("run-codegen", () => {
             expect(output).not.toContain("globalDbStub");
             expect(output).not.toContain("config.d1");
             expect(output).not.toContain("d1?:");
-            expect(output).toContain("facade[\"messages\"] = bindTable(db, \"messages\");");
+            expect(output).toContain('facade["messages"] = bindTable(db, "messages");');
         });
 
         it("hoists the scheduler and threads it into createShardCtxDb for triggers", () => {
@@ -570,7 +570,7 @@ describe("run-codegen", () => {
             const output = emitServer([function_("ping"), function_("get", { args: { id: { kind: "id", tableName: "posts" } } })]);
 
             expect(output).toContain("ping: (args?: {}) => Promise<unknown>;");
-            expect(output).toContain("get: (args: { id: Id<\"posts\"> }) => Promise<unknown>;");
+            expect(output).toContain('get: (args: { id: Id<"posts"> }) => Promise<unknown>;');
         });
 
         it("threads a function's concrete return type through the caller", () => {
@@ -579,7 +579,7 @@ describe("run-codegen", () => {
             const output = emitServer([function_("count", { returnType: "number" })]);
 
             expect(output).toContain("count: (args?: {}) => Promise<number>;");
-            expect(output).toContain("count: (args) => callRegistered(context, \"posts:count\", args),");
+            expect(output).toContain('count: (args) => callRegistered(context, "posts:count", args),');
         });
 
         it("emits an empty caller (and no unused locals) when there are no functions", () => {
@@ -594,7 +594,7 @@ describe("run-codegen", () => {
             expect(output).not.toContain("const callRegistered");
 
             // Nothing references Doc/Id, so the facade import stays minimal (ORM types are always pulled in).
-            expect(output).toContain("import type { DatabaseReaderFacade, DatabaseWriterFacade, OrmReader, OrmWriter } from \"./dataModel.js\";");
+            expect(output).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade, OrmReader, OrmWriter } from "./dataModel.js";');
         });
     });
 
@@ -628,8 +628,8 @@ describe("run-codegen", () => {
 
             const { shard } = emitDrizzleSchema(schema);
 
-            expect(shard).toContain("at: integer(\"at\").notNull()");
-            expect(shard).toContain("due: integer(\"due\").notNull()");
+            expect(shard).toContain('at: integer("at").notNull()');
+            expect(shard).toContain('due: integer("due").notNull()');
         });
     });
 });

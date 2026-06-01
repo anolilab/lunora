@@ -53,13 +53,15 @@ export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unk
         }
     });
     const getAuthTokenFunction = vi.fn<() => string | null>(() => authToken);
-    const onAuthTokenChangeFunction = vi.fn<(listener: (token: string | null) => void) => Unsubscribe>((listener: (token: string | null) => void): Unsubscribe => {
-        authListeners.add(listener);
+    const onAuthTokenChangeFunction = vi.fn<(listener: (token: string | null) => void) => Unsubscribe>(
+        (listener: (token: string | null) => void): Unsubscribe => {
+            authListeners.add(listener);
 
-        return () => {
-            authListeners.delete(listener);
-        };
-    });
+            return () => {
+                authListeners.delete(listener);
+            };
+        },
+    );
     const closeFunction = vi.fn<() => void>();
 
     const emit = (ref: string, value: unknown): void => {

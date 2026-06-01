@@ -3,7 +3,11 @@ import type { Id } from "@cirrus/values";
 import { describe, expect, it } from "vitest";
 
 import { RateLimiter } from "../src/rate-limiter.js";
-import type { RateLimitDb as RateLimitDatabase, RateLimitDbIndexRange as RateLimitDatabaseIndexRange, RateLimitDbQuery as RateLimitDatabaseQuery } from "../src/store.js";
+import type {
+    RateLimitDb as RateLimitDatabase,
+    RateLimitDbIndexRange as RateLimitDatabaseIndexRange,
+    RateLimitDbQuery as RateLimitDatabaseQuery,
+} from "../src/store.js";
 import { createDbStore as createDatabaseStore } from "../src/store.js";
 
 /**

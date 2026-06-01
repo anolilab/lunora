@@ -38,7 +38,7 @@ interface ReadGlobalTablePageOptions {
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 500;
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 

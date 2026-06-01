@@ -116,11 +116,7 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
                                 }}
                                 type="button"
                             >
-                                {table.name}
-{" "}
-(
-{table.rowCount}
-)
+                                {table.name} ({table.rowCount})
                             </button>
                             {expanded === table.name && (
                                 <ul data-testid={`sc-columns-${table.name}`}>

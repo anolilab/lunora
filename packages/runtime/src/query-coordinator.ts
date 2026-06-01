@@ -62,14 +62,14 @@ const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, Readon
  * requires shipping `(sum, count)` per shard, not the post-shard mean.
  * Use two separate fan-outs (`sum` + `count`) and divide in the caller.
  */
-type MergeStrategy
-    = | { kind: "concat" }
-        | { by: string; direction?: "asc" | "desc"; k: number; kind: "topK" }
-        | { kind: "first" }
-        | { kind: "max" }
-        | { kind: "min" }
-        | { kind: "sum" }
-        | { kind: "groupBy"; op?: "max" | "min" | "sum" };
+type MergeStrategy =
+    | { kind: "concat" }
+    | { by: string; direction?: "asc" | "desc"; k: number; kind: "topK" }
+    | { kind: "first" }
+    | { kind: "max" }
+    | { kind: "min" }
+    | { kind: "sum" }
+    | { kind: "groupBy"; op?: "max" | "min" | "sum" };
 
 /**
  * Convenience: build the right wire-serializable {@link MergeStrategy} for a
@@ -106,7 +106,7 @@ const mergeStrategyForAggregate = (
         }
 
         // avg requires (sum, count) — see jsdoc on MergeStrategy.
-        throw new CirrusError("aggregate({ op: \"avg\" }) is not supported across shards in v1 — fan out sum + count separately", {
+        throw new CirrusError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
             code: "BAD_REQUEST",
             status: 400,
         });
@@ -126,7 +126,7 @@ const mergeStrategyForAggregate = (
         return { kind: "groupBy", op: "min" };
     }
 
-    throw new CirrusError("groupBy({ agg: { op: \"avg\" } }) is not supported across shards in v1 — fan out sum + count separately", {
+    throw new CirrusError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
         code: "BAD_REQUEST",
         status: 400,
     });

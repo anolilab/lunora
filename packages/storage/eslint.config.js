@@ -45,12 +45,47 @@ export default createConfig(
         rules: {
             // Web platform globals present in the workerd + browser deploy runtimes (and
             // modern Node); eslint-plugin-n's Node-version data flags them conservatively.
-            "n/no-unsupported-features/node-builtins": ["error", { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "Storage", "sessionStorage", "localStorage"] }],
+            "n/no-unsupported-features/node-builtins": [
+                "error",
+                { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "Storage", "sessionStorage", "localStorage"] },
+            ],
             // Leading-underscore identifiers that are framework API by design: _id /
             // _creationTime are the public document fields; __cirrus* are internal markers;
             // _meta/__doc__ are data-model internals; __name is a bundler helper. Accidental
             // dangles (and the trailing-underscore variety) are still flagged.
-            "no-underscore-dangle": ["error", { allow: ["_id", "_creationTime", "_meta", "_parse", "_count", "_checks", "_chunk", "__doc__", "__name", "__cirrusRef", "__cirrusVisibility", "__cirrusProcedure", "__cirrusCtx", "__cirrusTable", "__cirrusPreloaded"] }],
+            "no-underscore-dangle": [
+                "error",
+                {
+                    allow: [
+                        "_id",
+                        "_creationTime",
+                        "_meta",
+                        "_parse",
+                        "_count",
+                        "_checks",
+                        "_chunk",
+                        "__doc__",
+                        "__name",
+                        "__cirrusRef",
+                        "__cirrusVisibility",
+                        "__cirrusProcedure",
+                        "__cirrusCtx",
+                        "__cirrusTable",
+                        "__cirrusPreloaded",
+                    ],
+                },
+            ],
+        },
+    },
+    // Formatting rules that conflict with Prettier (which owns formatting). Like
+    // @stylistic (off via `stylistic: false`), satisfying these fights Prettier:
+    // no-confusing-arrow wants parens Prettier strips; consistent-chaining owns method-
+    // chain line breaks; number-literal-case wants uppercase hex digits Prettier lowercases.
+    {
+        rules: {
+            "antfu/consistent-chaining": "off",
+            "no-confusing-arrow": "off",
+            "unicorn/number-literal-case": "off",
         },
     },
     // Test files: relax rules that are noisy or inappropriate in test code (loose

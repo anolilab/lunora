@@ -40,7 +40,7 @@ const escapeForCmd = (url: string): string =>
         .replaceAll(">", "%3E")
         .replaceAll("(", "%28")
         .replaceAll(")", "%29")
-        .replaceAll("\"", "%22")
+        .replaceAll('"', "%22")
         .replaceAll("!", "%21");
 
 const platformOpener = (url: string): Promise<void> =>

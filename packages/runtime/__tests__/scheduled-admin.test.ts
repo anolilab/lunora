@@ -215,7 +215,11 @@ describe("createWorker — scheduled admin endpoints", () => {
         const { calls, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/scheduled/ws", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/scheduled/ws", { headers: { Upgrade: "websocket" } }),
+            {},
+            fakeContext,
+        );
 
         expect(response.status).toBe(403);
         expect(calls).toEqual([]);
@@ -227,7 +231,11 @@ describe("createWorker — scheduled admin endpoints", () => {
         const { namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request(`https://app.example/_cirrus/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(
+            new Request(`https://app.example/_cirrus/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { method: "GET" }),
+            {},
+            fakeContext,
+        );
 
         expect(response.status).toBe(426);
     });

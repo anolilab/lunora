@@ -247,8 +247,9 @@ const STYLE_HTML = { __html: CSS } as const;
  * keeps React from duplicating it. Consumers composing panels by hand can render
  * this under a `.${DASHBOARD_ROOT_CLASS}` wrapper to opt in.
  */
-const DashboardStyles = (): ReactElement =>
-// eslint-disable-next-line react/no-danger -- a static, in-package stylesheet string; no user input.
-     <style dangerouslySetInnerHTML={STYLE_HTML} data-testid="dash-styles" />;
+const DashboardStyles = (): ReactElement => (
+    // eslint-disable-next-line react/no-danger -- a static, in-package stylesheet string; no user input.
+    <style dangerouslySetInnerHTML={STYLE_HTML} data-testid="dash-styles" />
+);
 
 export default DashboardStyles;

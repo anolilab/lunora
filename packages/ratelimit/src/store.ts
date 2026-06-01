@@ -205,5 +205,12 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     };
 };
 
-export type { DatabaseStoreOptions as DbStoreOptions, RateLimitDatabase as RateLimitDb, RateLimitDatabaseIndexRange as RateLimitDbIndexRange, RateLimitDatabaseQuery as RateLimitDbQuery, SqlLike, SqlStoreOptions };
+export type {
+    DatabaseStoreOptions as DbStoreOptions,
+    RateLimitDatabase as RateLimitDb,
+    RateLimitDatabaseIndexRange as RateLimitDbIndexRange,
+    RateLimitDatabaseQuery as RateLimitDbQuery,
+    SqlLike,
+    SqlStoreOptions,
+};
 export { createDatabaseStore as createDbStore, createMemoryStore, createSqlStore };

@@ -449,7 +449,11 @@ class CirrusClient {
      * Opt into queueing-before-first-connect via
      * `OfflineQueueOptions.queueBeforeFirstConnect`.
      */
-    public async mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: MutationCallOptions<unknown, unknown> = {}): Promise<ReturnOf<F>> {
+    public async mutation<F extends FunctionReference>(
+        function_: F,
+        args: ArgsOf<F>,
+        options: MutationCallOptions<unknown, unknown> = {},
+    ): Promise<ReturnOf<F>> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
@@ -1513,7 +1517,7 @@ class CirrusClient {
             return null;
         }
 
-        let hash = 0x81_1C_9D_C5;
+        let hash = 0x81_1c_9d_c5;
 
         for (let index = 0; index < token.length; index += 1) {
             // FNV-1a hash: bitwise XOR and the final `>>> 0` to a uint32 are the

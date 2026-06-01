@@ -248,7 +248,8 @@ describe("shardDO admin data migrations", () => {
             method: "POST",
         });
 
-    const versions = (): unknown[] => database.raw(`SELECT json_extract("__doc__", '$.version') AS version FROM "users" ORDER BY id`).map((row) => row["version"]);
+    const versions = (): unknown[] =>
+        database.raw(`SELECT json_extract("__doc__", '$.version') AS version FROM "users" ORDER BY id`).map((row) => row["version"]);
 
     it("runs a registered migration and reports completed counts", async () => {
         expect.assertions(3);

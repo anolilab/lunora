@@ -45,7 +45,7 @@ describe("functionRunner", () => {
 
         render(renderRunner(mock));
 
-        fireEvent.change(screen.getByTestId("args-input"), { target: { value: "{ \"limit\": 2 }" } });
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: '{ "limit": 2 }' } });
         fireEvent.click(screen.getByTestId("run-button"));
 
         await screen.findByTestId("result");
@@ -282,7 +282,7 @@ describe("functionRunner", () => {
         // Record a mutation run with custom args + shard, then switch the form
         // away so the load has something to restore.
         fireEvent.change(screen.getByTestId("function-select"), { target: { value: "messages:send" } });
-        fireEvent.change(screen.getByTestId("args-input"), { target: { value: "{ \"body\": \"hi\" }" } });
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: '{ "body": "hi" }' } });
         fireEvent.change(screen.getByTestId("shard-input"), { target: { value: "room-7" } });
         fireEvent.click(screen.getByTestId("run-button"));
 
@@ -295,7 +295,7 @@ describe("functionRunner", () => {
         fireEvent.click(screen.getByTestId("fn-history-load-0"));
 
         expect(screen.getByTestId<HTMLSelectElement>("function-select").value).toBe("messages:send");
-        expect(screen.getByTestId<HTMLTextAreaElement>("args-input").value).toBe("{ \"body\": \"hi\" }");
+        expect(screen.getByTestId<HTMLTextAreaElement>("args-input").value).toBe('{ "body": "hi" }');
         expect(screen.getByTestId<HTMLInputElement>("shard-input").value).toBe("room-7");
         expect(screen.getByTestId("fn-history-status-0").textContent).toBe("✓");
     });

@@ -15,9 +15,7 @@ const Display = (): ReactElement => {
 
     return (
         <div data-testid="display">
-            {token ?? "null"}
-|
-{user ? "user" : "anon"}
+            {token ?? "null"}|{user ? "user" : "anon"}
         </div>
     );
 };

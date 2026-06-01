@@ -43,7 +43,7 @@ describe("useQuery", () => {
         expect(mock.query).toHaveBeenCalledTimes(1);
     });
 
-    it("\"skip\" short-circuits the query — no client call", () => {
+    it('"skip" short-circuits the query — no client call', () => {
         expect.assertions(3);
 
         const mock = createMockClient(() => {

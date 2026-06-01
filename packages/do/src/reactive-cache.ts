@@ -152,13 +152,13 @@ class ReactiveCache {
     public constructor(options: ReactiveCacheOptions = {}) {
         this.maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
         this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-        this.now
-            = options.now
-                ?? (() => {
-                    this.monotonic += 1;
+        this.now =
+            options.now ??
+            (() => {
+                this.monotonic += 1;
 
-                    return this.monotonic;
-                });
+                return this.monotonic;
+            });
     }
 
     /**

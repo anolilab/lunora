@@ -481,7 +481,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
     return runner.call(sql, query, ...params);
 };
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 const jsonPath = (field: string): string => {
     // Internal columns live alongside the doc; expose them via the
@@ -1725,7 +1725,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         encoded,
                     ).toArray();
 
-                    return row[0] === undefined ? 0 : row[0].value ?? 0;
+                    return row[0] === undefined ? 0 : (row[0].value ?? 0);
                 }
             }
 
@@ -2485,10 +2485,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const needsPrevious
-                = hasTrigger(schema, tableName, "update")
-                    || (tableDefinition.aggregateIndexes ?? []).length > 0
-                    || (tableDefinition.rankIndexes ?? []).length > 0;
+            const needsPrevious =
+                hasTrigger(schema, tableName, "update") ||
+                (tableDefinition.aggregateIndexes ?? []).length > 0 ||
+                (tableDefinition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? lookupById(id)?.row : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
@@ -2625,7 +2625,7 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
         runSql(sql, `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(rankTable)} ("__id__" TEXT PRIMARY KEY, "__partition__" TEXT NOT NULL${columnPart})`);
 
         // Sorted btree: (partition, sortBy ASC/DESC..., __id__ ASC)
-        const orderedColumns = ["\"__partition__\" ASC"];
+        const orderedColumns = ['"__partition__" ASC'];
 
         for (const [i, column] of sortColumns.entries()) {
             const direction = index.sortBy[i]?.direction;
@@ -2633,7 +2633,7 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
             orderedColumns.push(`${quoteIdentifier(column)} ${direction === "desc" ? "DESC" : "ASC"}`);
         }
 
-        orderedColumns.push("\"__id__\" ASC");
+        orderedColumns.push('"__id__" ASC');
 
         const btreeName = `${tableName}__rank_${index.name}__btree`;
 

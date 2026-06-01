@@ -201,12 +201,7 @@ const sortRows = (rows: FakeRow[], orderClause: string | undefined): FakeRow[] =
     }
 
     const fields = splitTopLevelCommas(orderClause)
-        .map((segment) =>
-            segment
-                .trim()
-                .replace(/ ASC$/u, "")
-                .trim(),
-        )
+        .map((segment) => segment.trim().replace(/ ASC$/u, "").trim())
         .map((expression) => parseFieldExpression(expression));
 
     return rows.toSorted((leftRow, rightRow) => {

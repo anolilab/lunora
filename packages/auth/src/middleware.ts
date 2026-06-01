@@ -114,16 +114,16 @@ export type WithAuthPluginsMiddleware<Auth extends CirrusAuth> = <ContextIn>(opt
     next: MiddlewareNext<ContextIn>;
 }) => Promise<CirrusAuthApiContext<Auth> & ContextIn>;
 
-export const withAuthPlugins
-    = <Auth extends CirrusAuth>(auth: Auth): WithAuthPluginsMiddleware<Auth> =>
+export const withAuthPlugins =
+    <Auth extends CirrusAuth>(auth: Auth): WithAuthPluginsMiddleware<Auth> =>
     // The callable is generic over CtxIn so `next({ ctx: { authApi } })`
     // returns `CtxIn & { authApi: Auth["api"] }` — fields the upstream
     // middleware installed survive into the downstream chain. Returning the
     // extended ctx (instead of a fresh object) is critical: the structural
     // mirror of `Middleware` says the return value IS the new ctx, so
     // returning anything narrower would drop upstream fields.
-        async <ContextIn>({ next }: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }): Promise<CirrusAuthApiContext<Auth> & ContextIn> => {
-            const extended = await next({ ctx: { authApi: auth.api } });
+    async <ContextIn>({ next }: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }): Promise<CirrusAuthApiContext<Auth> & ContextIn> => {
+        const extended = await next({ ctx: { authApi: auth.api } });
 
-            return extended;
-        };
+        return extended;
+    };

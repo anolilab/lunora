@@ -144,13 +144,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 </ConfirmButton>
             </div>
 
-            <textarea
-                aria-label="NDJSON"
-                data-testid="ei-ndjson"
-                onChange={onNdjsonChange}
-                placeholder='{"table":"messages","doc":{…}}'
-                value={ndjson}
-            />
+            <textarea aria-label="NDJSON" data-testid="ei-ndjson" onChange={onNdjsonChange} placeholder='{"table":"messages","doc":{…}}' value={ndjson} />
 
             {error !== null && (
                 <pre data-testid="ei-error" role="alert">

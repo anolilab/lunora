@@ -95,8 +95,8 @@ const assertSingleStatement = (migration: Migration): void => {
         }
 
         if (inDouble) {
-            if (character === "\"") {
-                if (next === "\"") {
+            if (character === '"') {
+                if (next === '"') {
                     index += 1;
                 } else {
                     inDouble = false;
@@ -111,7 +111,7 @@ const assertSingleStatement = (migration: Migration): void => {
             continue;
         }
 
-        if (character === "\"") {
+        if (character === '"') {
             inDouble = true;
             continue;
         }

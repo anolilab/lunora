@@ -78,12 +78,12 @@ const dashboardPlugin = (): Plugin => {
             // `config.server` is typed required, but partial/mocked dev-server objects omit it.
             // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive against partial ViteDevServer objects
             const configuredHost = server.config.server?.host;
-            const isNonLoopbackBind
-                = configuredHost !== undefined
-                    && configuredHost !== false
-                    && configuredHost !== "localhost"
-                    && configuredHost !== "127.0.0.1"
-                    && configuredHost !== "::1";
+            const isNonLoopbackBind =
+                configuredHost !== undefined &&
+                configuredHost !== false &&
+                configuredHost !== "localhost" &&
+                configuredHost !== "127.0.0.1" &&
+                configuredHost !== "::1";
 
             server.middlewares.use((request, response, next) => {
                 const url = request.url ?? "";

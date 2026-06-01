@@ -93,7 +93,7 @@ const validatorKindToSqlType = (kind: string): ColumnSnapshot["sqlType"] => {
     }
 };
 
-const escapeIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
+const escapeIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 const renderColumnDefinition = (name: string, column: ColumnSnapshot): string => {
     const parts = [escapeIdentifier(name), column.sqlType];
@@ -130,13 +130,7 @@ const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
 const renderDropIndex = (indexName: string): string => `DROP INDEX IF EXISTS ${escapeIdentifier(indexName)};`;
 
 /** Surface type/nullability changes on an existing column as unsupported deltas. */
-const diffExistingColumn = (
-    tableName: string,
-    columnName: string,
-    old: ColumnSnapshot,
-    column: ColumnSnapshot,
-    unsupported: UnsupportedEntry[],
-): void => {
+const diffExistingColumn = (tableName: string, columnName: string, old: ColumnSnapshot, column: ColumnSnapshot, unsupported: UnsupportedEntry[]): void => {
     if (old.sqlType !== column.sqlType) {
         unsupported.push({
             kind: "columnTypeChange",
@@ -332,13 +326,4 @@ const renderMigrationFile = (name: string, diff: SchemaDiff, generatedAt: string
 };
 
 export type { ColumnSnapshot, DiffEntry, IndexSnapshot, SchemaDiff, SchemaSnapshot, TableSnapshot, UnsupportedEntry };
-export {
-    diffSnapshots,
-    renderAddColumn,
-    renderCreateIndex,
-    renderCreateTable,
-    renderDropIndex,
-    renderDropTable,
-    renderMigrationFile,
-    validatorKindToSqlType,
-};
+export { diffSnapshots, renderAddColumn, renderCreateIndex, renderCreateTable, renderDropIndex, renderDropTable, renderMigrationFile, validatorKindToSqlType };

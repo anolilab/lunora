@@ -34,7 +34,7 @@ interface RateLimiterOptions<Names extends string> {
 // limit appends `#<shard>`; `#` can't appear in either encoded half, so the
 // shard suffix is unambiguous too.
 const storageKeyFor = (name: string, key: string | undefined): string =>
-    (key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`);
+    key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`;
 
 /**
  * Deterministic shard selector. A FNV-1a-style rolling hash over the storage
@@ -57,7 +57,7 @@ const hashToShard = (storageKey: string, shards: number): number => {
 // A sharded config splits its rate and capacity evenly across N sub-buckets,
 // each enforced independently. `shards <= 1` (or unset) leaves the config as-is.
 const perShardConfig = (config: RateLimitConfig, shards: number): RateLimitConfig =>
-    (shards > 1 ? { ...config, capacity: (config.capacity ?? config.rate) / shards, rate: config.rate / shards } : config);
+    shards > 1 ? { ...config, capacity: (config.capacity ?? config.rate) / shards, rate: config.rate / shards } : config;
 
 /** Every storage key a `(name, key)` pair occupies — one per shard, or just one when unsharded. */
 const shardKeysFor = (name: string, key: string | undefined, shards: number): string[] => {
@@ -121,7 +121,7 @@ class RateLimiter<Names extends string = string> {
             // bucket this key actually consumes from.
             const base = storageKeyFor(name, normalizedKey);
             const storageKey = `${base}#${String(hashToShard(base, shards))}`;
-            const current = availableAt(perShardConfig(config, shards), await this.store.get(storageKey) ?? undefined, now);
+            const current = availableAt(perShardConfig(config, shards), (await this.store.get(storageKey)) ?? undefined, now);
 
             return { config, ts: current.ts, value: current.value };
         }

@@ -31,7 +31,7 @@ interface ImportResult {
 
 const DEFAULT_BATCH_SIZE = 200;
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
  * Return every `.global()` table in the schema, optionally narrowed by an

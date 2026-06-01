@@ -81,7 +81,7 @@ describe("shardDO (workerd)", () => {
         // Wait until the server-side handler acks. We poll runInDurableObject()
         // instead of relying on a brittle setTimeout — the runtime drains the
         // message queue between turns.
-        await waitFor(() => received.some((m) => m.includes("\"type\":\"ack\"")));
+        await waitFor(() => received.some((m) => m.includes('"type":"ack"')));
 
         expect(received.some((m) => JSON.parse(m).type === "ack")).toBe(true);
 
@@ -113,10 +113,10 @@ describe("shardDO (workerd)", () => {
             instance.broadcast({ key: "m1", op: "insert", row: { id: "m1" }, table: "messages" });
         });
 
-        await waitFor(() => subs[0].received.some((m) => m.includes("\"type\":\"delta\"")));
+        await waitFor(() => subs[0].received.some((m) => m.includes('"type":"delta"')));
 
-        const messageDeltas = subs[0].received.filter((m) => m.includes("\"type\":\"delta\""));
-        const documentDeltas = subs[1].received.filter((m) => m.includes("\"type\":\"delta\""));
+        const messageDeltas = subs[0].received.filter((m) => m.includes('"type":"delta"'));
+        const documentDeltas = subs[1].received.filter((m) => m.includes('"type":"delta"'));
 
         expect(messageDeltas).toHaveLength(1);
         expect(documentDeltas).toHaveLength(0);
@@ -144,7 +144,7 @@ describe("shardDO (workerd)", () => {
             instance.broadcast({ key: "x1", op: "insert", row: { id: "x1" }, table: "messages" });
         });
 
-        await waitFor(() => subA.received.some((m) => m.includes("\"type\":\"delta\"")));
+        await waitFor(() => subA.received.some((m) => m.includes('"type":"delta"')));
 
         // Give B a chance to (incorrectly) receive — wait a short fixed
         // interval after A has already received its delta. The runtime
@@ -154,8 +154,8 @@ describe("shardDO (workerd)", () => {
             setTimeout(resolve, 50);
         });
 
-        const aDeltas = subA.received.filter((m) => m.includes("\"type\":\"delta\""));
-        const bDeltas = subB.received.filter((m) => m.includes("\"type\":\"delta\""));
+        const aDeltas = subA.received.filter((m) => m.includes('"type":"delta"'));
+        const bDeltas = subB.received.filter((m) => m.includes('"type":"delta"'));
 
         expect(aDeltas).toHaveLength(1);
         expect(bDeltas).toHaveLength(0);
@@ -189,7 +189,7 @@ const openSocket = async (stub: DurableObjectStub<TestShardDO>, subId: string, q
     client.accept();
     client.send(JSON.stringify({ id: subId, query, type: "subscribe" }));
 
-    await waitFor(() => received.some((m) => m.includes("\"type\":\"ack\"")));
+    await waitFor(() => received.some((m) => m.includes('"type":"ack"')));
 
     return { client, received };
 };

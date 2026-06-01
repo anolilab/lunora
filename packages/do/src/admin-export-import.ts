@@ -134,11 +134,7 @@ const exportShardTable = async function* (
  * Yield every {@link ExportRow} this shard owns across `tables`. Tables are
  * walked in the order returned by {@link selectExportTables}.
  */
-const exportShardRows = async function* (
-    writer: DatabaseWriterLike,
-    schema: SchemaLike,
-    args: ExportShardArgs,
-): AsyncGenerator<ExportRow, void, undefined> {
+const exportShardRows = async function* (writer: DatabaseWriterLike, schema: SchemaLike, args: ExportShardArgs): AsyncGenerator<ExportRow, void, undefined> {
     const tables = selectExportTables(schema, args.tables);
     const batchSize = args.batchSize ?? DEFAULT_BATCH_SIZE;
 
@@ -364,12 +360,4 @@ const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminAr
 };
 
 export { exportShardRows, exportShardTable, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };
-export type {
-    ExportRow,
-    ExportShardAdminArgs,
-    ExportShardArgs,
-    ImportError,
-    ImportShardAdminArgs,
-    ImportShardArgs,
-    ImportShardResult,
-};
+export type { ExportRow, ExportShardAdminArgs, ExportShardArgs, ImportError, ImportShardAdminArgs, ImportShardArgs, ImportShardResult };

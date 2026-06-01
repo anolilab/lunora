@@ -46,10 +46,10 @@ type CirrusRouteHandler = (c: Context<CirrusHttpEnv>) => Promise<Response>;
  * runtime-injected {@link HttpActionCtx} lifted into `c.var.cirrus` by
  * {@link httpRouter}; `request` is the underlying `c.req.raw`.
  */
-const httpAction
-    = (handler: HttpActionHandler): CirrusRouteHandler =>
-        async (c) =>
-            handler(c.get("cirrus"), c.req.raw);
+const httpAction =
+    (handler: HttpActionHandler): CirrusRouteHandler =>
+    async (c) =>
+        handler(c.get("cirrus"), c.req.raw);
 
 /**
  * Create the hono app for HTTP actions. Pre-wired with a middleware that lifts
@@ -179,7 +179,7 @@ interface ValidatorWithMeta extends Validator {
 
 /** Peel a single `v.optional()` layer so coercion keys off the underlying kind. */
 const unwrapOptional = (validator: Validator): Validator =>
-    (validator.kind === "optional" ? ((validator as ValidatorWithMeta)._meta?.inner ?? validator) : validator);
+    validator.kind === "optional" ? ((validator as ValidatorWithMeta)._meta?.inner ?? validator) : validator;
 
 /**
  * Query-string values arrive as strings, but `@cirrus/values` validators are
@@ -376,23 +376,23 @@ const errorResponse = (error: unknown): Response => {
  * decode failures (bad query / body / params) surface as 400; a result that
  * violates `.output()` surfaces as 500 (see {@link applyOutput}).
  */
-const buildRouteHandler
-    = (state: RouteState, userHandler: LooseHandler): CirrusRouteHandler =>
-        async (c) => {
-            try {
-                const context = c.get("cirrus");
-                const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
-                const params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
-                const body = Object.keys(state.body).length > 0 ? await parseBody(state.body, c) : {};
-                const result = await userHandler({ body, ctx: context, params, searchParams });
-                const payload = state.output ? applyOutput(state.output, result) : result;
+const buildRouteHandler =
+    (state: RouteState, userHandler: LooseHandler): CirrusRouteHandler =>
+    async (c) => {
+        try {
+            const context = c.get("cirrus");
+            const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
+            const params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
+            const body = Object.keys(state.body).length > 0 ? await parseBody(state.body, c) : {};
+            const result = await userHandler({ body, ctx: context, params, searchParams });
+            const payload = state.output ? applyOutput(state.output, result) : result;
 
-                // eslint-disable-next-line unicorn/no-null -- Response body must be `null` for an empty 204 (the Fetch API rejects `undefined`)
-                return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
-            } catch (error: unknown) {
-                return errorResponse(error);
-            }
-        };
+            // eslint-disable-next-line unicorn/no-null -- Response body must be `null` for an empty 204 (the Fetch API rejects `undefined`)
+            return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
+        } catch (error: unknown) {
+            return errorResponse(error);
+        }
+    };
 
 type LooseStreamHandler = (options: {
     ctx: HttpActionCtx;
@@ -440,81 +440,81 @@ const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
  * `event: error` SSE frame (so clients see a structured payload instead of an
  * opaque transport-level disconnect).
  */
-const buildStreamHandler
-    = (state: RouteState, userHandler: LooseStreamHandler): CirrusRouteHandler =>
+const buildStreamHandler =
+    (state: RouteState, userHandler: LooseStreamHandler): CirrusRouteHandler =>
     // eslint-disable-next-line @typescript-eslint/require-await -- CirrusRouteHandler is contractually `(c) => Promise<Response>`; this handler returns synchronously (all awaits live inside the ReadableStream pump), so `async` is required by the type, not the body.
-        async (c) => {
-            let searchParams: Record<string, unknown>;
-            let params: Record<string, unknown>;
+    async (c) => {
+        let searchParams: Record<string, unknown>;
+        let params: Record<string, unknown>;
 
-            try {
-                searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
-                params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
-            } catch (error: unknown) {
-                return errorResponse(error);
-            }
+        try {
+            searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
+            params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
+        } catch (error: unknown) {
+            return errorResponse(error);
+        }
 
-            const context = c.get("cirrus");
-            const request = c.req.raw;
-            const encoder = new TextEncoder();
-            const ac = new AbortController();
+        const context = c.get("cirrus");
+        const request = c.req.raw;
+        const encoder = new TextEncoder();
+        const ac = new AbortController();
 
-            request.signal.addEventListener("abort", () => {
-                ac.abort();
-            });
+        request.signal.addEventListener("abort", () => {
+            ac.abort();
+        });
 
-            const stream = new ReadableStream<Uint8Array>({
-                cancel() {
+        const stream = new ReadableStream<Uint8Array>({
+            cancel() {
                 // The downstream consumer dropped the stream — propagate the
                 // cancel to the user iterator so any in-flight work bails out.
-                    ac.abort();
-                },
-                async start(controller) {
-                    try {
-                        const iterator = userHandler({ ctx: context, params, request, searchParams, signal: ac.signal });
+                ac.abort();
+            },
+            async start(controller) {
+                try {
+                    const iterator = userHandler({ ctx: context, params, request, searchParams, signal: ac.signal });
 
-                        for await (const chunk of iterator) {
-                            if (ac.signal.aborted) {
-                                break;
-                            }
-
-                            controller.enqueue(encoder.encode(sseFrame(chunk)));
+                    for await (const chunk of iterator) {
+                        if (ac.signal.aborted) {
+                            break;
                         }
 
-                        controller.enqueue(encoder.encode(sseFrame({}, "complete")));
-                    } catch (error: unknown) {
+                        controller.enqueue(encoder.encode(sseFrame(chunk)));
+                    }
+
+                    controller.enqueue(encoder.encode(sseFrame({}, "complete")));
+                } catch (error: unknown) {
                     // Mirror `@cirrus/runtime`'s `toErrorResponse` policy: only a
                     // known-safe CirrusError-shaped value gets its `code`/`message`
                     // echoed to the client. Everything else (which may carry stack
                     // traces, file paths, or internal identifiers in `.message`) is
                     // logged server-side and replaced with a generic frame.
-                        let payload: { code: string; message: string };
+                    let payload: { code: string; message: string };
 
-                        if (isCirrusErrorLike(error)) {
-                            payload = { code: error.code, message: error.message };
-                        } else {
+                    if (isCirrusErrorLike(error)) {
+                        payload = { code: error.code, message: error.message };
+                    } else {
                         // eslint-disable-next-line no-console -- log internal errors server-side; never echo raw details to the client
-                            console.error("[cirrus] unhandled stream handler error:", error);
-                            payload = { code: "INTERNAL_SERVER_ERROR", message: "Internal error" };
-                        }
-
-                        controller.enqueue(encoder.encode(sseFrame(payload, "error")));
-                    } finally {
-                        controller.close();
+                        console.error("[cirrus] unhandled stream handler error:", error);
+                        payload = { code: "INTERNAL_SERVER_ERROR", message: "Internal error" };
                     }
-                },
-            });
 
-            return new Response(stream, {
-                headers: {
-                    "cache-control": "no-cache, no-transform",
-                    "content-type": "text/event-stream; charset=utf-8",
-                    // Hint to proxies (including Cloudflare's own buffering layer)
-                    // that this response must not be coalesced.
-                    "x-accel-buffering": "no",
-                },
-            });
-        };
+                    controller.enqueue(encoder.encode(sseFrame(payload, "error")));
+                } finally {
+                    controller.close();
+                }
+            },
+        });
+
+        return new Response(stream, {
+            headers: {
+                "cache-control": "no-cache, no-transform",
+                "content-type": "text/event-stream; charset=utf-8",
+                // Hint to proxies (including Cloudflare's own buffering layer)
+                // that this response must not be coalesced.
+                "x-accel-buffering": "no",
+            },
+        });
+    };
 
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
     return {
@@ -527,10 +527,10 @@ const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
     };
 };
 
-const makeRouteFactory
-    = (method: HttpMethod): HttpRouteFactory =>
-        (path: string) =>
-            makeRouteBuilder({ body: {}, method, params: {}, path, searchParams: {} }) as unknown as HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
+const makeRouteFactory =
+    (method: HttpMethod): HttpRouteFactory =>
+    (path: string) =>
+        makeRouteBuilder({ body: {}, method, params: {}, path, searchParams: {} }) as unknown as HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
 
 /**
  * Typed REST route builder. Compiles down to a {@link CirrusRouteHandler}, so a

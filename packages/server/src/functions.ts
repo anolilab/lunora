@@ -83,7 +83,7 @@ const wrap = <A extends ArgsValidator, R, Kind extends "action" | "mutation" | "
         kind,
         // Only attach the key when internal so public registrations keep emitting
         // the bare `{ args, handler, kind }` shape (absence === public).
-        ...visibility ? { visibility } : {},
+        ...(visibility ? { visibility } : {}),
     };
 };
 
@@ -104,8 +104,7 @@ const internalMutation = <A extends ArgsValidator, R>(definition: MutationDefini
     wrap("mutation", definition, "internal");
 
 /** Register an internal action — callable only server-side via `ctx.runAction`, never from a client. */
-const internalAction = <A extends ArgsValidator, R>(definition: ActionDefinition<A, R>): RegisteredAction<A, R> =>
-    wrap("action", definition, "internal");
+const internalAction = <A extends ArgsValidator, R>(definition: ActionDefinition<A, R>): RegisteredAction<A, R> => wrap("action", definition, "internal");
 
 export { action, internalAction, internalMutation, internalQuery, mutation, query, validateArgs };
 

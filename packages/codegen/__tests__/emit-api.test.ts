@@ -23,14 +23,14 @@ describe("emitApi", () => {
                 exportName: "list",
                 filePath: "channels",
                 kind: "query",
-                returnType: "import(\"./_generated/dataModel.js\").Doc_channels[]",
+                returnType: 'import("./_generated/dataModel.js").Doc_channels[]',
             },
         ];
 
         const rendered = emitApi(functions);
 
-        expect(rendered).toContain("import(\"./dataModel.js\").Doc_channels[]");
-        expect(rendered).not.toContain("import(\"./_generated/dataModel.js\")");
+        expect(rendered).toContain('import("./dataModel.js").Doc_channels[]');
+        expect(rendered).not.toContain('import("./_generated/dataModel.js")');
     });
 
     it("leaves absolute `import('@scope/pkg')` qualifiers untouched", () => {
@@ -42,13 +42,13 @@ describe("emitApi", () => {
                 exportName: "getCtx",
                 filePath: "ctx",
                 kind: "query",
-                returnType: "import(\"@cirrus/server\").CirrusContext",
+                returnType: 'import("@cirrus/server").CirrusContext',
             },
         ];
 
         const rendered = emitApi(functions);
 
-        expect(rendered).toContain("import(\"@cirrus/server\").CirrusContext");
+        expect(rendered).toContain('import("@cirrus/server").CirrusContext');
     });
 
     it("rewrites the `_generated/` prefix even without a leading `./`", () => {
@@ -60,13 +60,13 @@ describe("emitApi", () => {
                 exportName: "list",
                 filePath: "messages",
                 kind: "query",
-                returnType: "import(\"_generated/dataModel.js\").Doc_messages[]",
+                returnType: 'import("_generated/dataModel.js").Doc_messages[]',
             },
         ];
 
         const rendered = emitApi(functions);
 
-        expect(rendered).toContain("import(\"./dataModel.js\").Doc_messages[]");
-        expect(rendered).not.toContain("import(\"_generated/dataModel.js\")");
+        expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
+        expect(rendered).not.toContain('import("_generated/dataModel.js")');
     });
 });

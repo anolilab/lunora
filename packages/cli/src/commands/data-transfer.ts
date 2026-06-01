@@ -93,10 +93,7 @@ const writeWithBackpressure = async (sink: NodeJS.WritableStream, line: string):
  * Drain the worker's NDJSON response into the sink, counting bytes and rows.
  * Pipes straight through so a 10M-row export never materialises in memory.
  */
-const streamNdjsonToSink = async (
-    body: ReadableStream<Uint8Array>,
-    sink: NodeJS.WritableStream,
-): Promise<{ bytes: number; rows: number }> => {
+const streamNdjsonToSink = async (body: ReadableStream<Uint8Array>, sink: NodeJS.WritableStream): Promise<{ bytes: number; rows: number }> => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let bytes = 0;

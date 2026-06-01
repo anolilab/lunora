@@ -98,8 +98,8 @@ describe("codegen-plugin", () => {
 
             expect(api).toContain("export interface ApiTypes");
             expect(api).toContain("messages:");
-            expect(api).toContain("list: FunctionReference<\"query\"");
-            expect(api).toContain("send: FunctionReference<\"mutation\"");
+            expect(api).toContain('list: FunctionReference<"query"');
+            expect(api).toContain('send: FunctionReference<"mutation"');
 
             const dataModel = readFileSync(join(generatedDirectory, "dataModel.ts"), "utf8");
 

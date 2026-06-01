@@ -228,10 +228,7 @@ const reconcileStaticWhere = (
  *
  * Returns the resolved `by`-key values when a hit is possible, else `undefined`.
  */
-const planAggregateLookup = (
-    index: AggregateIndexDefinitionLike,
-    requestedWhere: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined => {
+const planAggregateLookup = (index: AggregateIndexDefinitionLike, requestedWhere: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
     const by = index.by ?? [];
     const requested = requestedWhere ?? {};
 

@@ -66,7 +66,7 @@ const parseDevVariables = (content: string): Map<string, ParsedLine> => {
         let value = line.slice(eq + 1).trim();
         let quoted = false;
 
-        if ((value.startsWith("\"") && value.endsWith("\"") && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2)) {
+        if ((value.startsWith('"') && value.endsWith('"') && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2)) {
             quoted = true;
             value = value.slice(1, -1);
         }
@@ -84,7 +84,7 @@ const serializeDevVariables = (map: Map<string, ParsedLine>): string => {
         // Always quote to preserve whitespace and special characters round-trip.
         // Newlines are rejected at write time (env set), so single-line escaping
         // of backslash + double-quote is sufficient here.
-        const escaped = entry.value.replaceAll("\\", "\\\\").replaceAll("\"", String.raw`\"`);
+        const escaped = entry.value.replaceAll("\\", "\\\\").replaceAll('"', String.raw`\"`);
 
         lines.push(`${entry.key}="${escaped}"`);
     }

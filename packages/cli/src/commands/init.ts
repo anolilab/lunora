@@ -248,7 +248,7 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
     const templateType: Template = options.templateType ?? "vite";
 
     if (templateType === "next") {
-        options.logger.warn("template \"next\" is not yet available — re-run with `-t vite` or `-t standalone`.");
+        options.logger.warn('template "next" is not yet available — re-run with `-t vite` or `-t standalone`.');
 
         return { code: 1, files: [], target: "" };
     }
@@ -275,8 +275,8 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
 
     if (options.source !== undefined && options.source.length > 0 && !options.allowUnsafeSource && !isSafeSource(options.source)) {
         options.logger.error(
-            `init: refusing --source ${options.source} — only gh:, github:, or https:// sources are allowed (and may not contain "..").`
-            + " Re-run with --allow-unsafe-source if you really want this.",
+            `init: refusing --source ${options.source} — only gh:, github:, or https:// sources are allowed (and may not contain "..").` +
+                " Re-run with --allow-unsafe-source if you really want this.",
         );
 
         return { code: 1, files: [], target };

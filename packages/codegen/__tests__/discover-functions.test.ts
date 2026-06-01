@@ -132,7 +132,7 @@ describe("discoverFunctions", () => {
             const byName = new Map(result.map((f) => [f.exportName, f]));
 
             // Annotated literal type passes through directly.
-            expect(byName.get("greet")?.returnType).toBe("{ hello: \"world\"; }");
+            expect(byName.get("greet")?.returnType).toBe('{ hello: "world"; }');
             // Promise<T> is unwrapped to T.
             expect(byName.get("tick")?.returnType).toBe("number");
         });
@@ -352,7 +352,7 @@ describe("discoverFunctions", () => {
 
             expect(result).toHaveLength(1);
             expect(result[0]?.kind).toBe("query");
-            expect(result[0]?.returnType).toBe("{ hello: \"world\"; }");
+            expect(result[0]?.returnType).toBe('{ hello: "world"; }');
             expect(result[0]?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
             expect(result[0]?.args.limit).toEqual({ kind: "number" });
         });

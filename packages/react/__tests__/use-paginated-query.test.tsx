@@ -12,17 +12,17 @@ const function_ = (ref: string): FunctionReference => {
 };
 
 /** Keyset-style backend over a fixed list, cursor = next offset as a string. */
-const makePaginator
-    = (items: string[]) =>
-        (_ref: string, args: unknown): { continueCursor: null | string; isDone: boolean; page: string[] } => {
-            const { paginationOpts } = args as { paginationOpts: { cursor: null | string; numItems: number } };
-            const offset = paginationOpts.cursor ? Number(paginationOpts.cursor) : 0;
-            const end = offset + paginationOpts.numItems;
-            const page = items.slice(offset, end);
-            const isDone = end >= items.length;
+const makePaginator =
+    (items: string[]) =>
+    (_ref: string, args: unknown): { continueCursor: null | string; isDone: boolean; page: string[] } => {
+        const { paginationOpts } = args as { paginationOpts: { cursor: null | string; numItems: number } };
+        const offset = paginationOpts.cursor ? Number(paginationOpts.cursor) : 0;
+        const end = offset + paginationOpts.numItems;
+        const page = items.slice(offset, end);
+        const isDone = end >= items.length;
 
-            return { continueCursor: isDone ? null : String(end), isDone, page };
-        };
+        return { continueCursor: isDone ? null : String(end), isDone, page };
+    };
 
 interface HarnessProps {
     initialNumItems?: number;
@@ -144,7 +144,7 @@ describe("usePaginatedQuery", () => {
         expect(screen.getByTestId("results").textContent).toBe("a,b");
     });
 
-    it("\"skip\" short-circuits — no query and stays LoadingFirstPage", () => {
+    it('"skip" short-circuits — no query and stays LoadingFirstPage', () => {
         expect.assertions(4);
 
         const mock = createMockClient(makePaginator(["a", "b"]));

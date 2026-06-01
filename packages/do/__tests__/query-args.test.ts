@@ -67,7 +67,7 @@ describe("compileOrderBy", () => {
     it("renders per dialect", () => {
         expect.assertions(1);
 
-        expect(compileOrderBy([{ direction: "asc", field: "createdAt" }], d1FieldRef)).toBe("\"createdAt\" ASC, \"id\" ASC");
+        expect(compileOrderBy([{ direction: "asc", field: "createdAt" }], d1FieldRef)).toBe('"createdAt" ASC, "id" ASC');
     });
 });
 

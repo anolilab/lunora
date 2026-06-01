@@ -87,7 +87,7 @@ describe("usePreloadedQuery", () => {
 
         // React HTML-escapes the quotes in the serialized JSON, so decode them
         // before matching the preloaded value the server snapshot produced.
-        expect(view.replaceAll("&quot;", "\"")).toContain(JSON.stringify({ count: 42 }));
+        expect(view.replaceAll("&quot;", '"')).toContain(JSON.stringify({ count: 42 }));
         // No effects run during SSR, so neither transport is touched.
         expect(mock.query).not.toHaveBeenCalled();
         expect(mock.subscribe).not.toHaveBeenCalled();

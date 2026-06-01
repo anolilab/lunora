@@ -96,7 +96,7 @@ const throwingScheduler: SchedulerLike = {
     },
 };
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
+const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
  * Closed allowlist mapping each reducer `op` to the literal SQL function it may
@@ -641,12 +641,12 @@ const forEachRowPaged = async (
     let hasMore = true;
 
     while (hasMore) {
-        const pageRows
-            = cursorId === undefined
-                // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
-                ? await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY "id" ASC LIMIT ?`, [BACKFILL_BATCH_SIZE])
-                // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
-                : await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" > ? ORDER BY "id" ASC LIMIT ?`, [cursorId, BACKFILL_BATCH_SIZE]);
+        const pageRows =
+            cursorId === undefined
+                ? // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
+                  await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY "id" ASC LIMIT ?`, [BACKFILL_BATCH_SIZE])
+                : // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
+                  await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" > ? ORDER BY "id" ASC LIMIT ?`, [cursorId, BACKFILL_BATCH_SIZE]);
 
         for (const row of pageRows) {
             const decoded = decodeRow(definition, row);
@@ -1061,8 +1061,8 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         const guardClause = guardColumns.map((column) => `${quoteIdentifier(column)} IS ?`).join(" AND ");
         const guardValues = guardColumns.map((column) => snapshot[column]);
 
-        const sql
-            = verb === "UPDATE"
+        const sql =
+            verb === "UPDATE"
                 ? `UPDATE ${quoteIdentifier(table)} SET ${setClause} WHERE ${guardClause} RETURNING "id"`
                 : `DELETE FROM ${quoteIdentifier(table)} WHERE ${guardClause} RETURNING "id"`;
 
@@ -1779,9 +1779,9 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`document not found: ${id}`);
             }
 
-            const needsPrevious
-                = hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
-            const previous = needsPrevious ? decodeRow(definition, snapshot) ?? undefined : undefined;
+            const needsPrevious =
+                hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
+            const previous = needsPrevious ? (decodeRow(definition, snapshot) ?? undefined) : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
@@ -1799,7 +1799,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             await ensureRankBackfilledForTable(tableName);
 
             const fields = Object.keys(definition.shape);
-            const assignments = ["\"_creationTime\" = ?", ...fields.map((field) => `${quoteIdentifier(field)} = ?`)].join(", ");
+            const assignments = ['"_creationTime" = ?', ...fields.map((field) => `${quoteIdentifier(field)} = ?`)].join(", ");
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
             const values = [creationTime, ...fields.map((field) => serializeColumnValue(replaced[field] ?? null))];
 
@@ -1881,13 +1881,13 @@ const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<vo
                 [],
             );
 
-            const orderedColumns = ["\"__partition__\" ASC"];
+            const orderedColumns = ['"__partition__" ASC'];
 
             for (const [i, sortKey] of index.sortBy.entries()) {
                 orderedColumns.push(`${quoteIdentifier(sortColumnName(i))} ${sortKey.direction === "desc" ? "DESC" : "ASC"}`);
             }
 
-            orderedColumns.push("\"__id__\" ASC");
+            orderedColumns.push('"__id__" ASC');
 
             const btreeName = `${tableName}__rank_${index.name}__btree`;
 

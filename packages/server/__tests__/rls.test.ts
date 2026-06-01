@@ -158,7 +158,9 @@ describe("rls — read path", () => {
             { _id: "d2", ownerId: "u2", table: "documents" },
         ]);
 
-        const handler = cirrus.query.use(rlsForTest<TestContext>(policies)).query(async ({ ctx }) => ctx.db.findMany("documents", { where: { archived: false } }));
+        const handler = cirrus.query
+            .use(rlsForTest<TestContext>(policies))
+            .query(async ({ ctx }) => ctx.db.findMany("documents", { where: { archived: false } }));
 
         const context = makeContext(database, "u1");
 

@@ -149,8 +149,8 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
             {sessions !== null && (
                 <div data-testid="us-sessions">
                     <h3>
-Sessions for
-{selectedUser}
+                        Sessions for
+                        {selectedUser}
                     </h3>
 
                     {sessions.length === 0 && <p data-testid="us-sessions-empty">No active sessions.</p>}

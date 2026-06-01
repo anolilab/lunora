@@ -86,7 +86,11 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         throw new Error("@cirrus/storage: `bucket` is required");
     }
 
-    const upload = async (key: string, body: ReadableStream | ArrayBuffer | Blob, uploadOptions: UploadOptions = {}): Promise<{ etag: string; key: string }> => {
+    const upload = async (
+        key: string,
+        body: ReadableStream | ArrayBuffer | Blob,
+        uploadOptions: UploadOptions = {},
+    ): Promise<{ etag: string; key: string }> => {
         validateKey(key);
 
         if (uploadOptions.allowedContentTypes && uploadOptions.contentType && !uploadOptions.allowedContentTypes.includes(uploadOptions.contentType)) {

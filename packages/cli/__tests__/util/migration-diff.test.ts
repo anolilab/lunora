@@ -61,10 +61,10 @@ describe("sQL renderers", () => {
             name: "users",
         });
 
-        expect(sql).toContain("CREATE TABLE IF NOT EXISTS \"users\"");
-        expect(sql).toContain("\"_id\" TEXT PRIMARY KEY");
-        expect(sql).toContain("\"email\" TEXT NOT NULL");
-        expect(sql).toContain("\"age\" INTEGER");
+        expect(sql).toContain('CREATE TABLE IF NOT EXISTS "users"');
+        expect(sql).toContain('"_id" TEXT PRIMARY KEY');
+        expect(sql).toContain('"email" TEXT NOT NULL');
+        expect(sql).toContain('"age" INTEGER');
         expect(sql).not.toMatch(/"age"\s+INTEGER\s+NOT NULL/u);
         expect(sql.trim().endsWith(";")).toBe(true);
     });
@@ -74,13 +74,13 @@ describe("sQL renderers", () => {
 
         const sql = renderAddColumn("users", "nickname", { nullable: true, sqlType: "TEXT" });
 
-        expect(sql).toBe("ALTER TABLE \"users\" ADD COLUMN \"nickname\" TEXT;");
+        expect(sql).toBe('ALTER TABLE "users" ADD COLUMN "nickname" TEXT;');
     });
 
     it("renderDropTable emits DROP TABLE IF EXISTS", () => {
         expect.assertions(1);
 
-        expect(renderDropTable("users")).toBe("DROP TABLE IF EXISTS \"users\";");
+        expect(renderDropTable("users")).toBe('DROP TABLE IF EXISTS "users";');
     });
 
     it("renderCreateIndex emits the named index", () => {
@@ -88,13 +88,13 @@ describe("sQL renderers", () => {
 
         const sql = renderCreateIndex("users", { fields: ["email"], name: "by_email", unique: true });
 
-        expect(sql).toBe("CREATE UNIQUE INDEX IF NOT EXISTS \"by_email\" ON \"users\" (\"email\");");
+        expect(sql).toBe('CREATE UNIQUE INDEX IF NOT EXISTS "by_email" ON "users" ("email");');
     });
 
     it("renderDropIndex emits DROP INDEX IF EXISTS", () => {
         expect.assertions(1);
 
-        expect(renderDropIndex("by_email")).toBe("DROP INDEX IF EXISTS \"by_email\";");
+        expect(renderDropIndex("by_email")).toBe('DROP INDEX IF EXISTS "by_email";');
     });
 });
 
@@ -154,7 +154,7 @@ describe("diffSnapshots", () => {
 
         expect(diff.entries).toHaveLength(1);
         expect(diff.entries[0]?.kind).toBe("dropTable");
-        expect(diff.entries[0]?.sql).toBe("DROP TABLE IF EXISTS \"users\";");
+        expect(diff.entries[0]?.sql).toBe('DROP TABLE IF EXISTS "users";');
     });
 
     it("aDD COLUMN when a column appears on an existing table", () => {
@@ -178,7 +178,7 @@ describe("diffSnapshots", () => {
 
         expect(diff.entries).toHaveLength(1);
         expect(diff.entries[0]?.kind).toBe("addColumn");
-        expect(diff.entries[0]?.sql).toContain("ADD COLUMN \"nickname\" TEXT");
+        expect(diff.entries[0]?.sql).toContain('ADD COLUMN "nickname" TEXT');
     });
 
     it("cREATE INDEX / DROP INDEX on column-stable tables", () => {
@@ -292,7 +292,7 @@ describe("renderMigrationFile", () => {
 
         expect(body).toContain("Cirrus migration: init");
         expect(body).toContain("2024-01-01T00:00:00.000Z");
-        expect(body).toContain("CREATE TABLE IF NOT EXISTS \"users\"");
+        expect(body).toContain('CREATE TABLE IF NOT EXISTS "users"');
     });
 
     it("appends a manual-SQL comment block for unsupported deltas", () => {

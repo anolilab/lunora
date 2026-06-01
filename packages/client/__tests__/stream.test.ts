@@ -284,8 +284,7 @@ describe("stream", () => {
             iterable.cancel();
 
             const cancelFrame = latestSocket()
-                .sent
-                .map((raw) => JSON.parse(raw) as Record<string, unknown>)
+                .sent.map((raw) => JSON.parse(raw) as Record<string, unknown>)
                 .find((f) => f.type === "unsubscribe" && f.id === id);
 
             expect(cancelFrame).toBeDefined();

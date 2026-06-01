@@ -15,16 +15,14 @@ export interface LiveToggleProps {
  * lives in `useLiveToggle`.
  */
 export const LiveToggle = ({ live, liveError, onToggle, prefix }: LiveToggleProps): ReactElement => (
-        <>
-            <button aria-pressed={live} data-testid={`${prefix}-live`} onClick={onToggle} type="button">
-                {live ? "Live: on" : "Live: off"}
-            </button>
-            {live && liveError !== undefined && (
-                <span data-testid={`${prefix}-live-error`} role="status">
-                    Live unavailable:
-{" "}
-{liveError}
-                </span>
-            )}
-        </>
+    <>
+        <button aria-pressed={live} data-testid={`${prefix}-live`} onClick={onToggle} type="button">
+            {live ? "Live: on" : "Live: off"}
+        </button>
+        {live && liveError !== undefined && (
+            <span data-testid={`${prefix}-live-error`} role="status">
+                Live unavailable: {liveError}
+            </span>
+        )}
+    </>
 );

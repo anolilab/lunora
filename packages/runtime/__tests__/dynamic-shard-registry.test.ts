@@ -50,7 +50,7 @@ const createFakeRegistryDO = (initial: Record<string, string[]> = {}) => {
         if (request.method === "GET" && url.pathname === "/list") {
             const table = url.searchParams.get("table") ?? "";
 
-            return Response.json({ shardKeys: [...tables.get(table) ?? []] });
+            return Response.json({ shardKeys: [...(tables.get(table) ?? [])] });
         }
 
         if (request.method === "GET" && url.pathname === "/snapshot") {

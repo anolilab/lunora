@@ -99,7 +99,7 @@ describe("useStream", () => {
         });
     });
 
-    it("\"skip\" leaves the stream un-opened", () => {
+    it('"skip" leaves the stream un-opened', () => {
         expect.assertions(2);
 
         const { client, opened } = buildClientWithStream();

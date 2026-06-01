@@ -689,7 +689,9 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
     const implementation = ordered
         .map(([file, list]) => {
             const namespace = sanitizeNamespace(file);
-            const leaves = list.map((definition) => `        ${definition.exportName}: (args) => callRegistered(context, "${namespace}:${definition.exportName}", args),`).join("\n");
+            const leaves = list
+                .map((definition) => `        ${definition.exportName}: (args) => callRegistered(context, "${namespace}:${definition.exportName}", args),`)
+                .join("\n");
 
             return `    ${namespace}: {\n${leaves}\n    },`;
         })
@@ -769,8 +771,8 @@ const emitServer = (functions: ReadonlyArray<FunctionIR>, migrations: ReadonlyAr
     // `callRegistered` (and thus `context`) is only referenced when at least one
     // function exists; otherwise it would be an unused local / parameter.
     const callerParameter = functions.length > 0 ? "context" : "_context";
-    const callRegisteredHelper
-        = functions.length > 0
+    const callRegisteredHelper =
+        functions.length > 0
             ? `const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
@@ -1000,12 +1002,12 @@ const emitShard = (schema: SchemaIR): string => {
     const tableReferences = buildTableReferences(schema);
 
     const doTypeImports = [
-        ...hasTables ? ["AggregateOptions", "GroupByOptions"] : [],
+        ...(hasTables ? ["AggregateOptions", "GroupByOptions"] : []),
         "DatabaseWriterLike",
         "DataMigrationLike",
         "MigrationRunResult",
         "QueryArgs",
-        ...hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : [],
+        ...(hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : []),
         "RunShardMigrationArgs",
         "RunShardWriteArgs",
         "RunShardWriteResult",
@@ -1014,7 +1016,7 @@ const emitShard = (schema: SchemaIR): string => {
         "ShardDOState",
         "SqlExec",
         "WhereInput",
-        ...hasVectors ? ["WriteHook"] : [],
+        ...(hasVectors ? ["WriteHook"] : []),
     ];
 
     const importLines = [
@@ -1518,7 +1520,7 @@ const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
 
             // String literals start with a quote; `true`/`false`/`null` are plain
             // keywords; everything else is numeric.
-            if (value.startsWith("\"") || value.startsWith("'")) {
+            if (value.startsWith('"') || value.startsWith("'")) {
                 return { builder: "text", notNull: true };
             }
 
