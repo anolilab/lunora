@@ -1,7 +1,7 @@
 import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { bench, describe } from "vitest";
 
-import { createD1Exec } from "../__tests__/_helpers/node-sqlite-d1.js";
+import createD1Exec from "../__tests__/_helpers/node-sqlite-d1.js";
 import { createD1CtxDb as createD1ContextDatabase, runD1RankMigrations } from "../src/d1-ctx-db.js";
 
 /**
@@ -69,6 +69,7 @@ const createWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let channel = 0; channel < CHANNEL_COUNT; channel += 1) {
         for (let index = 0; index < ROWS_PER_CHANNEL; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed: rows insert one at a time to keep deterministic _creationTime ordering
             await writer.insert("messages", {
                 _id: `m-c${String(channel)}-${String(index).padStart(5, "0")}`,
                 channelId: `c${String(channel)}`,
@@ -102,6 +103,7 @@ describe("d1 rank() — indexed vs emulated scan", () => {
         let cursorAccumulator = 0;
 
         while (true) {
+            // eslint-disable-next-line no-await-in-loop -- cursor walk: each page depends on the prior page's continueCursor, so it must be sequential
             const page = await scanWriter.findMany("messages", {
                 cursor,
                 limit: 200,

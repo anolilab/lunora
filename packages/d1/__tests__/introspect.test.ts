@@ -2,7 +2,7 @@ import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { listGlobalTables, readGlobalTablePage } from "../src/introspect.js";
-import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
+import createD1Exec from "./_helpers/node-sqlite-d1.js";
 
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
     return {
@@ -35,15 +35,15 @@ const schema: SchemaLike = {
 let harness: ReturnType<typeof createD1Exec>;
 
 describe("d1 introspect", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         harness = createD1Exec();
         harness.ddl(`CREATE TABLE "organizations" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT, "active" INTEGER)`);
         harness.ddl(`CREATE TABLE "plans" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "tier" TEXT)`);
         harness.ddl(`CREATE TABLE "local" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "value" TEXT)`);
 
-        harness.exec.run(`INSERT INTO "organizations" VALUES ('o1', 1, 'Acme', 1), ('o2', 2, 'Globex', 0)`, []);
-        harness.exec.run(`INSERT INTO "plans" VALUES ('p1', 1, 'free')`, []);
-        harness.exec.run(`INSERT INTO "local" VALUES ('l1', 1, 'secret')`, []);
+        await harness.exec.run(`INSERT INTO "organizations" VALUES ('o1', 1, 'Acme', 1), ('o2', 2, 'Globex', 0)`, []);
+        await harness.exec.run(`INSERT INTO "plans" VALUES ('p1', 1, 'free')`, []);
+        await harness.exec.run(`INSERT INTO "local" VALUES ('l1', 1, 'secret')`, []);
     });
 
     afterEach(() => {

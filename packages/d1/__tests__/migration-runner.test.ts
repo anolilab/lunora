@@ -75,6 +75,7 @@ const createDatabase = async (initiallyAppliedSql: string[] = []): Promise<FakeD
         appliedHashes,
         batch: async (stmts) => {
             for (const stmt of stmts) {
+                // eslint-disable-next-line no-await-in-loop -- fake batch applies statements in order, mirroring D1's sequential batch semantics
                 await stmt.run();
             }
 

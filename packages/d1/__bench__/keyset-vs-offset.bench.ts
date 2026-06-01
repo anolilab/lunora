@@ -1,7 +1,7 @@
 import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { bench, describe } from "vitest";
 
-import { createD1Exec } from "../__tests__/_helpers/node-sqlite-d1.js";
+import createD1Exec from "../__tests__/_helpers/node-sqlite-d1.js";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db.js";
 
 /**
@@ -43,6 +43,7 @@ harness.ddl(
 const writer: DatabaseWriterLike = createD1ContextDatabase({ clock: () => CLOCK, exec: harness.exec, schema });
 
 for (let index = 0; index < ROW_COUNT; index += 1) {
+    // eslint-disable-next-line no-await-in-loop -- sequential seed: rows insert one at a time to keep deterministic _creationTime ordering
     await writer.insert("todos", { _id: `t${String(index).padStart(5, "0")}`, priority: "medium", seq: index });
 }
 
@@ -51,6 +52,7 @@ let walkedCursor: null | string = null;
 let rowsWalked = 0;
 
 while (rowsWalked < PAGE_OFFSET) {
+    // eslint-disable-next-line no-await-in-loop -- cursor walk: each page depends on the prior page's continueCursor, so it must be sequential
     const page = await writer.findMany("todos", {
         cursor: walkedCursor,
         limit: PAGE_OFFSET - rowsWalked,

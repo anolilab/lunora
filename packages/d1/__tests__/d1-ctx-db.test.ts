@@ -3,7 +3,7 @@ import { ConflictError } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db.js";
-import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
+import createD1Exec from "./_helpers/node-sqlite-d1.js";
 
 /**
  * Exercises the D1 column-dialect ctx-db against a real `node:sqlite` engine
@@ -436,10 +436,10 @@ describe("d1 ctx-db", () => {
             const { writer } = setupItems();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const document_ = await writer.get(id);
+            const doc = await writer.get(id);
 
-            expect(document_?.["status"]).toBe("todo");
-            expect(document_?.["seq"]).toBe(7);
+            expect(doc?.["status"]).toBe("todo");
+            expect(doc?.["seq"]).toBe(7);
         });
 
         it("a provided value overrides the default", async () => {
@@ -448,10 +448,10 @@ describe("d1 ctx-db", () => {
             const { writer } = setupItems();
 
             const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
-            const document_ = await writer.get(id);
+            const doc = await writer.get(id);
 
-            expect(document_?.["status"]).toBe("done");
-            expect(document_?.["seq"]).toBe(99);
+            expect(doc?.["status"]).toBe("done");
+            expect(doc?.["seq"]).toBe(99);
         });
 
         it("does not run `$onUpdateFn` on insert", async () => {
@@ -460,9 +460,9 @@ describe("d1 ctx-db", () => {
             const { revCalls, writer } = setupItems();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const document_ = await writer.get(id);
+            const doc = await writer.get(id);
 
-            expect(document_?.["rev"]).toBeNull();
+            expect(doc?.["rev"]).toBeNull();
             expect(revCalls()).toBe(0);
         });
     });

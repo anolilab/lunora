@@ -15,7 +15,7 @@ import type { D1Exec } from "../../src/d1-ctx-db.js";
  * which the repo's secret-scan hook flags); `.all()` both executes DDL/DML and
  * returns rows for `SELECT`.
  */
-export const createD1Exec = (): { close: () => void; ddl: (query: string) => void; exec: D1Exec } => {
+const createD1Exec = (): { close: () => void; ddl: (query: string) => void; exec: D1Exec } => {
     const database = new DatabaseSync(":memory:");
 
     const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => {
@@ -41,3 +41,5 @@ export const createD1Exec = (): { close: () => void; ddl: (query: string) => voi
         },
     };
 };
+
+export default createD1Exec;

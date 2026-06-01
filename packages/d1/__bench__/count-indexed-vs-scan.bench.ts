@@ -1,7 +1,7 @@
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { bench, describe } from "vitest";
 
-import { createD1Exec } from "../__tests__/_helpers/node-sqlite-d1.js";
+import createD1Exec from "../__tests__/_helpers/node-sqlite-d1.js";
 import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db.js";
 
 /**
@@ -67,6 +67,7 @@ const createWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => 
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let index = 0; index < ROW_COUNT; index += 1) {
+        // eslint-disable-next-line no-await-in-loop -- sequential seed: rows insert one at a time to keep deterministic _creationTime ordering
         await writer.insert("todos", {
             _id: `t${String(index)}`,
             priority: "medium",

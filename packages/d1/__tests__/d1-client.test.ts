@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "../src/d1-client.js";
 import { D1Client } from "../src/d1-client.js";
 
-const createStmt = (returnValue: { results: unknown[]; success: boolean } = { results: [], success: true }): D1PreparedStatementLike => {
+const createStmt = (returnValueInput?: { results: unknown[]; success: boolean }): D1PreparedStatementLike => {
+    const returnValue = returnValueInput ?? { results: [], success: true };
     const stmt: D1PreparedStatementLike = {
         all: vi.fn<() => Promise<typeof returnValue>>(async () => returnValue) as unknown as D1PreparedStatementLike["all"],
         bind: vi.fn<D1PreparedStatementLike["bind"]>(() => stmt),
