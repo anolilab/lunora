@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { RateLimitError } from "../src/error.js";
+import RateLimitError from "../src/error.js";
 import { RateLimiter } from "../src/rate-limiter.js";
 import type { RateLimitConfigMap } from "../src/types.js";
 

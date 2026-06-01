@@ -1,5 +1,5 @@
 import { availableAt, evaluate } from "./algorithms.js";
-import { RateLimitError } from "./error.js";
+import RateLimitError from "./error.js";
 import { createMemoryStore } from "./store.js";
 import type { RateLimitArgs, RateLimitConfig, RateLimitConfigMap, RateLimitStatus, RateLimitStore } from "./types.js";
 
@@ -47,7 +47,7 @@ const hashToShard = (storageKey: string, shards: number): number => {
     let hash = 0;
 
     for (let index = 0; index < storageKey.length; index += 1) {
-        // eslint-disable-next-line unicorn/prefer-math-trunc, no-bitwise -- 32-bit integer wraparound (`| 0`) is the correct hashing primitive here; Math.trunc would not wrap and the bitwise op is intentional.
+        // eslint-disable-next-line unicorn/prefer-math-trunc, no-bitwise, unicorn/prefer-code-point -- 32-bit integer wraparound (`| 0`) is the correct hashing primitive here; Math.trunc would not wrap, the bitwise op is intentional, and charCodeAt hashes per UTF-16 code unit by design (codePointAt would skip low surrogates).
         hash = (hash * 31 + storageKey.charCodeAt(index)) | 0;
     }
 
@@ -147,6 +147,9 @@ class RateLimiter<Names extends string = string> {
     private resolve(name: Names): RateLimitConfig {
         const config = this.config[name];
 
+        // Defensive runtime guard: the Names type says this key exists, but JS
+        // callers can pass an unconfigured name.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the keyed type
         if (!config) {
             throw new Error(`rate limit "${name}" is not configured`);
         }
@@ -197,7 +200,7 @@ class RateLimiter<Names extends string = string> {
             reserve: args.reserve ?? false,
         });
 
-        if (value !== null) {
+        if (value !== undefined) {
             await this.store.set(storageKey, value);
         }
 

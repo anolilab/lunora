@@ -32,7 +32,7 @@ describe("token bucket", () => {
         // 10 tokens / 1000ms = 0.01 tokens/ms, so one token takes 100ms.
         expect(status.retryAfter).toBe(100);
         // A rejected, non-reserving consume must not mutate state.
-        expect(value).toBeNull();
+        expect(value).toBeUndefined();
     });
 
     it("refills continuously over elapsed time", () => {
@@ -73,7 +73,7 @@ describe("token bucket", () => {
         const { status, value } = evaluate(tokenBucket, { ts: 0, value: 0 }, consumeOptions(11, 0, true));
 
         expect(status.ok).toBe(false);
-        expect(value).toBeNull();
+        expect(value).toBeUndefined();
     });
 });
 
@@ -273,7 +273,7 @@ describe("check (non-consuming)", () => {
         const { status, value } = evaluate(tokenBucket, { ts: 0, value: 3 }, { consume: false, count: 2, now: 0, reserve: false });
 
         expect(status.ok).toBe(true);
-        expect(value).toBeNull();
+        expect(value).toBeUndefined();
     });
 
     it("a sliding-window check never persists", () => {
@@ -281,6 +281,6 @@ describe("check (non-consuming)", () => {
 
         const { value } = evaluate(slidingWindow, { ts: 0, value: 4 }, { consume: false, count: 1, now: 0, reserve: false });
 
-        expect(value).toBeNull();
+        expect(value).toBeUndefined();
     });
 });

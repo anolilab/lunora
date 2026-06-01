@@ -15,8 +15,8 @@ interface EvaluateOptions {
 /** Result of evaluating a limit against its prior state. */
 interface EvaluateResult {
     status: RateLimitStatus;
-    /** Next value to persist, or `null` when the call must not mutate state. */
-    value: RateLimitValue | null;
+    /** Next value to persist, or `undefined` when the call must not mutate state. */
+    value: RateLimitValue | undefined;
 }
 
 const capacityOf = (config: RateLimitConfig): number => config.capacity ?? config.rate;
@@ -35,7 +35,7 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
     if (available >= options.count) {
         const value = { ts: options.now, value: available - options.count };
 
-        return { status: { ok: true, retryAfter: 0 }, value: options.consume ? value : null };
+        return { status: { ok: true, retryAfter: 0 }, value: options.consume ? value : undefined };
     }
 
     const deficit = options.count - available;
@@ -47,7 +47,7 @@ const tokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined,
         return { status: { ok: true, retryAfter }, value: { ts: options.now, value: available - options.count } };
     }
 
-    return { status: { ok: false, reason: "rate", retryAfter }, value: null };
+    return { status: { ok: false, reason: "rate", retryAfter }, value: undefined };
 };
 
 /**
@@ -73,7 +73,7 @@ const fixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined,
     if (base.value >= options.count) {
         const value = { ts: base.ts, value: base.value - options.count };
 
-        return { status: { ok: true, retryAfter: 0 }, value: options.consume ? value : null };
+        return { status: { ok: true, retryAfter: 0 }, value: options.consume ? value : undefined };
     }
 
     const retryAfter = base.ts + config.period - options.now;
@@ -82,7 +82,7 @@ const fixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined,
         return { status: { ok: true, retryAfter }, value: { ts: base.ts, value: base.value - options.count } };
     }
 
-    return { status: { ok: false, reason: "rate", retryAfter }, value: null };
+    return { status: { ok: false, reason: "rate", retryAfter }, value: undefined };
 };
 
 /**
@@ -131,10 +131,10 @@ const slidingWindow = (config: RateLimitConfig, prior: RateLimitValue | undefine
     if (admit || (options.consume && options.reserve && options.count <= limit)) {
         const value: RateLimitValue = { prev: previousCount, ts: windowStart, value: currentCount + options.count };
 
-        return { status: { ok: true, retryAfter: admit ? 0 : retryAfter() }, value: options.consume ? value : null };
+        return { status: { ok: true, retryAfter: admit ? 0 : retryAfter() }, value: options.consume ? value : undefined };
     }
 
-    return { status: { ok: false, reason: "rate", retryAfter: retryAfter() }, value: null };
+    return { status: { ok: false, reason: "rate", retryAfter: retryAfter() }, value: undefined };
 };
 
 /**

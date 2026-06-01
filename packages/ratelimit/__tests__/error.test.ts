@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { RateLimitError } from "../src/error.js";
+import RateLimitError from "../src/error.js";
 
 describe("rateLimitError", () => {
     it("describes a deny-list rejection", () => {

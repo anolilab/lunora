@@ -1,6 +1,6 @@
 export type { EvaluateOptions, EvaluateResult } from "./algorithms.js";
 export { availableAt, evaluate } from "./algorithms.js";
-export { RateLimitError } from "./error.js";
+export { default as RateLimitError } from "./error.js";
 export type { LimiterResolver, RateLimitMiddlewareOptions } from "./middleware.js";
 export { rateLimit } from "./middleware.js";
 export type { RateLimiterOptions } from "./rate-limiter.js";

@@ -89,6 +89,8 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
                 storageKey,
                 value.value,
                 value.ts,
+                // SQL bind: a missing `prev` must bind as SQL NULL, not undefined.
+                // eslint-disable-next-line unicorn/no-null -- SQLite/D1 bind parameters require null for a NULL column
                 value.prev ?? null,
             );
         },

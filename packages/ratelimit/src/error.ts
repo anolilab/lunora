@@ -13,7 +13,7 @@ const describe = (status: RateLimitStatus): string => {
  * `@cirrus/ratelimit` middleware does not use this — it throws a structural
  * `CirrusError` instead — so this is for direct callers that prefer exceptions.
  */
-export class RateLimitError extends Error {
+export default class RateLimitError extends Error {
     public override readonly name = "RateLimitError";
 
     public readonly reason: RateLimitReason | undefined;
