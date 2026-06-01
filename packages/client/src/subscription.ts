@@ -37,13 +37,13 @@ export interface SubscriptionState {
  * single server-side registration.
  */
 export class SubscriptionRegistry {
+    public static key(functionPath: string, args: Record<string, unknown>, shardKey?: string): string {
+        return `${functionPath}::${JSON.stringify(args)}::${shardKey ?? ""}`;
+    }
+
     private readonly byKey = new Map<string, SubscriptionState>();
 
     private readonly byId = new Map<string, SubscriptionState>();
-
-    public key(functionPath: string, args: Record<string, unknown>, shardKey?: string): string {
-        return `${functionPath}::${JSON.stringify(args ?? {})}::${shardKey ?? ""}`;
-    }
 
     public get(key: string): SubscriptionState | undefined {
         return this.byKey.get(key);
@@ -54,12 +54,12 @@ export class SubscriptionRegistry {
     }
 
     public add(state: SubscriptionState): void {
-        this.byKey.set(this.key(state.fn.__cirrusRef, state.args, state.shardKey), state);
+        this.byKey.set(SubscriptionRegistry.key(state.fn.__cirrusRef, state.args, state.shardKey), state);
         this.byId.set(state.id, state);
     }
 
     public remove(state: SubscriptionState): void {
-        this.byKey.delete(this.key(state.fn.__cirrusRef, state.args, state.shardKey));
+        this.byKey.delete(SubscriptionRegistry.key(state.fn.__cirrusRef, state.args, state.shardKey));
         this.byId.delete(state.id);
     }
 

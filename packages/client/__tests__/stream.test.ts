@@ -52,12 +52,6 @@ const createMockWebSocket = (): typeof WebSocket => {
             this.listeners.set(type, existing);
         }
 
-        private dispatch(type: string, event?: unknown): void {
-            for (const listener of this.listeners.get(type) ?? []) {
-                listener(event);
-            }
-        }
-
         public open(): void {
             this.readyState = 1;
             this.onopen?.();
@@ -79,6 +73,12 @@ const createMockWebSocket = (): typeof WebSocket => {
             this.readyState = 3;
             this.onclose?.();
             this.dispatch("close");
+        }
+
+        private dispatch(type: string, event?: unknown): void {
+            for (const listener of this.listeners.get(type) ?? []) {
+                listener(event);
+            }
         }
     }
 
@@ -315,11 +315,7 @@ describe("stream", () => {
 
             latestSocket().receive({ error: { code: "FORBIDDEN", message: "nope" }, id, type: "error" });
 
-            const consumer = (async () => {
-                for await (const _chunk of iterable) {
-                    /* unreachable */
-                }
-            })();
+            const consumer = iterable[Symbol.asyncIterator]().next();
 
             await expect(consumer).rejects.toMatchObject({ code: "FORBIDDEN", message: "nope" });
 
@@ -337,11 +333,7 @@ describe("stream", () => {
 
             client.close();
 
-            const consumer = (async () => {
-                for await (const _chunk of iterable) {
-                    /* unreachable */
-                }
-            })();
+            const consumer = iterable[Symbol.asyncIterator]().next();
 
             await expect(consumer).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
         });

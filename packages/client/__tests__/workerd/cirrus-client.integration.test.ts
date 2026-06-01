@@ -6,9 +6,9 @@
  * The test instantiates the standalone `CirrusClient` with `fetch` and a
  * `WebSocket` polyfill that route through `SELF.fetch`, then asserts:
  *
- *   1. `client.query()` round-trips through `/_cirrus/rpc`.
- *   2. `client.mutation()` captures + replays `x-d1-bookmark`.
- *   3. `client.subscribe()` delivers a real `delta` over a real WebSocket.
+ * 1. `client.query()` round-trips through `/_cirrus/rpc`.
+ * 2. `client.mutation()` captures + replays `x-d1-bookmark`.
+ * 3. `client.subscribe()` delivers a real `delta` over a real WebSocket.
  */
 import { env, runInDurableObject, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -54,6 +54,18 @@ class SelfWebSocket {
         this.connect(url);
     }
 
+    public send(data: string): void {
+        if (this.socket) {
+            this.socket.send(data);
+        } else {
+            this.pendingSends.push(data);
+        }
+    }
+
+    public close(): void {
+        this.socket?.close();
+    }
+
     private connect(url: string): void {
         SELF.fetch(url, { headers: { Upgrade: "websocket" } })
             .then((response) => {
@@ -91,18 +103,6 @@ class SelfWebSocket {
                 this.onclose?.({});
             });
     }
-
-    public send(data: string): void {
-        if (this.socket) {
-            this.socket.send(data);
-        } else {
-            this.pendingSends.push(data);
-        }
-    }
-
-    public close(): void {
-        this.socket?.close();
-    }
 }
 
 const makeClient = (): CirrusClient =>
@@ -121,10 +121,12 @@ const waitFor = async (predicate: () => boolean | Promise<boolean>, { intervalMs
             return;
         }
 
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        await new Promise((resolve) => {
+            setTimeout(resolve, intervalMs);
+        });
     }
 
-    throw new Error(`waitFor: predicate never became true within ${timeoutMs}ms`);
+    throw new Error(`waitFor: predicate never became true within ${timeoutMs.toString()}ms`);
 };
 
 describe("cirrusClient (workerd integration)", () => {
@@ -132,6 +134,7 @@ describe("cirrusClient (workerd integration)", () => {
         expect.hasAssertions();
 
         await runInDurableObject(rootStub(), async (instance) => {
+            // eslint-disable-next-line no-param-reassign -- seed the DO instance under test
             instance.rpcResult = { id: "u-1", name: "alice" };
         });
 
@@ -167,7 +170,9 @@ describe("cirrusClient (workerd integration)", () => {
             return SELF.fetch(input as never, init as never).then((response: Response) => {
                 const headers = new Headers(response.headers);
 
-                if (!headers.has("x-d1-bookmark") && new URL((input as Request | URL).toString()).pathname === "/_cirrus/rpc") {
+                const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+
+                if (!headers.has("x-d1-bookmark") && new URL(requestUrl).pathname === "/_cirrus/rpc") {
                     headers.set("x-d1-bookmark", "bk-42");
                 }
 
@@ -176,6 +181,7 @@ describe("cirrusClient (workerd integration)", () => {
         };
 
         await runInDurableObject(rootStub(), async (instance) => {
+            // eslint-disable-next-line no-param-reassign -- seed the DO instance under test
             instance.rpcResult = { ok: true };
         });
 

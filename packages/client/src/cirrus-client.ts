@@ -1,4 +1,4 @@
-import { createInMemoryBookmarkStorage } from "./bookmark.js";
+import createInMemoryBookmarkStorage from "./bookmark.js";
 import type { QueuedMutation } from "./offline-queue.js";
 import { OfflineQueue } from "./offline-queue.js";
 import type { ReconnectCalculator } from "./reconnect.js";
@@ -24,6 +24,8 @@ import type {
     ReturnOf,
     RpcResponseBody,
     ScheduleRecord,
+    ServerDataMessage,
+    ServerErrorMessage,
     ServerMessage,
     StorageListPage,
     StorageObject,
@@ -58,7 +60,7 @@ type WSState = "idle" | "connecting" | "open" | "closed";
  * is (re)connecting and none is open; `connected` = at least one socket is open;
  * `offline` = sockets exist but all are down (between reconnect attempts).
  */
-export type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
+type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
 
 interface MutationCallOptions<TCurrent, TValue> {
     optimistic?: (current: TCurrent | undefined) => TValue;
@@ -71,6 +73,14 @@ interface MutationCallOptions<TCurrent, TValue> {
  * match a mutation's `args` against subscription `args` when applying
  * optimistic updates.
  */
+const compareEntryKeys = ([a]: [string, unknown], [b]: [string, unknown]): number => {
+    if (a < b) {
+        return -1;
+    }
+
+    return a > b ? 1 : 0;
+};
+
 const stableStringify = (value: unknown): string => {
     if (value === null || typeof value !== "object") {
         return JSON.stringify(value);
@@ -80,7 +90,7 @@ const stableStringify = (value: unknown): string => {
         return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
     }
 
-    const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    const entries = Object.entries(value as Record<string, unknown>).toSorted(compareEntryKeys);
 
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
 };
@@ -97,10 +107,10 @@ interface ShardConnection {
     pendingStreams?: ClientMessage[];
     pendingUnsubscribes: string[];
     reconnect: ReconnectCalculator;
-    reconnectTimer: ReturnType<typeof setTimeout> | null;
+    reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
-    socket: WebSocket | null;
+    socket: undefined | WebSocket;
     wasEverConnected: boolean;
     wsState: WSState;
 }
@@ -123,6 +133,109 @@ const joinUrl = (base: string, path: string): string => {
     return `${trimmed}${path}`;
 };
 
+/** Map a shard key to its connection-map key (the default shard uses `""`). */
+const connectionKey = (shardKey: string | undefined): string => shardKey ?? "";
+
+/**
+ * Apply one optimistic update to a single subscription state and return its
+ * rollback closure (or `undefined` if the optimistic callback threw, in which
+ * case the state is left untouched). The rollback binds `state`/`previous`/
+ * `version` into locals so its version check and restore run synchronously,
+ * with no `await` between read and write that could let a server delta sneak
+ * in unobserved.
+ */
+const applyOptimisticToState = (state: SubscriptionState, optimistic: (current: unknown) => unknown): (() => void) | undefined => {
+    const previous = state.lastValue;
+    const versionAtApply = state.serverVersion;
+    let next: unknown;
+
+    try {
+        next = optimistic(previous);
+    } catch {
+        return undefined;
+    }
+
+    // Intentionally mutate the shared subscription state in place so live
+    // subscribers observe the optimistic value immediately.
+    // eslint-disable-next-line no-param-reassign -- optimistic update mutates the shared subscription state
+    state.lastValue = next;
+
+    for (const callback of state.callbacks) {
+        try {
+            callback(next);
+        } catch {
+            /* user callback threw — ignore */
+        }
+    }
+
+    return () => {
+        // If a server-pushed delta has bumped serverVersion since we applied
+        // the optimistic update, the server has given us newer-than-`previous`
+        // data — don't roll back, the current value is closer to truth.
+        if (state.serverVersion > versionAtApply) {
+            return;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- rollback restores the shared subscription state
+        state.lastValue = previous;
+
+        for (const callback of state.callbacks) {
+            try {
+                callback(previous);
+            } catch {
+                /* user callback threw — ignore */
+            }
+        }
+    };
+};
+
+/**
+ * Build a coded `Error` from a stream-scoped server `error` frame. Pulls the
+ * `code`/`message` off either the top-level fields or the nested `error`
+ * envelope (the server uses both shapes), falling back to "stream error".
+ */
+const buildStreamError = (message: ServerErrorMessage): Error => {
+    const errorEnvelope = message.error as { code?: unknown; message?: unknown } | undefined;
+    const code = typeof errorEnvelope?.code === "string" ? errorEnvelope.code : undefined;
+    const nestedMessage = typeof errorEnvelope?.message === "string" ? errorEnvelope.message : undefined;
+    const messageText = (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? "stream error";
+
+    return Object.assign(new Error(messageText), code === undefined ? undefined : { code });
+};
+
+/** Decode a raw WS frame (string or binary) into text, or `undefined` if unsupported. */
+const decodeServerFrame = (raw: unknown): string | undefined => {
+    if (typeof raw === "string") {
+        return raw;
+    }
+
+    if (raw instanceof ArrayBuffer) {
+        return new TextDecoder().decode(raw);
+    }
+
+    return undefined;
+};
+
+/**
+ * Best-effort send over a shard's WS. Returns `true` when the message was
+ * handed to the socket, `false` when the caller should queue it for the
+ * next reconnect.
+ */
+const sendOn = (conn: ShardConnection, message: ClientMessage): boolean => {
+    if (!conn.socket || conn.wsState !== "open") {
+        return false;
+    }
+
+    try {
+        conn.socket.send(JSON.stringify(message));
+
+        return true;
+    } catch {
+        /* socket may have closed between checks; reconnect will handle it */
+        return false;
+    }
+};
+
 /**
  * Cirrus browser/edge client. Talks RPC over HTTP and real-time deltas over
  * a single multiplexed WebSocket.
@@ -130,14 +243,14 @@ const joinUrl = (base: string, path: string): string => {
  * Reconnect, offline queueing, and optimistic updates are all handled here;
  * see the package README for the wire protocol.
  */
-export class CirrusClient {
+class CirrusClient {
     public readonly url: string;
 
     public readonly wsUrl: string;
 
     private wsToken: string | undefined;
 
-    private readonly fetchImpl: typeof fetch;
+    private readonly fetchImpl: typeof fetch | undefined;
 
     private readonly WebSocketImpl: typeof WebSocket | undefined;
 
@@ -154,6 +267,9 @@ export class CirrusClient {
     /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
     private readonly connections = new Map<string, ShardConnection>();
 
+    // `null` is the public sentinel for "signed out" across getAuthToken /
+    // setAuthToken / onAuthTokenChange — part of the exported API contract.
+    // eslint-disable-next-line unicorn/no-null -- public auth-token contract sentinel
     private authToken: string | null = null;
 
     /**
@@ -161,16 +277,16 @@ export class CirrusClient {
      * the queue-assigned mutation id. Captured at enqueue from the auth token
      * in effect at the time, and re-checked at flush so a queued write can
      * never replay under a different identity than the one that issued it.
-     * See {@link identityFingerprint} for the fingerprint shape.
+     * See `identityFingerprint` for the fingerprint shape.
      */
     private readonly queuedIdentities = new Map<string, string | null>();
 
     private closed = false;
 
-    /** Subscribers to auth-token changes (see {@link onAuthTokenChange}). */
+    /** Subscribers to auth-token changes (see `onAuthTokenChange`). */
     private readonly authTokenListeners = new Set<(token: string | null) => void>();
 
-    /** Subscribers to aggregate connection-status changes (see {@link onConnectionStatus}). */
+    /** Subscribers to aggregate connection-status changes (see `onConnectionStatus`). */
     private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
 
     /** Last status broadcast, so we only notify listeners on an actual change. */
@@ -192,7 +308,7 @@ export class CirrusClient {
         this.url = options.url;
         this.wsUrl = options.wsUrl ?? joinUrl(deriveWsUrl(options.url), WS_PATH);
         this.wsToken = options.wsToken;
-        this.fetchImpl = options.fetch ?? (typeof fetch === "function" ? fetch.bind(globalThis) : (undefined as unknown as typeof fetch));
+        this.fetchImpl = options.fetch ?? (typeof fetch === "function" ? fetch.bind(globalThis) : undefined);
         this.WebSocketImpl = options.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
         this.bookmark = options.bookmarkStorage ?? createInMemoryBookmarkStorage();
         this.reconnectOptions = options.reconnect;
@@ -204,25 +320,8 @@ export class CirrusClient {
             // synchronous; hydration then opens sockets for any restored writes
             // so they flush once the WS connects.
             queueMicrotask((): void => {
-                void this.hydratePersistedQueue();
+                this.hydratePersistedQueue().catch(() => undefined);
             });
-        }
-    }
-
-    /**
-     * Restore offline mutations persisted in a prior session and open a socket
-     * for each shard they target so they flush once the WS reconnects. Failures
-     * are swallowed — a broken durable store must not stop the client booting.
-     */
-    private async hydratePersistedQueue(): Promise<void> {
-        try {
-            const shardKeys = await this.offlineQueue.hydrate();
-
-            for (const shardKey of shardKeys) {
-                this.ensureSocket(shardKey);
-            }
-        } catch {
-            /* durable store unavailable — boot without restored writes */
         }
     }
 
@@ -330,46 +429,6 @@ export class CirrusClient {
         };
     }
 
-    /** Derive the aggregate status from the per-shard socket states. */
-    private computeStatus(): ConnectionStatus {
-        const conns = [...this.connections.values()];
-
-        if (conns.length === 0) {
-            return "idle";
-        }
-
-        if (conns.some((conn) => conn.wsState === "open")) {
-            return "connected";
-        }
-
-        if (conns.some((conn) => conn.wsState === "connecting")) {
-            return "connecting";
-        }
-
-        // Sockets exist but none is open or actively connecting — i.e. all are
-        // down between reconnect attempts.
-        return "offline";
-    }
-
-    /** Recompute the aggregate status and notify listeners if it changed. */
-    private emitConnectionStatus(): void {
-        const next = this.computeStatus();
-
-        if (next === this.lastStatus) {
-            return;
-        }
-
-        this.lastStatus = next;
-
-        for (const listener of this.statusListeners) {
-            try {
-                listener(next);
-            } catch {
-                /* listener threw — ignore */
-            }
-        }
-    }
-
     // --- RPC ---------------------------------------------------------------
 
     public async query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
@@ -388,7 +447,7 @@ export class CirrusClient {
      * (`wasEverConnected`), so the registry / resubscribe handshake has run.
      * Mutations issued before the very first WS connect to a shard fail fast.
      * Opt into queueing-before-first-connect via
-     * {@link OfflineQueueOptions.queueBeforeFirstConnect}.
+     * `OfflineQueueOptions.queueBeforeFirstConnect`.
      */
     public async mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: MutationCallOptions<unknown, unknown> = {}): Promise<ReturnOf<F>> {
         if (this.closed) {
@@ -398,79 +457,7 @@ export class CirrusClient {
         const argsRecord = args as Record<string, unknown>;
 
         // Apply optimistic updates to any subscriber listening on this fn.
-        const optimisticRollbacks: (() => void)[] = [];
-
-        if (options.optimistic) {
-            // Scope optimistic updates to subscriptions on the SAME function
-            // AND the same shardKey AND the same args. Otherwise one user's
-            // mutation would overwrite every other subscriber's value on the
-            // same function (e.g. two users on different rooms).
-            const mutationShardKey = options.shardKey;
-            const mutationArgsKey = stableStringify(argsRecord);
-
-            for (const state of this.subscriptions.all()) {
-                if (state.fn.__cirrusRef !== function_.__cirrusRef) {
-                    continue;
-                }
-
-                if (state.shardKey !== mutationShardKey) {
-                    continue;
-                }
-
-                if (stableStringify(state.args) !== mutationArgsKey) {
-                    continue;
-                }
-
-                const previous = state.lastValue;
-                const versionAtApply = state.serverVersion;
-                let next: unknown;
-
-                try {
-                    next = options.optimistic(previous);
-                } catch {
-                    continue;
-                }
-
-                state.lastValue = next;
-
-                for (const callback of state.callbacks) {
-                    try {
-                        callback(next);
-                    } catch {
-                        /* user callback threw — ignore */
-                    }
-                }
-
-                // Bind `state` (and `previous`, `versionAtApply`) into locals
-                // so the rollback closure makes its version check and the
-                // assignment of `previous` synchronously, with no `await`
-                // between read and write that could let a server delta sneak
-                // in unobserved.
-                const boundState = state;
-                const boundPrevious = previous;
-                const boundVersion = versionAtApply;
-
-                optimisticRollbacks.push(() => {
-                    // If a server-pushed delta has bumped serverVersion since
-                    // we applied the optimistic update, the server has given
-                    // us newer-than-`previous` data — don't roll back, the
-                    // current value is closer to truth.
-                    if (boundState.serverVersion > boundVersion) {
-                        return;
-                    }
-
-                    boundState.lastValue = boundPrevious;
-
-                    for (const callback of boundState.callbacks) {
-                        try {
-                            callback(boundPrevious);
-                        } catch {
-                            /* user callback threw — ignore */
-                        }
-                    }
-                });
-            }
-        }
+        const optimisticRollbacks = this.applyOptimisticUpdates(function_.__cirrusRef, argsRecord, options.shardKey, options.optimistic);
 
         // Queue while offline (only mutations — queries fail fast). We also
         // queue when we're mid-reconnect (wsState === "connecting") provided
@@ -479,7 +466,7 @@ export class CirrusClient {
         // dropped shard only queues writes destined for it.
         const conn = this.getConnection(options.shardKey);
         const wsState: WSState = conn?.wsState ?? "idle";
-        const hasSocket = conn?.socket != undefined;
+        const hasSocket = conn?.socket !== undefined;
         const wasEverConnected = conn?.wasEverConnected ?? false;
         const { queueBeforeFirstConnect } = this.offlineQueue;
         const connectedGate = wasEverConnected || queueBeforeFirstConnect;
@@ -500,7 +487,7 @@ export class CirrusClient {
                             rollback();
                         }
 
-                        reject(error);
+                        reject(error instanceof Error ? error : new Error(String(error)));
                     },
                     resolve,
                     shardKey: options.shardKey,
@@ -586,8 +573,8 @@ export class CirrusClient {
         const url = this.wsToken === undefined ? base : `${base}?token=${encodeURIComponent(this.wsToken)}`;
         const reconnect = createReconnect(this.reconnectOptions);
 
-        let socket: null | WebSocket = null;
-        let timer: null | ReturnType<typeof setTimeout> = null;
+        let socket: undefined | WebSocket;
+        let timer: ReturnType<typeof setTimeout> | undefined;
         let closed = false;
 
         const connect = (): void => {
@@ -614,16 +601,16 @@ export class CirrusClient {
             });
 
             socket.addEventListener("close", () => {
-                socket = null;
+                socket = undefined;
 
                 if (!closed) {
                     timer = setTimeout(connect, reconnect.next());
                 }
             });
 
-            socket.onerror = () => {
+            socket.addEventListener("error", () => {
                 /* the runtime follows up with close; reconnect handles it there */
-            };
+            });
         };
 
         connect();
@@ -631,7 +618,7 @@ export class CirrusClient {
         return () => {
             closed = true;
 
-            if (timer !== null) {
+            if (timer !== undefined) {
                 clearTimeout(timer);
             }
 
@@ -793,10 +780,10 @@ export class CirrusClient {
         }
 
         const argsRecord = (args ?? {}) as Record<string, unknown>;
-        const key = this.subscriptions.key(function_.__cirrusRef, argsRecord, options.shardKey);
+        const key = SubscriptionRegistry.key(function_.__cirrusRef, argsRecord, options.shardKey);
 
         let state = this.subscriptions.get(key);
-        const callback_ = callback as SubscriptionCallback;
+        const subscriptionCallback = callback as SubscriptionCallback;
         const errorCallback = options.onError;
 
         if (!state) {
@@ -817,7 +804,7 @@ export class CirrusClient {
             this.subscriptions.add(state);
         }
 
-        state.callbacks.add(callback_);
+        state.callbacks.add(subscriptionCallback);
 
         if (errorCallback) {
             state.errorCallbacks.add(errorCallback);
@@ -826,7 +813,7 @@ export class CirrusClient {
         // Replay last value to new subscriber synchronously if available.
         if (state.lastValue !== undefined) {
             try {
-                callback_(state.lastValue);
+                subscriptionCallback(state.lastValue);
             } catch {
                 /* user callback threw — ignore */
             }
@@ -835,26 +822,24 @@ export class CirrusClient {
         this.ensureSocket(options.shardKey);
         this.sendSubscribeIfOpen(state);
 
-        return () => {
-            if (!state) {
-                return;
-            }
+        const subscriptionState = state;
 
-            state.callbacks.delete(callback_);
+        return () => {
+            subscriptionState.callbacks.delete(subscriptionCallback);
 
             if (errorCallback) {
-                state.errorCallbacks.delete(errorCallback);
+                subscriptionState.errorCallbacks.delete(errorCallback);
             }
 
-            if (state.callbacks.size === 0) {
-                const conn = this.getConnection(state.shardKey);
-                const ok = conn ? this.sendOn(conn, { id: state.id, type: "unsubscribe" }) : false;
+            if (subscriptionState.callbacks.size === 0) {
+                const conn = this.getConnection(subscriptionState.shardKey);
+                const ok = conn ? sendOn(conn, { id: subscriptionState.id, type: "unsubscribe" }) : false;
 
                 if (!ok && conn) {
-                    conn.pendingUnsubscribes.push(state.id);
+                    conn.pendingUnsubscribes.push(subscriptionState.id);
                 }
 
-                this.subscriptions.remove(state);
+                this.subscriptions.remove(subscriptionState);
             }
         };
     }
@@ -904,7 +889,7 @@ export class CirrusClient {
                 const conn = this.getConnection(shardKey);
 
                 if (conn) {
-                    this.sendOn(conn, { id, type: "unsubscribe" });
+                    sendOn(conn, { id, type: "unsubscribe" });
                 }
 
                 this.streams.delete(id);
@@ -925,7 +910,7 @@ export class CirrusClient {
         };
 
         if (conn?.wsState === "open") {
-            this.sendOn(conn, message);
+            sendOn(conn, message);
         } else if (conn) {
             // Defer the send to the open handler — the existing pending logic
             // is for unsubscribes, so stash the stream-start frame separately.
@@ -967,9 +952,9 @@ export class CirrusClient {
         this.streams.clear();
 
         for (const conn of this.connections.values()) {
-            if (conn.reconnectTimer !== null) {
+            if (conn.reconnectTimer !== undefined) {
                 clearTimeout(conn.reconnectTimer);
-                conn.reconnectTimer = null;
+                conn.reconnectTimer = undefined;
             }
 
             if (conn.socket) {
@@ -979,7 +964,7 @@ export class CirrusClient {
                     /* ignore */
                 }
 
-                conn.socket = null;
+                conn.socket = undefined;
             }
 
             conn.wsState = "closed";
@@ -991,25 +976,114 @@ export class CirrusClient {
 
     // --- Internals ----------------------------------------------------------
 
-    private connectionKey(shardKey: string | undefined): string {
-        return shardKey ?? "";
+    /**
+     * Restore offline mutations persisted in a prior session and open a socket
+     * for each shard they target so they flush once the WS reconnects. Failures
+     * are swallowed — a broken durable store must not stop the client booting.
+     */
+    private async hydratePersistedQueue(): Promise<void> {
+        try {
+            const shardKeys = await this.offlineQueue.hydrate();
+
+            for (const shardKey of shardKeys) {
+                this.ensureSocket(shardKey);
+            }
+        } catch {
+            /* durable store unavailable — boot without restored writes */
+        }
+    }
+
+    /** Derive the aggregate status from the per-shard socket states. */
+    private computeStatus(): ConnectionStatus {
+        const conns = [...this.connections.values()];
+
+        if (conns.length === 0) {
+            return "idle";
+        }
+
+        if (conns.some((conn) => conn.wsState === "open")) {
+            return "connected";
+        }
+
+        if (conns.some((conn) => conn.wsState === "connecting")) {
+            return "connecting";
+        }
+
+        // Sockets exist but none is open or actively connecting — i.e. all are
+        // down between reconnect attempts.
+        return "offline";
+    }
+
+    /** Recompute the aggregate status and notify listeners if it changed. */
+    private emitConnectionStatus(): void {
+        const next = this.computeStatus();
+
+        if (next === this.lastStatus) {
+            return;
+        }
+
+        this.lastStatus = next;
+
+        for (const listener of this.statusListeners) {
+            try {
+                listener(next);
+            } catch {
+                /* listener threw — ignore */
+            }
+        }
+    }
+
+    /**
+     * Apply an optimistic update to every subscription that matches the
+     * mutation's function ref, shard key, and args, returning the rollback
+     * callbacks to invoke if the mutation later fails. Scoping to the same
+     * (fn, shardKey, args) keeps one user's mutation from clobbering another
+     * subscriber's value on the same function (e.g. two users on different rooms).
+     */
+    private applyOptimisticUpdates(
+        functionRef: string,
+        argsRecord: Record<string, unknown>,
+        mutationShardKey: string | undefined,
+        optimistic: ((current: unknown) => unknown) | undefined,
+    ): (() => void)[] {
+        const optimisticRollbacks: (() => void)[] = [];
+
+        if (!optimistic) {
+            return optimisticRollbacks;
+        }
+
+        const mutationArgsKey = stableStringify(argsRecord);
+
+        for (const state of this.subscriptions.all()) {
+            if (state.fn.__cirrusRef !== functionRef || state.shardKey !== mutationShardKey || stableStringify(state.args) !== mutationArgsKey) {
+                continue;
+            }
+
+            const rollback = applyOptimisticToState(state, optimistic);
+
+            if (rollback) {
+                optimisticRollbacks.push(rollback);
+            }
+        }
+
+        return optimisticRollbacks;
     }
 
     private getConnection(shardKey: string | undefined): ShardConnection | undefined {
-        return this.connections.get(this.connectionKey(shardKey));
+        return this.connections.get(connectionKey(shardKey));
     }
 
     private getOrCreateConnection(shardKey: string | undefined): ShardConnection {
-        const key = this.connectionKey(shardKey);
+        const key = connectionKey(shardKey);
         let conn = this.connections.get(key);
 
         if (!conn) {
             conn = {
                 pendingUnsubscribes: [],
                 reconnect: createReconnect(this.reconnectOptions),
-                reconnectTimer: null,
+                reconnectTimer: undefined,
                 shardKey,
-                socket: null,
+                socket: undefined,
                 wasEverConnected: false,
                 wsState: "idle",
             };
@@ -1122,7 +1196,7 @@ export class CirrusClient {
             method,
         });
 
-        let body: Record<string, unknown>;
+        let body: unknown;
 
         try {
             body = await response.json();
@@ -1130,7 +1204,8 @@ export class CirrusClient {
             throw new Error(`CirrusClient: response was not JSON (status ${response.status.toString()})`);
         }
 
-        if (body && typeof body === "object" && "error" in body) {
+        // Untrusted server payload: narrow before inspecting for an error envelope.
+        if (typeof body === "object" && body !== null && "error" in body) {
             const envelope = body.error as { code?: string; message?: string };
             const error = new Error(envelope.message ?? "admin request failed");
 
@@ -1169,7 +1244,7 @@ export class CirrusClient {
             this.markShardPendingAck(shardKey);
 
             for (const state of this.subscriptions.all()) {
-                if (this.connectionKey(state.shardKey) === this.connectionKey(shardKey)) {
+                if (connectionKey(state.shardKey) === connectionKey(shardKey)) {
                     this.sendSubscribeIfOpen(state);
                 }
             }
@@ -1181,7 +1256,7 @@ export class CirrusClient {
                 conn.pendingUnsubscribes = [];
 
                 for (const id of pending) {
-                    this.sendOn(conn, { id, type: "unsubscribe" });
+                    sendOn(conn, { id, type: "unsubscribe" });
                 }
             }
 
@@ -1195,22 +1270,22 @@ export class CirrusClient {
                 conn.pendingStreams = [];
 
                 for (const message of pending) {
-                    this.sendOn(conn, message);
+                    sendOn(conn, message);
                 }
             }
 
-            void this.flushOfflineQueue(shardKey);
+            this.flushOfflineQueue(shardKey).catch(() => undefined);
         });
 
-        socket.onmessage = (event: MessageEvent): void => {
+        socket.addEventListener("message", (event: MessageEvent): void => {
             this.handleServerMessage(event.data);
-        };
+        });
 
         socket.addEventListener("close", (): void => {
             this.handleDisconnect(conn);
         });
 
-        socket.onerror = (): void => {
+        socket.addEventListener("error", (): void => {
             // Some WebSocket implementations (notably misbehaving proxies and
             // certain test doubles) fire `error` without a follow-up `close`.
             // Treat error in `connecting`/`open` as a disconnect ourselves to
@@ -1219,7 +1294,7 @@ export class CirrusClient {
             if (conn.wsState === "connecting" || conn.wsState === "open") {
                 this.handleDisconnect(conn);
             }
-        };
+        });
     }
 
     private handleDisconnect(conn: ShardConnection): void {
@@ -1233,7 +1308,10 @@ export class CirrusClient {
             return;
         }
 
-        conn.socket = null;
+        // Intentional mutation of the shared, long-lived connection record so
+        // the open/close/error handlers all observe the same state machine.
+        /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
+        conn.socket = undefined;
         conn.wsState = "idle";
         this.emitConnectionStatus();
         this.markShardPendingAck(conn.shardKey);
@@ -1245,17 +1323,18 @@ export class CirrusClient {
         const delay = conn.reconnect.next();
 
         conn.reconnectTimer = setTimeout(() => {
-            conn.reconnectTimer = null;
+            conn.reconnectTimer = undefined;
             this.ensureSocket(conn.shardKey);
         }, delay);
+        /* eslint-enable no-param-reassign */
     }
 
     /** Mark every subscription bound to `shardKey` as needing a fresh ack. */
     private markShardPendingAck(shardKey: string | undefined): void {
-        const key = this.connectionKey(shardKey);
+        const key = connectionKey(shardKey);
 
         for (const state of this.subscriptions.all()) {
-            if (this.connectionKey(state.shardKey) === key) {
+            if (connectionKey(state.shardKey) === key) {
                 state.acked = false;
             }
         }
@@ -1273,7 +1352,7 @@ export class CirrusClient {
         // surfaced a distinct `__cirrusTable`.
         const table = (state.fn as FunctionReference & { __cirrusTable?: string }).__cirrusTable ?? state.fn.__cirrusRef;
 
-        this.sendOn(conn, {
+        sendOn(conn, {
             id: state.id,
             query: { args: state.args, functionPath: state.fn.__cirrusRef, table },
             type: "subscribe",
@@ -1281,9 +1360,9 @@ export class CirrusClient {
     }
 
     private handleServerMessage(raw: unknown): void {
-        const text = typeof raw === "string" ? raw : raw instanceof ArrayBuffer ? new TextDecoder().decode(raw) : null;
+        const text = decodeServerFrame(raw);
 
-        if (text === null) {
+        if (text === undefined) {
             return;
         }
 
@@ -1295,139 +1374,125 @@ export class CirrusClient {
             return;
         }
 
-        if (message.type === "ack") {
-            const state = this.subscriptions.getById(message.id);
+        switch (message.type) {
+            case "ack": {
+                const state = this.subscriptions.getById(message.id);
 
-            if (state) {
-                state.acked = true;
-            }
-
-            return;
-        }
-
-        if (message.type === "chunk") {
-            const { data, id } = message;
-            const stream = this.streams.get(id);
-
-            if (stream) {
-                stream.handle.push(data);
-            }
-
-            return;
-        }
-
-        if (message.type === "error") {
-            // Stream-scoped errors arrive on the same `error` envelope as
-            // subscription errors; dispatch by id-prefix lookup.
-            const { id } = message;
-            const stream = id === undefined ? undefined : this.streams.get(id);
-
-            if (stream && id !== undefined) {
-                const code = typeof (message.error as { code?: unknown } | undefined)?.code === "string" ? (message.error as { code: string }).code : undefined;
-                const messageText
-                    = (typeof message.message === "string" ? message.message : undefined)
-                        ?? (typeof (message.error as { message?: unknown } | undefined)?.message === "string"
-                            ? (message.error as { message: string }).message
-                            : "stream error");
-                const error = Object.assign(new Error(messageText), code ? { code } : undefined);
-
-                stream.handle.fail(error);
-                this.streams.delete(id);
-
-                return;
-            }
-
-            // A subscription-scoped rejection (e.g. an admin subscription on a
-            // socket that didn't clear the admin gate). Surface it to the
-            // subscriber's onError so the UI can react instead of silently
-            // never receiving data; the registration is left in place so a
-            // later reconnect with proper credentials can still succeed.
-            const state = id === undefined ? undefined : this.subscriptions.getById(id);
-
-            if (state) {
-                const error = { message: typeof message.message === "string" ? message.message : "subscription error" };
-
-                for (const errorCallback of state.errorCallbacks) {
-                    try {
-                        errorCallback(error);
-                    } catch {
-                        /* user callback threw — ignore */
-                    }
+                if (state) {
+                    state.acked = true;
                 }
-            }
-
-            return;
-        }
-
-        if (message.type === "data" || message.type === "delta") {
-            const { id } = message;
-            const state = id ? this.subscriptions.getById(id) : undefined;
-
-            if (!state) {
-                return;
-            }
-
-            const payload = "data" in message && message.data !== undefined ? message.data : message.delta;
-
-            state.lastValue = payload;
-            state.serverVersion += 1;
-
-            for (const callback of state.callbacks) {
-                try {
-                    callback(payload);
-                } catch {
-                    /* user callback threw — ignore */
-                }
-            }
-
-            return;
-        }
-
-        if (message.type === "complete") {
-            // Streams complete normally — close the iterator. Subscriptions
-            // can also receive `complete` (cancelled server-side); remove them
-            // from the registry. The two id-spaces don't overlap (`sub_*` vs
-            // `stream_*`) so the two lookups are mutually exclusive.
-            const stream = this.streams.get(message.id);
-
-            if (stream) {
-                stream.handle.complete();
-                this.streams.delete(message.id);
 
                 return;
             }
+            case "chunk": {
+                const { data, id } = message;
+                const stream = this.streams.get(id);
 
-            const state = this.subscriptions.getById(message.id);
+                stream?.handle.push(data);
 
-            if (state) {
-                this.subscriptions.remove(state);
+                return;
+            }
+            case "complete": {
+                this.handleCompleteMessage(message.id);
+
+                return;
+            }
+            case "data":
+            case "delta": {
+                this.handleDataMessage(message);
+
+                return;
+            }
+            case "error": {
+                this.handleErrorMessage(message);
+
+                break;
+            }
+            default: {
+                break;
             }
         }
     }
 
-    /**
-     * Best-effort send over a shard's WS. Returns `true` when the message was
-     * handed to the socket, `false` when the caller should queue it for the
-     * next reconnect.
-     */
-    private sendOn(conn: ShardConnection, message: ClientMessage): boolean {
-        if (!conn.socket || conn.wsState !== "open") {
-            return false;
+    private handleErrorMessage(message: ServerErrorMessage): void {
+        // Stream-scoped errors arrive on the same `error` envelope as
+        // subscription errors; dispatch by id-prefix lookup.
+        const { id } = message;
+        const stream = id === undefined ? undefined : this.streams.get(id);
+
+        if (stream && id !== undefined) {
+            stream.handle.fail(buildStreamError(message));
+            this.streams.delete(id);
+
+            return;
         }
 
-        try {
-            conn.socket.send(JSON.stringify(message));
+        // A subscription-scoped rejection (e.g. an admin subscription on a
+        // socket that didn't clear the admin gate). Surface it to the
+        // subscriber's onError so the UI can react instead of silently
+        // never receiving data; the registration is left in place so a
+        // later reconnect with proper credentials can still succeed.
+        const state = id === undefined ? undefined : this.subscriptions.getById(id);
 
-            return true;
-        } catch {
-            /* socket may have closed between checks; reconnect will handle it */
-            return false;
+        if (state) {
+            const error = { message: typeof message.message === "string" ? message.message : "subscription error" };
+
+            for (const errorCallback of state.errorCallbacks) {
+                try {
+                    errorCallback(error);
+                } catch {
+                    /* user callback threw — ignore */
+                }
+            }
+        }
+    }
+
+    private handleDataMessage(message: ServerDataMessage): void {
+        const { id } = message;
+        const state = id ? this.subscriptions.getById(id) : undefined;
+
+        if (!state) {
+            return;
+        }
+
+        const payload = "data" in message && message.data !== undefined ? message.data : message.delta;
+
+        state.lastValue = payload;
+        state.serverVersion += 1;
+
+        for (const callback of state.callbacks) {
+            try {
+                callback(payload);
+            } catch {
+                /* user callback threw — ignore */
+            }
+        }
+    }
+
+    private handleCompleteMessage(id: string): void {
+        // Streams complete normally — close the iterator. Subscriptions
+        // can also receive `complete` (cancelled server-side); remove them
+        // from the registry. The two id-spaces don't overlap (`sub_*` vs
+        // `stream_*`) so the two lookups are mutually exclusive.
+        const stream = this.streams.get(id);
+
+        if (stream) {
+            stream.handle.complete();
+            this.streams.delete(id);
+
+            return;
+        }
+
+        const state = this.subscriptions.getById(id);
+
+        if (state) {
+            this.subscriptions.remove(state);
         }
     }
 
     private unpersist(id: string | undefined): void {
         if (id) {
-            void this.persistence?.remove(id).catch(() => undefined);
+            this.persistence?.remove(id).catch(() => undefined);
         }
     }
 
@@ -1438,20 +1503,28 @@ export class CirrusClient {
      * a length-prefixed FNV-1a hash is enough to detect an identity *change*
      * without keeping the credential around in the queue map.
      */
+    // `null` is the distinct "signed out" identity (separate from `undefined`,
+    // which means "not stamped / hydrated"); the two must not be conflated.
     private identityFingerprint(): string | null {
         const token = this.authToken;
 
         if (token === null) {
+            // eslint-disable-next-line unicorn/no-null -- signed-out identity sentinel, distinct from undefined
             return null;
         }
 
         let hash = 0x81_1C_9D_C5;
 
         for (let index = 0; index < token.length; index += 1) {
+            // FNV-1a hash: bitwise XOR and the final `>>> 0` to a uint32 are the
+            // algorithm; charCodeAt (not codePointAt) keeps the digest stable for
+            // surrogate pairs, so the fingerprint never changes shape.
+            // eslint-disable-next-line no-bitwise, unicorn/prefer-code-point -- FNV-1a hash requires charCode XOR
             hash ^= token.charCodeAt(index);
             hash = Math.imul(hash, 0x01_00_01_93);
         }
 
+        // eslint-disable-next-line no-bitwise -- coerce the FNV-1a accumulator to an unsigned 32-bit integer
         return `${token.length.toString(36)}:${(hash >>> 0).toString(36)}`;
     }
 
@@ -1477,8 +1550,8 @@ export class CirrusClient {
     }
 
     private async flushOfflineQueue(shardKey: string | undefined): Promise<void> {
-        const key = this.connectionKey(shardKey);
-        const drained = this.offlineQueue.drain((item) => this.connectionKey(item.shardKey) === key);
+        const key = connectionKey(shardKey);
+        const drained = this.offlineQueue.drain((item) => connectionKey(item.shardKey) === key);
         const currentIdentity = this.identityFingerprint();
 
         // Sequential replay — parallel `.then()` chains would race and break
@@ -1508,6 +1581,7 @@ export class CirrusClient {
             this.queuedIdentities.delete(item.id ?? "");
 
             try {
+                // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on (see above)
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, { captureBookmark: true });
 
                 this.unpersist(item.id);
@@ -1522,3 +1596,6 @@ export class CirrusClient {
         }
     }
 }
+
+export { CirrusClient };
+export type { ConnectionStatus };

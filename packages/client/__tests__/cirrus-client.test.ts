@@ -4,7 +4,10 @@ import { CirrusClient } from "../src/cirrus-client.js";
 import { createInMemoryPersistence } from "../src/persistence.js";
 import type { FunctionReference } from "../src/types.js";
 
-const flushMicrotasks = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+const flushMicrotasks = (): Promise<void> =>
+    new Promise((resolve) => {
+        setTimeout(resolve, 0);
+    });
 
 // --- Test doubles -----------------------------------------------------------
 
@@ -56,12 +59,6 @@ const createMockWebSocket = (): typeof WebSocket => {
             this.listeners.set(type, existing);
         }
 
-        private dispatch(type: string, event?: unknown): void {
-            for (const listener of this.listeners.get(type) ?? []) {
-                listener(event);
-            }
-        }
-
         public open(): void {
             this.readyState = 1;
             this.onopen?.();
@@ -87,6 +84,12 @@ const createMockWebSocket = (): typeof WebSocket => {
 
         public close(): void {
             this.triggerClose();
+        }
+
+        private dispatch(type: string, event?: unknown): void {
+            for (const listener of this.listeners.get(type) ?? []) {
+                listener(event);
+            }
         }
     }
 

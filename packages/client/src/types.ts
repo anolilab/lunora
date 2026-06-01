@@ -8,7 +8,13 @@ export type FunctionKind = "action" | "mutation" | "query" | "stream";
  * Generated declarations decorate this with phantom type parameters so the
  * client can infer args / return values per call site.
  */
-export interface FunctionReference<_Kind extends FunctionKind = FunctionKind, _Args = unknown, _Return = unknown> {
+export interface FunctionReference<Kind extends FunctionKind = FunctionKind, Args = unknown, Return = unknown> {
+    /**
+     * Phantom marker carrying the `Kind`/`Args`/`Return` type parameters for
+     * inference. Never present at runtime; declared as a covariant (output)
+     * position so a concrete reference stays assignable to a widened one.
+     */
+    readonly __cirrusPhantom?: { args: Args; kind: Kind; returns: Return };
     readonly __cirrusRef: string;
 }
 
@@ -54,7 +60,7 @@ export interface OfflineQueueOptions {
 
     /**
      * Queue mutations issued before a shard's first successful WebSocket
-     * connect (defaults to `false`). The standard behaviour ({@link CirrusClient}'s
+     * connect (defaults to `false`). The standard behaviour (`CirrusClient`'s
      * `mutation()`) queues only when the targeted shard has been connected at
      * least once (`wasEverConnected`), so the registry / resubscribe handshake
      * has run. Set this to `true` for offline-first apps that want to enqueue
@@ -78,9 +84,9 @@ export interface PersistedMutation {
 
 /**
  * Durable store for the offline mutation queue. The default client keeps the
- * queue in memory; supplying an adapter (e.g. {@link createIndexedDbPersistence})
+ * queue in memory; supplying an adapter (e.g. `createIndexedDbPersistence`)
  * makes queued writes survive a page reload. Implementations must preserve FIFO
- * (enqueue) order in {@link PersistenceAdapter.load}.
+ * (enqueue) order in `PersistenceAdapter.load`.
  *
  * Replay semantics are at-least-once: a mutation is removed only after the
  * server confirms (or rejects) it, so a crash between commit and `remove` can

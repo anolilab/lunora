@@ -1,7 +1,7 @@
 /**
- * Bounded async-iterator queue backing {@link CirrusClient.stream}.
+ * Bounded async-iterator queue backing `CirrusClient.stream`.
  *
- * The server pushes one {@link ServerChunkMessage} per yielded value while the
+ * The server pushes one server `chunk` message per yielded value while the
  * client iterates with `for await (const chunk of stream)`. A producer that
  * outruns its consumer would otherwise OOM the page, so the buffer is bounded
  * — exceeding {@link DEFAULT_MAX_BUFFER} surfaces a `STREAM_BACKPRESSURE`
@@ -12,9 +12,9 @@
  * are silent no-ops so a duplicate `complete` frame after a cancel doesn't
  * crash the page.
  */
-export const DEFAULT_MAX_BUFFER = 1024;
+const DEFAULT_MAX_BUFFER = 1024;
 
-export interface StreamHandle<T = unknown> {
+interface StreamHandle<T = unknown> {
     /** Mark the stream complete (no more chunks); resolves any pending consumer to `done:true`. */
     readonly complete: () => void;
     /** Surface an error to any pending consumer; subsequent pushes are dropped. */
@@ -29,7 +29,7 @@ export interface StreamHandle<T = unknown> {
     readonly push: (value: T) => void;
 }
 
-export interface StreamIterable<T> extends AsyncIterable<T> {
+interface StreamIterable<T> extends AsyncIterable<T> {
     /** Cancel the stream from the consumer side: closes the iterator and notifies the registered canceller. */
     cancel: () => void;
 }
@@ -46,7 +46,7 @@ interface PendingResolve<T> {
  * when the consumer calls `.cancel()` (or `.return()`) so the client can
  * send a `{type:"unsubscribe"}` frame to the server.
  */
-export const createStream = <T>(options: { maxBuffer?: number; onCancel: () => void }): { handle: StreamHandle<T>; iterable: StreamIterable<T> } => {
+const createStream = <T>(options: { maxBuffer?: number; onCancel: () => void }): { handle: StreamHandle<T>; iterable: StreamIterable<T> } => {
     const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
     const buffer: T[] = [];
     const pending: PendingResolve<T>[] = [];
@@ -194,3 +194,6 @@ export const createStream = <T>(options: { maxBuffer?: number; onCancel: () => v
 
     return { handle, iterable };
 };
+
+export { createStream, DEFAULT_MAX_BUFFER };
+export type { StreamHandle, StreamIterable };

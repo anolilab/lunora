@@ -19,11 +19,11 @@ export interface Env {
 }
 
 export class TestShardDO extends DurableObject<Env> {
-    private readonly shard: ConcreteShard;
-
     public rpcResult: unknown = null;
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
+
+    private readonly shard: ConcreteShard;
 
     public constructor(context: DurableObjectState, env: Env) {
         super(context, env);

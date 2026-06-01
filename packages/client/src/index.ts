@@ -1,4 +1,4 @@
-export { createInMemoryBookmarkStorage } from "./bookmark.js";
+export { default as createInMemoryBookmarkStorage } from "./bookmark.js";
 export type { ConnectionStatus } from "./cirrus-client.js";
 export { CirrusClient } from "./cirrus-client.js";
 export type { QueuedMutation } from "./offline-queue.js";

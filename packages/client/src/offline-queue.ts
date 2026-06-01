@@ -1,6 +1,6 @@
 import type { OfflineQueueOptions, PersistenceAdapter } from "./types.js";
 
-export interface QueuedMutation<T = unknown> {
+interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
     readonly functionPath: string;
     /** Stable id used to remove the entry from durable storage once replayed; assigned by the queue when absent. */
@@ -31,16 +31,16 @@ const nextId = (): string => {
  * entry is rejected with `OFFLINE_QUEUE_OVERFLOW`.
  *
  * When a {@link PersistenceAdapter} is supplied, enqueued mutations are mirrored
- * to durable storage so they survive a reload — {@link hydrate} restores them on
+ * to durable storage so they survive a reload — {@link OfflineQueue.hydrate} restores them on
  * the next startup and the client replays them on reconnect. Durable removal is
  * the caller's responsibility *after* a successful replay (see `CirrusClient`);
  * the queue only persists on enqueue and un-persists on overflow.
  */
-export class OfflineQueue {
-    private readonly maxItems: number;
-
+class OfflineQueue {
     /** Opt-in to queueing mutations before the targeted shard's first connect. */
     public readonly queueBeforeFirstConnect: boolean;
+
+    private readonly maxItems: number;
 
     private readonly persistence: PersistenceAdapter | undefined;
 
@@ -62,14 +62,14 @@ export class OfflineQueue {
         item.id ??= nextId();
         this.items.push(item);
 
-        void this.persistence?.append({ args: item.args, functionPath: item.functionPath, id: item.id, shardKey: item.shardKey }).catch(() => undefined);
+        this.persistence?.append({ args: item.args, functionPath: item.functionPath, id: item.id, shardKey: item.shardKey }).catch(() => undefined);
 
         while (this.items.length > this.maxItems) {
             const dropped = this.items.shift();
 
             if (dropped) {
                 if (dropped.id) {
-                    void this.persistence?.remove(dropped.id).catch(() => undefined);
+                    this.persistence?.remove(dropped.id).catch(() => undefined);
                 }
 
                 const error = new Error("offline queue overflow");
@@ -159,3 +159,6 @@ export class OfflineQueue {
         this.items.length = 0;
     }
 }
+
+export { OfflineQueue };
+export type { QueuedMutation };

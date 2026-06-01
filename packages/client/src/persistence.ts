@@ -6,7 +6,7 @@ import type { PersistedMutation, PersistenceAdapter } from "./types.js";
  * a deliberate "no durable store" choice that still satisfies the interface).
  * Preserves enqueue order; `clone` keeps callers from mutating stored args.
  */
-export const createInMemoryPersistence = (): PersistenceAdapter => {
+const createInMemoryPersistence = (): PersistenceAdapter => {
     const entries = new Map<string, PersistedMutation>();
     const clone = (mutation: PersistedMutation): PersistedMutation => {
         return {
@@ -37,7 +37,8 @@ export const createInMemoryPersistence = (): PersistenceAdapter => {
     };
 };
 
-export interface IndexedDbPersistenceOptions {
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public exported type name; renaming breaks @cirrus/client consumers
+interface IndexedDbPersistenceOptions {
     /** Database name; defaults to `"cirrus"`. */
     databaseName?: string;
     /** Injectable `IDBFactory` (e.g. `fake-indexeddb` in tests); defaults to the global `indexedDB`. */
@@ -71,7 +72,8 @@ const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
  * ops reuse one connection. Throws eagerly if no `IDBFactory` is available —
  * callers in non-browser environments should use {@link createInMemoryPersistence}.
  */
-export const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions = {}): PersistenceAdapter => {
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public exported function name; renaming breaks @cirrus/client consumers
+const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions = {}): PersistenceAdapter => {
     const factory = options.indexedDB ?? (typeof indexedDB === "undefined" ? undefined : indexedDB);
 
     if (!factory) {
@@ -149,3 +151,6 @@ export const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions 
         },
     };
 };
+
+export { createIndexedDbPersistence, createInMemoryPersistence };
+export type { IndexedDbPersistenceOptions };

@@ -119,7 +119,7 @@ describe("offlineQueue — persistence", () => {
         const shardKeys = await queue.hydrate();
 
         expect(queue.size).toBe(3);
-        expect([...shardKeys].sort()).toEqual(["room-1", "room-2"]);
+        expect(shardKeys.toSorted((a, b) => String(a).localeCompare(String(b)))).toEqual(["room-1", "room-2"]);
 
         const drained = queue.drain();
 
