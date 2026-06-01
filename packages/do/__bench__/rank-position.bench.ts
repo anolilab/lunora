@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
+import createSqliteExec from "../__tests__/_helpers/node-sqlite.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { RankIndexDefinitionLike } from "../src/rank.js";
@@ -55,6 +55,7 @@ const scanSchema: SchemaLike = {
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let channel = 0; channel < CHANNEL_COUNT; channel += 1) {
         for (let index = 0; index < ROWS_PER_CHANNEL; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
             await writer.insert("messages", {
                 _id: `m-c${String(channel)}-${String(index).padStart(5, "0")}`,
                 channelId: `c${String(channel)}`,
@@ -96,6 +97,7 @@ describe("rank() — indexed vs emulated scan", () => {
         let cursorAccumulator = 0;
 
         while (true) {
+            // eslint-disable-next-line no-await-in-loop -- sequential cursor walk over partition pages
             const page = await scanWriter.findMany("messages", {
                 cursor,
                 limit: 200,

@@ -76,9 +76,9 @@ describe("encodeCursor / decodeCursor", () => {
         expect.assertions(1);
 
         const keys = [{ direction: "asc" as const, field: "createdAt" }];
-        const document_ = { _id: "row_42", createdAt: 1700, title: "ignored" };
+        const doc = { _id: "row_42", createdAt: 1700, title: "ignored" };
 
-        const cursor = encodeCursor(document_, keys);
+        const cursor = encodeCursor(doc, keys);
 
         expect(decodeCursor(cursor)).toEqual([1700, "row_42"]);
     });
@@ -87,9 +87,9 @@ describe("encodeCursor / decodeCursor", () => {
         expect.assertions(1);
 
         const keys = [{ direction: "asc" as const, field: "name" }];
-        const document_ = { _id: "café", name: "naïve — 日本語" };
+        const doc = { _id: "café", name: "naïve — 日本語" };
 
-        expect(decodeCursor(encodeCursor(document_, keys))).toEqual(["naïve — 日本語", "café"]);
+        expect(decodeCursor(encodeCursor(doc, keys))).toEqual(["naïve — 日本語", "café"]);
     });
 
     it("rejects a non-array payload", () => {

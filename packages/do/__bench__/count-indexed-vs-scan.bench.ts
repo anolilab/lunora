@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
+import createSqliteExec from "../__tests__/_helpers/node-sqlite.js";
 import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
@@ -56,6 +56,7 @@ const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let index = 0; index < ROW_COUNT; index += 1) {
+        // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
         await writer.insert("todos", {
             _id: `t${String(index)}`,
             priority: "medium",

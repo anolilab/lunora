@@ -4,7 +4,7 @@ import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { RankIndexDefinitionLike } from "../src/rank.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 /**
  * Triggers run inline within the DO transaction; the counter / rank

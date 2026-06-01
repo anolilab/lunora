@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 /**
  * Exercises the ORM query methods (`findMany`/`findFirst`/`count`) against a

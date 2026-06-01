@@ -7,7 +7,7 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
 import type { RunShardExportArgs, RunShardImportArgs, ShardDOState } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 const ADMIN_TOKEN = "s3cret-admin";
 
@@ -131,6 +131,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         writer = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
 
         for (let index = 1; index <= 3; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
             await writer.insert(
                 "users",
                 { _id: `u${String(index)}`, email: `u${String(index)}@x.io`, name: `user ${String(index)}` },
@@ -139,6 +140,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         }
 
         for (let index = 1; index <= 2; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
             await writer.insert("messages", { _id: `m${String(index)}`, channelId: "c1", text: `msg ${String(index)}` }, { allowExplicitId: true });
         }
     });
@@ -263,6 +265,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
 
         for (const original of exported) {
             const id = original.doc["_id"] as string;
+            // eslint-disable-next-line no-await-in-loop -- sequential per-row reload to verify round-trip
             const reloaded = await freshWriter.get(id);
 
             expect(reloaded).not.toBeNull();

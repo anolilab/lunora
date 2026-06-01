@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ShardDOState } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
 import type { SocketAttachment, SubscriptionEnvelope } from "../src/types.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 interface FakeWebSocket {
     attachment: SocketAttachment | undefined;
@@ -47,6 +47,7 @@ const waitForTerminator = async (ws: FakeWebSocket, deadlineMs = 200): Promise<v
             return;
         }
 
+        // eslint-disable-next-line no-await-in-loop -- polling loop must wait between frame checks
         await new Promise<void>((resolve) => {
             setTimeout(resolve, 1);
         });
@@ -83,13 +84,13 @@ class StreamShard extends ShardDO {
         functionPath: string,
         args: Record<string, unknown>,
     ): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
-        const function_ = this.registered.get(functionPath);
+        const fn = this.registered.get(functionPath);
 
-        if (!function_) {
+        if (!fn) {
             return null;
         }
 
-        return { iterator: (signal) => function_(args, signal) };
+        return { iterator: (signal) => fn(args, signal) };
     }
 }
 
@@ -160,6 +161,7 @@ describe("shardDO streaming queries", () => {
                 yielded.push(index);
                 yield index;
                 // Yield to the event loop so the cancel message can interleave.
+                // eslint-disable-next-line no-await-in-loop -- intentional per-yield event-loop turn
                 await new Promise<void>((resolve) => {
                     setTimeout(resolve, 0);
                 });

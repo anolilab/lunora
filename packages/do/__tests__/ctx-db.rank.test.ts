@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { backfillRankIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { RankIndexDefinitionLike } from "../src/rank.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 /**
  * Exercises the rank-index runtime — trigger-maintained sorted companions,
@@ -90,9 +90,9 @@ describe("ctx-db rank", () => {
             await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 50 }, { allowExplicitId: true });
             await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 100 }, { allowExplicitId: true });
 
-            const document_ = await writer.get("m2");
+            const doc = await writer.get("m2");
 
-            await expect(writer.rank("messages", "leaderboard", { row: document_! })).resolves.toEqual({ position: 1, total: 2 });
+            await expect(writer.rank("messages", "leaderboard", { row: doc! })).resolves.toEqual({ position: 1, total: 2 });
         });
 
         it("rank() returns null when the row isn't in the index", async () => {
@@ -259,6 +259,7 @@ describe("ctx-db rank", () => {
             const writer = setupWriter(makeSchema(byScoreDesc));
 
             for (let i = 0; i < 5; i += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential ordered inserts into the same DB
                 await writer.insert("messages", { _id: `m${String(i)}`, archived: false, channelId: "c1", score: i * 10 }, { allowExplicitId: true });
             }
 

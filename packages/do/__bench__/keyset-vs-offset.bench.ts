@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
+import createSqliteExec from "../__tests__/_helpers/node-sqlite.js";
 import type { SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 
@@ -45,6 +45,7 @@ runShardMigrations(harness.sql, schema);
 const writer = createShardContextDatabase({ schema, sql: harness.sql });
 
 for (let index = 0; index < ROW_COUNT; index += 1) {
+    // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
     await writer.insert("todos", { _id: `t${String(index).padStart(5, "0")}`, priority: "medium", seq: index });
 }
 
@@ -53,6 +54,7 @@ let walkedCursor: null | string = null;
 let rowsWalked = 0;
 
 while (rowsWalked < PAGE_OFFSET) {
+    // eslint-disable-next-line no-await-in-loop -- sequential keyset walk to capture cursor
     const page = await writer.findMany("todos", {
         cursor: walkedCursor,
         limit: PAGE_OFFSET - rowsWalked,

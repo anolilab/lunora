@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import { createSqliteExec } from "../__tests__/_helpers/node-sqlite.js";
+import createSqliteExec from "../__tests__/_helpers/node-sqlite.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 
@@ -59,15 +59,18 @@ const writer: DatabaseWriterLike = createShardContextDatabase({ schema, sql: har
 const USER_COUNT = 10;
 
 for (let user = 0; user < USER_COUNT; user += 1) {
+    // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
     await writer.insert("users", { _id: `u${String(user)}`, name: `User ${String(user)}` });
 }
 
 for (let message = 0; message < MESSAGE_COUNT; message += 1) {
     const authorId = `u${String(message % USER_COUNT)}`;
 
+    // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
     await writer.insert("messages", { _id: `m${String(message)}`, authorId, body: `msg ${String(message)}` });
 
     for (let reaction = 0; reaction < REACTIONS_PER_MESSAGE; reaction += 1) {
+        // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
         await writer.insert("reactions", {
             _id: `r-m${String(message)}-${String(reaction)}`,
             emoji: "👍",

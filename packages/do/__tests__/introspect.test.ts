@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { listTables, readTablePage } from "../src/introspect.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 describe("introspect", () => {
     let database: ReturnType<typeof createSqliteExec>;

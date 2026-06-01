@@ -19,13 +19,33 @@ import type { ShardDOState } from "../../src/shard-do.js";
 import { ShardDO } from "../../src/shard-do.js";
 import type { MutationDelta } from "../../src/types.js";
 
-export interface Env {
+interface Env {
     CIRRUS_ALLOWED_ORIGINS?: string;
     SESSION: DurableObjectNamespace<TestSessionDO>;
     SHARD: DurableObjectNamespace<TestShardDO>;
 }
 
-export class TestShardDO extends DurableObject<Env> {
+class ConcreteShard extends ShardDO {
+    public constructor(
+        state: ShardDOState,
+        env: unknown,
+        private readonly outer: TestShardDO,
+    ) {
+        super(state, env);
+    }
+
+    public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        this.outer.lastRpcCall = { args, functionPath };
+
+        return this.outer.rpcResult;
+    }
+
+    public override broadcastDelta(delta: MutationDelta): void {
+        super["broadcastDelta"](delta);
+    }
+}
+
+class TestShardDO extends DurableObject<Env> {
     public rpcResult: unknown = { ok: true };
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
@@ -54,27 +74,7 @@ export class TestShardDO extends DurableObject<Env> {
     }
 }
 
-class ConcreteShard extends ShardDO {
-    public constructor(
-        state: ShardDOState,
-        env: unknown,
-        private readonly outer: TestShardDO,
-    ) {
-        super(state, env);
-    }
-
-    public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-        this.outer.lastRpcCall = { args, functionPath };
-
-        return this.outer.rpcResult;
-    }
-
-    public override broadcastDelta(delta: MutationDelta): void {
-        super["broadcastDelta"](delta);
-    }
-}
-
-export class TestSessionDO extends DurableObject<Env> {
+class TestSessionDO extends DurableObject<Env> {
     private readonly session: SessionDO;
 
     public constructor(context: DurableObjectState, env: Env) {
@@ -87,8 +87,12 @@ export class TestSessionDO extends DurableObject<Env> {
     }
 }
 
-export default {
+const handler = {
     async fetch(_request: Request, _env: Env): Promise<Response> {
         return new Response("test-worker", { status: 200 });
     },
 };
+
+export default handler;
+export { TestSessionDO, TestShardDO };
+export type { Env };

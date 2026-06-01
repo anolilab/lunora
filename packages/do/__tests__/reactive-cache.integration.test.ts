@@ -367,9 +367,9 @@ class CachingShard extends ShardDO {
         });
     }
 
-    public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment = { subs: {} }): void {
+    public registerSocket(ws: FakeWebSocket, attachment?: SocketAttachment): void {
         this.state.acceptWebSocket(ws as unknown as WebSocket);
-        ws.serializeAttachment(attachment);
+        ws.serializeAttachment(attachment ?? { subs: {} });
     }
 
     public driveMessage(ws: FakeWebSocket, envelope: SubscriptionEnvelope): Promise<void> {

@@ -7,7 +7,7 @@ import { runDataMigration } from "../src/data-migration.js";
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
 import type { RunShardMigrationArgs, RunShardWriteArgs, RunShardWriteResult, ShardDOState } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 /**
  * A real-SQLite-backed ShardDO whose `handleRpc` throws — proving the admin
@@ -225,6 +225,7 @@ describe("shardDO admin data migrations", () => {
         const writer: DatabaseWriterLike = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
 
         for (let index = 1; index <= 3; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
             await writer.insert("users", { _id: `u${String(index)}`, name: `user ${String(index)}`, version: 0 });
         }
 

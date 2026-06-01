@@ -4,7 +4,7 @@ import { ADMIN_FUNCTIONS } from "../src/introspect.js";
 import type { ShardDOState } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
 import type { SocketAttachment, SubscriptionEnvelope } from "../src/types.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 const ADMIN_TOKEN = "s3cret-admin";
 

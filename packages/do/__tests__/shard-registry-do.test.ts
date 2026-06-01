@@ -66,6 +66,7 @@ describe("shardRegistryDO", () => {
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         for (const key of ["channel-1", "channel-2", "channel-3"]) {
+            // eslint-disable-next-line no-await-in-loop -- ordered registrations must apply sequentially
             await registry.fetch(post("/register", { shardKey: key, table: "messages" }));
         }
 

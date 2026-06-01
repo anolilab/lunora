@@ -102,9 +102,9 @@ class TestShard extends ShardDO {
         return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
     }
 
-    public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment = { subs: {} }): void {
+    public registerSocket(ws: FakeWebSocket, attachment?: SocketAttachment): void {
         this.state.acceptWebSocket(ws as unknown as WebSocket);
-        ws.serializeAttachment(attachment);
+        ws.serializeAttachment(attachment ?? { subs: {} });
     }
 }
 
@@ -144,9 +144,9 @@ class ReexecShard extends ShardDO {
         return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
     }
 
-    public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment = { subs: {} }): void {
+    public registerSocket(ws: FakeWebSocket, attachment?: SocketAttachment): void {
         this.state.acceptWebSocket(ws as unknown as WebSocket);
-        ws.serializeAttachment(attachment);
+        ws.serializeAttachment(attachment ?? { subs: {} });
     }
 
     public writeRpc(headers: Record<string, string> = {}): Promise<Response> {

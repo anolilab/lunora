@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import { ConflictError } from "../src/transaction.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 /**
  * Exercises the write-layer constraint enforcement (column defaults,
@@ -74,10 +74,10 @@ describe("ctx-db constraints", () => {
             const { writer } = setup();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const document_ = await writer.get(id);
+            const doc = await writer.get(id);
 
-            expect(document_?.["status"]).toBe("todo");
-            expect(document_?.["seq"]).toBe(7);
+            expect(doc?.["status"]).toBe("todo");
+            expect(doc?.["seq"]).toBe(7);
         });
 
         it("a provided value overrides the default", async () => {
@@ -86,10 +86,10 @@ describe("ctx-db constraints", () => {
             const { writer } = setup();
 
             const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
-            const document_ = await writer.get(id);
+            const doc = await writer.get(id);
 
-            expect(document_?.["status"]).toBe("done");
-            expect(document_?.["seq"]).toBe(99);
+            expect(doc?.["status"]).toBe("done");
+            expect(doc?.["seq"]).toBe(99);
         });
 
         it("does not run `$onUpdateFn` on insert", async () => {
@@ -98,9 +98,9 @@ describe("ctx-db constraints", () => {
             const { revCalls, writer } = setup();
 
             const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-            const document_ = await writer.get(id);
+            const doc = await writer.get(id);
 
-            expect(document_?.["rev"]).toBeUndefined();
+            expect(doc?.["rev"]).toBeUndefined();
             expect(revCalls()).toBe(0);
         });
     });

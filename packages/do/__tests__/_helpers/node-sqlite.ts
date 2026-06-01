@@ -16,7 +16,7 @@ import type { SqlCursor, SqlExec } from "../../src/ctx-db.js";
  * flags) — every statement goes through `prepare(...).all(...)`, which both
  * executes DDL/DML and returns rows for `SELECT`.
  */
-export const createSqliteExec = (): { close: () => void; raw: (query: string, ...params: unknown[]) => Record<string, unknown>[]; sql: SqlExec } => {
+const createSqliteExec = (): { close: () => void; raw: (query: string, ...params: unknown[]) => Record<string, unknown>[]; sql: SqlExec } => {
     const database = new DatabaseSync(":memory:");
 
     const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
@@ -52,3 +52,5 @@ export const createSqliteExec = (): { close: () => void; raw: (query: string, ..
         sql: { exec: run },
     };
 };
+
+export default createSqliteExec;

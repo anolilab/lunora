@@ -4,7 +4,7 @@ import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { DataMigrationLike } from "../src/data-migration.js";
 import { DATA_MIGRATION_STATE_TABLE, runDataMigration } from "../src/data-migration.js";
-import { createSqliteExec } from "./_helpers/node-sqlite.js";
+import createSqliteExec from "./_helpers/node-sqlite.js";
 
 /**
  * Exercises the online data-migration runner against a real SQLite engine (per
@@ -42,6 +42,7 @@ const setupWriter = (): DatabaseWriterLike => {
 /** Seed five users (u1..u5), each at version 0, with ascending scores 10..50. */
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let index = 1; index <= 5; index += 1) {
+        // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
         await writer.insert("users", { _id: `u${String(index)}`, name: `user ${String(index)}`, score: index * 10, version: 0 }, { allowExplicitId: true });
     }
 };

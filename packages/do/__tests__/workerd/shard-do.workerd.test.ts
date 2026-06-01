@@ -25,6 +25,52 @@ const newStub = (name: string): DurableObjectStub<TestShardDO> => {
     return env.SHARD.get(id);
 };
 
+interface OpenedSocket {
+    client: WebSocket;
+    received: string[];
+}
+
+const waitFor = async (predicate: () => boolean, { intervalMs = 10, timeoutMs = 2000 }: { intervalMs?: number; timeoutMs?: number } = {}): Promise<void> => {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+        if (predicate()) {
+            return;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- polling loop must wait between predicate checks
+        await new Promise((resolve) => {
+            setTimeout(resolve, intervalMs);
+        });
+    }
+
+    throw new Error(`waitFor: predicate never became true within ${String(timeoutMs)}ms`);
+};
+
+const openSocket = async (stub: DurableObjectStub<TestShardDO>, subId: string, query: { table: string }): Promise<OpenedSocket> => {
+    const upgrade = await stub.fetch("https://shard.internal/_ws", { headers: { Upgrade: "websocket" } });
+
+    if (!upgrade.webSocket) {
+        throw new Error(`expected websocket upgrade, got status ${String(upgrade.status)}`);
+    }
+
+    const client = upgrade.webSocket;
+    const received: string[] = [];
+
+    client.addEventListener("message", (event) => {
+        if (typeof event.data === "string") {
+            received.push(event.data);
+        }
+    });
+
+    client.accept();
+    client.send(JSON.stringify({ id: subId, query, type: "subscribe" }));
+
+    await waitFor(() => received.some((m) => m.includes('"type":"ack"')));
+
+    return { client, received };
+};
+
 describe("shardDO (workerd)", () => {
     it("instantiates against a real DurableObjectState and serves /rpc", async () => {
         expect.assertions(3);
@@ -164,48 +210,3 @@ describe("shardDO (workerd)", () => {
         subB.client.close(1000, "done");
     });
 });
-
-interface OpenedSocket {
-    client: WebSocket;
-    received: string[];
-}
-
-const openSocket = async (stub: DurableObjectStub<TestShardDO>, subId: string, query: { table: string }): Promise<OpenedSocket> => {
-    const upgrade = await stub.fetch("https://shard.internal/_ws", { headers: { Upgrade: "websocket" } });
-
-    if (!upgrade.webSocket) {
-        throw new Error(`expected websocket upgrade, got status ${String(upgrade.status)}`);
-    }
-
-    const client = upgrade.webSocket;
-    const received: string[] = [];
-
-    client.addEventListener("message", (event) => {
-        if (typeof event.data === "string") {
-            received.push(event.data);
-        }
-    });
-
-    client.accept();
-    client.send(JSON.stringify({ id: subId, query, type: "subscribe" }));
-
-    await waitFor(() => received.some((m) => m.includes('"type":"ack"')));
-
-    return { client, received };
-};
-
-const waitFor = async (predicate: () => boolean, { intervalMs = 10, timeoutMs = 2000 }: { intervalMs?: number; timeoutMs?: number } = {}): Promise<void> => {
-    const deadline = Date.now() + timeoutMs;
-
-    while (Date.now() < deadline) {
-        if (predicate()) {
-            return;
-        }
-
-        await new Promise((resolve) => {
-            setTimeout(resolve, intervalMs);
-        });
-    }
-
-    throw new Error(`waitFor: predicate never became true within ${String(timeoutMs)}ms`);
-};

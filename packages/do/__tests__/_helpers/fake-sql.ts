@@ -9,19 +9,19 @@ import type { SchemaLike, SqlCursor, SqlExec } from "../../src/ctx-db.js";
  * SQLite implementation.
  */
 
-export interface FakeRow {
+interface FakeRow {
     __doc__: string;
     _creationTime: number;
     id: string;
 }
 
-export interface FakeIndex {
+interface FakeIndex {
     expressions: string[];
     table: string;
     unique: boolean;
 }
 
-export interface FakeSqlState {
+interface FakeSqlState {
     indexes: Map<string, FakeIndex>;
     /** Rows touched by the most recent INSERT/UPDATE/DELETE — mirrors SQLite `changes()`. */
     lastChanges: number;
@@ -86,9 +86,9 @@ const extractFieldValue = (row: FakeRow, field: string): unknown => {
         return row._creationTime;
     }
 
-    const document_ = JSON.parse(row.__doc__) as Record<string, unknown>;
+    const document = JSON.parse(row.__doc__) as Record<string, unknown>;
 
-    return document_[field];
+    return document[field];
 };
 
 const jsonExtractPattern = /^json_extract\(__doc__, '\$\.([^']+)'\)$/u;
@@ -221,7 +221,7 @@ const sortRows = (rows: FakeRow[], orderClause: string | undefined): FakeRow[] =
 
 type Handler = (sqlString: string, params: unknown[]) => SqlCursor<Record<string, unknown>> | undefined;
 
-export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
+const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
     const state: FakeSqlState = {
         indexes: new Map(),
         lastChanges: 0,
@@ -465,7 +465,7 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
     return { sql, state };
 };
 
-export const messagesSchema: SchemaLike = {
+const messagesSchema: SchemaLike = {
     tables: {
         messages: {
             indexes: [
@@ -490,3 +490,6 @@ export const messagesSchema: SchemaLike = {
         },
     },
 };
+
+export { createFakeSql, messagesSchema };
+export type { FakeIndex, FakeRow, FakeSqlState };
