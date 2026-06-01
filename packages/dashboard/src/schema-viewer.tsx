@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { TableInfo, TablePage } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
-import { adminRef, callOptions, errorMessage } from "./internal.js";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
 
@@ -54,7 +54,7 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
     );
 
     useEffect(() => {
-        void refresh(initialShardKey ?? "");
+        fireAndForget(refresh(initialShardKey ?? ""));
     }, [refresh, initialShardKey]);
 
     const toggle = useCallback(
@@ -84,17 +84,15 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
         [client, columns, expanded, shardKey],
     );
 
+    const refreshCurrent = useCallback((): void => {
+        fireAndForget(refresh(shardKey));
+    }, [refresh, shardKey]);
+
     return (
         <div data-testid="cirrus-schema">
             <div>
                 <ShardInput onChange={setShardKey} testId="sc-shard-input" value={shardKey} />
-                <button
-                    data-testid="sc-refresh"
-                    onClick={() => {
-                        void refresh(shardKey);
-                    }}
-                    type="button"
-                >
+                <button data-testid="sc-refresh" onClick={refreshCurrent} type="button">
                     Refresh
                 </button>
             </div>
@@ -112,8 +110,9 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
                             <button
                                 aria-expanded={expanded === table.name}
                                 data-testid={`sc-toggle-${table.name}`}
+                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row toggle closes over table.name; admin dev-tool render path
                                 onClick={() => {
-                                    void toggle(table.name);
+                                    fireAndForget(toggle(table.name));
                                 }}
                                 type="button"
                             >

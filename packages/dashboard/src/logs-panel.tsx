@@ -6,11 +6,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { LogEntry, LogLevel, LogsResult } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
-import { adminRef, callOptions, errorMessage } from "./internal.js";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
-import { useLiveAdmin } from "./use-live-admin.js";
+import useLiveAdmin from "./use-live-admin.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
@@ -120,7 +120,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     );
 
     useEffect(() => {
-        void refresh(initialShardKey ?? "");
+        fireAndForget(refresh(initialShardKey ?? ""));
     }, [refresh, initialShardKey]);
 
     // Live channel: while toggled on, each server push replaces the buffer so
@@ -131,7 +131,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         shardKey,
         (result) => {
             setError(null);
-            setLiveError(null);
+            setLiveError(undefined);
             setEntries((result as LogsResult).entries);
         },
         live,
@@ -189,37 +189,28 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         return { height: totalSize, position: "relative", width: "100%" };
     }, [totalSize]);
 
+    const refreshCurrent = useCallback((): void => {
+        fireAndForget(refresh(shardKey));
+    }, [refresh, shardKey]);
+
+    const onSearchChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+        setSearch(event.target.value);
+    }, []);
+
+    const onLevelChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
+        setLevelFilter(event.target.value);
+    }, []);
+
     return (
         <div data-testid="cirrus-logs">
             <div>
                 <ShardInput onChange={setShardKey} testId="lg-shard-input" value={shardKey} />
-                <button
-                    data-testid="lg-refresh"
-                    onClick={() => {
-                        void refresh(shardKey);
-                    }}
-                    type="button"
-                >
+                <button data-testid="lg-refresh" onClick={refreshCurrent} type="button">
                     Refresh
                 </button>
                 <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="lg" />
-                <input
-                    aria-label="Search messages"
-                    data-testid="lg-search"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                        setSearch(event.target.value);
-                    }}
-                    placeholder="search message"
-                    value={search}
-                />
-                <select
-                    aria-label="Level filter"
-                    data-testid="lg-level-filter"
-                    onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                        setLevelFilter(event.target.value);
-                    }}
-                    value={levelFilter}
-                >
+                <input aria-label="Search messages" data-testid="lg-search" onChange={onSearchChange} placeholder="search message" value={search} />
+                <select aria-label="Level filter" data-testid="lg-level-filter" onChange={onLevelChange} value={levelFilter}>
                     <option value="all">all</option>
                     {levels.map((level) => (
                         <option key={level} value={level}>

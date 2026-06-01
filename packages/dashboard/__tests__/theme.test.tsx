@@ -2,8 +2,8 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { DashboardApp } from "../src/app.js";
-import { DashboardStyles } from "../src/theme.js";
-import { DASHBOARD_ROOT_CLASS } from "../src/theme-constants.js";
+import DashboardStyles from "../src/theme.js";
+import DASHBOARD_ROOT_CLASS from "../src/theme-constants.js";
 
 const DECLARATION_BLOCK = /\{[^{}]*\}/g;
 const RULE_DELIMITER = /[|{}]/u;

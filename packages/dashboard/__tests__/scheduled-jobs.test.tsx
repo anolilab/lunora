@@ -17,6 +17,9 @@ const RECORDS: ScheduleRecord[] = [
 
 const withProvider = (mock: MockClientHooks, children: ReactNode): ReactElement => <CirrusProvider client={mock.asClient}>{children}</CirrusProvider>;
 
+const loadEmpty = async (): Promise<ScheduleRecord[]> => [];
+const loadRecords = async (): Promise<ScheduleRecord[]> => RECORDS;
+
 describe("scheduledJobs", () => {
     it("renders jobs soonest-due first", async () => {
         expect.assertions(2);
@@ -36,7 +39,7 @@ describe("scheduledJobs", () => {
     it("shows empty state when there are no jobs", async () => {
         expect.assertions(1);
 
-        render(withProvider(createMockClient(), <ScheduledJobs loadJobs={async () => []} />));
+        render(withProvider(createMockClient(), <ScheduledJobs loadJobs={loadEmpty} />));
 
         const empty = await screen.findByTestId("sj-empty");
 
@@ -46,7 +49,7 @@ describe("scheduledJobs", () => {
     it("hides cancel controls for a custom read-only loader", async () => {
         expect.assertions(1);
 
-        render(withProvider(createMockClient(), <ScheduledJobs loadJobs={async () => RECORDS} />));
+        render(withProvider(createMockClient(), <ScheduledJobs loadJobs={loadRecords} />));
 
         await screen.findByTestId("sj-table");
 
@@ -170,7 +173,7 @@ describe("scheduledJobs", () => {
 
         const mock = createMockClient();
 
-        render(withProvider(mock, <ScheduledJobs loadJobs={async () => RECORDS} />));
+        render(withProvider(mock, <ScheduledJobs loadJobs={loadRecords} />));
 
         await screen.findByTestId("sj-table");
 

@@ -5,11 +5,11 @@ import { useCallback, useEffect, useState } from "react";
 import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
-import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal.js";
+import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
-import { useLiveAdmin } from "./use-live-admin.js";
+import useLiveAdmin from "./use-live-admin.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 
 interface MigrationsPanelProps {
@@ -63,7 +63,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     );
 
     useEffect(() => {
-        void refresh(initialShardKey ?? "");
+        fireAndForget(refresh(initialShardKey ?? ""));
     }, [refresh, initialShardKey]);
 
     // Live channel: while toggled on, each server push refreshes the run-state
@@ -74,7 +74,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
         shardKey,
         (result) => {
             setStatusError(null);
-            setLiveError(null);
+            setLiveError(undefined);
             setRows((result as { migrations: MigrationStatusRow[] }).migrations);
         },
         live,
@@ -107,17 +107,31 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
         }
     }, [client, direction, dryRun, migrationId, refresh, shardKey]);
 
+    const refreshCurrent = useCallback((): void => {
+        fireAndForget(refresh(shardKey));
+    }, [refresh, shardKey]);
+
+    const runMigration = useCallback((): void => {
+        fireAndForget(run());
+    }, [run]);
+
+    const onIdChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+        setMigrationId(event.target.value);
+    }, []);
+
+    const onDirectionChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
+        setDirection(event.target.value === "down" ? "down" : "up");
+    }, []);
+
+    const onDryRunChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+        setDryRun(event.target.checked);
+    }, []);
+
     return (
         <div data-testid="cirrus-migrations">
             <div>
                 <ShardInput onChange={setShardKey} testId="mg-shard-input" value={shardKey} />
-                <button
-                    data-testid="mg-refresh"
-                    onClick={() => {
-                        void refresh(shardKey);
-                    }}
-                    type="button"
-                >
+                <button data-testid="mg-refresh" onClick={refreshCurrent} type="button">
                     Refresh
                 </button>
                 <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="mg" />
@@ -162,59 +176,22 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
 
             <fieldset>
                 <legend>Run migration</legend>
-                <input
-                    aria-label="Migration id"
-                    data-testid="mg-id-input"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                        setMigrationId(event.target.value);
-                    }}
-                    placeholder="migration id"
-                    value={migrationId}
-                />
-                <select
-                    aria-label="Direction"
-                    data-testid="mg-direction"
-                    onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                        setDirection(event.target.value === "down" ? "down" : "up");
-                    }}
-                    value={direction}
-                >
+                <input aria-label="Migration id" data-testid="mg-id-input" onChange={onIdChange} placeholder="migration id" value={migrationId} />
+                <select aria-label="Direction" data-testid="mg-direction" onChange={onDirectionChange} value={direction}>
                     <option value="up">up</option>
                     <option value="down">down</option>
                 </select>
                 <label htmlFor="mg-dry-run">
-                    <input
-                        checked={dryRun}
-                        data-testid="mg-dry-run"
-                        id="mg-dry-run"
-                        onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                            setDryRun(event.target.checked);
-                        }}
-                        type="checkbox"
-                    />
+                    <input checked={dryRun} data-testid="mg-dry-run" id="mg-dry-run" onChange={onDryRunChange} type="checkbox" />
                     Dry run
                 </label>
                 {dryRun ? (
-                    <button
-                        data-testid="mg-run"
-                        disabled={running}
-                        onClick={() => {
-                            void run();
-                        }}
-                        type="button"
-                    >
+                    <button data-testid="mg-run" disabled={running} onClick={runMigration} type="button">
                         {running ? "Running…" : "Run"}
                     </button>
                 ) : (
                     // A real (non-dry-run) migration mutates rows — guard it.
-                    <ConfirmButton
-                        confirmLabel={running ? "Running…" : "Run migration?"}
-                        disabled={running}
-                        onConfirm={() => {
-                            void run();
-                        }}
-                        testId="mg-run"
-                    >
+                    <ConfirmButton confirmLabel={running ? "Running…" : "Run migration?"} disabled={running} onConfirm={runMigration} testId="mg-run">
                         Run
                     </ConfirmButton>
                 )}

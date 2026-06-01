@@ -52,7 +52,7 @@ const createBrowserClient = (): MockClientHooks =>
 
 const renderBrowser = (mock: MockClientHooks, props: DataBrowserProps = {}): ReactElement => (
     <CirrusProvider client={mock.asClient}>
-        <DataBrowser {...props} />
+        <DataBrowser editable={props.editable} initialShardKey={props.initialShardKey} pageSize={props.pageSize} />
     </CirrusProvider>
 );
 

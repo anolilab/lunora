@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { DataBrowser } from "./data-browser.js";
 import { ErrorBoundary } from "./error-boundary.js";
@@ -81,17 +81,20 @@ export const Dashboard = ({ dataEditable = false, functions, initialShardKey, sc
     const [active, setActive] = useState<DashboardTab>("data");
     const current = tabs.includes(active) ? active : "data";
 
+    const selectTab = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
+        setActive(event.currentTarget.dataset.tab as DashboardTab);
+    }, []);
+
     return (
         <div data-testid="cirrus-dashboard">
             <div aria-label="Dashboard sections" data-testid="dash-tabs" role="tablist">
                 {tabs.map((tab) => (
                     <button
                         aria-selected={current === tab}
+                        data-tab={tab}
                         data-testid={`dash-tab-${tab}`}
                         key={tab}
-                        onClick={() => {
-                            setActive(tab);
-                        }}
+                        onClick={selectTab}
                         role="tab"
                         type="button"
                     >

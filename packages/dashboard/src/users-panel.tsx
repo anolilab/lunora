@@ -3,7 +3,7 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import { errorMessage, formatTimestamp } from "./internal.js";
+import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
 import { useAutoRefresh } from "./use-auto-refresh.js";
 
 interface UsersPanelProps {
@@ -61,40 +61,35 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
         [client, pageSize],
     );
 
+    const reloadUsers = useCallback((): void => {
+        fireAndForget(fetchUsers());
+    }, [fetchUsers]);
+
+    const toggleAuto = useCallback((): void => {
+        setAuto((on) => !on);
+    }, []);
+
     useEffect(() => {
-        void fetchUsers();
+        fireAndForget(fetchUsers());
     }, [fetchUsers]);
 
     // Auto-refresh: the auth store is HTTP-only (no subscription channel), so
     // polling is the honest "live" — re-list users to catch new sign-ups /
     // revoked sessions without a manual reload.
     useAutoRefresh(() => {
-        void fetchUsers();
+        fireAndForget(fetchUsers());
 
         if (selectedUser !== null) {
-            void fetchSessions(selectedUser);
+            fireAndForget(fetchSessions(selectedUser));
         }
     }, auto);
 
     return (
         <div data-testid="cirrus-users">
-            <button
-                data-testid="us-refresh"
-                onClick={() => {
-                    void fetchUsers();
-                }}
-                type="button"
-            >
+            <button data-testid="us-refresh" onClick={reloadUsers} type="button">
                 Reload users
             </button>
-            <button
-                aria-pressed={auto}
-                data-testid="us-auto"
-                onClick={() => {
-                    setAuto((on) => !on);
-                }}
-                type="button"
-            >
+            <button aria-pressed={auto} data-testid="us-auto" onClick={toggleAuto} type="button">
                 {auto ? "Auto: on" : "Auto: off"}
             </button>
 
@@ -130,8 +125,9 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                                     <button
                                         aria-pressed={selectedUser === user.id}
                                         data-testid={`us-sessions-${user.id}`}
+                                        // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over user.id; this is an admin dev-tool render path
                                         onClick={() => {
-                                            void fetchSessions(user.id);
+                                            fireAndForget(fetchSessions(user.id));
                                         }}
                                         type="button"
                                     >

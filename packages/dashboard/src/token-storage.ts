@@ -7,12 +7,12 @@
  */
 const STORAGE_KEY = "cirrus-dashboard-admin-token";
 
-const store = (): Storage | null => {
+const store = (): Storage | undefined => {
     try {
-        return (globalThis as { sessionStorage?: Storage }).sessionStorage ?? null;
+        return (globalThis as { sessionStorage?: Storage }).sessionStorage;
     } catch {
         // Accessing sessionStorage can throw in sandboxed iframes / privacy mode.
-        return null;
+        return undefined;
     }
 };
 
@@ -29,7 +29,7 @@ export const loadToken = (): string => {
 export const saveToken = (token: string): void => {
     const storage = store();
 
-    if (storage === null) {
+    if (storage === undefined) {
         return;
     }
 

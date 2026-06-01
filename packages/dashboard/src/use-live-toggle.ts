@@ -3,10 +3,10 @@ import { useCallback, useState } from "react";
 export interface LiveToggleState {
     /** Whether the live WebSocket channel is currently enabled. */
     readonly live: boolean;
-    /** The latest live-subscription rejection message, or `null` when healthy. */
-    readonly liveError: null | string;
-    /** Set/clear the live error (pass to `useLiveAdmin`'s `onError`; call with `null` on a successful push). */
-    readonly setLiveError: (message: null | string) => void;
+    /** The latest live-subscription rejection message, or `undefined` when healthy. */
+    readonly liveError: string | undefined;
+    /** Set/clear the live error (pass to `useLiveAdmin`'s `onError`; call with `undefined` on a successful push). */
+    readonly setLiveError: (message: string | undefined) => void;
     /** Flip the toggle, clearing any stale error so the banner doesn't linger. */
     readonly toggle: () => void;
 }
@@ -17,14 +17,14 @@ export interface LiveToggleState {
  * so every panel's toggle behaves identically (clears the error on toggle; the
  * panel clears it again on the next successful push).
  */
-export function useLiveToggle(): LiveToggleState {
+export const useLiveToggle = (): LiveToggleState => {
     const [live, setLive] = useState<boolean>(false);
-    const [liveError, setLiveError] = useState<null | string>(null);
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     const toggle = useCallback((): void => {
-        setLiveError(null);
+        setLiveError(undefined);
         setLive((on) => !on);
     }, []);
 
     return { live, liveError, setLiveError, toggle };
-}
+};

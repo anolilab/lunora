@@ -2,7 +2,7 @@ import type { ReactElement } from "react";
 
 export interface LiveToggleProps {
     readonly live: boolean;
-    readonly liveError: null | string;
+    readonly liveError: string | undefined;
     readonly onToggle: () => void;
     /** Test-id prefix for the panel (e.g. `"mt"`, `"lg"`, `"db"`, `"mg"`). */
     readonly prefix: string;
@@ -19,7 +19,7 @@ export const LiveToggle = ({ live, liveError, onToggle, prefix }: LiveToggleProp
             <button aria-pressed={live} data-testid={`${prefix}-live`} onClick={onToggle} type="button">
                 {live ? "Live: on" : "Live: off"}
             </button>
-            {live && liveError !== null && (
+            {live && liveError !== undefined && (
                 <span data-testid={`${prefix}-live-error`} role="status">
                     Live unavailable:
 {" "}

@@ -10,11 +10,11 @@ const STORAGE_KEY = "cirrus-dashboard-recent-shards";
 /** Cap the list so it stays a short, useful menu rather than an unbounded log. */
 const MAX_RECENTS = 10;
 
-const store = (): Storage | null => {
+const store = (): Storage | undefined => {
     try {
-        return (globalThis as { sessionStorage?: Storage }).sessionStorage ?? null;
+        return (globalThis as { sessionStorage?: Storage }).sessionStorage;
     } catch {
-        return null;
+        return undefined;
     }
 };
 
@@ -50,7 +50,7 @@ export const recordShard = (shardKey: string): string[] => {
     const next = [trimmed, ...loadRecentShards().filter((entry) => entry !== trimmed)].slice(0, MAX_RECENTS);
     const storage = store();
 
-    if (storage !== null) {
+    if (storage !== undefined) {
         try {
             storage.setItem(STORAGE_KEY, JSON.stringify(next));
         } catch {

@@ -3,7 +3,7 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { errorMessage, formatTimestamp } from "./internal.js";
+import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
 import type { FunctionDescriptor, FunctionKind, RunStatus } from "./types.js";
@@ -82,7 +82,7 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
 
         let cancelled = false;
 
-        void client
+        client
             .listFunctions()
             .then((list) => {
                 if (!cancelled) {
@@ -187,6 +187,18 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
         setShardKey(entry.shardKey);
     }, []);
 
+    const onSelectChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
+        setSelectedPath(event.target.value);
+    }, []);
+
+    const onArgsChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>): void => {
+        setArgsText(event.target.value);
+    }, []);
+
+    const runOnce = useCallback((): void => {
+        fireAndForget(run());
+    }, [run]);
+
     return (
         <div data-testid="cirrus-function-runner">
             {discoverError !== null && (
@@ -195,14 +207,7 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
                 </p>
             )}
 
-            <select
-                aria-label="Function"
-                data-testid="function-select"
-                onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                    setSelectedPath(event.target.value);
-                }}
-                value={effectivePath}
-            >
+            <select aria-label="Function" data-testid="function-select" onChange={onSelectChange} value={effectivePath}>
                 {functions.map((descriptor) => (
                     <option key={descriptor.path} value={descriptor.path}>
                         {descriptor.path}
@@ -214,25 +219,11 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
                 ))}
             </select>
 
-            <textarea
-                aria-label="Arguments"
-                data-testid="args-input"
-                onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
-                    setArgsText(event.target.value);
-                }}
-                value={argsText}
-            />
+            <textarea aria-label="Arguments" data-testid="args-input" onChange={onArgsChange} value={argsText} />
 
             <ShardInput onChange={setShardKey} testId="shard-input" value={shardKey} />
 
-            <button
-                data-testid="run-button"
-                disabled={status === "running" || selected === undefined}
-                onClick={() => {
-                    void run();
-                }}
-                type="button"
-            >
+            <button data-testid="run-button" disabled={status === "running" || selected === undefined} onClick={runOnce} type="button">
                 Run
             </button>
 
@@ -262,6 +253,7 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
 {" "}
                             <button
                                 data-testid={`fn-history-load-${index.toString()}`}
+                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the history entry; admin dev-tool render path
                                 onClick={() => {
                                     loadRun(entry);
                                 }}

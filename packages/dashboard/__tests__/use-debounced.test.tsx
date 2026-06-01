@@ -1,7 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useDebounced } from "../src/use-debounced.js";
+import useDebounced from "../src/use-debounced.js";
 
 const Probe = ({ delayMs, value }: { delayMs?: number; value: string }): React.ReactElement => {
     const debounced = useDebounced(value, delayMs);

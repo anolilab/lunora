@@ -3,7 +3,7 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import { errorMessage } from "./internal.js";
+import { errorMessage, fireAndForget } from "./internal.js";
 
 interface GlobalDataBrowserProps {
     /** Rows requested per page. Clamped server-side to `[1, 500]`. */
@@ -31,7 +31,7 @@ const formatCell = (value: unknown): string => {
             return value.toString();
         }
         default: {
-            return JSON.stringify(value) ?? "";
+            return JSON.stringify(value);
         }
     }
 };
@@ -93,13 +93,13 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
     );
 
     useEffect(() => {
-        void fetchTables();
+        fireAndForget(fetchTables());
     }, [fetchTables]);
 
     const selectTable = useCallback(
         (table: string): void => {
             setSelectedTable(table);
-            void fetchPage(table, 0);
+            fireAndForget(fetchPage(table, 0));
         },
         [fetchPage],
     );
@@ -110,7 +110,7 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
                 return;
             }
 
-            void fetchPage(selectedTable, Math.max(0, nextOffset));
+            fireAndForget(fetchPage(selectedTable, Math.max(0, nextOffset)));
         },
         [fetchPage, selectedTable],
     );
@@ -121,15 +121,21 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
 
+    const reloadTables = useCallback((): void => {
+        fireAndForget(fetchTables());
+    }, [fetchTables]);
+
+    const goPrevious = useCallback((): void => {
+        goToPage(offset - pageSize);
+    }, [goToPage, offset, pageSize]);
+
+    const goNext = useCallback((): void => {
+        goToPage(offset + pageSize);
+    }, [goToPage, offset, pageSize]);
+
     return (
         <div data-testid="cirrus-global-data-browser">
-            <button
-                data-testid="gdb-load-tables"
-                onClick={() => {
-                    void fetchTables();
-                }}
-                type="button"
-            >
+            <button data-testid="gdb-load-tables" onClick={reloadTables} type="button">
                 Reload tables
             </button>
 
@@ -148,6 +154,7 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
                             <button
                                 aria-pressed={selectedTable === table.name}
                                 data-testid={`gdb-table-${table.name}`}
+                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over table.name; admin dev-tool render path
                                 onClick={() => {
                                     selectTable(table.name);
                                 }}
@@ -192,27 +199,13 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
                     </table>
 
                     <div>
-                        <button
-                            data-testid="gdb-prev"
-                            disabled={!hasPrevious}
-                            onClick={() => {
-                                goToPage(offset - pageSize);
-                            }}
-                            type="button"
-                        >
+                        <button data-testid="gdb-prev" disabled={!hasPrevious} onClick={goPrevious} type="button">
                             Previous
                         </button>
                         <span data-testid="gdb-page-info">
                             {rangeStart}-{rangeEnd} of {total}
                         </span>
-                        <button
-                            data-testid="gdb-next"
-                            disabled={!hasNext}
-                            onClick={() => {
-                                goToPage(offset + pageSize);
-                            }}
-                            type="button"
-                        >
+                        <button data-testid="gdb-next" disabled={!hasNext} onClick={goNext} type="button">
                             Next
                         </button>
                     </div>

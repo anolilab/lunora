@@ -58,6 +58,7 @@ export const aggregateMetrics = (results: ReadonlyArray<ShardMetricsResult>): Ag
 
     return {
         failed,
+        // eslint-disable-next-line unicorn/no-null -- hitRate is part of the public AggregateMetrics type, which models "no cache" as null
         hitRate: cacheTotal === 0 ? null : cacheHits / cacheTotal,
         reachable,
         totalDatabaseSize,

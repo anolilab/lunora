@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 export interface ConfirmButtonProps {
     /** Label for the initial trigger (e.g. `Delete`). */
@@ -24,16 +24,22 @@ export interface ConfirmButtonProps {
 export const ConfirmButton = ({ children, confirmLabel = "Confirm", disabled = false, onConfirm, testId }: ConfirmButtonProps): ReactElement => {
     const [confirming, setConfirming] = useState(false);
 
+    const startConfirm = useCallback((): void => {
+        setConfirming(true);
+    }, []);
+
+    const cancelConfirm = useCallback((): void => {
+        setConfirming(false);
+    }, []);
+
+    const acceptConfirm = useCallback((): void => {
+        setConfirming(false);
+        onConfirm();
+    }, [onConfirm]);
+
     if (!confirming) {
         return (
-            <button
-                data-testid={testId}
-                disabled={disabled}
-                onClick={() => {
-                    setConfirming(true);
-                }}
-                type="button"
-            >
+            <button data-testid={testId} disabled={disabled} onClick={startConfirm} type="button">
                 {children}
             </button>
         );
@@ -41,24 +47,10 @@ export const ConfirmButton = ({ children, confirmLabel = "Confirm", disabled = f
 
     return (
         <span data-testid={`${testId}-prompt`} role="group">
-            <button
-                data-testid={`${testId}-confirm`}
-                disabled={disabled}
-                onClick={() => {
-                    setConfirming(false);
-                    onConfirm();
-                }}
-                type="button"
-            >
+            <button data-testid={`${testId}-confirm`} disabled={disabled} onClick={acceptConfirm} type="button">
                 {confirmLabel}
             </button>
-            <button
-                data-testid={`${testId}-cancel`}
-                onClick={() => {
-                    setConfirming(false);
-                }}
-                type="button"
-            >
+            <button data-testid={`${testId}-cancel`} onClick={cancelConfirm} type="button">
                 Cancel
             </button>
         </span>

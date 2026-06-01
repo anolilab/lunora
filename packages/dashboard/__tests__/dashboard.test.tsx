@@ -22,9 +22,9 @@ const createClient = (): MockClientHooks =>
         },
     });
 
-const renderDashboard = (mock: MockClientHooks, props = {}) => (
+const renderDashboard = (mock: MockClientHooks) => (
     <CirrusProvider client={mock.asClient}>
-        <Dashboard {...props} />
+        <Dashboard />
     </CirrusProvider>
 );
 

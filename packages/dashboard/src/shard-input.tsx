@@ -1,5 +1,5 @@
 import type { ChangeEvent, ReactElement } from "react";
-import { useId, useMemo } from "react";
+import { useCallback, useId, useState } from "react";
 
 import { loadRecentShards } from "./shard-history.js";
 
@@ -20,9 +20,15 @@ export interface ShardInputProps {
  */
 export const ShardInput = ({ onChange, testId, value }: ShardInputProps): ReactElement => {
     const listId = useId();
-    // Snapshot once per render; the menu only needs to be fresh on (re)mount and
-    // when the panel re-renders after recording a shard.
-    const recents = useMemo(() => loadRecentShards(), []);
+    // Snapshot once on mount; the menu only needs to be fresh on (re)mount.
+    const [recents] = useState<ReadonlyArray<string>>(() => loadRecentShards());
+
+    const onInputChange = useCallback(
+        (event: ChangeEvent<HTMLInputElement>): void => {
+            onChange(event.target.value);
+        },
+        [onChange],
+    );
 
     return (
         <>
@@ -30,9 +36,7 @@ export const ShardInput = ({ onChange, testId, value }: ShardInputProps): ReactE
                 aria-label="Shard key"
                 data-testid={testId}
                 list={recents.length > 0 ? listId : undefined}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    onChange(event.target.value);
-                }}
+                onChange={onInputChange}
                 placeholder="shard key (optional)"
                 value={value}
             />

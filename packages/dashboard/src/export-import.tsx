@@ -5,7 +5,7 @@ import { useCallback, useState } from "react";
 import type { ExportRow, ImportShardResult } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
-import { adminRef, callOptions, errorMessage } from "./internal.js";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
 
@@ -31,7 +31,7 @@ const parseNdjson = (text: string): ExportRow[] => {
     const lines = text.split("\n");
 
     for (const [index, rawLine] of lines.entries()) {
-        const line = (rawLine ?? "").trim();
+        const line = rawLine.trim();
 
         if (line === "") {
             continue;
@@ -120,28 +120,26 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
     const insertedTotal = importResult === null ? 0 : Object.values(importResult.inserted).reduce((sum, count) => sum + count, 0);
 
+    const runExport = useCallback((): void => {
+        fireAndForget(exportShard());
+    }, [exportShard]);
+
+    const runImport = useCallback((): void => {
+        fireAndForget(importShard());
+    }, [importShard]);
+
+    const onNdjsonChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>): void => {
+        setNdjson(event.target.value);
+    }, []);
+
     return (
         <div data-testid="cirrus-export-import">
             <div>
                 <ShardInput onChange={setShardKey} testId="ei-shard-input" value={shardKey} />
-                <button
-                    data-testid="ei-export"
-                    disabled={busy}
-                    onClick={() => {
-                        void exportShard();
-                    }}
-                    type="button"
-                >
+                <button data-testid="ei-export" disabled={busy} onClick={runExport} type="button">
                     Export
                 </button>
-                <ConfirmButton
-                    confirmLabel="Import (writes rows)?"
-                    disabled={busy || ndjson.trim() === ""}
-                    onConfirm={() => {
-                        void importShard();
-                    }}
-                    testId="ei-import"
-                >
+                <ConfirmButton confirmLabel="Import (writes rows)?" disabled={busy || ndjson.trim() === ""} onConfirm={runImport} testId="ei-import">
                     Import
                 </ConfirmButton>
             </div>
@@ -149,9 +147,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
             <textarea
                 aria-label="NDJSON"
                 data-testid="ei-ndjson"
-                onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
-                    setNdjson(event.target.value);
-                }}
+                onChange={onNdjsonChange}
                 placeholder='{"table":"messages","doc":{…}}'
                 value={ndjson}
             />

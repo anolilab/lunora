@@ -21,6 +21,18 @@ export const callOptions = (shardKey: string): { shardKey?: string } => {
 export const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
+ * Fire a promise without awaiting it, swallowing rejection. The dashboard's
+ * async loaders already surface their own errors into panel state via internal
+ * try/catch, so an event handler or effect can kick one off and return `void`
+ * without leaving a floating promise.
+ */
+export const fireAndForget = (promise: Promise<unknown>): void => {
+    promise.catch(() => {
+        /* loaders surface their own errors into panel state */
+    });
+};
+
+/**
  * Render a byte count compactly (e.g. `1.4 MB`). `null`/`undefined` render as an
  * em dash so panels can pass an absent size straight through.
  */

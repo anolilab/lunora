@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConfirmButton } from "./confirm-button.js";
-import { errorMessage, formatTimestamp } from "./internal.js";
+import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
 import { useAutoRefresh } from "./use-auto-refresh.js";
 
 interface ScheduledJobsProps {
@@ -77,7 +77,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
     }, [load]);
 
     useEffect(() => {
-        void refresh();
+        fireAndForget(refresh());
     }, [refresh]);
 
     // Live updates. When the panel sources jobs from the client (no custom
@@ -100,7 +100,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
 
     // Polling fallback for the custom-loader case (no WS to subscribe to).
     useAutoRefresh(() => {
-        void refresh();
+        fireAndForget(refresh());
     }, auto && !livePush);
 
     const cancel = useCallback(
@@ -126,27 +126,23 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
         [auto, cancelImpl, livePush, refresh],
     );
 
+    const runRefresh = useCallback((): void => {
+        fireAndForget(refresh());
+    }, [refresh]);
+
+    const toggleAuto = useCallback((): void => {
+        setAuto((on) => !on);
+    }, []);
+
+    const autoLabel = `${livePush ? "Live" : "Auto"}: ${auto ? "on" : "off"}`;
+
     return (
         <div data-testid="cirrus-scheduled-jobs">
-            <button
-                data-testid="sj-refresh"
-                disabled={busy}
-                onClick={() => {
-                    void refresh();
-                }}
-                type="button"
-            >
+            <button data-testid="sj-refresh" disabled={busy} onClick={runRefresh} type="button">
                 Refresh
             </button>
-            <button
-                aria-pressed={auto}
-                data-testid="sj-auto"
-                onClick={() => {
-                    setAuto((on) => !on);
-                }}
-                type="button"
-            >
-                {auto ? `${livePush ? "Live" : "Auto"}: on` : `${livePush ? "Live" : "Auto"}: off`}
+            <button aria-pressed={auto} data-testid="sj-auto" onClick={toggleAuto} type="button">
+                {autoLabel}
             </button>
 
             {error !== null && (
@@ -179,8 +175,9 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                                     <td>
                                         <ConfirmButton
                                             confirmLabel="Cancel job?"
+                                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over job.id; admin dev-tool render path
                                             onConfirm={() => {
-                                                void cancel(job.id);
+                                                fireAndForget(cancel(job.id));
                                             }}
                                             testId={`sj-cancel-${job.id}`}
                                         >

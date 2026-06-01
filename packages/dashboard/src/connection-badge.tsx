@@ -21,7 +21,7 @@ const DOT_BASE_STYLE = { borderRadius: "50%", display: "inline-block", height: 8
  * (a panel showing "Live: on" while the socket is down would otherwise look
  * identical to one that's simply idle).
  */
-export const ConnectionBadge = (): ReactElement => {
+const ConnectionBadge = (): ReactElement => {
     const status = useConnectionStatus();
     const { color, text } = LABELS[status];
     const dotStyle = useMemo(() => {
@@ -35,3 +35,5 @@ export const ConnectionBadge = (): ReactElement => {
         </span>
     );
 };
+
+export default ConnectionBadge;

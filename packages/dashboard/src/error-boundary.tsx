@@ -21,34 +21,33 @@ const MESSAGE_STYLE = { overflow: "auto", whiteSpace: "pre-wrap" } as const;
  * button that clears the boundary and re-renders its children.
  */
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-    public constructor(props: ErrorBoundaryProps) {
-        super(props);
-        this.state = { error: null };
-    }
-
     public static getDerivedStateFromError(error: Error): ErrorBoundaryState {
         return { error };
     }
 
+    public override state: ErrorBoundaryState = { error: null };
+
     public override componentDidCatch(error: Error, info: ErrorInfo): void {
         // Surface to the console so the stack isn't lost; the UI shows the message.
+        // eslint-disable-next-line no-console -- deliberate operator-facing surface so a caught render error keeps its stack
         console.error("[cirrus-dashboard] panel error", error, info.componentStack);
     }
 
-    private readonly reset = (): void => {
+    public readonly reset = (): void => {
         this.setState({ error: null });
     };
 
     public override render(): ReactNode {
+        const { children, label } = this.props;
         const { error } = this.state;
 
         if (error === null) {
-            return this.props.children;
+            return <>{children}</>;
         }
 
         return (
             <div data-testid="dash-error-boundary" role="alert" style={CONTAINER_STYLE}>
-                <strong>{this.props.label === undefined ? "Something went wrong" : `${this.props.label} failed`}</strong>
+                <strong>{label === undefined ? "Something went wrong" : `${label} failed`}</strong>
                 <pre data-testid="dash-error-message" style={MESSAGE_STYLE}>
                     {error.message}
                 </pre>

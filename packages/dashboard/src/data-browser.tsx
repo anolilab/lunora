@@ -8,12 +8,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TableInfo, TablePage, WriteRowResult } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
-import { adminRef, callOptions } from "./internal.js";
+import { adminRef, callOptions, fireAndForget } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
-import { useDebounced } from "./use-debounced.js";
-import { useLiveAdmin } from "./use-live-admin.js";
+import useDebounced from "./use-debounced.js";
+import useLiveAdmin from "./use-live-admin.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 
 interface DataBrowserProps {
@@ -85,15 +85,15 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
         }
     }
 
-    const document_: Record<string, unknown> = {};
+    const fields: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(row)) {
         if (key !== "id" && key !== "__id__" && key !== "_id" && key !== "_creationTime" && key !== "__doc__") {
-            document_[key] = value;
+            fields[key] = value;
         }
     }
 
-    return document_;
+    return fields;
 };
 
 /**
@@ -122,7 +122,7 @@ const formatCell = (value: unknown): string => {
             return value.toString();
         }
         default: {
-            return JSON.stringify(value) ?? "";
+            return JSON.stringify(value);
         }
     }
 };
@@ -142,20 +142,19 @@ const RefCell = ({
     id: string;
     onNavigate: (target: string, id: string) => void;
     target: string;
-}): ReactElement => (
-        <button
-            data-testid={`db-ref-${column}`}
-            onClick={() => {
-                onNavigate(target, id);
-            }}
-            title={`Open ${target} ${id}`}
-            type="button"
-        >
+}): ReactElement => {
+    const onClick = useCallback((): void => {
+        onNavigate(target, id);
+    }, [onNavigate, target, id]);
+
+    return (
+        <button data-testid={`db-ref-${column}`} onClick={onClick} title={`Open ${target} ${id}`} type="button">
             {id}
 {" "}
 ↗
         </button>
-);
+    );
+};
 
 /** The header glyph for a column given react-table's sort state: ` ▲`, ` ▼`, or empty. */
 const sortIndicator = (sorted: "asc" | "desc" | false): string => {
@@ -241,15 +240,19 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
     );
 
     const fetchPage = useCallback(
-        async (shard: string, table: string, nextOffset: number, search: string): Promise<void> => {
+        async (shard: string, table: string, nextOffset: number, searchQuery: string): Promise<void> => {
             setPageError(null);
 
             try {
-                const result = (await client.query(READ_TABLE_PAGE, { limit: pageSize, offset: nextOffset, search, table }, callOptions(shard))) as TablePage;
+                const result = (await client.query(
+                    READ_TABLE_PAGE,
+                    { limit: pageSize, offset: nextOffset, search: searchQuery, table },
+                    callOptions(shard),
+                )) as TablePage;
 
                 setPage(result);
                 setOffset(nextOffset);
-                setLoaded({ offset: nextOffset, search, shard, table });
+                setLoaded({ offset: nextOffset, search: searchQuery, shard, table });
             } catch (error) {
                 setPage(null);
                 setPageError((error as Error).message);
@@ -261,7 +264,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
     // Initial load only. Subsequent reloads are driven by the "Load tables"
     // button so typing a shard key doesn't fire a request per keystroke.
     useEffect(() => {
-        void fetchTables(initialShardKey ?? "");
+        fireAndForget(fetchTables(initialShardKey ?? ""));
     }, [fetchTables, initialShardKey]);
 
     // Live channel: while toggled on, the server re-pushes the loaded window
@@ -275,7 +278,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         loaded?.shard ?? "",
         (result) => {
             setPageError(null);
-            setLiveError(null);
+            setLiveError(undefined);
             setPage(result as TablePage);
         },
         live && loaded !== null,
@@ -292,7 +295,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         loaded?.shard ?? "",
         (result) => {
             setTablesError(null);
-            setLiveError(null);
+            setLiveError(undefined);
             setTables(result as TableInfo[]);
         },
         live && loaded !== null,
@@ -305,7 +308,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
             setSorting([]);
             setFilter("");
             setSelectedTable(table);
-            void fetchPage(shardKey, table, 0, "");
+            fireAndForget(fetchPage(shardKey, table, 0, ""));
         },
         [fetchPage, shardKey],
     );
@@ -320,7 +323,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
             setFilter(id);
             // Seed the page immediately with the search applied; the debounced
             // effect would otherwise fire a second time with the same value.
-            void fetchPage(shardKey, targetTable, 0, id);
+            fireAndForget(fetchPage(shardKey, targetTable, 0, id));
         },
         [fetchPage, shardKey],
     );
@@ -331,7 +334,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                 return;
             }
 
-            void fetchPage(shardKey, selectedTable, Math.max(0, nextOffset), search);
+            fireAndForget(fetchPage(shardKey, selectedTable, Math.max(0, nextOffset), search));
         },
         [fetchPage, search, selectedTable, shardKey],
     );
@@ -345,7 +348,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
             return;
         }
 
-        void fetchPage(shardKey, selectedTable, 0, search);
+        fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
     }, [search, selectedTable, shardKey, loaded, fetchPage]);
 
     // Issue a writeRow op then reload the current page so the change shows. A
@@ -358,11 +361,11 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
 
             setWriteError(null);
 
-            let document_: Record<string, unknown> | undefined;
+            let parsedDocument: Record<string, unknown> | undefined;
 
             if (op !== "delete") {
                 try {
-                    document_ = documentText === undefined || documentText.trim() === "" ? {} : (JSON.parse(documentText) as Record<string, unknown>);
+                    parsedDocument = documentText === undefined || documentText.trim() === "" ? {} : (JSON.parse(documentText) as Record<string, unknown>);
                 } catch (error) {
                     setWriteError(`Invalid JSON: ${(error as Error).message}`);
 
@@ -371,7 +374,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
             }
 
             try {
-                (await client.query(WRITE_ROW, { doc: document_, id: id ?? undefined, op, table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
+                (await client.query(WRITE_ROW, { doc: parsedDocument, id: id ?? undefined, op, table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
                 setEditing(null);
                 await fetchPage(shardKey, selectedTable, offset, search);
             } catch (error) {
@@ -399,14 +402,14 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
 
             return {
                 accessorFn: (row: TableRow) => row[column],
-                cell: (info) => {
+                cell: (info): ReactElement => {
                     const value = info.getValue();
 
                     if (target !== undefined && (typeof value === "string" || typeof value === "number") && String(value) !== "") {
                         return <RefCell column={column} id={String(value)} onNavigate={navigateToRef} target={target} />;
                     }
 
-                    return formatCell(value);
+                    return <>{formatCell(value)}</>;
                 },
                 header: references?.[column] === undefined ? column : `${column} →`,
                 id: column,
@@ -485,6 +488,59 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
 
+    const loadTables = useCallback((): void => {
+        fireAndForget(fetchTables(shardKey));
+    }, [fetchTables, shardKey]);
+
+    const showTable = useCallback((): void => {
+        setViewMode("table");
+    }, []);
+
+    const showJson = useCallback((): void => {
+        setViewMode("json");
+    }, []);
+
+    const refreshPage = useCallback((): void => {
+        goToPage(offset);
+    }, [goToPage, offset]);
+
+    const onFilterChange = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
+        setFilter(event.target.value);
+    }, []);
+
+    const addRow = useCallback((): void => {
+        setWriteError(null);
+        setEditing({ docText: "{}", id: "" });
+    }, []);
+
+    const onEditorDocumentChange = useCallback(
+        (event: React.ChangeEvent<HTMLTextAreaElement>): void => {
+            setEditing((current) => (current === null ? current : { docText: event.target.value, id: current.id }));
+        },
+        [],
+    );
+
+    const saveEdit = useCallback((): void => {
+        if (editing === null) {
+            return;
+        }
+
+        fireAndForget(writeRow(editing.id === "" ? "insert" : "patch", editing.id === "" ? null : editing.id, editing.docText));
+    }, [editing, writeRow]);
+
+    const cancelEdit = useCallback((): void => {
+        setEditing(null);
+        setWriteError(null);
+    }, []);
+
+    const goPrevious = useCallback((): void => {
+        goToPage(offset - pageSize);
+    }, [goToPage, offset, pageSize]);
+
+    const goNext = useCallback((): void => {
+        goToPage(offset + pageSize);
+    }, [goToPage, offset, pageSize]);
+
     const renderRow = (virtualRow: { index: number; size: number; start: number }): ReactElement => {
         const tableRow = tableRows[virtualRow.index] as Row<TableRow>;
         const { original } = tableRow;
@@ -509,6 +565,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                         <button
                             data-testid={`db-edit-${key}`}
                             disabled={id === null}
+                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the original row; admin dev-tool render path
                             onClick={() => {
                                 setWriteError(null);
                                 setEditing({ docText: JSON.stringify(rowDocument(original), null, 2), id });
@@ -520,8 +577,9 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                         <ConfirmButton
                             confirmLabel="Delete?"
                             disabled={id === null}
+                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the row id; admin dev-tool render path
                             onConfirm={() => {
-                                void writeRow("delete", id);
+                                fireAndForget(writeRow("delete", id));
                             }}
                             testId={`db-delete-${key}`}
                         >
@@ -537,13 +595,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         <div data-testid="cirrus-data-browser">
             <div>
                 <ShardInput onChange={setShardKey} testId="db-shard-input" value={shardKey} />
-                <button
-                    data-testid="db-load-tables"
-                    onClick={() => {
-                        void fetchTables(shardKey);
-                    }}
-                    type="button"
-                >
+                <button data-testid="db-load-tables" onClick={loadTables} type="button">
                     Load tables
                 </button>
             </div>
@@ -561,6 +613,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                             <button
                                 aria-pressed={selectedTable === tableInfo.name}
                                 data-testid={`db-table-${tableInfo.name}`}
+                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over tableInfo.name; admin dev-tool render path
                                 onClick={() => {
                                     selectTable(tableInfo.name);
                                 }}
@@ -586,54 +639,19 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
             {page !== null && (
                 <div data-testid="db-page">
                     <div data-testid="db-view-toggle">
-                        <button
-                            aria-pressed={viewMode === "table"}
-                            data-testid="db-view-table"
-                            onClick={() => {
-                                setViewMode("table");
-                            }}
-                            type="button"
-                        >
+                        <button aria-pressed={viewMode === "table"} data-testid="db-view-table" onClick={showTable} type="button">
                             Table
                         </button>
-                        <button
-                            aria-pressed={viewMode === "json"}
-                            data-testid="db-view-json"
-                            onClick={() => {
-                                setViewMode("json");
-                            }}
-                            type="button"
-                        >
+                        <button aria-pressed={viewMode === "json"} data-testid="db-view-json" onClick={showJson} type="button">
                             JSON
                         </button>
-                        <button
-                            data-testid="db-refresh"
-                            onClick={() => {
-                                goToPage(offset);
-                            }}
-                            type="button"
-                        >
+                        <button data-testid="db-refresh" onClick={refreshPage} type="button">
                             Refresh
                         </button>
                         <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="db" />
-                        <input
-                            aria-label="Search rows"
-                            data-testid="db-filter"
-                            onChange={(event) => {
-                                setFilter(event.target.value);
-                            }}
-                            placeholder="search table…"
-                            value={filter}
-                        />
+                        <input aria-label="Search rows" data-testid="db-filter" onChange={onFilterChange} placeholder="search table…" value={filter} />
                         {editable && (
-                            <button
-                                data-testid="db-add-row"
-                                onClick={() => {
-                                    setWriteError(null);
-                                    setEditing({ docText: "{}", id: "" });
-                                }}
-                                type="button"
-                            >
+                            <button data-testid="db-add-row" onClick={addRow} type="button">
                                 Add row
                             </button>
                         )}
@@ -641,31 +659,11 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
 
                     {editable && editing !== null && (
                         <div data-testid="db-editor">
-                            <textarea
-                                aria-label="Row document JSON"
-                                data-testid="db-editor-doc"
-                                onChange={(event) => {
-                                    setEditing({ docText: event.target.value, id: editing.id });
-                                }}
-                                value={editing.docText}
-                            />
-                            <button
-                                data-testid="db-editor-save"
-                                onClick={() => {
-                                    void writeRow(editing.id === "" ? "insert" : "patch", editing.id === "" ? null : editing.id, editing.docText);
-                                }}
-                                type="button"
-                            >
+                            <textarea aria-label="Row document JSON" data-testid="db-editor-doc" onChange={onEditorDocumentChange} value={editing.docText} />
+                            <button data-testid="db-editor-save" onClick={saveEdit} type="button">
                                 Save
                             </button>
-                            <button
-                                data-testid="db-editor-cancel"
-                                onClick={() => {
-                                    setEditing(null);
-                                    setWriteError(null);
-                                }}
-                                type="button"
-                            >
+                            <button data-testid="db-editor-cancel" onClick={cancelEdit} type="button">
                                 Cancel
                             </button>
                         </div>
@@ -705,25 +703,11 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                     {viewMode === "json" && <pre data-testid="db-json">{JSON.stringify(page.rows, null, 2)}</pre>}
 
                     <div>
-                        <button
-                            data-testid="db-prev"
-                            disabled={!hasPrevious}
-                            onClick={() => {
-                                goToPage(offset - pageSize);
-                            }}
-                            type="button"
-                        >
+                        <button data-testid="db-prev" disabled={!hasPrevious} onClick={goPrevious} type="button">
                             Previous
                         </button>
                         <span data-testid="db-page-info">{`${rangeStart.toString()}-${rangeEnd.toString()} of ${total.toString()}`}</span>
-                        <button
-                            data-testid="db-next"
-                            disabled={!hasNext}
-                            onClick={() => {
-                                goToPage(offset + pageSize);
-                            }}
-                            type="button"
-                        >
+                        <button data-testid="db-next" disabled={!hasNext} onClick={goNext} type="button">
                             Next
                         </button>
                     </div>

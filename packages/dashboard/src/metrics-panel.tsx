@@ -4,13 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ShardMetrics } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
-import { adminRef, callOptions, errorMessage, formatBytes } from "./internal.js";
+import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import type { ShardMetricsResult } from "./metrics-aggregate.js";
 import { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate.js";
 import { loadRecentShards, recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
-import { useLiveAdmin } from "./use-live-admin.js";
+import useLiveAdmin from "./use-live-admin.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 
 interface MetricsPanelProps {
@@ -124,7 +124,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     const applySample = useCallback(
         (next: ShardMetrics): void => {
             setError(null);
-            setLiveError(null);
+            setLiveError(undefined);
             setMetrics(next);
 
             const previous = lastRequestsRef.current;
@@ -179,7 +179,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     );
 
     useEffect(() => {
-        void refresh(initialShardKey ?? "");
+        fireAndForget(refresh(initialShardKey ?? ""));
     }, [refresh, initialShardKey]);
 
     // Live channel: while toggled on, each server push folds in like a refresh.
@@ -238,38 +238,31 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     const errorRate = metrics === null || metrics.requests === 0 ? "—" : `${((metrics.errors / metrics.requests) * 100).toFixed(1)}%`;
     const currentDelta = history.length > 0 ? (history.at(-1) as number) : 0;
 
+    const refreshCurrent = useCallback((): void => {
+        fireAndForget(refresh(shardKey));
+    }, [refresh, shardKey]);
+
+    const runAggregate = useCallback((): void => {
+        fireAndForget(aggregateAll());
+    }, [aggregateAll]);
+
+    const clearAggregate = useCallback((): void => {
+        setShardResults(null);
+    }, []);
+
     return (
         <div data-testid="cirrus-metrics">
             <div>
                 <ShardInput onChange={setShardKey} testId="mt-shard-input" value={shardKey} />
-                <button
-                    data-testid="mt-refresh"
-                    onClick={() => {
-                        void refresh(shardKey);
-                    }}
-                    type="button"
-                >
+                <button data-testid="mt-refresh" onClick={refreshCurrent} type="button">
                     Refresh
                 </button>
                 <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="mt" />
-                <button
-                    data-testid="mt-aggregate"
-                    disabled={aggregating}
-                    onClick={() => {
-                        void aggregateAll();
-                    }}
-                    type="button"
-                >
+                <button data-testid="mt-aggregate" disabled={aggregating} onClick={runAggregate} type="button">
                     {aggregating ? "Aggregating…" : "All shards"}
                 </button>
                 {shardResults !== null && (
-                    <button
-                        data-testid="mt-aggregate-clear"
-                        onClick={() => {
-                            setShardResults(null);
-                        }}
-                        type="button"
-                    >
+                    <button data-testid="mt-aggregate-clear" onClick={clearAggregate} type="button">
                         Hide
                     </button>
                 )}

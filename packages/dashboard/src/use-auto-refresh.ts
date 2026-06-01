@@ -15,7 +15,7 @@ export const DEFAULT_AUTO_REFRESH_MS = 5000;
  * fresh closure each render doesn't reset the interval; only `enabled`/`intervalMs`
  * do. The interval is cleared on disable and unmount.
  */
-export function useAutoRefresh(onTick: () => void, enabled: boolean, intervalMs: number = DEFAULT_AUTO_REFRESH_MS): void {
+export const useAutoRefresh = (onTick: () => void, enabled: boolean, intervalMs: number = DEFAULT_AUTO_REFRESH_MS): void => {
     const tickRef = useRef(onTick);
 
     tickRef.current = onTick;
@@ -26,9 +26,9 @@ export function useAutoRefresh(onTick: () => void, enabled: boolean, intervalMs:
         }
 
         const id = setInterval(() => {
-            const document_ = (globalThis as { document?: { hidden?: boolean } }).document;
+            const globalDocument = (globalThis as { document?: { hidden?: boolean } }).document;
 
-            if (document_?.hidden === true) {
+            if (globalDocument?.hidden === true) {
                 return;
             }
 
@@ -39,4 +39,4 @@ export function useAutoRefresh(onTick: () => void, enabled: boolean, intervalMs:
             clearInterval(id);
         };
     }, [enabled, intervalMs]);
-}
+};

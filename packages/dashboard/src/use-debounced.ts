@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
  * stable for `delayMs`. Used so a per-keystroke search box drives at most one
  * server round-trip per pause, instead of one request per character.
  */
-export function useDebounced<T>(value: T, delayMs = 300): T {
+const useDebounced = <T>(value: T, delayMs = 300): T => {
     const [debounced, setDebounced] = useState<T>(value);
 
     useEffect(() => {
@@ -19,4 +19,6 @@ export function useDebounced<T>(value: T, delayMs = 300): T {
     }, [value, delayMs]);
 
     return debounced;
-}
+};
+
+export default useDebounced;

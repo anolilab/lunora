@@ -3,7 +3,7 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import { errorMessage, formatBytes } from "./internal.js";
+import { errorMessage, fireAndForget, formatBytes } from "./internal.js";
 
 interface FileBrowserProps {
     /** Object-key prefix the browser filters by on first load. */
@@ -41,7 +41,7 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
             try {
                 const page = await client.listStorageObjects({ cursor, limit: pageSize, prefix: searchPrefix });
 
-                setObjects((previous) => append && previous !== null ? [...previous, ...page.objects] : page.objects);
+                setObjects((previous) => (append && previous !== null ? [...previous, ...page.objects] : page.objects));
                 setNextCursor(page.cursor);
             } catch (error_) {
                 if (!append) {
@@ -57,8 +57,20 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     );
 
     useEffect(() => {
-        void list(initialPrefix ?? "", undefined, false);
+        fireAndForget(list(initialPrefix ?? "", undefined, false));
     }, [list, initialPrefix]);
+
+    const onPrefixChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+        setPrefix(event.target.value);
+    }, []);
+
+    const listFirst = useCallback((): void => {
+        fireAndForget(list(prefix, undefined, false));
+    }, [list, prefix]);
+
+    const loadMore = useCallback((): void => {
+        fireAndForget(list(prefix, nextCursor, true));
+    }, [list, prefix, nextCursor]);
 
     return (
         <div data-testid="cirrus-file-browser">
@@ -66,20 +78,11 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                 <input
                     aria-label="Key prefix"
                     data-testid="fb-prefix-input"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                        setPrefix(event.target.value);
-                    }}
+                    onChange={onPrefixChange}
                     placeholder="key prefix (optional)"
                     value={prefix}
                 />
-                <button
-                    data-testid="fb-list"
-                    disabled={busy}
-                    onClick={() => {
-                        void list(prefix, undefined, false);
-                    }}
-                    type="button"
-                >
+                <button data-testid="fb-list" disabled={busy} onClick={listFirst} type="button">
                     List
                 </button>
             </div>
@@ -114,14 +117,7 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
             )}
 
             {nextCursor !== undefined && (
-                <button
-                    data-testid="fb-next"
-                    disabled={busy}
-                    onClick={() => {
-                        void list(prefix, nextCursor, true);
-                    }}
-                    type="button"
-                >
+                <button data-testid="fb-next" disabled={busy} onClick={loadMore} type="button">
                     Load more
                 </button>
             )}

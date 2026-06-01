@@ -1,14 +1,14 @@
 import { CirrusClient } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ConnectionBadge } from "./connection-badge.js";
+import ConnectionBadge from "./connection-badge.js";
 import type { DashboardProps } from "./dashboard.js";
 import { Dashboard } from "./dashboard.js";
 import { ErrorBoundary } from "./error-boundary.js";
-import { DashboardStyles } from "./theme.js";
-import { DASHBOARD_ROOT_CLASS } from "./theme-constants.js";
+import DashboardStyles from "./theme.js";
+import DASHBOARD_ROOT_CLASS from "./theme-constants.js";
 import { loadToken, saveToken } from "./token-storage.js";
 
 interface DashboardAppProps {
@@ -92,6 +92,14 @@ export const DashboardApp = ({ adminToken, baseUrl, dashboard }: DashboardAppPro
         [client],
     );
 
+    const onTokenChange = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
+        setToken(event.target.value);
+    }, []);
+
+    const clearToken = useCallback((): void => {
+        setToken("");
+    }, []);
+
     return (
         <div className={DASHBOARD_ROOT_CLASS} data-testid="cirrus-dashboard-app">
             <DashboardStyles />
@@ -106,22 +114,14 @@ export const DashboardApp = ({ adminToken, baseUrl, dashboard }: DashboardAppPro
                         <input
                             data-testid="dash-app-token"
                             id="dash-app-token"
-                            onChange={(event) => {
-                                setToken(event.target.value);
-                            }}
+                            onChange={onTokenChange}
                             placeholder="CIRRUS_ADMIN_TOKEN"
                             type="password"
                             value={token}
                         />
                     </label>
                     {token !== "" && (
-                        <button
-                            data-testid="dash-app-clear-token"
-                            onClick={() => {
-                                setToken("");
-                            }}
-                            type="button"
-                        >
+                        <button data-testid="dash-app-clear-token" onClick={clearToken} type="button">
                             Clear
                         </button>
                     )}
@@ -129,7 +129,13 @@ export const DashboardApp = ({ adminToken, baseUrl, dashboard }: DashboardAppPro
                 </header>
 
                 <ErrorBoundary label="Dashboard">
-                    <Dashboard {...dashboard} />
+                    <Dashboard
+                        dataEditable={dashboard?.dataEditable}
+                        functions={dashboard?.functions}
+                        initialShardKey={dashboard?.initialShardKey}
+                        scheduledCancel={dashboard?.scheduledCancel}
+                        scheduledLoad={dashboard?.scheduledLoad}
+                    />
                 </ErrorBoundary>
             </CirrusProvider>
         </div>
