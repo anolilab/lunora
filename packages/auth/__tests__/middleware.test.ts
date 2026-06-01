@@ -96,7 +96,9 @@ describe("withAuthPlugins", () => {
     });
 
     test("installs `authApi` onto ctx as the auth instance's api surface", async () => {
-        expect.assertions(3);
+        // `expectTypeOf` below is a compile-time assertion and does not count
+        // toward the runtime assertion tally — only the two `expect()` calls do.
+        expect.assertions(2);
 
         const middleware = withAuthPlugins(auth);
         const ctx = await runMiddleware<MockHandlerCtx>(middleware as unknown as Parameters<typeof runMiddleware>[0], {});
@@ -136,7 +138,9 @@ describe("withAuthPlugins", () => {
     });
 
     test("composing after another middleware preserves the upstream ctx fields", async () => {
-        expect.assertions(3);
+        // The `expectTypeOf` below is compile-time only and is not counted in
+        // the runtime assertion tally — only the two `expect()` calls are.
+        expect.assertions(2);
 
         // Pretend an upstream middleware has already installed `userId` on
         // the ctx. The middleware under test must layer authApi on top
