@@ -428,7 +428,7 @@ describe("shardDO admin row writes", () => {
     const rowCount = (): number => Number(db.raw(`SELECT COUNT(*) AS c FROM "users"`)[0]?.["c"] ?? 0);
 
     test("inserts a row and returns its assigned id", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
