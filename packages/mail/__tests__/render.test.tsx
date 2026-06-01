@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { createMailer } from "../src/create-mailer.js";
 import { renderEmail } from "../src/render.js";
@@ -14,7 +14,7 @@ const WelcomeEmail = ({ name }: { name: string }) => (
 );
 
 describe("renderEmail", () => {
-    test("renders a React element to HTML and plain text", async () => {
+    it("renders a React element to HTML and plain text", async () => {
         expect.assertions(5);
 
         const result = await renderEmail(<WelcomeEmail name="Alice" />);
@@ -29,7 +29,7 @@ describe("renderEmail", () => {
         expect(result.text).not.toContain("<h1>");
     });
 
-    test("createMailer.send() renders react templates before handing off to transport", async () => {
+    it("createMailer.send() renders react templates before handing off to transport", async () => {
         expect.assertions(3);
 
         const captured: SendPayload[] = [];

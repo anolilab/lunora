@@ -8,11 +8,12 @@ import type { RateLimitReason } from "./types.js";
  * — the latter lets a procedure bind a durable, ORM-backed limiter at call time
  * (e.g. `(ctx) => new RateLimiter({ config, store: createDbStore({ db: ctx.db }) })`).
  */
-export type LimiterResolver<Ctx> = ((ctx: Ctx) => Promise<RateLimiter> | RateLimiter) | RateLimiter;
+type LimiterResolver<Ctx> = ((ctx: Ctx) => Promise<RateLimiter> | RateLimiter) | RateLimiter;
 
-export interface RateLimitMiddlewareOptions<Ctx> {
+interface RateLimitMiddlewareOptions<Ctx> {
     /** Units to consume per call. Defaults to `1`. */
     count?: number;
+
     /**
      * Behavior when the limiter itself throws (store unavailable, etc).
      * Defaults to `false` (fail closed: deny the request with a 503). Set to
@@ -36,7 +37,7 @@ const defaultMessage = (name: string, reason: RateLimitReason, retryAfter: numbe
         return `request denied for "${name}"`;
     }
 
-    return retryAfter === undefined ? `rate limit "${name}" exceeded` : `rate limit "${name}" exceeded; retry after ${retryAfter}ms`;
+    return retryAfter === undefined ? `rate limit "${name}" exceeded` : `rate limit "${name}" exceeded; retry after ${String(retryAfter)}ms`;
 };
 
 /**
@@ -53,7 +54,7 @@ const defaultMessage = (name: string, reason: RateLimitReason, retryAfter: numbe
  * Pass `failOpen: true` to swallow the error and admit the request instead —
  * appropriate only when degraded availability is preferable to refusal.
  */
-export const rateLimit =
+const rateLimit =
     <Ctx>(limiter: LimiterResolver<Ctx>, name: string, options: RateLimitMiddlewareOptions<Ctx> = {}): Middleware<Ctx, Ctx> =>
     async ({ ctx, next }) => {
         let status;
@@ -95,3 +96,6 @@ export const rateLimit =
 
         return next();
     };
+
+export type { LimiterResolver, RateLimitMiddlewareOptions };
+export { rateLimit };

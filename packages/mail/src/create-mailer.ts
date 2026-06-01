@@ -43,23 +43,23 @@ const toAddress = (input: string): { email: string; name?: string } => {
         const email = match[2];
 
         if (name.length > MAX_NAME_LENGTH) {
-            throw new Error(`@cirrus/mail: address name must be <= ${MAX_NAME_LENGTH} characters`);
+            throw new Error(`@cirrus/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
         }
 
         if (email.length > MAX_EMAIL_LENGTH) {
-            throw new Error(`@cirrus/mail: address email must be <= ${MAX_EMAIL_LENGTH} characters`);
+            throw new Error(`@cirrus/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
         }
 
         assertSafeAddressField("name", name);
         assertSafeAddressField("email", email);
 
-        return { name, email };
+        return { email, name };
     }
 
     const email = input.trim();
 
     if (email.length > MAX_EMAIL_LENGTH) {
-        throw new Error(`@cirrus/mail: address email must be <= ${MAX_EMAIL_LENGTH} characters`);
+        throw new Error(`@cirrus/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
     }
 
     assertSafeAddressField("email", email);
@@ -74,7 +74,7 @@ const toAddressList = (input: string | string[] | undefined): { email: string; n
 
     const list = Array.isArray(input) ? input : [input];
 
-    return list.map(toAddress);
+    return list.map((entry) => toAddress(entry));
 };
 
 /**
@@ -97,15 +97,15 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
             }
 
             const result = await provider.sendEmail({
-                from: toAddress(payload.from ?? defaultFrom),
-                to: toList.length === 1 ? firstRecipient : toList,
-                subject: payload.subject,
-                html: payload.html,
-                text: payload.text,
-                cc: toAddressList(payload.cc),
                 bcc: toAddressList(payload.bcc),
-                replyTo: payload.replyTo ? toAddress(payload.replyTo) : undefined,
+                cc: toAddressList(payload.cc),
+                from: toAddress(payload.from ?? defaultFrom),
                 headers: payload.headers,
+                html: payload.html,
+                replyTo: payload.replyTo ? toAddress(payload.replyTo) : undefined,
+                subject: payload.subject,
+                text: payload.text,
+                to: toList.length === 1 ? firstRecipient : toList,
             });
 
             if (!result.success || !result.data) {
@@ -177,15 +177,15 @@ export const createMailer = (options: CirrusMailOptions): Mailer => {
         }
 
         return {
-            to: opts.to,
-            subject: opts.subject,
-            from: opts.from ?? options.from,
-            html,
-            text,
-            cc: opts.cc,
             bcc: opts.bcc,
-            replyTo: opts.replyTo,
+            cc: opts.cc,
+            from: opts.from ?? options.from,
             headers: opts.headers,
+            html,
+            replyTo: opts.replyTo,
+            subject: opts.subject,
+            text,
+            to: opts.to,
         };
     };
 
@@ -211,5 +211,5 @@ export const createMailer = (options: CirrusMailOptions): Mailer => {
         return { queued: true };
     };
 
-    return { send, queue };
+    return { queue, send };
 };

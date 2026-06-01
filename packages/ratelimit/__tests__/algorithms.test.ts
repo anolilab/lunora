@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { availableAt, evaluate } from "../src/algorithms.js";
 import type { RateLimitConfig } from "../src/types.js";
@@ -7,10 +7,10 @@ const tokenBucket: RateLimitConfig = { kind: "token bucket", period: 1000, rate:
 const fixedWindow: RateLimitConfig = { kind: "fixed window", period: 1000, rate: 5 };
 const slidingWindow: RateLimitConfig = { kind: "sliding window", period: 1000, rate: 10 };
 
-const consumeOptions = (count: number, now: number, reserve = false) => ({ consume: true, count, now, reserve });
+const consumeOptions = (count: number, now: number, reserve = false) => { return { consume: true, count, now, reserve }; };
 
 describe("token bucket", () => {
-    test("a fresh key starts full", () => {
+    it("a fresh key starts full", () => {
         expect.assertions(2);
 
         const { status, value } = evaluate(tokenBucket, undefined, consumeOptions(1, 0));
@@ -19,7 +19,7 @@ describe("token bucket", () => {
         expect(value).toEqual({ ts: 0, value: 9 });
     });
 
-    test("rejects once tokens are exhausted and reports retryAfter", () => {
+    it("rejects once tokens are exhausted and reports retryAfter", () => {
         expect.assertions(4);
 
         const drained = { ts: 0, value: 0 };
@@ -33,7 +33,7 @@ describe("token bucket", () => {
         expect(value).toBeNull();
     });
 
-    test("refills continuously over elapsed time", () => {
+    it("refills continuously over elapsed time", () => {
         expect.assertions(2);
 
         const drained = { ts: 0, value: 0 };
@@ -44,7 +44,7 @@ describe("token bucket", () => {
         expect(value).toEqual({ ts: 500, value: 2 });
     });
 
-    test("never accrues beyond capacity", () => {
+    it("never accrues beyond capacity", () => {
         expect.assertions(1);
 
         const capped: RateLimitConfig = { capacity: 10, kind: "token bucket", period: 1000, rate: 10 };
@@ -54,7 +54,7 @@ describe("token bucket", () => {
         expect(value).toEqual({ ts: 10_000, value: 10 });
     });
 
-    test("reserve permits a deficit and reports when it clears", () => {
+    it("reserve permits a deficit and reports when it clears", () => {
         expect.assertions(3);
 
         const drained = { ts: 0, value: 0 };
@@ -65,7 +65,7 @@ describe("token bucket", () => {
         expect(value).toEqual({ ts: 0, value: -2 });
     });
 
-    test("reserve still rejects a request larger than capacity", () => {
+    it("reserve still rejects a request larger than capacity", () => {
         expect.assertions(2);
 
         const { status, value } = evaluate(tokenBucket, { ts: 0, value: 0 }, consumeOptions(11, 0, true));
@@ -76,7 +76,7 @@ describe("token bucket", () => {
 });
 
 describe("fixed window", () => {
-    test("grants rate tokens at the window start", () => {
+    it("grants rate tokens at the window start", () => {
         expect.assertions(2);
 
         const { status, value } = evaluate(fixedWindow, undefined, consumeOptions(5, 0));
@@ -85,7 +85,7 @@ describe("fixed window", () => {
         expect(value).toEqual({ ts: 0, value: 0 });
     });
 
-    test("rejects within the window and points retryAfter at the next window", () => {
+    it("rejects within the window and points retryAfter at the next window", () => {
         expect.assertions(2);
 
         const exhausted = { ts: 0, value: 0 };
@@ -95,7 +95,7 @@ describe("fixed window", () => {
         expect(status.retryAfter).toBe(600);
     });
 
-    test("resets at the next window boundary", () => {
+    it("resets at the next window boundary", () => {
         expect.assertions(2);
 
         const exhausted = { ts: 0, value: 0 };
@@ -105,7 +105,7 @@ describe("fixed window", () => {
         expect(value).toEqual({ ts: 1000, value: 3 });
     });
 
-    test("does not roll over unused tokens without an explicit capacity", () => {
+    it("does not roll over unused tokens without an explicit capacity", () => {
         expect.assertions(1);
 
         const leftover = { ts: 0, value: 4 };
@@ -115,7 +115,7 @@ describe("fixed window", () => {
         expect(value).toEqual({ ts: 1000, value: 5 });
     });
 
-    test("rolls leftover tokens forward up to capacity", () => {
+    it("rolls leftover tokens forward up to capacity", () => {
         expect.assertions(1);
 
         const rollover: RateLimitConfig = { capacity: 8, kind: "fixed window", period: 1000, rate: 5 };
@@ -126,7 +126,7 @@ describe("fixed window", () => {
         expect(value).toEqual({ ts: 1000, value: 8 });
     });
 
-    test("aligns windows to the configured start offset", () => {
+    it("aligns windows to the configured start offset", () => {
         expect.assertions(1);
 
         const aligned: RateLimitConfig = { kind: "fixed window", period: 1000, rate: 1, start: 200 };
@@ -136,7 +136,7 @@ describe("fixed window", () => {
         expect(value?.ts).toBe(1200);
     });
 
-    test("reserve borrows against the current window, and the debt is forgiven at the boundary", () => {
+    it("reserve borrows against the current window, and the debt is forgiven at the boundary", () => {
         expect.assertions(4);
 
         const exhausted = { ts: 0, value: 0 };
@@ -155,7 +155,7 @@ describe("fixed window", () => {
 });
 
 describe("sliding window", () => {
-    test("a fresh key admits up to the limit and tracks the count", () => {
+    it("a fresh key admits up to the limit and tracks the count", () => {
         expect.assertions(2);
 
         const { status, value } = evaluate(slidingWindow, undefined, consumeOptions(1, 0));
@@ -164,7 +164,7 @@ describe("sliding window", () => {
         expect(value).toEqual({ prev: 0, ts: 0, value: 1 });
     });
 
-    test("a full previous window suppresses a fresh burst at the boundary", () => {
+    it("a full previous window suppresses a fresh burst at the boundary", () => {
         expect.assertions(2);
 
         // The previous window (ts 0) saw the full 10; at the next window's start the
@@ -177,7 +177,7 @@ describe("sliding window", () => {
         expect(status.retryAfter).toBe(100);
     });
 
-    test("admits once the previous window has decayed enough", () => {
+    it("admits once the previous window has decayed enough", () => {
         expect.assertions(2);
 
         const previousFull = { ts: 0, value: 10 };
@@ -187,7 +187,7 @@ describe("sliding window", () => {
         expect(value).toEqual({ prev: 10, ts: 1000, value: 1 });
     });
 
-    test("weights the previous window by how far it has scrolled out", () => {
+    it("weights the previous window by how far it has scrolled out", () => {
         expect.assertions(2);
 
         // 8 in the previous window, 500ms into the next: estimate 8*0.5 = 4. A burst of
@@ -199,7 +199,7 @@ describe("sliding window", () => {
         expect(status.retryAfter).toBe(125);
     });
 
-    test("a gap of two or more windows resets the estimate", () => {
+    it("a gap of two or more windows resets the estimate", () => {
         expect.assertions(2);
 
         const stale = { ts: 0, value: 10 };
@@ -209,7 +209,7 @@ describe("sliding window", () => {
         expect(value).toEqual({ prev: 0, ts: 3000, value: 10 });
     });
 
-    test("reserve borrows past the limit and reports when the pressure clears", () => {
+    it("reserve borrows past the limit and reports when the pressure clears", () => {
         expect.assertions(3);
 
         const currentFull = { prev: 0, ts: 0, value: 10 };
@@ -222,26 +222,26 @@ describe("sliding window", () => {
 });
 
 describe("availableAt", () => {
-    test("a fresh token bucket reports full capacity", () => {
+    it("a fresh token bucket reports full capacity", () => {
         expect.assertions(1);
 
         expect(availableAt(tokenBucket, undefined, 0)).toEqual({ ts: 0, value: 10 });
     });
 
-    test("token bucket refills toward capacity without consuming", () => {
+    it("token bucket refills toward capacity without consuming", () => {
         expect.assertions(1);
 
         // 500ms accrues 5 tokens on top of the drained 0.
         expect(availableAt(tokenBucket, { ts: 0, value: 0 }, 500)).toEqual({ ts: 500, value: 5 });
     });
 
-    test("token bucket never reports beyond capacity", () => {
+    it("token bucket never reports beyond capacity", () => {
         expect.assertions(1);
 
         expect(availableAt(tokenBucket, { ts: 0, value: 8 }, 10_000)).toEqual({ ts: 10_000, value: 10 });
     });
 
-    test("fixed window reports remaining tokens, resetting at the boundary", () => {
+    it("fixed window reports remaining tokens, resetting at the boundary", () => {
         expect.assertions(2);
 
         // Same window: 2 of 5 left.
@@ -250,14 +250,14 @@ describe("availableAt", () => {
         expect(availableAt(fixedWindow, { ts: 0, value: 0 }, 1000)).toEqual({ ts: 1000, value: 5 });
     });
 
-    test("sliding window reports the remaining allowance under the weighted estimate", () => {
+    it("sliding window reports the remaining allowance under the weighted estimate", () => {
         expect.assertions(1);
 
         // Previous window saw the full 10; 100ms in, estimate is 9, leaving 1.
         expect(availableAt(slidingWindow, { ts: 0, value: 10 }, 1100)).toEqual({ ts: 1000, value: 1 });
     });
 
-    test("sliding window floors the allowance at zero when over the limit", () => {
+    it("sliding window floors the allowance at zero when over the limit", () => {
         expect.assertions(1);
 
         expect(availableAt(slidingWindow, { prev: 0, ts: 0, value: 12 }, 0)).toEqual({ ts: 0, value: 0 });
@@ -265,7 +265,7 @@ describe("availableAt", () => {
 });
 
 describe("check (non-consuming)", () => {
-    test("reports availability without mutating state", () => {
+    it("reports availability without mutating state", () => {
         expect.assertions(2);
 
         const { status, value } = evaluate(tokenBucket, { ts: 0, value: 3 }, { consume: false, count: 2, now: 0, reserve: false });
@@ -274,7 +274,7 @@ describe("check (non-consuming)", () => {
         expect(value).toBeNull();
     });
 
-    test("a sliding-window check never persists", () => {
+    it("a sliding-window check never persists", () => {
         expect.assertions(1);
 
         const { value } = evaluate(slidingWindow, { ts: 0, value: 4 }, { consume: false, count: 1, now: 0, reserve: false });

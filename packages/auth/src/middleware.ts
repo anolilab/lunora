@@ -72,7 +72,7 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  * authorization bypass, not just a missing convenience.
  *
  * Cirrus's procedure context does not currently carry the raw request headers
- * (only the resolved identity — see {@link AuthState} in `@cirrus/server`), so
+ * (only the resolved identity — see `AuthState` in `@cirrus/server`), so
  * this middleware **cannot** pre-bind headers for you and does **not** do so.
  * You MUST pass the inbound `Headers` explicitly into **every** `ctx.authApi.*`
  * call, from a transport that has them — typically an HTTP action:
@@ -101,11 +101,12 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  * `Headers` and authenticate with whatever bearer token your auth instance
  * is configured to honour.
  */
+
 /**
  * Shape of the middleware {@link withAuthPlugins} returns: a callable generic
  * over the incoming ctx so chaining `.use(...)` preserves whatever ctx fields
  * the upstream middleware already installed. Lives as its own interface
- * because TypeScript doesn't allow declaring `const fn: <CtxIn>() => ...` —
+ * because TypeScript doesn't allow declaring `const fn: &lt;CtxIn>() => ...` —
  * the generic must live on a callable type alias or interface.
  */
 export type WithAuthPluginsMiddleware<Auth extends CirrusAuth> = <CtxIn>(options: {
@@ -113,16 +114,16 @@ export type WithAuthPluginsMiddleware<Auth extends CirrusAuth> = <CtxIn>(options
     next: MiddlewareNext<CtxIn>;
 }) => Promise<CirrusAuthApiContext<Auth> & CtxIn>;
 
-export const withAuthPlugins = <Auth extends CirrusAuth>(auth: Auth): WithAuthPluginsMiddleware<Auth> => {
+export const withAuthPlugins = <Auth extends CirrusAuth>(auth: Auth): WithAuthPluginsMiddleware<Auth> =>
     // The callable is generic over CtxIn so `next({ ctx: { authApi } })`
     // returns `CtxIn & { authApi: Auth["api"] }` — fields the upstream
     // middleware installed survive into the downstream chain. Returning the
     // extended ctx (instead of a fresh object) is critical: the structural
     // mirror of `Middleware` says the return value IS the new ctx, so
     // returning anything narrower would drop upstream fields.
-    return async <CtxIn>({ next }: { ctx: CtxIn; next: MiddlewareNext<CtxIn> }): Promise<CirrusAuthApiContext<Auth> & CtxIn> => {
+     async <CtxIn>({ next }: { ctx: CtxIn; next: MiddlewareNext<CtxIn> }): Promise<CirrusAuthApiContext<Auth> & CtxIn> => {
         const extended = await next({ ctx: { authApi: auth.api } });
 
         return extended;
-    };
-};
+    }
+;

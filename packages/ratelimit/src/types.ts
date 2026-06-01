@@ -18,6 +18,7 @@ export interface RateLimitConfig {
     period: number;
     /** Tokens granted per `period`. */
     rate: number;
+
     /**
      * Split a hot limit across N independent sub-buckets to avoid a single
      * contended key/Durable Object. Each shard enforces `rate / shards` (and
@@ -30,6 +31,7 @@ export interface RateLimitConfig {
      * integer — `1` is equivalent to unset.
      */
     shards?: number;
+
     /**
      * Phase offset in epoch milliseconds for windowed algorithms — windows
      * align to `start + n * period`. Ignored by token buckets. Defaults to `0`.
@@ -37,7 +39,7 @@ export interface RateLimitConfig {
     start?: number;
 }
 
-/** A map of limit name to its config, used to construct a {@link RateLimiter}. */
+/** A map of limit name to its config, used to construct a `RateLimiter`. */
 export type RateLimitConfigMap<Names extends string = string> = Record<Names, RateLimitConfig>;
 
 /** Persisted accounting state for one `(name, key)` pair. */
@@ -47,11 +49,13 @@ export interface RateLimitValue {
      * weight the current estimate. Unset for token-bucket / fixed-window.
      */
     prev?: number;
+
     /**
      * Token-bucket: timestamp of the last refill. Fixed/sliding window: start of
      * the window the value belongs to.
      */
     ts: number;
+
     /**
      * Tokens available (token bucket), tokens remaining in the window (fixed
      * window), or requests made in the current window (sliding window).
@@ -60,7 +64,7 @@ export interface RateLimitValue {
     value: number;
 }
 
-/** Outcome of a {@link RateLimiter.limit} / {@link RateLimiter.check} call. */
+/** Outcome of a `RateLimiter.limit` / `RateLimiter.check` call. */
 export interface RateLimitStatus {
     /** Whether the request is permitted. */
     ok: boolean;
@@ -70,19 +74,20 @@ export interface RateLimitStatus {
     retryAfter: number;
 }
 
-/** Per-call options for {@link RateLimiter.limit}. */
+/** Per-call options for `RateLimiter.limit`. */
 export interface RateLimitArgs {
     /** Units to consume. Defaults to `1`. */
     count?: number;
     /** Sub-key isolating the limit (per user/team/IP). Omit for a global limit. */
     key?: string;
+
     /**
      * Permit the request even when capacity is insufficient, reserving future
      * capacity (the stored value goes negative). `retryAfter` then reports when
      * the debt clears. Rejected only when `count` exceeds the bucket capacity.
      */
     reserve?: boolean;
-    /** Throw {@link RateLimitError} instead of returning a failing status. */
+    /** Throw `RateLimitError` instead of returning a failing status. */
     throws?: boolean;
 }
 

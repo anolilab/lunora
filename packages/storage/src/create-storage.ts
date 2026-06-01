@@ -10,6 +10,9 @@ const MAX_LIST_LIMIT = 1000;
 /** Default page size for `list()` — chosen to bound a default call's response shape. */
 const DEFAULT_LIST_LIMIT = 100;
 
+/** Trailing-slash trimmer for `publicBaseUrl`; hoisted to avoid per-call recompilation. */
+const TRAILING_SLASHES_RE = /\/+$/;
+
 /**
  * Reject keys that escape the bucket, contain a path-traversal segment, or
  * exceed R2's size ceiling. Used by every operation that takes a `key` —
@@ -25,7 +28,7 @@ const validateKey = (key: string): void => {
     }
 
     if (key.length > MAX_KEY_LENGTH) {
-        throw new Error(`@cirrus/storage: key exceeds ${MAX_KEY_LENGTH}-byte limit`);
+        throw new Error(`@cirrus/storage: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     if (key.includes("\0")) {
@@ -61,7 +64,7 @@ export const scopeKey = (prefix: string, key: string): string => {
     const composed = `${trimmedPrefix}/${key}`;
 
     if (composed.length > MAX_KEY_LENGTH) {
-        throw new Error(`@cirrus/storage: scoped key exceeds ${MAX_KEY_LENGTH}-byte limit`);
+        throw new Error(`@cirrus/storage: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     return composed;
@@ -87,16 +90,16 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
             const size = body instanceof ArrayBuffer ? body.byteLength : body instanceof Blob ? body.size : undefined;
 
             if (size !== undefined && size > uploadOpts.maxSize) {
-                throw new Error(`@cirrus/storage: body exceeds maxSize (${size} > ${uploadOpts.maxSize})`);
+                throw new Error(`@cirrus/storage: body exceeds maxSize (${String(size)} > ${String(uploadOpts.maxSize)})`);
             }
         }
 
         const object = await options.bucket.put(key, body, {
-            httpMetadata: uploadOpts.contentType ? { contentType: uploadOpts.contentType } : undefined,
             customMetadata: uploadOpts.customMetadata,
+            httpMetadata: uploadOpts.contentType ? { contentType: uploadOpts.contentType } : undefined,
         });
 
-        return { key: object.key, etag: object.etag };
+        return { etag: object.etag, key: object.key };
     };
 
     const download = async (key: string): Promise<R2ObjectBodyLike | null> => {
@@ -120,9 +123,9 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
 
         const requested = listOpts.limit ?? DEFAULT_LIST_LIMIT;
         const limit = Math.min(Math.max(1, Math.floor(requested)), MAX_LIST_LIMIT);
-        const result = await options.bucket.list({ prefix, limit, cursor: listOpts.cursor, delimiter: listOpts.delimiter });
+        const result = await options.bucket.list({ cursor: listOpts.cursor, delimiter: listOpts.delimiter, limit, prefix });
 
-        return { objects: result.objects, cursor: result.cursor };
+        return { cursor: result.cursor, objects: result.objects };
     };
 
     const getUrl = (key: string): string => {
@@ -136,9 +139,9 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         // and getSignedUrl agree on the key representation — validateKey permits
         // URL-significant chars (`?`, `#`, space) that would otherwise corrupt
         // the public URL.
-        const safeKey = key.split("/").map(encodeURIComponent).join("/");
+        const safeKey = key.split("/").map((segment) => encodeURIComponent(segment)).join("/");
 
-        return `${options.publicBaseUrl.replace(/\/+$/, "")}/${safeKey}`;
+        return `${options.publicBaseUrl.replace(TRAILING_SLASHES_RE, "")}/${safeKey}`;
     };
 
     const getSignedUrl = async (key: string, signedOpts: SignedUrlOptions = {}): Promise<string> => {
@@ -154,12 +157,12 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
 
         return buildSignedUrl({
             baseUrl: options.publicBaseUrl,
-            secret: options.signingSecret,
-            key,
             expiresInSeconds: signedOpts.expiresInSeconds,
+            key,
             method: signedOpts.method,
+            secret: options.signingSecret,
         });
     };
 
-    return { upload, download, delete: deleteObject, list, getUrl, getSignedUrl };
+    return { delete: deleteObject, download, getSignedUrl, getUrl, list, upload };
 };

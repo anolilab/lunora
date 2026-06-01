@@ -9,13 +9,13 @@ import { RateLimiter } from "../src/index.js";
  * value. `getValue` (the sibling bench) only does the read; this bench
  * measures the read+write path that's actually on the hot path.
  *
- *  - **token bucket, unsharded** — single bucket; cheapest mode.
- *  - **token bucket, shards=8** — one bucket lookup chosen at random;
- *    the write still touches one shard. Sharding is a read cost, not a
- *    write cost — the bench documents that.
- *  - **fixed window** — different algorithm, same store IO shape.
- *  - **sliding window** — algorithm with the most arithmetic.
- *  - **deny-list hit** — short-circuits before the algorithm runs.
+ * - **token bucket, unsharded** — single bucket; cheapest mode.
+ * - **token bucket, shards=8** — one bucket lookup chosen at random;
+ * the write still touches one shard. Sharding is a read cost, not a
+ * write cost — the bench documents that.
+ * - **fixed window** — different algorithm, same store IO shape.
+ * - **sliding window** — algorithm with the most arithmetic.
+ * - **deny-list hit** — short-circuits before the algorithm runs.
  */
 
 const PERIOD_MS = 1000;

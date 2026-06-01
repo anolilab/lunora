@@ -7,7 +7,7 @@
  * boot a real `SchedulerDO` and drive its alarm via `runDurableObjectAlarm`.
  */
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { TestSchedulerDO } from "./test-worker.js";
 
@@ -18,9 +18,7 @@ interface ScheduleResponseBody {
 
 // `env` is typed via the `Cloudflare.Env` augmentation in `./env.d.ts`.
 
-const newStub = (name = "scheduler-tests"): DurableObjectStub<TestSchedulerDO> => {
-    return env.SCHEDULER.get(env.SCHEDULER.idFromName(name)) as DurableObjectStub<TestSchedulerDO>;
-};
+const newStub = (name = "scheduler-tests"): DurableObjectStub<TestSchedulerDO> => env.SCHEDULER.get(env.SCHEDULER.idFromName(name));
 
 const post = async (stub: DurableObjectStub<TestSchedulerDO>, path: string, body: unknown): Promise<Response> =>
     stub.fetch(`https://scheduler.internal${path}`, {
@@ -30,7 +28,7 @@ const post = async (stub: DurableObjectStub<TestSchedulerDO>, path: string, body
     });
 
 describe("schedulerDO (workerd)", () => {
-    test("/schedule arms the runtime alarm for the earliest pending task", async () => {
+    it("/schedule arms the runtime alarm for the earliest pending task", async () => {
         expect.hasAssertions();
 
         const stub = newStub("alarm-arm");
@@ -53,7 +51,7 @@ describe("schedulerDO (workerd)", () => {
         });
     });
 
-    test("runDurableObjectAlarm() fires due records and reschedules to the next", async () => {
+    it("runDurableObjectAlarm() fires due records and reschedules to the next", async () => {
         expect.hasAssertions();
 
         const stub = newStub("alarm-fire");
@@ -79,21 +77,20 @@ describe("schedulerDO (workerd)", () => {
         });
     });
 
-    test("/cancel removes the record and re-arms the alarm to the next pending entry", async () => {
+    it("/cancel removes the record and re-arms the alarm to the next pending entry", async () => {
         expect.hasAssertions();
 
         const stub = newStub("alarm-cancel");
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
-        const soonerBody = (await (
-            await post(stub, "/schedule", {
-                functionPath: "b",
-                args: {},
-                scheduledFor: sooner,
-                originUrl: "https://app.test",
-            })
-        ).json()) as ScheduleResponseBody;
+        const soonerResponse = await post(stub, "/schedule", {
+            functionPath: "b",
+            args: {},
+            scheduledFor: sooner,
+            originUrl: "https://app.test",
+        });
+        const soonerBody = (await soonerResponse.json()) as ScheduleResponseBody;
 
         await post(stub, "/schedule", { functionPath: "a", args: {}, scheduledFor: later, originUrl: "https://app.test" });
 

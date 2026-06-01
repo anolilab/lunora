@@ -1,5 +1,5 @@
 import type { Middleware, MiddlewareNext } from "@cirrus/server";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { rateLimit } from "../src/middleware.js";
 import { RateLimiter } from "../src/rate-limiter.js";
@@ -36,7 +36,7 @@ const catchError = async (fn: () => Promise<unknown>): Promise<Record<string, un
 const makeLimiter = (denyList?: string[]) => new RateLimiter({ config: { api: { kind: "token bucket", period: 1000, rate: 1 } }, denyList, now: () => 0 });
 
 describe("rateLimit middleware", () => {
-    test("calls next when under the limit", async () => {
+    it("calls next when under the limit", async () => {
         expect.assertions(2);
 
         const middleware = rateLimit<Ctx>(makeLimiter(), "api");
@@ -47,7 +47,7 @@ describe("rateLimit middleware", () => {
         expect(result).toBe(SENTINEL);
     });
 
-    test("throws a structural CirrusError (429) once the limit is hit", async () => {
+    it("throws a structural CirrusError (429) once the limit is hit", async () => {
         expect.assertions(4);
 
         const middleware = rateLimit<Ctx>(makeLimiter(), "api");
@@ -61,7 +61,7 @@ describe("rateLimit middleware", () => {
         expect(error.retryAfter).toBeTypeOf("number");
     });
 
-    test("maps a deny-list hit to FORBIDDEN (403) without a retryAfter", async () => {
+    it("maps a deny-list hit to FORBIDDEN (403) without a retryAfter", async () => {
         expect.assertions(3);
 
         const middleware = rateLimit<Ctx>(makeLimiter(["banned"]), "api", { key: (ctx) => ctx.userId });
@@ -74,7 +74,7 @@ describe("rateLimit middleware", () => {
         expect(error.retryAfter).toBeUndefined();
     });
 
-    test("isolates limits by the derived key", async () => {
+    it("isolates limits by the derived key", async () => {
         expect.assertions(2);
 
         const middleware = rateLimit<Ctx>(makeLimiter(), "api", { key: (ctx) => ctx.userId });
@@ -86,7 +86,7 @@ describe("rateLimit middleware", () => {
         await expect(invoke(middleware, { userId: "bob" })).resolves.toMatchObject({ called: true });
     });
 
-    test("accepts a per-ctx limiter resolver", async () => {
+    it("accepts a per-ctx limiter resolver", async () => {
         expect.assertions(1);
 
         const shared = makeLimiter();
@@ -97,7 +97,7 @@ describe("rateLimit middleware", () => {
         expect(called).toBe(true);
     });
 
-    test("honors a custom message", async () => {
+    it("honors a custom message", async () => {
         expect.assertions(1);
 
         const middleware = rateLimit<Ctx>(makeLimiter(), "api", { message: "slow down" });

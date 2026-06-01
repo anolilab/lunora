@@ -16,9 +16,11 @@ import { join } from "node:path";
 
 import type { Plugin } from "vite";
 import { resolveConfig } from "vite";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { cirrus } from "../src/index.js";
+
+const CIRRUS_WRANGLER_ERROR = /\[cirrus\] wrangler/;
 
 const SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
 
@@ -45,8 +47,7 @@ const VALID_WRANGLER = `{
  * plugin contributes multiple sub-plugins; we model the entrypoint plus one
  * sub-plugin so name-uniqueness assertions are meaningful.
  */
-const tanstackStartLike = (): ReadonlyArray<Plugin> => {
-    return [
+const tanstackStartLike = (): ReadonlyArray<Plugin> => [
         {
             name: "tanstack-start",
             enforce: "pre",
@@ -57,7 +58,6 @@ const tanstackStartLike = (): ReadonlyArray<Plugin> => {
             configureServer() {},
         },
     ];
-};
 
 /**
  * Shape-faithful stand-in for `@react-router/dev/vite`'s plugin. RR7 ships a
@@ -87,7 +87,7 @@ describe("framework-compose", () => {
     });
 
     describe("cirrus() framework composition", () => {
-        test("composes with a TanStack-Start-shaped plugin and resolveConfig succeeds", async () => {
+        it("composes with a TanStack-Start-shaped plugin and resolveConfig succeeds", async () => {
             expect.hasAssertions();
 
             const cirrusPlugins = await cirrus({
@@ -117,7 +117,7 @@ describe("framework-compose", () => {
             expect(new Set(names).size).toBe(names.length);
         });
 
-        test("composes with a React-Router-v7-shaped plugin and resolveConfig succeeds", async () => {
+        it("composes with a React-Router-v7-shaped plugin and resolveConfig succeeds", async () => {
             expect.hasAssertions();
 
             const cirrusPlugins = await cirrus({
@@ -144,7 +144,7 @@ describe("framework-compose", () => {
             expect(new Set(names).size).toBe(names.length);
         });
 
-        test("wranglerValidator configResolved still fires inside a framework pipeline", async () => {
+        it("wranglerValidator configResolved still fires inside a framework pipeline", async () => {
             expect.assertions(1);
 
             // Drop a wrangler.jsonc that is *missing* the SHARD binding — the
@@ -177,7 +177,7 @@ describe("framework-compose", () => {
                     },
                     "serve",
                 ),
-            ).rejects.toThrow(/\[cirrus\] wrangler/);
+            ).rejects.toThrow(CIRRUS_WRANGLER_ERROR);
         });
     });
 });

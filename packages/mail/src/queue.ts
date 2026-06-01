@@ -13,17 +13,19 @@ export interface QueuedSend {
     to: string | string[];
 }
 
-export const toQueuedPayload = (opts: QueuedSend): QueuedSend => ({
-    to: opts.to,
-    subject: opts.subject,
-    from: opts.from,
-    html: opts.html,
-    text: opts.text,
-    cc: opts.cc,
+export const toQueuedPayload = (opts: QueuedSend): QueuedSend => {
+ return {
     bcc: opts.bcc,
-    replyTo: opts.replyTo,
+    cc: opts.cc,
+    from: opts.from,
     headers: opts.headers,
-});
+    html: opts.html,
+    replyTo: opts.replyTo,
+    subject: opts.subject,
+    text: opts.text,
+    to: opts.to,
+};
+};
 
 /**
  * Helper used by Queue consumers: rehydrate a `QueuedSend` payload and forward

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { codegenPlugin } from "../src/codegen-plugin.js";
 import type { ResolvedCirrusPluginOptions } from "../src/types.js";
@@ -51,7 +51,8 @@ const writeFixture = (root: string): void => {
     writeFileSync(join(root, "cirrus", "messages.ts"), MESSAGES_SOURCE, "utf8");
 };
 
-const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => ({
+const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => {
+ return {
     cloudflare: false,
     dashboard: false,
     generatedDir: "cirrus/_generated",
@@ -59,7 +60,8 @@ const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => ({
     projectRoot,
     schemaDir: "cirrus",
     validateWrangler: false,
-});
+};
+};
 
 describe("codegen-plugin", () => {
     beforeEach(() => {
@@ -71,7 +73,7 @@ describe("codegen-plugin", () => {
     });
 
     describe("codegenPlugin", () => {
-        test("buildStart runs codegen and emits the three generated files", () => {
+        it("buildStart runs codegen and emits the three generated files", () => {
             expect.assertions(10);
 
             writeFixture(workdir);
@@ -83,7 +85,7 @@ describe("codegen-plugin", () => {
 
             // Vite's buildStart is invoked with a rollup-style context. We pass `undefined`
             // because our implementation doesn't touch it.
-            (hook as (this: unknown) => void).call(undefined as unknown);
+            (hook as (this: unknown) => void).call(undefined);
 
             const generatedDirectory = join(workdir, "cirrus", "_generated");
 
@@ -104,7 +106,7 @@ describe("codegen-plugin", () => {
             expect(dataModel).toContain("export interface Doc_users");
         });
 
-        test("buildStart logs a warning when schema.ts is missing (does not crash)", () => {
+        it("buildStart logs a warning when schema.ts is missing (does not crash)", () => {
             expect.assertions(2);
 
             const warnings: string[] = [];
@@ -120,7 +122,7 @@ describe("codegen-plugin", () => {
             try {
                 const plugin = codegenPlugin(makeOptions(workdir));
 
-                (plugin.buildStart as (this: unknown) => void).call(undefined as unknown);
+                (plugin.buildStart as (this: unknown) => void).call(undefined);
 
                 expect(warnings.some((warning) => warning.includes("schema.ts not found"))).toBe(true);
                 expect(errors).toHaveLength(0);
@@ -132,7 +134,7 @@ describe("codegen-plugin", () => {
             }
         });
 
-        test("plugin exposes the expected name and configureServer hook", () => {
+        it("plugin exposes the expected name and configureServer hook", () => {
             expect.assertions(2);
 
             const plugin = codegenPlugin(makeOptions(workdir));

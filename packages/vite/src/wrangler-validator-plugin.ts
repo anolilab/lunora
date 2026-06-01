@@ -25,7 +25,6 @@ const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Err
  */
 export const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
     return {
-        name: "cirrus:wrangler-validator",
         configResolved() {
             const result = validateWranglerProject({
                 projectRoot: options.projectRoot,
@@ -53,5 +52,6 @@ export const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): P
                 throw formatError(result.wranglerPath, result.problems);
             }
         },
+        name: "cirrus:wrangler-validator",
     };
 };

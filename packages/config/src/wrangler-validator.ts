@@ -3,13 +3,13 @@
  * (`@cirrus/vite`) and the CLI (`@cirrus/cli`).
  *
  * Two entry points are provided:
- *  - `validateWranglerConfig(wrangler, schemaInfo)` — pure: takes a parsed
- *    object plus an optional schema descriptor and returns a structured
- *    `{ valid, errors, warnings }` result.
- *  - `validateWranglerProject({ projectRoot, schemaDir })` — file-system
- *    aware: locates `wrangler.jsonc`/`wrangler.json`, parses it, discovers
- *    the project's schema, and returns the existing
- *    `{ problems, wranglerPath }` shape kept for backward compatibility.
+ * - `validateWranglerConfig(wrangler, schemaInfo)` — pure: takes a parsed
+ * object plus an optional schema descriptor and returns a structured
+ * `{ valid, errors, warnings }` result.
+ * - `validateWranglerProject({ projectRoot, schemaDir })` — file-system
+ * aware: locates `wrangler.jsonc`/`wrangler.json`, parses it, discovers
+ * the project's schema, and returns the existing
+ * `{ problems, wranglerPath }` shape kept for backward compatibility.
  */
 import { existsSync, readFileSync } from "node:fs";
 
@@ -20,16 +20,19 @@ import { Project } from "ts-morph";
 
 import { join } from "./path.js";
 
-export const REQUIRED_COMPATIBILITY_DATE: string = "2026-04-07";
+const REQUIRED_COMPATIBILITY_DATE: string = "2026-04-07";
 
-export const REQUIRED_FLAG: string = "web_socket_auto_reply_to_close";
+const REQUIRED_FLAG: string = "web_socket_auto_reply_to_close";
+
+// Hoisted to module scope so the literal isn't re-compiled on every call.
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 interface WranglerDurableObjectBinding {
     class_name?: string;
     name?: string;
 }
 
-export interface WranglerConfig {
+interface WranglerConfig {
     compatibility_date?: string;
     compatibility_flags?: ReadonlyArray<string>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
@@ -38,14 +41,14 @@ export interface WranglerConfig {
     vectorize?: ReadonlyArray<{ binding?: string; index_name?: string }>;
 }
 
-export interface SchemaInfo {
+interface SchemaInfo {
     /** Whether the cirrus schema declares any `.global()` table. */
     hasGlobalTable: boolean;
     /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
     vectorIndexNames?: ReadonlyArray<string>;
 }
 
-export interface WranglerValidationReport {
+interface WranglerValidationReport {
     errors: string[];
     valid: boolean;
     warnings: string[];
@@ -55,7 +58,7 @@ export interface WranglerValidationReport {
  * Pure validator: given a parsed `WranglerConfig` object and an optional
  * `SchemaInfo`, produce a structured report. Performs no I/O.
  */
-export const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: SchemaInfo): WranglerValidationReport => {
+const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: SchemaInfo): WranglerValidationReport => {
     const errors: string[] = [];
     const warnings: string[] = [];
 
@@ -73,13 +76,12 @@ export const validateWranglerConfig = (wrangler: WranglerConfig | undefined, sch
     }
 
     const compatibilityDate = wrangler.compatibility_date ?? "";
+
     // Lexical `<` only matches numeric comparison for strict `YYYY-MM-DD`; a
     // malformed string like "2026-4-7" sorts before "2026-04-07" and would
     // pass `>= REQUIRED_COMPATIBILITY_DATE` checks by accident. Enforce the
     // shape so the comparison below is meaningful.
-    const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
-
-    if (compatibilityDate && !isoDatePattern.test(compatibilityDate)) {
+    if (compatibilityDate && !ISO_DATE_PATTERN.test(compatibilityDate)) {
         errors.push(`compatibility_date must be in YYYY-MM-DD format (got "${compatibilityDate}")`);
     } else if (compatibilityDate < REQUIRED_COMPATIBILITY_DATE) {
         errors.push(`compatibility_date must be >= "${REQUIRED_COMPATIBILITY_DATE}" (got "${compatibilityDate || "<missing>"}")`);
@@ -125,14 +127,14 @@ export const validateWranglerConfig = (wrangler: WranglerConfig | undefined, sch
  * `validateWrangler(wranglerJson, schema)` returning
  * `{ valid, errors, warnings }`.
  */
-export const validateWrangler: typeof validateWranglerConfig = validateWranglerConfig;
+const validateWrangler: typeof validateWranglerConfig = validateWranglerConfig;
 
-export interface WranglerProjectValidationOptions {
+interface WranglerProjectValidationOptions {
     projectRoot: string;
     schemaDir?: string;
 }
 
-export interface WranglerProjectValidationResult {
+interface WranglerProjectValidationResult {
     problems: ReadonlyArray<string>;
     report: WranglerValidationReport;
     wranglerPath: string | undefined;
@@ -158,7 +160,7 @@ const findWranglerFile = (projectRoot: string): string | undefined => {
  * `validateWranglerConfig`. Returns the legacy
  * `{ problems, wranglerPath }` shape plus the structured `report`.
  */
-export const validateWranglerProject = (options: WranglerProjectValidationOptions): WranglerProjectValidationResult => {
+const validateWranglerProject = (options: WranglerProjectValidationOptions): WranglerProjectValidationResult => {
     const schemaDir = options.schemaDir ?? "cirrus";
     const wranglerPath = findWranglerFile(options.projectRoot);
 
@@ -221,3 +223,6 @@ export const validateWranglerProject = (options: WranglerProjectValidationOption
         wranglerPath,
     };
 };
+
+export type { SchemaInfo, WranglerConfig, WranglerProjectValidationOptions, WranglerProjectValidationResult, WranglerValidationReport };
+export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject };

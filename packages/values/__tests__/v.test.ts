@@ -1,20 +1,28 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { Id, Infer } from "../src/index.js";
 import { v, ValidationError } from "../src/index.js";
 
 type Assert<T extends true> = T;
+// The canonical type-equality idiom: the single-use `<T>()` params are
+// load-bearing (they force structural comparison), so the rule is disabled here.
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 
+const REFINEMENT_RE = /refinement/u;
+const LOWERCASE_SLUG_RE = /^[a-z]+$/u;
+const EMPTY_RE = /empty/u;
+const LOWERCASE_RE = /lowercase/u;
+
 describe("primitives", () => {
-    test("string parses and rejects", () => {
+    it("string parses and rejects", () => {
         expect.assertions(2);
 
         expect(v.string().parse("hi")).toBe("hi");
         expect(() => v.string().parse(7)).toThrow(ValidationError);
     });
 
-    test("number rejects NaN", () => {
+    it("number rejects NaN", () => {
         expect.assertions(3);
 
         expect(v.number().parse(7)).toBe(7);
@@ -22,28 +30,28 @@ describe("primitives", () => {
         expect(() => v.number().parse("7")).toThrow(ValidationError);
     });
 
-    test("boolean", () => {
+    it("boolean", () => {
         expect.assertions(2);
 
         expect(v.boolean().parse(true)).toBe(true);
         expect(() => v.boolean().parse("true")).toThrow(ValidationError);
     });
 
-    test("bigint", () => {
+    it("bigint", () => {
         expect.assertions(2);
 
         expect(v.bigint().parse(1n)).toBe(1n);
         expect(() => v.bigint().parse(1)).toThrow(ValidationError);
     });
 
-    test("null", () => {
+    it("null", () => {
         expect.assertions(2);
 
         expect(v.null().parse(null)).toBeNull();
         expect(() => v.null().parse(undefined)).toThrow(ValidationError);
     });
 
-    test("bytes accepts ArrayBuffer only", () => {
+    it("bytes accepts ArrayBuffer only", () => {
         expect.assertions(2);
 
         const buffer = new ArrayBuffer(4);
@@ -52,7 +60,7 @@ describe("primitives", () => {
         expect(() => v.bytes().parse(new Uint8Array(4))).toThrow(ValidationError);
     });
 
-    test("literal", () => {
+    it("literal", () => {
         expect.assertions(2);
 
         const validator = v.literal("a");
@@ -61,7 +69,7 @@ describe("primitives", () => {
         expect(() => validator.parse("b")).toThrow(ValidationError);
     });
 
-    test("any", () => {
+    it("any", () => {
         expect.assertions(2);
 
         expect(v.any().parse(42)).toBe(42);
@@ -70,7 +78,7 @@ describe("primitives", () => {
 });
 
 describe("composites", () => {
-    test("object parses nested validators", () => {
+    it("object parses nested validators", () => {
         expect.assertions(2);
 
         const schema = v.object({
@@ -82,7 +90,7 @@ describe("composites", () => {
         expect(() => schema.parse({ count: 1 })).toThrow(ValidationError);
     });
 
-    test("object rejects arrays and null", () => {
+    it("object rejects arrays and null", () => {
         expect.assertions(2);
 
         const schema = v.object({ x: v.number() });
@@ -91,7 +99,7 @@ describe("composites", () => {
         expect(() => schema.parse(null)).toThrow(ValidationError);
     });
 
-    test("optional allows undefined", () => {
+    it("optional allows undefined", () => {
         expect.assertions(3);
 
         const schema = v.object({ name: v.string(), nickname: v.optional(v.string()) });
@@ -101,7 +109,7 @@ describe("composites", () => {
         expect(() => schema.parse({ name: "a", nickname: 7 })).toThrow(ValidationError);
     });
 
-    test("array parses element-wise and surfaces index in path", () => {
+    it("array parses element-wise and surfaces index in path", () => {
         expect.hasAssertions();
 
         const schema = v.array(v.number());
@@ -117,7 +125,7 @@ describe("composites", () => {
         }
     });
 
-    test("union accepts any variant, rejects none", () => {
+    it("union accepts any variant, rejects none", () => {
         expect.assertions(3);
 
         const schema = v.union(v.string(), v.number());
@@ -127,7 +135,7 @@ describe("composites", () => {
         expect(() => schema.parse(true)).toThrow(ValidationError);
     });
 
-    test("record validates keys and values", () => {
+    it("record validates keys and values", () => {
         expect.assertions(2);
 
         const schema = v.record(v.string(), v.number());
@@ -138,7 +146,7 @@ describe("composites", () => {
 });
 
 describe("id", () => {
-    test("returns branded type for any string", () => {
+    it("returns branded type for any string", () => {
         expect.assertions(2);
 
         const validator = v.id("users");
@@ -152,7 +160,7 @@ describe("id", () => {
         expect(idCheck).toBe(true);
     });
 
-    test("rejects non-string", () => {
+    it("rejects non-string", () => {
         expect.assertions(1);
 
         expect(() => v.id("users").parse(7)).toThrow(ValidationError);
@@ -160,7 +168,7 @@ describe("id", () => {
 });
 
 describe("time validators", () => {
-    test("timestamp and date parse epoch-millisecond numbers and reject the rest", () => {
+    it("timestamp and date parse epoch-millisecond numbers and reject the rest", () => {
         expect.assertions(5);
 
         const now = Date.now();
@@ -172,7 +180,7 @@ describe("time validators", () => {
         expect(() => v.timestamp().parse(Number.POSITIVE_INFINITY)).toThrow(ValidationError);
     });
 
-    test("defaultNow records a Date.now() default factory", () => {
+    it("defaultNow records a Date.now() default factory", () => {
         expect.assertions(2);
 
         const { column } = (v.timestamp().defaultNow() as unknown as { _meta: { column: { defaultFn?: () => unknown } } })._meta;
@@ -183,7 +191,7 @@ describe("time validators", () => {
 });
 
 describe("$type override", () => {
-    test("retypes the validator without changing runtime parsing", () => {
+    it("retypes the validator without changing runtime parsing", () => {
         expect.assertions(2);
 
         const userId = v.string().$type<Id<"users">>();
@@ -199,7 +207,7 @@ describe("$type override", () => {
 });
 
 describe("error paths", () => {
-    test("nested object error includes full path", () => {
+    it("nested object error includes full path", () => {
         expect.hasAssertions();
 
         const schema = v.object({
@@ -217,7 +225,7 @@ describe("error paths", () => {
         }
     });
 
-    test("safeParse returns ok on success", () => {
+    it("safeParse returns ok on success", () => {
         expect.hasAssertions();
 
         const result = v.string().safeParse("hello");
@@ -231,7 +239,7 @@ describe("error paths", () => {
 });
 
 describe("type inference", () => {
-    test("infer extracts TS type from validator", () => {
+    it("infer extracts TS type from validator", () => {
         expect.assertions(2);
 
         const schema = v.object({
@@ -254,7 +262,7 @@ describe("type inference", () => {
 });
 
 describe(".check() refinement", () => {
-    test("passes when the predicate holds", () => {
+    it("passes when the predicate holds", () => {
         expect.assertions(2);
 
         const nonNeg = v.number().check((n) => n >= 0);
@@ -263,7 +271,7 @@ describe(".check() refinement", () => {
         expect(nonNeg.parse(42)).toBe(42);
     });
 
-    test("throws ValidationError with the user message when the predicate fails", () => {
+    it("throws ValidationError with the user message when the predicate fails", () => {
         expect.hasAssertions();
 
         const nonNeg = v.number().check((n) => n >= 0, "must be non-negative");
@@ -284,7 +292,7 @@ describe(".check() refinement", () => {
         }
     });
 
-    test("uses a default message when none is supplied", () => {
+    it("uses a default message when none is supplied", () => {
         expect.hasAssertions();
 
         const evenOnly = v.number().check((n) => n % 2 === 0);
@@ -297,32 +305,32 @@ describe(".check() refinement", () => {
             expect(error).toBeInstanceOf(ValidationError);
 
             if (error instanceof ValidationError) {
-                expect(error.expected).toMatch(/refinement/u);
+                expect(error.expected).toMatch(REFINEMENT_RE);
             }
         }
     });
 
-    test("composes — multiple .check() calls all must pass", () => {
+    it("composes — multiple .check() calls all must pass", () => {
         expect.assertions(3);
 
         const slug = v
             .string()
             .check((s) => s.length > 0, "must not be empty")
-            .check((s) => /^[a-z]+$/u.test(s), "lowercase letters only");
+            .check((s) => LOWERCASE_SLUG_RE.test(s), "lowercase letters only");
 
         expect(slug.parse("hello")).toBe("hello");
-        expect(() => slug.parse("")).toThrow(/empty/u);
-        expect(() => slug.parse("Hello")).toThrow(/lowercase/u);
+        expect(() => slug.parse("")).toThrow(EMPTY_RE);
+        expect(() => slug.parse("Hello")).toThrow(LOWERCASE_RE);
     });
 
-    test("runs after the inner parser — type errors surface first", () => {
+    it("runs after the inner parser — type errors surface first", () => {
         expect.hasAssertions();
 
         const positiveInt = v.number().check((n) => Number.isInteger(n) && n > 0);
 
         // Non-number fails the underlying number parser, not the refinement.
         try {
-            positiveInt.parse("3" as unknown as number);
+            positiveInt.parse("3");
 
             expect.fail("expected ValidationError");
         } catch (error: unknown) {
@@ -334,7 +342,7 @@ describe(".check() refinement", () => {
         }
     });
 
-    test("works on column validators and preserves modifier chain", () => {
+    it("works on column validators and preserves modifier chain", () => {
         expect.assertions(2);
 
         const slug = v
@@ -343,11 +351,11 @@ describe(".check() refinement", () => {
             .unique();
 
         // The validator runtime is the same parse() path — refinement still fires.
-        expect(() => slug.parse("")).toThrow(/empty/u);
+        expect(() => slug.parse("")).toThrow(EMPTY_RE);
         expect(slug.parse("hello")).toBe("hello");
     });
 
-    test("safeParse surfaces a check failure as ok:false", () => {
+    it("safeParse surfaces a check failure as ok:false", () => {
         expect.hasAssertions();
 
         const positive = v.number().check((n) => n > 0, "must be positive");

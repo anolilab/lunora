@@ -2,10 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { WranglerConfig } from "../src/wrangler-validator.js";
 import { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject } from "../src/wrangler-validator.js";
+
+const SHARD_BINDING_ERROR_RE = /SHARD.+ShardDO/u;
+const WRANGLER_NOT_FOUND_RE = /wrangler\.jsonc not found/u;
 
 const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@cirrus/server";
 
@@ -74,7 +77,7 @@ describe("wrangler-validator", () => {
     });
 
     describe("validateWranglerConfig (pure)", () => {
-        test("returns valid:true when all required bindings/flags are present", () => {
+        it("returns valid:true when all required bindings/flags are present", () => {
             expect.assertions(2);
 
             const wrangler: WranglerConfig = {
@@ -89,7 +92,7 @@ describe("wrangler-validator", () => {
             expect(report.errors).toEqual([]);
         });
 
-        test("reports the SHARD binding when missing", () => {
+        it("reports the SHARD binding when missing", () => {
             expect.assertions(2);
 
             const report = validateWranglerConfig({
@@ -98,10 +101,10 @@ describe("wrangler-validator", () => {
             });
 
             expect(report.valid).toBe(false);
-            expect(report.errors.some((line) => /SHARD.+ShardDO/u.test(line))).toBe(true);
+            expect(report.errors.some((line) => SHARD_BINDING_ERROR_RE.test(line))).toBe(true);
         });
 
-        test("does not require the compatibility flag when compatibility_date is recent enough", () => {
+        it("does not require the compatibility flag when compatibility_date is recent enough", () => {
             expect.assertions(2);
 
             // web_socket_auto_reply_to_close became the default on REQUIRED_COMPATIBILITY_DATE,
@@ -116,7 +119,7 @@ describe("wrangler-validator", () => {
             expect(report.errors.some((line) => line.includes(REQUIRED_FLAG))).toBe(false);
         });
 
-        test("reports an outdated compatibility_date", () => {
+        it("reports an outdated compatibility_date", () => {
             expect.assertions(1);
 
             const report = validateWranglerConfig({
@@ -128,7 +131,7 @@ describe("wrangler-validator", () => {
             expect(report.errors.some((line) => line.includes("compatibility_date"))).toBe(true);
         });
 
-        test("requires a DB binding when the schema has any .global() table", () => {
+        it("requires a DB binding when the schema has any .global() table", () => {
             expect.assertions(1);
 
             const wrangler: WranglerConfig = {
@@ -142,7 +145,7 @@ describe("wrangler-validator", () => {
             expect(report.errors.some((line) => line.includes("d1_databases"))).toBe(true);
         });
 
-        test("requires a matching vectorize binding for each declared vector index", () => {
+        it("requires a matching vectorize binding for each declared vector index", () => {
             expect.assertions(2);
 
             const wrangler: WranglerConfig = {
@@ -157,7 +160,7 @@ describe("wrangler-validator", () => {
             expect(report.errors.some((line) => line.includes("docs-body"))).toBe(true);
         });
 
-        test("passes when a vectorize binding declares the index_name", () => {
+        it("passes when a vectorize binding declares the index_name", () => {
             expect.assertions(2);
 
             const wrangler: WranglerConfig = {
@@ -173,13 +176,13 @@ describe("wrangler-validator", () => {
             expect(report.errors).toEqual([]);
         });
 
-        test("validateWrangler is an alias for validateWranglerConfig", () => {
+        it("validateWrangler is an alias for validateWranglerConfig", () => {
             expect.assertions(1);
 
             expect(validateWrangler).toBe(validateWranglerConfig);
         });
 
-        test("treats a non-object wrangler as invalid", () => {
+        it("treats a non-object wrangler as invalid", () => {
             expect.assertions(2);
 
             const report = validateWranglerConfig(undefined);
@@ -190,7 +193,7 @@ describe("wrangler-validator", () => {
     });
 
     describe("validateWranglerProject (file-system aware)", () => {
-        test("passes when wrangler.jsonc declares everything the schema implies", () => {
+        it("passes when wrangler.jsonc declares everything the schema implies", () => {
             expect.assertions(3);
 
             writeSchema(SCHEMA_WITH_GLOBAL);
@@ -203,18 +206,18 @@ describe("wrangler-validator", () => {
             expect(result.wranglerPath).toBe(join(workdir, "wrangler.jsonc"));
         });
 
-        test("returns a problem when wrangler.jsonc is missing entirely", () => {
+        it("returns a problem when wrangler.jsonc is missing entirely", () => {
             expect.assertions(2);
 
             writeSchema(SCHEMA_NO_GLOBAL);
 
             const result = validateWranglerProject({ projectRoot: workdir });
 
-            expect(result.problems.join("\n")).toMatch(/wrangler\.jsonc not found/u);
+            expect(result.problems.join("\n")).toMatch(WRANGLER_NOT_FOUND_RE);
             expect(result.wranglerPath).toBeUndefined();
         });
 
-        test("does not require D1 when no table is global", () => {
+        it("does not require D1 when no table is global", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -237,7 +240,7 @@ describe("wrangler-validator", () => {
             expect(result.problems).toEqual([]);
         });
 
-        test("supports jsonc comments and trailing commas", () => {
+        it("supports jsonc comments and trailing commas", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -261,7 +264,7 @@ describe("wrangler-validator", () => {
             expect(result.problems).toEqual([]);
         });
 
-        test("returns a problem when SHARD durable-object binding is missing", () => {
+        it("returns a problem when SHARD durable-object binding is missing", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -278,10 +281,10 @@ describe("wrangler-validator", () => {
 
             const result = validateWranglerProject({ projectRoot: workdir });
 
-            expect(result.problems.some((line) => /SHARD.+ShardDO/u.test(line))).toBe(true);
+            expect(result.problems.some((line) => SHARD_BINDING_ERROR_RE.test(line))).toBe(true);
         });
 
-        test("flags a declared .vectorize() index with no matching vectorize binding", () => {
+        it("flags a declared .vectorize() index with no matching vectorize binding", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_WITH_VECTOR);
@@ -304,7 +307,7 @@ describe("wrangler-validator", () => {
             expect(result.problems.some((line) => line.includes("docs-body"))).toBe(true);
         });
 
-        test("passes when wrangler declares the vectorize binding for the schema's index", () => {
+        it("passes when wrangler declares the vectorize binding for the schema's index", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_WITH_VECTOR);
@@ -328,7 +331,7 @@ describe("wrangler-validator", () => {
             expect(result.problems).toEqual([]);
         });
 
-        test("returns a problem when schema has .global() tables but D1 binding is missing", () => {
+        it("returns a problem when schema has .global() tables but D1 binding is missing", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_WITH_GLOBAL);

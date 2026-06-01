@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, test } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { SchedulerDO } from "../src/scheduler-do.js";
 import type { ScheduleRecord } from "../src/types.js";
@@ -31,7 +31,7 @@ const post = (path: string, body: unknown): Request =>
     });
 
 describe("schedulerDO", () => {
-    test("/schedule persists a record and sets the alarm to the earliest pending task", async () => {
+    it("/schedule persists a record and sets the alarm to the earliest pending task", async () => {
         expect.assertions(3);
 
         const state = createFakeState();
@@ -57,7 +57,7 @@ describe("schedulerDO", () => {
         expect(state.alarm).toBe(scheduledFor);
     });
 
-    test("/schedule picks the earliest of two pending records for the alarm", async () => {
+    it("/schedule picks the earliest of two pending records for the alarm", async () => {
         expect.assertions(1);
 
         const state = createFakeState();
@@ -71,7 +71,7 @@ describe("schedulerDO", () => {
         expect(state.alarm).toBe(sooner);
     });
 
-    test("/cancel removes a record and reschedules the alarm", async () => {
+    it("/cancel removes a record and reschedules the alarm", async () => {
         expect.assertions(3);
 
         const state = createFakeState();
@@ -93,7 +93,7 @@ describe("schedulerDO", () => {
         expect(state.alarm).toBe(later);
     });
 
-    test("/cancel returns cancelled=false for an unknown id", async () => {
+    it("/cancel returns cancelled=false for an unknown id", async () => {
         expect.assertions(1);
 
         const state = createFakeState();
@@ -104,7 +104,7 @@ describe("schedulerDO", () => {
         expect(body.cancelled).toBe(false);
     });
 
-    test("alarm() dispatches due records and clears them from storage", async () => {
+    it("alarm() dispatches due records and clears them from storage", async () => {
         expect.assertions(3);
 
         const state = createFakeState();
@@ -122,7 +122,7 @@ describe("schedulerDO", () => {
         expect(state.alarm).toBe(now + 60_000);
     });
 
-    test("returns 404 for unknown routes", async () => {
+    it("returns 404 for unknown routes", async () => {
         expect.assertions(1);
 
         const state = createFakeState();
@@ -132,7 +132,7 @@ describe("schedulerDO", () => {
         expect(response.status).toBe(404);
     });
 
-    test("/schedule validates required fields", async () => {
+    it("/schedule validates required fields", async () => {
         expect.assertions(1);
 
         const state = createFakeState();
@@ -151,7 +151,7 @@ describe("schedulerDO — live subscriptions", () => {
         return last === undefined ? [] : (JSON.parse(last) as { records: ScheduleRecord[] }).records;
     };
 
-    test("pushes the job list to subscribers when a job is scheduled", async () => {
+    it("pushes the job list to subscribers when a job is scheduled", async () => {
         expect.assertions(2);
 
         const state = createFakeStateWithSockets();
@@ -168,7 +168,7 @@ describe("schedulerDO — live subscriptions", () => {
         expect(latestJobs(pushed).map((record) => record.functionPath)).toEqual(["a"]);
     });
 
-    test("pushes the updated list when a job is cancelled", async () => {
+    it("pushes the updated list when a job is cancelled", async () => {
         expect.assertions(1);
 
         const state = createFakeStateWithSockets();
@@ -188,7 +188,7 @@ describe("schedulerDO — live subscriptions", () => {
         expect(latestJobs(state.sockets[0]?.sent ?? [])).toEqual([]);
     });
 
-    test("does not throw when broadcasting with no live sockets", async () => {
+    it("does not throw when broadcasting with no live sockets", async () => {
         expect.assertions(1);
 
         const state = createFakeState();
@@ -202,7 +202,7 @@ describe("schedulerDO — live subscriptions", () => {
         expect(response.status).toBe(200);
     });
 
-    test("rejects a /ws upgrade when the runtime can't accept sockets", async () => {
+    it("rejects a /ws upgrade when the runtime can't accept sockets", async () => {
         expect.assertions(1);
 
         const state = createFakeState();

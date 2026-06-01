@@ -7,21 +7,20 @@
  * the runtime R2 surface workerd exposes.
  */
 import { env } from "cloudflare:test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { createStorage } from "../../src/create-storage.js";
-import type { R2BucketLike } from "../../src/types.js";
 
-const storage = (): ReturnType<typeof createStorage> => createStorage({ bucket: env.BUCKET as unknown as R2BucketLike });
+const storage = (): ReturnType<typeof createStorage> => createStorage({ bucket: env.BUCKET });
 
 describe("createStorage (workerd + Miniflare R2 integration)", () => {
-    test("upload then download round-trips bytes through R2", async () => {
+    it("upload then download round-trips bytes through R2", async () => {
         expect.assertions(6);
 
         const sut = storage();
         const payload = new TextEncoder().encode("hello cirrus");
 
-        const putResult = await sut.upload("greetings/hello.txt", payload.buffer as ArrayBuffer, {
+        const putResult = await sut.upload("greetings/hello.txt", payload.buffer, {
             contentType: "text/plain",
         });
 
@@ -38,27 +37,27 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
         await expect(got!.text()).resolves.toBe("hello cirrus");
     });
 
-    test("list returns objects matching the given prefix", async () => {
+    it("list returns objects matching the given prefix", async () => {
         expect.assertions(1);
 
         const sut = storage();
 
-        await sut.upload("photos/a.jpg", new Uint8Array([1, 2, 3]).buffer as ArrayBuffer);
-        await sut.upload("photos/b.jpg", new Uint8Array([4, 5, 6]).buffer as ArrayBuffer);
-        await sut.upload("docs/readme.txt", new Uint8Array([7, 8, 9]).buffer as ArrayBuffer);
+        await sut.upload("photos/a.jpg", new Uint8Array([1, 2, 3]).buffer);
+        await sut.upload("photos/b.jpg", new Uint8Array([4, 5, 6]).buffer);
+        await sut.upload("docs/readme.txt", new Uint8Array([7, 8, 9]).buffer);
 
         const listed = await sut.list("photos/");
-        const keys = listed.objects.map((object) => object.key).sort();
+        const keys = listed.objects.map((object) => object.key).toSorted((a, b) => a.localeCompare(b));
 
         expect(keys).toEqual(["photos/a.jpg", "photos/b.jpg"]);
     });
 
-    test("delete removes the object", async () => {
+    it("delete removes the object", async () => {
         expect.assertions(2);
 
         const sut = storage();
 
-        await sut.upload("ephemeral.txt", new TextEncoder().encode("bye").buffer as ArrayBuffer);
+        await sut.upload("ephemeral.txt", new TextEncoder().encode("bye").buffer);
 
         await expect(sut.download("ephemeral.txt")).resolves.not.toBeNull();
 
@@ -67,7 +66,7 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
         await expect(sut.download("ephemeral.txt")).resolves.toBeNull();
     });
 
-    test("download returns null for missing keys", async () => {
+    it("download returns null for missing keys", async () => {
         expect.assertions(1);
 
         const sut = storage();

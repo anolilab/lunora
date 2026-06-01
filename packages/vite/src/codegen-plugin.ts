@@ -44,7 +44,6 @@ export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
     return {
-        name: "cirrus:codegen",
         buildStart() {
             const logger = {
                 error: (message: string): void => {
@@ -61,6 +60,18 @@ export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
         },
         configureServer(server: ViteDevServer) {
             server.watcher.add(absoluteSchemaDirectory);
+
+            // Reuse the dev server's logger for codegen output. Declared here
+            // (not inside the debounced callback) so the arrow bodies don't nest
+            // past the lint depth limit.
+            const serverLogger = {
+                error: (message: string): void => {
+                    server.config.logger.error(message);
+                },
+                warn: (message: string): void => {
+                    server.config.logger.warn(message);
+                },
+            };
 
             // True only for the directory itself or a real descendant — a bare
             // `startsWith` would also match a sibling whose name shares the
@@ -94,14 +105,7 @@ export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                 }
 
                 debounceTimer = setTimeout(() => {
-                    const ok = runCodegenSafely(options, {
-                        error: (message: string) => {
-                            server.config.logger.error(message);
-                        },
-                        warn: (message: string) => {
-                            server.config.logger.warn(message);
-                        },
-                    });
+                    const ok = runCodegenSafely(options, serverLogger);
 
                     if (ok) {
                         // Invalidate generated modules so the dev server picks up new types/values.
@@ -120,5 +124,6 @@ export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
             server.watcher.on("change", onChange);
             server.watcher.on("unlink", onChange);
         },
+        name: "cirrus:codegen",
     };
 };

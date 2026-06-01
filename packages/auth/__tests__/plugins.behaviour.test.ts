@@ -1,5 +1,5 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/create-auth.js";
 import { admin, organization } from "../src/plugins.js";
@@ -21,7 +21,8 @@ const SECRET = "x".repeat(32);
 
 const STRONG_PASSWORD = "correct horse battery staple";
 
-const seedMemoryDb = (): Record<string, unknown[]> => ({
+const seedMemoryDb = (): Record<string, unknown[]> => {
+ return {
     account: [],
     invitation: [],
     member: [],
@@ -30,7 +31,8 @@ const seedMemoryDb = (): Record<string, unknown[]> => ({
     team: [],
     user: [],
     verification: [],
-});
+};
+};
 
 /**
  * Sign in as `email`/`password` and pull the `cookie` header from the
@@ -91,7 +93,7 @@ describe("admin plugin behaviour", () => {
         adminHeaders = await signInAndCookie(auth, "root@example.com", STRONG_PASSWORD);
     });
 
-    test("banUser flips the user row's banned flag", async () => {
+    it("banUser flips the user row's banned flag", async () => {
         expect.assertions(2);
 
         // Sign up a regular user that the admin will then ban.
@@ -111,7 +113,7 @@ describe("admin plugin behaviour", () => {
         expect(userRow?.banReason).toBe("spam");
     });
 
-    test("a banned user cannot sign in", async () => {
+    it("a banned user cannot sign in", async () => {
         expect.assertions(2);
 
         const signUp = await auth.api.signUpEmail({
@@ -159,7 +161,7 @@ describe("organization plugin behaviour", () => {
         });
     });
 
-    test("createOrganization persists a row and seeds the owner membership", async () => {
+    it("createOrganization persists a row and seeds the owner membership", async () => {
         expect.assertions(3);
 
         const signUp = await auth.api.signUpEmail({
@@ -173,19 +175,19 @@ describe("organization plugin behaviour", () => {
 
         expect(org).not.toBeNull();
 
-        const organizations = (memoryDb["organization"] ?? []) as Array<{ name: string; slug: string }>;
+        const organizations = (memoryDb["organization"] ?? []) as { name: string; slug: string }[];
 
         expect(organizations).toEqual([expect.objectContaining({ name: "Acme", slug: "acme" })]);
 
         // The plugin auto-creates a `member` row for the creator with the
         // `owner` role. That's the contract third-party admin UIs rely on,
         // so we lock it in here.
-        const members = (memoryDb["member"] ?? []) as Array<{ organizationId: string; role: string; userId: string }>;
+        const members = (memoryDb["member"] ?? []) as { organizationId: string; role: string; userId: string }[];
 
         expect(members).toEqual([expect.objectContaining({ organizationId: org?.id, role: "owner", userId: ownerId })]);
     });
 
-    test("createInvitation stores an invitation row tied to the org", async () => {
+    it("createInvitation stores an invitation row tied to the org", async () => {
         expect.assertions(2);
 
         // Bootstrap an owner + organization the same way the previous test does.
@@ -212,12 +214,12 @@ describe("organization plugin behaviour", () => {
             headers: ownerHeaders,
         });
 
-        const invitations = (memoryDb["invitation"] ?? []) as Array<{
+        const invitations = (memoryDb["invitation"] ?? []) as {
             email: string;
             inviterId: string;
             organizationId: string;
             role: string;
-        }>;
+        }[];
 
         expect(invitations).toHaveLength(1);
         expect(invitations[0]).toMatchObject({

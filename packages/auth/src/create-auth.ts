@@ -1,4 +1,5 @@
-import { betterAuth, type BetterAuthOptions } from "better-auth";
+import type { BetterAuthOptions } from "better-auth";
+import { betterAuth } from "better-auth";
 
 /**
  * Cirrus's options pass straight through to better-auth — the only thing we
@@ -14,7 +15,7 @@ export type CirrusAuthOptions = BetterAuthOptions;
 
 /**
  * The full better-auth instance: `auth.handler` accepts a `Request` and
- * returns a `Response` (used by {@link handleAuthRequest}); `auth.api`
+ * returns a `Response` (used by `handleAuthRequest`); `auth.api`
  * exposes the typed endpoint surface for server-side calls (e.g.
  * `auth.api.getSession({ headers })` inside a query/mutation).
  */

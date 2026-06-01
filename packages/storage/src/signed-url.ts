@@ -2,6 +2,10 @@ import type { SignedUrlOptions } from "./types.js";
 
 const textEncoder = new TextEncoder();
 
+// Hoisted to module scope so the literals aren't recompiled on every call.
+const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;
+const LEADING_SLASH_RE = /^\//;
+
 const toBase64Url = (bytes: Uint8Array): string => {
     let binary = "";
 
@@ -25,11 +29,11 @@ const fromBase64Url = (input: string): Uint8Array => {
 };
 
 const importHmacKey = async (secret: string): Promise<CryptoKey> =>
-    crypto.subtle.importKey("raw", textEncoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+    crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
 
 // Host is lowercased so a signature minted for `Example.com` verifies against
 // `example.com` — DNS is case-insensitive, but the URL parser preserves case.
-const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: number): string => `${method}\n${host.toLowerCase()}\n${key}\n${exp}`;
+const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: number): string => `${method}\n${host.toLowerCase()}\n${key}\n${String(exp)}`;
 
 const extractHost = (input: string): string => {
     // Tolerate a bare host-or-base by trying URL first; fall back to splitting
@@ -37,14 +41,14 @@ const extractHost = (input: string): string => {
     try {
         return new URL(input).host;
     } catch {
-        const noScheme = input.replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "");
+        const noScheme = input.replace(SCHEME_PREFIX_RE, "");
 
         return noScheme.split("/")[0] ?? "";
     }
 };
 
 /**
- * Worker-signed URL: `${publicBaseUrl}/${key}?exp=<unix>&method=<GET|PUT>&sig=<base64url-hmac>`.
+ * Worker-signed URL: `${publicBaseUrl}/${key}?exp=&lt;unix>&amp;method=&lt;GET|PUT>&amp;sig=&lt;base64url-hmac>`.
  *
  * The HMAC canonical includes the URL host so a signature minted for one bucket
  * cannot be replayed against another host on the same signing secret. Even so,
@@ -70,14 +74,15 @@ export const buildSignedUrl = async (
     const sig = toBase64Url(new Uint8Array(signature));
 
     const base = args.baseUrl.endsWith("/") ? args.baseUrl.slice(0, -1) : args.baseUrl;
-    const safeKey = args.key.split("/").map(encodeURIComponent).join("/");
+    const safeKey = args.key.split("/").map((segment) => encodeURIComponent(segment)).join("/");
 
-    return `${base}/${safeKey}?exp=${exp}&method=${method}&sig=${sig}`;
+    return `${base}/${safeKey}?exp=${String(exp)}&method=${method}&sig=${sig}`;
 };
 
 export interface VerifyResult {
     key?: string;
     method?: "GET" | "PUT";
+
     /**
      * Internal-only failure reason for server logs/diagnostics. **Do not echo
      * to clients** — a precise reason ("expired" vs "bad_signature") is a
@@ -93,7 +98,7 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
     try {
         url = input instanceof URL ? input : new URL(input);
     } catch {
-        return { valid: false, reason: "malformed" };
+        return { reason: "malformed", valid: false };
     }
 
     const exp = Number.parseInt(url.searchParams.get("exp") ?? "", 10);
@@ -101,15 +106,15 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
     const method = (url.searchParams.get("method") ?? "GET") as "GET" | "PUT";
 
     if (!sig || !Number.isFinite(exp)) {
-        return { valid: false, reason: "malformed" };
+        return { reason: "malformed", valid: false };
     }
 
     if (exp < Math.floor(Date.now() / 1000)) {
-        return { valid: false, reason: "expired" };
+        return { reason: "expired", valid: false };
     }
 
     if (method !== "GET" && method !== "PUT") {
-        return { valid: false, reason: "malformed" };
+        return { reason: "malformed", valid: false };
     }
 
     // Pathname is `/<key>`. Strip the leading slash and decode each segment.
@@ -120,10 +125,10 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
     let sigBytes: Uint8Array;
 
     try {
-        key = url.pathname.replace(/^\//, "").split("/").map(decodeURIComponent).join("/");
+        key = url.pathname.replace(LEADING_SLASH_RE, "").split("/").map((segment) => decodeURIComponent(segment)).join("/");
         sigBytes = fromBase64Url(sig);
     } catch {
-        return { valid: false, reason: "malformed" };
+        return { reason: "malformed", valid: false };
     }
 
     const cryptoKey = await importHmacKey(secret);
@@ -135,8 +140,8 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
     );
 
     if (!valid) {
-        return { valid: false, reason: "bad_signature" };
+        return { reason: "bad_signature", valid: false };
     }
 
-    return { valid: true, key, method };
+    return { key, method, valid: true };
 };

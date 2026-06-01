@@ -1,8 +1,13 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createScheduler } from "../src/create-scheduler.js";
 import { createCronTrigger } from "../src/cron.js";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference } from "../src/types.js";
+
+const NAMESPACE_PATTERN = /namespace/;
+const ORIGIN_URL_PATTERN = /originUrl/;
+const DELAY_MS_PATTERN = /delayMs/;
+const SCHEDULER_DO_PATTERN = /SchedulerDO/;
 
 interface CapturedCall {
     body: Record<string, unknown>;
@@ -27,7 +32,7 @@ const fakeNamespace = (
         }),
     };
     const namespace: DurableObjectNamespaceLike = {
-        idFromName: vi.fn<DurableObjectNamespaceLike["idFromName"]>((name: string) => ({ toString: () => name })),
+        idFromName: vi.fn<DurableObjectNamespaceLike["idFromName"]>((name: string) => { return { toString: () => name }; }),
         get: vi.fn<DurableObjectNamespaceLike["get"]>(() => stub),
     };
 
@@ -37,14 +42,14 @@ const fakeNamespace = (
 const fn: FunctionReference = { __cirrusRef: "messages.send" };
 
 describe("createScheduler", () => {
-    test("requires a namespace + originUrl", () => {
+    it("requires a namespace + originUrl", () => {
         expect.assertions(2);
 
-        expect(() => createScheduler({} as never)).toThrow(/namespace/);
-        expect(() => createScheduler({ namespace: fakeNamespace().namespace } as never)).toThrow(/originUrl/);
+        expect(() => createScheduler({} as never)).toThrow(NAMESPACE_PATTERN);
+        expect(() => createScheduler({ namespace: fakeNamespace().namespace } as never)).toThrow(ORIGIN_URL_PATTERN);
     });
 
-    test("runAt() forwards the RPC envelope to SchedulerDO", async () => {
+    it("runAt() forwards the RPC envelope to SchedulerDO", async () => {
         expect.assertions(3);
 
         const { namespace, calls } = fakeNamespace();
@@ -64,17 +69,17 @@ describe("createScheduler", () => {
         });
     });
 
-    test("runAfter() rejects negative or non-finite delays", async () => {
+    it("runAfter() rejects negative or non-finite delays", async () => {
         expect.assertions(2);
 
         const { namespace } = fakeNamespace();
         const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
 
-        await expect(scheduler.runAfter(-1, fn, {} as Record<string, unknown>)).rejects.toThrow(/delayMs/);
-        await expect(scheduler.runAfter(Number.NaN, fn, {} as Record<string, unknown>)).rejects.toThrow(/delayMs/);
+        await expect(scheduler.runAfter(-1, fn, {})).rejects.toThrow(DELAY_MS_PATTERN);
+        await expect(scheduler.runAfter(Number.NaN, fn, {})).rejects.toThrow(DELAY_MS_PATTERN);
     });
 
-    test("runAfter() computes scheduledFor relative to now()", async () => {
+    it("runAfter() computes scheduledFor relative to now()", async () => {
         expect.assertions(3);
 
         const { namespace, calls } = fakeNamespace();
@@ -82,7 +87,7 @@ describe("createScheduler", () => {
 
         const before = Date.now();
 
-        await scheduler.runAfter(5000, fn, { x: 1 } as Record<string, unknown>, { shardKey: "u-1" });
+        await scheduler.runAfter(5000, fn, { x: 1 }, { shardKey: "u-1" });
         const after = Date.now();
 
         const scheduledFor = calls[0]?.body.scheduledFor as number;
@@ -92,7 +97,7 @@ describe("createScheduler", () => {
         expect(calls[0]?.body.shardKey).toBe("u-1");
     });
 
-    test("cancel() forwards the id", async () => {
+    it("cancel() forwards the id", async () => {
         expect.assertions(3);
 
         const { namespace, calls } = fakeNamespace();
@@ -105,22 +110,22 @@ describe("createScheduler", () => {
         expect(new URL(calls[0]!.url).pathname).toBe("/cancel");
     });
 
-    test("throws when SchedulerDO returns a non-2xx response", async () => {
+    it("throws when SchedulerDO returns a non-2xx response", async () => {
         expect.assertions(1);
 
         const stub = {
             fetch: vi.fn<DurableObjectStubLike["fetch"]>(async () => new Response("nope", { status: 500 })),
         };
         const namespace: DurableObjectNamespaceLike = {
-            idFromName: () => ({ toString: () => "default" }),
+            idFromName: () => { return { toString: () => "default" }; },
             get: () => stub,
         };
         const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
 
-        await expect(scheduler.runAfter(0, fn, {} as Record<string, unknown>)).rejects.toThrow(/SchedulerDO/);
+        await expect(scheduler.runAfter(0, fn, {})).rejects.toThrow(SCHEDULER_DO_PATTERN);
     });
 
-    test("createCronTrigger emits a wrangler.jsonc snippet + dispatcher metadata", () => {
+    it("createCronTrigger emits a wrangler.jsonc snippet + dispatcher metadata", () => {
         expect.assertions(3);
 
         const snippet = createCronTrigger({ schedule: "0 * * * *", fn, args: { tenant: "acme" } });
@@ -130,7 +135,7 @@ describe("createScheduler", () => {
         expect(snippet.wranglerJsonc).toContain('"0 * * * *"');
     });
 
-    test("createCronTrigger validates inputs", () => {
+    it("createCronTrigger validates inputs", () => {
         expect.assertions(2);
 
         expect(() => createCronTrigger({ schedule: "", fn })).toThrow();

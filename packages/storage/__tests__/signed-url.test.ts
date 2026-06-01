@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildSignedUrl, verifySignedUrl } from "../src/signed-url.js";
 
@@ -7,7 +7,7 @@ describe("signedUrl", () => {
         vi.useRealTimers();
     });
 
-    test("sign + verify roundtrip succeeds for a fresh signature", async () => {
+    it("sign + verify roundtrip succeeds for a fresh signature", async () => {
         expect.assertions(3);
 
         const url = await buildSignedUrl({
@@ -24,7 +24,7 @@ describe("signedUrl", () => {
         expect(result.method).toBe("GET");
     });
 
-    test("rejects an expired URL", async () => {
+    it("rejects an expired URL", async () => {
         expect.assertions(2);
 
         vi.useFakeTimers();
@@ -46,7 +46,7 @@ describe("signedUrl", () => {
         expect(result.reason).toBe("expired");
     });
 
-    test("rejects a URL signed with a different secret", async () => {
+    it("rejects a URL signed with a different secret", async () => {
         expect.assertions(2);
 
         const url = await buildSignedUrl({
@@ -62,7 +62,7 @@ describe("signedUrl", () => {
         expect(result.reason).toBe("bad_signature");
     });
 
-    test("rejects a URL with a tampered key path", async () => {
+    it("rejects a URL with a tampered key path", async () => {
         expect.assertions(2);
 
         const url = await buildSignedUrl({
@@ -79,7 +79,7 @@ describe("signedUrl", () => {
         expect(result.reason).toBe("bad_signature");
     });
 
-    test("returns malformed for URLs missing sig or exp", async () => {
+    it("returns malformed for URLs missing sig or exp", async () => {
         expect.assertions(2);
 
         const result = await verifySignedUrl("https://cdn.test/x", "shh");
@@ -88,7 +88,7 @@ describe("signedUrl", () => {
         expect(result.reason).toBe("malformed");
     });
 
-    test("preserves PUT method in the round-trip", async () => {
+    it("preserves PUT method in the round-trip", async () => {
         expect.assertions(2);
 
         const url = await buildSignedUrl({
@@ -105,7 +105,7 @@ describe("signedUrl", () => {
         expect(result.method).toBe("PUT");
     });
 
-    test("handles keys with multiple path segments", async () => {
+    it("handles keys with multiple path segments", async () => {
         expect.assertions(2);
 
         const url = await buildSignedUrl({

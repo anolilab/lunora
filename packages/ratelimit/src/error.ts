@@ -5,22 +5,22 @@ const describe = (status: RateLimitStatus): string => {
         return "request denied (deny list)";
     }
 
-    return Number.isFinite(status.retryAfter) ? `rate limit exceeded; retry after ${Math.ceil(status.retryAfter)}ms` : "rate limit exceeded";
+    return Number.isFinite(status.retryAfter) ? `rate limit exceeded; retry after ${String(Math.ceil(status.retryAfter))}ms` : "rate limit exceeded";
 };
 
 /**
- * Thrown by {@link RateLimiter.limit} when called with `{ throws: true }`. The
+ * Thrown by `RateLimiter.limit` when called with `{ throws: true }`. The
  * `@cirrus/ratelimit` middleware does not use this — it throws a structural
  * `CirrusError` instead — so this is for direct callers that prefer exceptions.
  */
 export class RateLimitError extends Error {
-    override readonly name = "RateLimitError";
+    public override readonly name = "RateLimitError";
 
-    readonly reason: RateLimitReason | undefined;
+    public readonly reason: RateLimitReason | undefined;
 
-    readonly retryAfter: number;
+    public readonly retryAfter: number;
 
-    constructor(status: RateLimitStatus, message?: string) {
+    public constructor(status: RateLimitStatus, message?: string) {
         super(message ?? describe(status));
         this.reason = status.reason;
         this.retryAfter = status.retryAfter;

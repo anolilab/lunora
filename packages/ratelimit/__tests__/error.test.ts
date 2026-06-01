@@ -1,9 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { RateLimitError } from "../src/error.js";
 
 describe("rateLimitError", () => {
-    test("describes a deny-list rejection", () => {
+    it("describes a deny-list rejection", () => {
         expect.assertions(3);
 
         const error = new RateLimitError({ ok: false, reason: "deny", retryAfter: Number.POSITIVE_INFINITY });
@@ -13,7 +13,7 @@ describe("rateLimitError", () => {
         expect(error.message).toBe("request denied (deny list)");
     });
 
-    test("describes a rate rejection with a rounded retryAfter", () => {
+    it("describes a rate rejection with a rounded retryAfter", () => {
         expect.assertions(3);
 
         const error = new RateLimitError({ ok: false, reason: "rate", retryAfter: 99.2 });
@@ -23,7 +23,7 @@ describe("rateLimitError", () => {
         expect(error.message).toBe("rate limit exceeded; retry after 100ms");
     });
 
-    test("omits an unbounded retryAfter from the message", () => {
+    it("omits an unbounded retryAfter from the message", () => {
         expect.assertions(1);
 
         const error = new RateLimitError({ ok: false, reason: "rate", retryAfter: Number.POSITIVE_INFINITY });
@@ -31,7 +31,7 @@ describe("rateLimitError", () => {
         expect(error.message).toBe("rate limit exceeded");
     });
 
-    test("honors an explicit message override", () => {
+    it("honors an explicit message override", () => {
         expect.assertions(1);
 
         const error = new RateLimitError({ ok: false, reason: "rate", retryAfter: 100 }, "slow down");

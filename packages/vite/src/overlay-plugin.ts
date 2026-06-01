@@ -35,8 +35,8 @@ export const overlayPlugin = async (): Promise<Plugin | ReadonlyArray<Plugin>> =
         }
 
         return {
-            name: "cirrus:overlay-injector",
             apply: "serve" as const,
+            name: "cirrus:overlay-injector",
         };
     }
 };

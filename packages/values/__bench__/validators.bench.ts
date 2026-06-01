@@ -9,11 +9,11 @@ import { v } from "../src/v.js";
  * realistic call volumes, so we benchmark the shapes that actually show up
  * in user code:
  *
- *  - Primitives — the most common args (string, number, boolean, id).
- *  - Optional + literal + union — the next tier (auth flags, role narrowing).
- *  - Object — almost every RPC takes an object somewhere.
- *  - Array / record / nested object — the heavier shapes (history, prefs).
- *  - Failing path (string given a number) — exercises the `fail()` throw.
+ * - Primitives — the most common args (string, number, boolean, id).
+ * - Optional + literal + union — the next tier (auth flags, role narrowing).
+ * - Object — almost every RPC takes an object somewhere.
+ * - Array / record / nested object — the heavier shapes (history, prefs).
+ * - Failing path (string given a number) — exercises the `fail()` throw.
  *
  * `safeParse` is benched alongside `parse` because the runtime uses both:
  * `parse` on the hot dispatch path, `safeParse` in dev overlay diagnostics.
@@ -72,8 +72,8 @@ const sampleNested = {
     message: sampleMessage,
     metadata: { ip: "127.0.0.1", agent: "vitest" },
 };
-const sampleStringArray = Array.from({ length: 32 }, (_, index) => `item-${index}`);
-const sampleRecord = Object.fromEntries(Array.from({ length: 16 }, (_, index) => [`key-${index}`, `value-${index}`]));
+const sampleStringArray = Array.from({ length: 32 }, (_, index) => `item-${String(index)}`);
+const sampleRecord = Object.fromEntries(Array.from({ length: 16 }, (_, index) => [`key-${String(index)}`, `value-${String(index)}`]));
 
 describe("primitives", () => {
     bench("v.string()", () => {

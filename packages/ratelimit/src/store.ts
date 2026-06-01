@@ -7,7 +7,7 @@ import type { RateLimitStore, RateLimitValue } from "./types.js";
  * Durable Object, the instance) — adequate for single-DO limits but not shared
  * across instances. Use {@link createSqlStore} for durable per-DO state.
  */
-export const createMemoryStore = (): RateLimitStore => {
+const createMemoryStore = (): RateLimitStore => {
     const map = new Map<string, RateLimitValue>();
 
     return {
@@ -25,11 +25,11 @@ export const createMemoryStore = (): RateLimitStore => {
  * Minimal projection of `state.storage.sql` (workerd's `SqlStorage`, also
  * satisfied by `node:sqlite`). Only the `exec` overload is required.
  */
-export interface SqlLike {
+interface SqlLike {
     exec: <Row = Record<string, unknown>>(query: string, ...params: unknown[]) => { toArray: () => Row[] };
 }
 
-export interface SqlStoreOptions {
+interface SqlStoreOptions {
     sql: SqlLike;
     /** Table name. Created if missing. Defaults to `_cirrus_rate_limits`. */
     table?: string;
@@ -56,7 +56,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
  * SQL surface used here (`exec`) is not a substitute for transactional
  * isolation across concurrent invocations.
  */
-export const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
+const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     const { sql } = options;
     const table = options.table ?? "_cirrus_rate_limits";
 
@@ -100,7 +100,7 @@ export const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
  * `IndexRangeBuilder` field-for-field so the real `ctx.db` query builder is
  * assignable; only `eq` is exercised.
  */
-export interface RateLimitDbIndexRange {
+interface RateLimitDbIndexRange {
     eq: (field: string, value: unknown) => RateLimitDbIndexRange;
     gt: (field: string, value: unknown) => RateLimitDbIndexRange;
     gte: (field: string, value: unknown) => RateLimitDbIndexRange;
@@ -109,7 +109,7 @@ export interface RateLimitDbIndexRange {
 }
 
 /** The slice of a `ctx.db` table query the store relies on. */
-export interface RateLimitDbQuery {
+interface RateLimitDbQuery {
     first: () => Promise<Record<string, unknown> | null>;
     withIndex: (indexName: string, range: (q: RateLimitDbIndexRange) => RateLimitDbIndexRange) => RateLimitDbQuery;
 }
@@ -120,14 +120,14 @@ export interface RateLimitDbQuery {
  * directly — declared here (rather than imported) to keep `@cirrus/ratelimit`
  * free of a runtime dependency on `@cirrus/server`.
  */
-export interface RateLimitDb {
+interface RateLimitDb {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
     insert: <T extends string>(table: T, document: Record<string, unknown>) => Promise<Id<T>>;
     patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
     query: (table: string) => RateLimitDbQuery;
 }
 
-export interface DbStoreOptions {
+interface DbStoreOptions {
     /** The Cirrus ORM writer — `ctx.db` inside a mutation or action. */
     db: RateLimitDb;
     /** Index that resolves a row by its key column. Defaults to `by_key`. */
@@ -155,7 +155,7 @@ export interface DbStoreOptions {
  * Each operation is a read-then-write; inside a mutation/action that pair runs
  * under the DO's input gate, so it is atomic against concurrent calls.
  */
-export const createDbStore = (options: DbStoreOptions): RateLimitStore => {
+const createDbStore = (options: DbStoreOptions): RateLimitStore => {
     const { db } = options;
     const table = options.table ?? "rateLimits";
     const index = options.index ?? "by_key";
@@ -202,3 +202,6 @@ export const createDbStore = (options: DbStoreOptions): RateLimitStore => {
         },
     };
 };
+
+export type { DbStoreOptions, RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, SqlLike, SqlStoreOptions };
+export { createDbStore, createMemoryStore, createSqlStore };

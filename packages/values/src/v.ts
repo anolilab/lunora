@@ -1,14 +1,14 @@
 import type { ValidationPath } from "./errors.js";
 import { describeValue, formatPath, ValidationError } from "./errors.js";
 
-/** Branded id type, e.g. `Id<"users">`. */
-export type Id<TableName extends string> = string & { readonly __table: TableName };
+/** Branded id type, e.g. `Id&lt;"users">`. */
+type Id<TableName extends string> = string & { readonly __table: TableName };
 
 /**
  * Runtime "kind" tag attached to every validator. Codegen and reflective tools
  * use this to inspect the shape without crawling the closure.
  */
-export type ValidatorKind =
+type ValidatorKind =
     | "any"
     | "array"
     | "bigint"
@@ -26,7 +26,7 @@ export type ValidatorKind =
     | "timestamp"
     | "union";
 
-export interface Validator<T = unknown> {
+interface Validator<T = unknown> {
     readonly __type: T;
 
     /**
@@ -51,14 +51,14 @@ export interface Validator<T = unknown> {
 }
 
 /** Extract the TS type a validator describes (the **select** type). */
-export type Infer<V> = V extends Validator<infer T> ? T : never;
+type Infer<V> = V extends Validator<infer T> ? T : never;
 
 /**
  * Column constraints/defaults collected from the `v.*` modifier chain used
  * inside `defineTable`. Inert in argument position. Persisted on the
  * validator's internal `_meta.column` and mirrored into codegen IR.
  */
-export interface ColumnMeta {
+interface ColumnMeta {
     /** `.$defaultFn(fn)` — default factory; field is optional on insert. */
     defaultFn?: () => unknown;
     /** `.default(value)` — literal default; field is optional on insert. */
@@ -75,7 +75,7 @@ export interface ColumnMeta {
  * Phantom carrier of a column's select/insert types. Never present at runtime;
  * `defineTable` reads it to derive `$inferSelect` / `$inferInsert`.
  */
-export interface Column<TSelect, TInsert> {
+interface Column<TSelect, TInsert> {
     /** Phantom carrier — type-only, never present at runtime. */
     readonly __column: { insert: TInsert; select: TSelect };
 }
@@ -86,12 +86,12 @@ export interface Column<TSelect, TInsert> {
  * `TSelect` is the read type; `TInsert` is the write type (modifiers may make it
  * `| undefined`, marking the field optional on insert).
  */
-export interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInsert>, Validator<TSelect> {
+interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInsert>, Validator<TSelect> {
     /** Default factory applied in the write layer; field becomes optional on insert. */
     $defaultFn: (fn: () => TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
     /** Recompute the field on every patch/replace when not explicitly provided. */
     $onUpdateFn: (fn: () => TSelect) => ColumnValidator<TSelect, TInsert>;
-    /** Override the inferred select/insert type without changing runtime parsing (e.g. `v.string().$type<Id<"users">>()`). */
+    /** Override the inferred select/insert type without changing runtime parsing (e.g. `v.string().$type&lt;Id&lt;"users">>()`). */
     $type: <TOverride>() => ColumnValidator<TOverride, TOverride>;
     /** Refinement predicate run after parsing — see {@link Validator.check}. Chainable; preserves column modifiers. */
     check: (predicate: (value: TSelect) => boolean, message?: string) => ColumnValidator<TSelect, TInsert>;
@@ -108,19 +108,19 @@ export interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInse
  * {@link TimestampColumnValidator.defaultNow} so the field can default to the
  * insert-time clock.
  */
-export interface TimestampColumnValidator extends ColumnValidator<number, number> {
+interface TimestampColumnValidator extends ColumnValidator<number, number> {
     /** Default to the current epoch-ms (`Date.now()`) at insert time; field becomes optional on insert. */
     defaultNow: () => ColumnValidator<number, number | undefined>;
 }
 
 /** The type a validator/column presents on **select** (reads). */
-export type InferSelect<V> = V extends Validator<infer T> ? T : never;
+type InferSelect<V> = V extends Validator<infer T> ? T : never;
 
 /** The type a validator/column accepts on **insert** (writes). */
-export type InferInsert<V> = V extends Column<unknown, infer I> ? I : V extends Validator<infer T> ? T : never;
+type InferInsert<V> = V extends Column<unknown, infer I> ? I : V extends Validator<infer T> ? T : never;
 
 /** Derive the read shape of a table's column map. */
-export type SelectShape<S extends Record<string, Validator>> = {
+type SelectShape<S extends Record<string, Validator>> = {
     [K in keyof S]: InferSelect<S[K]>;
 };
 
@@ -129,7 +129,7 @@ export type SelectShape<S extends Record<string, Validator>> = {
  * includes `undefined` (via `.default()` / `.$defaultFn()` / `v.optional`)
  * become optional keys.
  */
-export type InsertShape<S extends Record<string, Validator>> = {
+type InsertShape<S extends Record<string, Validator>> = {
     [K in keyof S as undefined extends InferInsert<S[K]> ? K : never]?: Exclude<InferInsert<S[K]>, undefined>;
 } & {
     [K in keyof S as undefined extends InferInsert<S[K]> ? never : K]: InferInsert<S[K]>;
@@ -163,6 +163,11 @@ interface InternalColumnValidator<T> extends InternalValidator<T> {
     unique: () => InternalColumnValidator<T>;
 }
 
+// Declared as a function (not an arrow expression) so TypeScript treats its
+// `: never` return as a control-flow assertion — callers rely on this to narrow
+// `value` after `if (!check) fail(...)`. `func-style` is disabled here because
+// an arrow const loses that narrowing and surfaces no-unsafe-call downstream.
+// eslint-disable-next-line func-style
 function fail(context: ParseContext, expected: string, received: unknown): never {
     const { path } = context;
     const receivedDescription = describeValue(received);
@@ -184,10 +189,10 @@ const createValidator = <T>(
     const validator = {
         __type: undefined as unknown as T,
         _meta: { ...meta, column },
-        kind,
         _parse(value: unknown, context: ParseContext) {
             return parser(value, context);
         },
+        kind,
         parse(value: unknown) {
             return parser(value, { path: [] });
         },
@@ -215,9 +220,7 @@ const createValidator = <T>(
     // it clones the validator and lets the public signature retype the result.
     validator.$type = (() => rebuild({})) as InternalColumnValidator<T>["$type"];
     validator.nullable = () => {
-        const nullableParser = (value: unknown, context: ParseContext): null | T => {
-            return value === null ? null : parser(value, context);
-        };
+        const nullableParser = (value: unknown, context: ParseContext): null | T => (value === null ? null : parser(value, context));
 
         return createValidator<null | T>(kind, nullableParser, { ...meta, column: { ...column, notNull: false } });
     };
@@ -360,18 +363,18 @@ const literal = <T extends bigint | boolean | number | string | null>(literalVal
         ),
     );
 
-const array = <V extends Validator>(inner: V): ColumnValidator<Array<Infer<V>>, Array<Infer<V>>> => {
+const array = <V extends Validator>(inner: V): ColumnValidator<Infer<V>[], Infer<V>[]> => {
     const innerInternal = toInternal(inner as Validator<Infer<V>>);
 
     return asColumn(
-        createValidator<Array<Infer<V>>>(
+        createValidator<Infer<V>[]>(
             "array",
             (value, context) => {
                 if (!Array.isArray(value)) {
                     fail(context, "array", value);
                 }
 
-                const out: Array<Infer<V>> = [];
+                const out: Infer<V>[] = [];
 
                 for (const [index, element] of value.entries()) {
                     out.push(innerInternal._parse(element, { path: [...context.path, index] }));
@@ -389,8 +392,7 @@ type ObjectShapeType<S extends ObjectShape> = {
     [K in keyof S as undefined extends Infer<S[K]> ? K : never]?: Infer<S[K]>;
 } & { [K in keyof S as undefined extends Infer<S[K]> ? never : K]: Infer<S[K]> };
 
-const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<ObjectShapeType<S>, ObjectShapeType<S>> => {
-    return asColumn(
+const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<ObjectShapeType<S>, ObjectShapeType<S>> => asColumn(
         createValidator<ObjectShapeType<S>>(
             "object",
             (value, context) => {
@@ -417,7 +419,6 @@ const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<Objec
             { shape },
         ),
     );
-};
 
 const record = <K extends Validator<string>, V extends Validator>(
     keyValidator: K,
@@ -477,7 +478,7 @@ const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValid
                     }
                 }
 
-                fail(context, `union of ${members.length} member(s)`, value);
+                fail(context, `union of ${String(members.length)} member(s)`, value);
             },
             { members },
         ),
@@ -508,7 +509,7 @@ const any = (): ColumnValidator<unknown, unknown> => asColumn(createValidator<un
  * Validator/codec namespace. Each factory returns a {@link Validator} with a
  * runtime `parse`/`safeParse` plus a phantom `__type` field for inference.
  */
-export const v: {
+const v: {
     any: typeof any;
     array: typeof array;
     bigint: typeof bigintValidator;
@@ -543,3 +544,19 @@ export const v: {
     timestamp,
     union,
 };
+
+export type {
+    Column,
+    ColumnMeta,
+    ColumnValidator,
+    Id,
+    Infer,
+    InferInsert,
+    InferSelect,
+    InsertShape,
+    SelectShape,
+    TimestampColumnValidator,
+    Validator,
+    ValidatorKind,
+};
+export { v };

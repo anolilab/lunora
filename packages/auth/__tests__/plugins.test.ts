@@ -1,6 +1,42 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import * as plugins from "../src/plugins.js";
+import {
+    admin,
+    anonymous,
+    bearer,
+    customSession,
+    emailOTP,
+    genericOAuth,
+    jwt,
+    magicLink,
+    multiSession,
+    oAuthProxy,
+    oidcProvider,
+    organization,
+    phoneNumber,
+    siwe,
+    twoFactor,
+    username,
+} from "../src/plugins.js";
+
+const plugins = {
+    admin,
+    anonymous,
+    bearer,
+    customSession,
+    emailOTP,
+    genericOAuth,
+    jwt,
+    magicLink,
+    multiSession,
+    oAuthProxy,
+    oidcProvider,
+    organization,
+    phoneNumber,
+    siwe,
+    twoFactor,
+    username,
+};
 
 /**
  * The expansion shipped under `@cirrus/auth/plugins` is intentionally a
@@ -29,17 +65,17 @@ describe("@cirrus/auth/plugins", () => {
         "username",
     ] as const;
 
-    test.each(expectedExports)("exports `%s` as a callable factory", (name) => {
+    it.each(expectedExports)("exports `%s` as a callable factory", (name) => {
         expect.assertions(2);
 
         expect(plugins).toHaveProperty(name);
 
-        const factory = plugins[name as keyof typeof plugins];
+        const factory = plugins[name];
 
         expect(factory).toBeTypeOf("function");
     });
 
-    test("admin() returns a plugin object with a known shape", () => {
+    it("admin() returns a plugin object with a known shape", () => {
         expect.assertions(2);
 
         const plugin = plugins.admin();
@@ -48,7 +84,7 @@ describe("@cirrus/auth/plugins", () => {
         expect(plugin).toHaveProperty("id");
     });
 
-    test("organization() returns a plugin object with a known shape", () => {
+    it("organization() returns a plugin object with a known shape", () => {
         expect.assertions(2);
 
         const plugin = plugins.organization();

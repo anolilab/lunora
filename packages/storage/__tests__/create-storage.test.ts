@@ -1,14 +1,20 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createStorage } from "../src/create-storage.js";
 import type { R2BucketLike, R2ObjectBodyLike, R2ObjectLike } from "../src/types.js";
 
-const fakeObject = (key: string, etag: string = "etag-1"): R2ObjectLike => ({
+const BUCKET_RE = /bucket/;
+const PUBLIC_BASE_URL_RE = /publicBaseUrl/;
+const SIGNING_SECRET_RE = /signingSecret/;
+
+const fakeObject = (key: string, etag: string = "etag-1"): R2ObjectLike => {
+ return {
     key,
     size: 4,
     etag,
     httpMetadata: { contentType: "text/plain" },
-});
+};
+};
 
 const fakeBucket = (): R2BucketLike & { deletes: string[]; puts: { body: unknown; key: string; options?: unknown }[] } => {
     const puts: { body: unknown; key: string; options?: unknown }[] = [];
@@ -37,22 +43,24 @@ const fakeBucket = (): R2BucketLike & { deletes: string[]; puts: { body: unknown
         delete: vi.fn<R2BucketLike["delete"]>(async (key) => {
             deletes.push(key);
         }),
-        list: vi.fn<R2BucketLike["list"]>(async (options) => ({
+        list: vi.fn<R2BucketLike["list"]>(async (options) => {
+ return {
             objects: [fakeObject(`${options?.prefix ?? ""}a`), fakeObject(`${options?.prefix ?? ""}b`)],
             cursor: options?.cursor ? undefined : "next-cursor",
-        })),
+        };
+}),
     };
 };
 
 describe("createStorage", () => {
-    test("throws when bucket is missing", () => {
+    it("throws when bucket is missing", () => {
         expect.assertions(1);
 
         // @ts-expect-error - intentional misuse
-        expect(() => createStorage({})).toThrow(/bucket/);
+        expect(() => createStorage({})).toThrow(BUCKET_RE);
     });
 
-    test("upload() forwards content-type + metadata", async () => {
+    it("upload() forwards content-type + metadata", async () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
@@ -70,7 +78,7 @@ describe("createStorage", () => {
         });
     });
 
-    test("download() returns the R2 object body or null", async () => {
+    it("download() returns the R2 object body or null", async () => {
         expect.assertions(3);
 
         const bucket = fakeBucket();
@@ -86,7 +94,7 @@ describe("createStorage", () => {
         expect(missing).toBeNull();
     });
 
-    test("delete() forwards to the bucket", async () => {
+    it("delete() forwards to the bucket", async () => {
         expect.assertions(1);
 
         const bucket = fakeBucket();
@@ -97,7 +105,7 @@ describe("createStorage", () => {
         expect(bucket.deletes).toEqual(["k"]);
     });
 
-    test("list() returns objects + cursor", async () => {
+    it("list() returns objects + cursor", async () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
@@ -109,16 +117,16 @@ describe("createStorage", () => {
         expect(result.cursor).toBe("next-cursor");
     });
 
-    test("getUrl() requires publicBaseUrl", () => {
+    it("getUrl() requires publicBaseUrl", () => {
         expect.assertions(1);
 
         const bucket = fakeBucket();
         const storage = createStorage({ bucket });
 
-        expect(() => storage.getUrl("x")).toThrow(/publicBaseUrl/);
+        expect(() => storage.getUrl("x")).toThrow(PUBLIC_BASE_URL_RE);
     });
 
-    test("getUrl() joins the base URL and key, trimming trailing slashes", () => {
+    it("getUrl() joins the base URL and key, trimming trailing slashes", () => {
         expect.assertions(1);
 
         const bucket = fakeBucket();
@@ -127,20 +135,20 @@ describe("createStorage", () => {
         expect(storage.getUrl("uploads/x.png")).toBe("https://cdn.test/uploads/x.png");
     });
 
-    test("getSignedUrl() requires publicBaseUrl + signingSecret", async () => {
+    it("getSignedUrl() requires publicBaseUrl + signingSecret", async () => {
         expect.assertions(2);
 
         const bucket = fakeBucket();
         const storage = createStorage({ bucket });
 
-        await expect(storage.getSignedUrl("x")).rejects.toThrow(/publicBaseUrl/);
+        await expect(storage.getSignedUrl("x")).rejects.toThrow(PUBLIC_BASE_URL_RE);
 
         const partial = createStorage({ bucket, publicBaseUrl: "https://cdn.test" });
 
-        await expect(partial.getSignedUrl("x")).rejects.toThrow(/signingSecret/);
+        await expect(partial.getSignedUrl("x")).rejects.toThrow(SIGNING_SECRET_RE);
     });
 
-    test("getSignedUrl() returns a parseable URL with sig + exp", async () => {
+    it("getSignedUrl() returns a parseable URL with sig + exp", async () => {
         expect.assertions(4);
 
         const bucket = fakeBucket();

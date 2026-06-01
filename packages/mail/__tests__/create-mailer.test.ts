@@ -1,7 +1,11 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createMailer } from "../src/create-mailer.js";
 import type { MailTransport, QueueLike, SendPayload } from "../src/types.js";
+
+const FROM_PATTERN = /from/;
+const API_KEY_PATTERN = /apiKey/;
+const QUEUE_PATTERN = /queue/;
 
 const fakeTransport = (id: string = "msg-1"): { sent: SendPayload[]; transport: MailTransport } => {
     const sent: SendPayload[] = [];
@@ -17,19 +21,19 @@ const fakeTransport = (id: string = "msg-1"): { sent: SendPayload[]; transport: 
 };
 
 describe("createMailer", () => {
-    test("throws when `from` is missing", () => {
+    it("throws when `from` is missing", () => {
         expect.assertions(1);
 
-        expect(() => createMailer({ from: "" })).toThrow(/from/);
+        expect(() => createMailer({ from: "" })).toThrow(FROM_PATTERN);
     });
 
-    test("throws when neither apiKey nor transport is configured", () => {
+    it("throws when neither apiKey nor transport is configured", () => {
         expect.assertions(1);
 
-        expect(() => createMailer({ from: "noreply@x.test" })).toThrow(/apiKey/);
+        expect(() => createMailer({ from: "noreply@x.test" })).toThrow(API_KEY_PATTERN);
     });
 
-    test("send() forwards to the transport with the default `from`", async () => {
+    it("send() forwards to the transport with the default `from`", async () => {
         expect.assertions(3);
 
         const { transport, sent } = fakeTransport("id-42");
@@ -51,7 +55,7 @@ describe("createMailer", () => {
         });
     });
 
-    test("send() honors a per-call `from` override", async () => {
+    it("send() honors a per-call `from` override", async () => {
         expect.assertions(1);
 
         const { transport, sent } = fakeTransport();
@@ -62,7 +66,7 @@ describe("createMailer", () => {
         expect(sent[0]?.from).toBe("Bob <bob@x.test>");
     });
 
-    test("queue() enqueues a serializable payload and skips the transport", async () => {
+    it("queue() enqueues a serializable payload and skips the transport", async () => {
         expect.assertions(4);
 
         const { transport, sent } = fakeTransport();
@@ -91,12 +95,12 @@ describe("createMailer", () => {
         expect(sent).toHaveLength(0);
     });
 
-    test("queue() requires a queue binding", async () => {
+    it("queue() requires a queue binding", async () => {
         expect.assertions(1);
 
         const { transport } = fakeTransport();
         const mailer = createMailer({ from: "x@x.test", transport });
 
-        await expect(mailer.queue({ to: "a@x.test", subject: "x", text: "y" })).rejects.toThrow(/queue/);
+        await expect(mailer.queue({ to: "a@x.test", subject: "x", text: "y" })).rejects.toThrow(QUEUE_PATTERN);
     });
 });

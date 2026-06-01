@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { RateLimiter } from "../src/rate-limiter.js";
 import { createMemoryStore, createSqlStore } from "../src/store.js";
 import { createSqliteSql } from "./_helpers/node-sqlite.js";
 
 describe("memory store", () => {
-    test("round-trips and deletes values", () => {
+    it("round-trips and deletes values", () => {
         expect.assertions(3);
 
         const store = createMemoryStore();
@@ -33,7 +33,7 @@ describe("sql store (real node:sqlite)", () => {
         harness.close();
     });
 
-    test("persists fractional token-bucket values across reads", () => {
+    it("persists fractional token-bucket values across reads", () => {
         expect.assertions(1);
 
         const store = createSqlStore({ sql: harness.sql });
@@ -43,7 +43,7 @@ describe("sql store (real node:sqlite)", () => {
         expect(store.get("send:alice")).toEqual({ ts: 1234, value: 2.5 });
     });
 
-    test("round-trips the sliding-window previous-window count", () => {
+    it("round-trips the sliding-window previous-window count", () => {
         expect.assertions(1);
 
         const store = createSqlStore({ sql: harness.sql });
@@ -53,7 +53,7 @@ describe("sql store (real node:sqlite)", () => {
         expect(store.get("hits:bob")).toEqual({ prev: 7, ts: 1000, value: 3 });
     });
 
-    test("upserts on conflict and deletes", () => {
+    it("upserts on conflict and deletes", () => {
         expect.assertions(3);
 
         const store = createSqlStore({ sql: harness.sql });
@@ -71,7 +71,7 @@ describe("sql store (real node:sqlite)", () => {
         expect(store.get("k")).toBeUndefined();
     });
 
-    test("backs a RateLimiter end to end", async () => {
+    it("backs a RateLimiter end to end", async () => {
         expect.assertions(3);
 
         const clock = { now: 0 };

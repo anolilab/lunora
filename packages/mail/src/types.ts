@@ -46,7 +46,7 @@ export interface SendOpts {
 export interface CirrusMailOptions {
     /** API key for the default Resend transport. Ignored when `transport` is set. */
     apiKey?: string;
-    /** Default sender (`Name <addr@host>` or bare email). */
+    /** Default sender (`Name &lt;addr@host>` or bare email). */
     from: string;
     /** Default queue binding for `mailer.queue()`. */
     queue?: QueueLike;

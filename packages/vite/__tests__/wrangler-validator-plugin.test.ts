@@ -2,10 +2,15 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ResolvedCirrusPluginOptions } from "../src/types.js";
 import { wranglerValidatorPlugin } from "../src/wrangler-validator-plugin.js";
+
+const WRANGLER_NOT_FOUND = /wrangler\.jsonc not found/u;
+const SHARD_SHARDDO = /SHARD.+ShardDO/u;
+const D1_DATABASES = /d1_databases/u;
+const COMPATIBILITY_DATE = /compatibility_date/u;
 
 const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@cirrus/server";
 
@@ -44,7 +49,8 @@ const VALID_WRANGLER = `{
 }
 `;
 
-const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => ({
+const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => {
+ return {
     cloudflare: false,
     dashboard: false,
     generatedDir: "cirrus/_generated",
@@ -52,7 +58,8 @@ const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => ({
     projectRoot,
     schemaDir: "cirrus",
     validateWrangler: true,
-});
+};
+};
 
 let workdir: string;
 
@@ -75,7 +82,7 @@ describe("wrangler-validator-plugin", () => {
     });
 
     describe("wranglerValidatorPlugin", () => {
-        test("passes when wrangler.jsonc declares everything the schema implies", () => {
+        it("passes when wrangler.jsonc declares everything the schema implies", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_WITH_GLOBAL);
@@ -88,7 +95,7 @@ describe("wrangler-validator-plugin", () => {
             }).not.toThrow();
         });
 
-        test("throws when wrangler.jsonc is missing entirely", () => {
+        it("throws when wrangler.jsonc is missing entirely", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -97,10 +104,10 @@ describe("wrangler-validator-plugin", () => {
 
             expect(() => {
                 callConfigResolved(plugin);
-            }).toThrow(/wrangler\.jsonc not found/u);
+            }).toThrow(WRANGLER_NOT_FOUND);
         });
 
-        test("throws when SHARD durable-object binding is missing", () => {
+        it("throws when SHARD durable-object binding is missing", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -119,10 +126,10 @@ describe("wrangler-validator-plugin", () => {
 
             expect(() => {
                 callConfigResolved(plugin);
-            }).toThrow(/SHARD.+ShardDO/u);
+            }).toThrow(SHARD_SHARDDO);
         });
 
-        test("throws when schema has .global() tables but D1 binding is missing", () => {
+        it("throws when schema has .global() tables but D1 binding is missing", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_WITH_GLOBAL);
@@ -144,10 +151,10 @@ describe("wrangler-validator-plugin", () => {
 
             expect(() => {
                 callConfigResolved(plugin);
-            }).toThrow(/d1_databases/u);
+            }).toThrow(D1_DATABASES);
         });
 
-        test("does not require D1 when no table is global", () => {
+        it("does not require D1 when no table is global", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -172,7 +179,7 @@ describe("wrangler-validator-plugin", () => {
             }).not.toThrow();
         });
 
-        test("throws when compatibility_date is too old", () => {
+        it("throws when compatibility_date is too old", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);
@@ -194,10 +201,10 @@ describe("wrangler-validator-plugin", () => {
 
             expect(() => {
                 callConfigResolved(plugin);
-            }).toThrow(/compatibility_date/u);
+            }).toThrow(COMPATIBILITY_DATE);
         });
 
-        test("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", () => {
+        it("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", () => {
             expect.assertions(1);
 
             // The flag became the default on 2026-04-07; workerd warns when it's set redundantly.
@@ -223,7 +230,7 @@ describe("wrangler-validator-plugin", () => {
             }).not.toThrow();
         });
 
-        test("supports jsonc comments and trailing commas", () => {
+        it("supports jsonc comments and trailing commas", () => {
             expect.assertions(1);
 
             writeSchema(SCHEMA_NO_GLOBAL);

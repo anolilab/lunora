@@ -19,7 +19,7 @@ export const createFakeState = (): SchedulerDOState & {
             get: async <T = unknown>(key: string) => storageMap.get(key) as T | undefined,
             put: async <T = unknown>(entries: Record<string, T> | string, value?: T) => {
                 if (typeof entries === "string") {
-                    storageMap.set(entries, value as unknown);
+                    storageMap.set(entries, value);
 
                     return;
                 }
@@ -43,7 +43,10 @@ export const createFakeState = (): SchedulerDOState & {
             list: async <T = unknown>(options: { limit?: number; prefix?: string } = {}) => {
                 const result = new Map<string, T>();
                 const prefix = options.prefix ?? "";
-                const keys = [...storageMap.keys()].filter((key) => key.startsWith(prefix)).sort();
+                // Code-unit ordering (NOT locale-aware): the time index relies on
+                // lexical byte order matching numeric order, so keep the default
+                // string comparison rather than `localeCompare`.
+                const keys = [...storageMap.keys()].filter((key) => key.startsWith(prefix)).toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
                 for (const key of keys.slice(0, options.limit ?? keys.length)) {
                     result.set(key, storageMap.get(key) as T);

@@ -3,7 +3,10 @@ import type { AddressInfo } from "node:net";
 import type { Plugin, ViteDevServer } from "vite";
 
 /** Dev-server path the dashboard SPA is served from. */
-export const DASHBOARD_PATH = "/__cirrus";
+const DASHBOARD_PATH = "/__cirrus";
+
+const LEADING_SLASH = /^\//;
+const TRAILING_SLASH = /\/$/;
 
 /**
  * The single-page document served at {@link DASHBOARD_PATH}. The inline module
@@ -35,8 +38,8 @@ const DASHBOARD_HTML = `<!doctype html>
  * `resolvedUrls.local` (honours `host` / `base` / https); falls back to the raw
  * socket address, bracketing IPv6 and normalising the wildcard host.
  */
-export const buildDashboardUrl = (input: { address?: AddressInfo | null | string; base?: string; resolvedLocal?: string }): string => {
-    const path = DASHBOARD_PATH.replace(/^\//, "");
+const buildDashboardUrl = (input: { address?: AddressInfo | null | string; base?: string; resolvedLocal?: string }): string => {
+    const path = DASHBOARD_PATH.replace(LEADING_SLASH, "");
 
     if (input.resolvedLocal !== undefined && input.resolvedLocal !== "") {
         const origin = input.resolvedLocal.endsWith("/") ? input.resolvedLocal.slice(0, -1) : input.resolvedLocal;
@@ -44,7 +47,7 @@ export const buildDashboardUrl = (input: { address?: AddressInfo | null | string
         return `${origin}/${path}`;
     }
 
-    const base = input.base === undefined || input.base === "/" ? "" : input.base.replace(/\/$/, "");
+    const base = input.base === undefined || input.base === "/" ? "" : input.base.replace(TRAILING_SLASH, "");
 
     if (input.address === null || input.address === undefined || typeof input.address === "string") {
         return `http://localhost:5173${base}/${path}`;
@@ -53,7 +56,7 @@ export const buildDashboardUrl = (input: { address?: AddressInfo | null | string
     const host = input.address.address === "::" || input.address.address === "0.0.0.0" ? "localhost" : input.address.address;
     const bracketed = host.includes(":") ? `[${host}]` : host;
 
-    return `http://${bracketed}:${input.address.port}${base}/${path}`;
+    return `http://${bracketed}:${String(input.address.port)}${base}/${path}`;
 };
 
 /**
@@ -64,9 +67,8 @@ export const buildDashboardUrl = (input: { address?: AddressInfo | null | string
  * Because `cirrus dev` spawns Vite, this makes the dashboard available on
  * `cirrus dev` and on a plain `vite` with no per-project files.
  */
-export const dashboardPlugin = (): Plugin => {
+const dashboardPlugin = (): Plugin => {
     return {
-        name: "cirrus:dashboard",
         apply: "serve",
         configureServer(server: ViteDevServer) {
             // Refuse to serve the dashboard route when Vite is bound to a
@@ -133,5 +135,8 @@ export const dashboardPlugin = (): Plugin => {
                 }
             };
         },
+        name: "cirrus:dashboard",
     };
 };
+
+export { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin };

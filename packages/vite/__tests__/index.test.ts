@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { cirrus } from "../src/index.js";
 
@@ -41,7 +41,7 @@ describe("index", () => {
     });
 
     describe("cirrus()", () => {
-        test("returns an array of plugins including the cirrus internals and cloudflare", async () => {
+        it("returns an array of plugins including the cirrus internals and cloudflare", async () => {
             expect.hasAssertions();
 
             const plugins = await cirrus({ overlay: false, projectRoot: workdir, validateWrangler: true });
@@ -56,7 +56,7 @@ describe("index", () => {
             expect(names.some((name) => name.includes("cloudflare"))).toBe(true);
         });
 
-        test("excludes the cloudflare plugin when cloudflare is false", async () => {
+        it("excludes the cloudflare plugin when cloudflare is false", async () => {
             expect.hasAssertions();
 
             const plugins = await cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
@@ -67,7 +67,7 @@ describe("index", () => {
             expect(names.some((name) => name.includes("cloudflare"))).toBe(false);
         });
 
-        test("excludes the wrangler validator when validateWrangler is false", async () => {
+        it("excludes the wrangler validator when validateWrangler is false", async () => {
             expect.hasAssertions();
 
             const plugins = await cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
@@ -77,7 +77,7 @@ describe("index", () => {
             expect(names).not.toContain("cirrus:wrangler-validator");
         });
 
-        test("includes the overlay plugin when overlay is true", async () => {
+        it("includes the overlay plugin when overlay is true", async () => {
             expect.assertions(1);
 
             const plugins = await cirrus({ cloudflare: false, overlay: true, projectRoot: workdir, validateWrangler: false });

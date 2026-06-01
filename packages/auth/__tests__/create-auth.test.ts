@@ -1,7 +1,9 @@
-import { describe, expect, expectTypeOf, test } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { createAuth } from "../src/create-auth.js";
 import { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "../src/handler.js";
+
+const SECRET_PATTERN = /secret/i;
 
 /**
  * Unit smoke tests for the better-auth wrapper. End-to-end coverage lives in
@@ -10,12 +12,12 @@ import { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "../src/handler.js";
  * unrelated paths skipped).
  */
 describe("createAuth", () => {
-    test("throws when secret is missing", () => {
+    it("throws when secret is missing", () => {
         expect.assertions(1);
-        expect(() => createAuth({ secret: "" })).toThrow(/secret/i);
+        expect(() => createAuth({ secret: "" })).toThrow(SECRET_PATTERN);
     });
 
-    test("returns an instance with handler + api + options", () => {
+    it("returns an instance with handler + api + options", () => {
         expect.assertions(2);
 
         const auth = createAuth({
@@ -36,7 +38,7 @@ describe("handleAuthRequest", () => {
         secret: "s".repeat(32),
     });
 
-    test("returns null for paths outside the auth base path", async () => {
+    it("returns null for paths outside the auth base path", async () => {
         expect.assertions(1);
 
         const response = await handleAuthRequest(auth, new Request("https://app.test/api/other/thing"));
@@ -44,7 +46,7 @@ describe("handleAuthRequest", () => {
         expect(response).toBeNull();
     });
 
-    test("returns null for the runtime's RPC path", async () => {
+    it("returns null for the runtime's RPC path", async () => {
         expect.assertions(1);
 
         const response = await handleAuthRequest(auth, new Request("https://app.test/_cirrus/rpc"));
@@ -52,7 +54,7 @@ describe("handleAuthRequest", () => {
         expect(response).toBeNull();
     });
 
-    test("delegates to auth.handler for /api/auth/* paths", async () => {
+    it("delegates to auth.handler for /api/auth/* paths", async () => {
         expect.assertions(1);
 
         // Better-auth returns a real Response even when the underlying op
@@ -63,7 +65,7 @@ describe("handleAuthRequest", () => {
         expect(response).toBeInstanceOf(Response);
     });
 
-    test("honours a custom basePath", async () => {
+    it("honours a custom basePath", async () => {
         expect.assertions(1);
 
         const response = await handleAuthRequest(auth, new Request("https://app.test/auth/get-session"), "/auth");
@@ -71,7 +73,7 @@ describe("handleAuthRequest", () => {
         expect(response).toBeInstanceOf(Response);
     });
 
-    test("dEFAULT_AUTH_BASE_PATH is /api/auth", () => {
+    it("dEFAULT_AUTH_BASE_PATH is /api/auth", () => {
         expect.assertions(1);
         expect(DEFAULT_AUTH_BASE_PATH).toBe("/api/auth");
     });

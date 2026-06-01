@@ -11,7 +11,7 @@ import type { SchedulerDOState, SchedulerEnv } from "../../src/scheduler-do.js";
 import { SchedulerDO } from "../../src/scheduler-do.js";
 import type { ScheduleRecord } from "../../src/types.js";
 
-export interface Env {
+interface Env {
     SCHEDULER: DurableObjectNamespace<TestSchedulerDO>;
 }
 
@@ -21,9 +21,10 @@ export interface Env {
  * `state.storage.list({ end })` parameter is the inclusive upper bound; the
  * mock honours `key < end` which is the same semantics. Other methods map 1:1.
  */
-const toSchedulerState = (ctx: DurableObjectState): SchedulerDOState => ({
+const toSchedulerState = (ctx: DurableObjectState): SchedulerDOState => {
+ return {
     storage: {
-        get: <T = unknown>(key: string) => ctx.storage.get<T>(key) as Promise<T | undefined>,
+        get: <T = unknown>(key: string) => ctx.storage.get<T>(key),
         put: <T = unknown>(entries: Record<string, T> | string, value?: T) => {
             if (typeof entries === "string") {
                 return ctx.storage.put(entries, value);
@@ -43,15 +44,16 @@ const toSchedulerState = (ctx: DurableObjectState): SchedulerDOState => ({
         getAlarm: () => ctx.storage.getAlarm(),
         deleteAlarm: () => ctx.storage.deleteAlarm(),
     },
-});
+};
+};
 
-export class TestSchedulerDO extends DurableObject<Env> {
-    private readonly scheduler: ConcreteScheduler;
-
+class TestSchedulerDO extends DurableObject<Env> {
     /** Records every dispatch attempted by the real alarm fire path. */
     public dispatched: ScheduleRecord[] = [];
 
-    constructor(ctx: DurableObjectState, env: Env) {
+    private readonly scheduler: ConcreteScheduler;
+
+    public constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
         // Cast: SchedulerEnv is a bag of bindings; our test `Env` is a
         // subtype of it.
@@ -68,7 +70,7 @@ export class TestSchedulerDO extends DurableObject<Env> {
 }
 
 class ConcreteScheduler extends SchedulerDO {
-    constructor(
+    public constructor(
         state: SchedulerDOState,
         env: SchedulerEnv,
         private readonly outer: TestSchedulerDO,
@@ -83,8 +85,12 @@ class ConcreteScheduler extends SchedulerDO {
     }
 }
 
-export default {
+const testWorker = {
     async fetch(_request: Request, _env: Env): Promise<Response> {
         return new Response("test-worker", { status: 200 });
     },
 };
+
+export default testWorker;
+export { TestSchedulerDO };
+export type { Env };

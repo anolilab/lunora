@@ -1,8 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { RateLimitError } from "../src/error.js";
 import { RateLimiter } from "../src/rate-limiter.js";
 import type { RateLimitConfigMap } from "../src/types.js";
+
+const NOT_CONFIGURED_RE = /not configured/;
+const POSITIVE_INTEGER_RE = /positive integer/;
 
 const config = {
     login: { kind: "fixed window", period: 1000, rate: 3 },
@@ -17,7 +20,7 @@ const makeLimiter = (overrides: { clock?: { now: number }; denyList?: string[] }
 };
 
 describe("limit", () => {
-    test("consumes capacity and then rejects", async () => {
+    it("consumes capacity and then rejects", async () => {
         expect.hasAssertions();
 
         const limiter = makeLimiter();
@@ -29,7 +32,7 @@ describe("limit", () => {
         await expect(limiter.limit("send")).resolves.toMatchObject({ ok: false, reason: "rate" });
     });
 
-    test("isolates separate keys", async () => {
+    it("isolates separate keys", async () => {
         expect.hasAssertions();
 
         const limiter = makeLimiter();
@@ -43,7 +46,7 @@ describe("limit", () => {
         await expect(limiter.limit("send", { key: "bob" })).resolves.toMatchObject({ ok: true });
     });
 
-    test("count consumes multiple units at once", async () => {
+    it("count consumes multiple units at once", async () => {
         expect.assertions(2);
 
         const limiter = makeLimiter();
@@ -52,7 +55,7 @@ describe("limit", () => {
         await expect(limiter.limit("send", { count: 1 })).resolves.toMatchObject({ ok: false });
     });
 
-    test("throws RateLimitError when throws is set", async () => {
+    it("throws RateLimitError when throws is set", async () => {
         expect.assertions(1);
 
         const limiter = makeLimiter();
@@ -62,18 +65,18 @@ describe("limit", () => {
         await expect(limiter.limit("send", { throws: true })).rejects.toBeInstanceOf(RateLimitError);
     });
 
-    test("unknown limit name throws", async () => {
+    it("unknown limit name throws", async () => {
         expect.assertions(1);
 
         const limiter = makeLimiter();
 
         // @ts-expect-error -- "nope" is not a configured limit name.
-        await expect(limiter.limit("nope")).rejects.toThrow(/not configured/);
+        await expect(limiter.limit("nope")).rejects.toThrow(NOT_CONFIGURED_RE);
     });
 });
 
 describe("check", () => {
-    test("does not consume", async () => {
+    it("does not consume", async () => {
         expect.assertions(2);
 
         const limiter = makeLimiter();
@@ -88,7 +91,7 @@ describe("check", () => {
 });
 
 describe("getValue", () => {
-    test("reports a full bucket for a key that has never been seen", async () => {
+    it("reports a full bucket for a key that has never been seen", async () => {
         expect.assertions(2);
 
         const limiter = makeLimiter();
@@ -101,7 +104,7 @@ describe("getValue", () => {
 });
 
 describe("reserve", () => {
-    test("permits a deficit and persists the debt for later calls", async () => {
+    it("permits a deficit and persists the debt for later calls", async () => {
         expect.assertions(3);
 
         const clock = { now: 0 };
@@ -121,7 +124,7 @@ describe("reserve", () => {
 });
 
 describe("key derivation", () => {
-    test("a limit named with the separator cannot collide with a keyed limit", async () => {
+    it("a limit named with the separator cannot collide with a keyed limit", async () => {
         expect.assertions(1);
 
         const limiter = new RateLimiter({
@@ -137,7 +140,7 @@ describe("key derivation", () => {
 });
 
 describe("reset", () => {
-    test("clears accumulated usage", async () => {
+    it("clears accumulated usage", async () => {
         expect.assertions(2);
 
         const limiter = makeLimiter();
@@ -153,7 +156,7 @@ describe("reset", () => {
 });
 
 describe("deny list", () => {
-    test("denies listed keys before any accounting", async () => {
+    it("denies listed keys before any accounting", async () => {
         expect.assertions(2);
 
         const limiter = makeLimiter({ denyList: ["banned"] });
@@ -164,7 +167,7 @@ describe("deny list", () => {
         expect(status.retryAfter).toBe(Number.POSITIVE_INFINITY);
     });
 
-    test("leaves other keys unaffected", async () => {
+    it("leaves other keys unaffected", async () => {
         expect.assertions(1);
 
         const limiter = makeLimiter({ denyList: ["banned"] });
@@ -174,7 +177,7 @@ describe("deny list", () => {
 });
 
 describe("clock progression", () => {
-    test("a fixed-window limit recovers in the next window", async () => {
+    it("a fixed-window limit recovers in the next window", async () => {
         expect.assertions(2);
 
         const clock = { now: 0 };
@@ -189,7 +192,7 @@ describe("clock progression", () => {
         await expect(limiter.limit("login")).resolves.toMatchObject({ ok: true });
     });
 
-    test("a sliding-window limit stays suppressed across the boundary until it decays", async () => {
+    it("a sliding-window limit stays suppressed across the boundary until it decays", async () => {
         expect.hasAssertions();
 
         const clock = { now: 0 };
@@ -214,7 +217,7 @@ describe("clock progression", () => {
 });
 
 describe("live refill", () => {
-    test("getValue projects token-bucket refill to the current clock", async () => {
+    it("getValue projects token-bucket refill to the current clock", async () => {
         expect.assertions(2);
 
         const clock = { now: 0 };
@@ -223,13 +226,17 @@ describe("live refill", () => {
         await limiter.limit("send", { count: 5 });
 
         // Drained now; nothing to spend.
-        expect((await limiter.getValue("send")).value).toBe(0);
+        const drained = await limiter.getValue("send");
+
+        expect(drained.value).toBe(0);
 
         // Half a period later, the 5/1000ms refill has accrued 2.5 tokens — a live
         // figure, not the 0 that was persisted.
         clock.now = 500;
 
-        expect((await limiter.getValue("send")).value).toBe(2.5);
+        const refilled = await limiter.getValue("send");
+
+        expect(refilled.value).toBe(2.5);
     });
 });
 
@@ -238,7 +245,7 @@ describe("sharding", () => {
 
     const shardedLimiter = () => new RateLimiter({ config: shardedConfig, now: () => 0 });
 
-    test("same key always lands on the same shard (deterministic)", async () => {
+    it("same key always lands on the same shard (deterministic)", async () => {
         expect.assertions(3);
 
         const limiter = shardedLimiter();
@@ -251,7 +258,7 @@ describe("sharding", () => {
         await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: false, reason: "rate" });
     });
 
-    test("getValue reflects the single shard the key routes to", async () => {
+    it("getValue reflects the single shard the key routes to", async () => {
         expect.assertions(3);
 
         const limiter = shardedLimiter();
@@ -269,10 +276,12 @@ describe("sharding", () => {
         await limiter.limit("hits", { key: "alice" });
 
         // Alice's shard is now drained, so getValue for her key reports 0.
-        expect((await limiter.getValue("hits", { key: "alice" })).value).toBe(0);
+        const drained = await limiter.getValue("hits", { key: "alice" });
+
+        expect(drained.value).toBe(0);
     });
 
-    test("reset clears every shard", async () => {
+    it("reset clears every shard", async () => {
         expect.assertions(2);
 
         const limiter = shardedLimiter();
@@ -287,11 +296,11 @@ describe("sharding", () => {
         await expect(limiter.limit("hits", { key: "alice" })).resolves.toMatchObject({ ok: true });
     });
 
-    test("rejects a non-integer shard count at construction", () => {
+    it("rejects a non-integer shard count at construction", () => {
         expect.assertions(1);
 
         expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", period: 1000, rate: 4, shards: 1.5 } }, now: () => 0 })).toThrow(
-            /positive integer/,
+            POSITIVE_INTEGER_RE,
         );
     });
 });

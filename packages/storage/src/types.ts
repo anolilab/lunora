@@ -44,6 +44,7 @@ export interface UploadOptions {
     allowedContentTypes?: ReadonlyArray<string>;
     contentType?: string;
     customMetadata?: Record<string, string>;
+
     /**
      * Maximum body size in bytes. Enforced for `ArrayBuffer`/`Blob` sources
      * whose length is known synchronously; ignored for `ReadableStream`.

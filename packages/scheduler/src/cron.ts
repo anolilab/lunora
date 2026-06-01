@@ -1,6 +1,6 @@
 import type { FunctionReference } from "./types.js";
 
-export interface CronTriggerOptions {
+interface CronTriggerOptions {
     /** Args passed to the function. */
     args?: Record<string, unknown>;
     /** The Cirrus function to invoke on each trigger fire. */
@@ -9,7 +9,7 @@ export interface CronTriggerOptions {
     schedule: string;
 }
 
-export interface CronTriggerSnippet {
+interface CronTriggerSnippet {
     /** Paste these into `wrangler.jsonc` under `triggers.crons`. */
     crons: string[];
     /** Routes the Worker should mount to receive the trigger dispatch. */
@@ -28,11 +28,13 @@ export interface CronTriggerSnippet {
 // that would otherwise silently no-op.
 const CRON_PIECE = /^(?:\*|\*\/\d+|\d+(?:-\d+)?(?:\/\d+)?)$/u;
 
+const CRON_FIELD_SEPARATOR = /\s+/u;
+
 const isValidCronField = (field: string): boolean => field.split(",").every((piece) => CRON_PIECE.test(piece));
 
 /** Standard 5-field (minute hour day month dow) or 6-field (with seconds) cron. */
 const isValidCronExpression = (schedule: string): boolean => {
-    const tokens = schedule.trim().split(/\s+/u);
+    const tokens = schedule.trim().split(CRON_FIELD_SEPARATOR);
 
     if (tokens.length !== 5 && tokens.length !== 6) {
         return false;
@@ -46,7 +48,7 @@ const isValidCronExpression = (schedule: string): boolean => {
  * function. The actual cron handler is mounted by `@cirrus/runtime` — we only
  * emit the configuration here.
  */
-export const createCronTrigger = (options: CronTriggerOptions): CronTriggerSnippet => {
+const createCronTrigger = (options: CronTriggerOptions): CronTriggerSnippet => {
     if (!options.schedule || !options.fn) {
         throw new Error("@cirrus/scheduler: createCronTrigger() requires `schedule` and `fn`");
     }
@@ -68,9 +70,12 @@ export const createCronTrigger = (options: CronTriggerOptions): CronTriggerSnipp
     return {
         crons: [options.schedule],
         dispatcher: {
-            functionPath: options.fn.__cirrusRef,
             args: options.args ?? {},
+            functionPath: options.fn.__cirrusRef,
         },
         wranglerJsonc: snippet,
     };
 };
+
+export { createCronTrigger };
+export type { CronTriggerOptions, CronTriggerSnippet };

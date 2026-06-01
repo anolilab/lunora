@@ -1,7 +1,7 @@
 import type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "./types.js";
 
 /** Inputs to {@link evaluate}. */
-export interface EvaluateOptions {
+interface EvaluateOptions {
     /** When `false`, compute status without consuming (a `check`). */
     consume: boolean;
     /** Units requested. */
@@ -13,7 +13,7 @@ export interface EvaluateOptions {
 }
 
 /** Result of evaluating a limit against its prior state. */
-export interface EvaluateResult {
+interface EvaluateResult {
     status: RateLimitStatus;
     /** Next value to persist, or `null` when the call must not mutate state. */
     value: RateLimitValue | null;
@@ -142,10 +142,10 @@ const slidingWindow = (config: RateLimitConfig, prior: RateLimitValue | undefine
  * units could be admitted right now. Token bucket → the refilled token count;
  * fixed window → tokens left in the current (possibly rolled-over) window;
  * sliding window → `rate` minus the weighted estimate, floored at zero. Pure,
- * like {@link evaluate}. Backs {@link RateLimiter.getValue} so it reports a
+ * like {@link evaluate}. Backs `RateLimiter.getValue` so it reports a
  * live figure rather than the last value that happened to be persisted.
  */
-export const availableAt = (config: RateLimitConfig, prior: RateLimitValue | undefined, now: number): { ts: number; value: number } => {
+const availableAt = (config: RateLimitConfig, prior: RateLimitValue | undefined, now: number): { ts: number; value: number } => {
     if (config.kind === "token bucket") {
         const capacity = capacityOf(config);
         const ratePerMs = config.rate / config.period;
@@ -189,7 +189,7 @@ export const availableAt = (config: RateLimitConfig, prior: RateLimitValue | und
  * clock or persists — the caller supplies `now` and writes back `value` when
  * it is non-`null`.
  */
-export const evaluate = (config: RateLimitConfig, prior: RateLimitValue | undefined, options: EvaluateOptions): EvaluateResult => {
+const evaluate = (config: RateLimitConfig, prior: RateLimitValue | undefined, options: EvaluateOptions): EvaluateResult => {
     if (config.kind === "token bucket") {
         return tokenBucket(config, prior, options);
     }
@@ -200,3 +200,6 @@ export const evaluate = (config: RateLimitConfig, prior: RateLimitValue | undefi
 
     return fixedWindow(config, prior, options);
 };
+
+export type { EvaluateOptions, EvaluateResult };
+export { availableAt, evaluate };

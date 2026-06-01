@@ -22,6 +22,6 @@ export const createSqliteSql = (): { close: () => void; sql: SqlLike } => {
         close: () => {
             db.close();
         },
-        sql: { exec: run as SqlLike["exec"] },
+        sql: { exec: run },
     };
 };

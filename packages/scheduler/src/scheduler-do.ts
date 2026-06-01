@@ -7,7 +7,7 @@ import type { ScheduleRecord } from "./types.js";
  * `/ws` subscription (push the job list on every change) and are absent in the
  * storage-only fakes, in which case the DO simply serves no live sockets.
  */
-export interface SchedulerDOState {
+interface SchedulerDOState {
     /** Accept a hibernatable server WebSocket (workers `state.acceptWebSocket`). */
     acceptWebSocket?: (ws: WebSocket) => void;
     /** Every accepted server WebSocket (workers `state.getWebSockets`). */
@@ -23,20 +23,23 @@ export interface SchedulerDOState {
     };
 }
 
-export interface SchedulerEnv {
+interface SchedulerEnv {
     [key: string]: unknown;
+
     /**
      * Fallback bearer token attached to the dispatch when
      * {@link SchedulerEnv.CIRRUS_SCHEDULER_SECRET} is not configured. Sent as
-     * `authorization: Bearer <token>`.
+     * `authorization: Bearer &lt;token>`.
      */
     CIRRUS_ADMIN_TOKEN?: string;
+
     /**
      * Base URL where the Worker is mounted. SchedulerDO uses this at dispatch
      * time to call back into the Worker. Read at fire time (NOT taken from the
      * request body) to prevent SSRF via a forged `originUrl` field.
      */
     CIRRUS_ORIGIN_URL?: string;
+
     /**
      * Shared secret used to HMAC-sign the dispatch body so the runtime receiver
      * can authenticate the call (header `x-cirrus-scheduler-signature`). Without
@@ -73,6 +76,7 @@ const generateId = (): string => {
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
     functionPath: string;
+
     /**
      * Legacy field accepted but ignored: dispatch always uses
      * `env.CIRRUS_ORIGIN_URL`. Kept on the wire so older `@cirrus/scheduler`
@@ -90,19 +94,31 @@ interface CancelRequestBody {
 /**
  * Durable Object that stores pending scheduled invocations sorted by their
  * `scheduledFor` time and fires them via HTTP on alarm. Storage layout:
- *
- *   `id:<id>`               -> {@link ScheduleRecord}
- *   `t:<paddedTime>:<id>`   -> id (used as a sorted index)
+ * `id:&lt;id>` maps to {@link ScheduleRecord}; `t:&lt;paddedTime>:&lt;id>` maps to the
+ * id (used as a sorted index).
  *
  * On every mutation the DO recomputes the earliest pending task and updates
  * the alarm via `state.storage.setAlarm(time)`.
  */
-export class SchedulerDO {
+class SchedulerDO {
+    private static indexKey(scheduledFor: number, id: string): string {
+        // Zero-pad so the lexical order matches numerical order.
+        return `t:${String(scheduledFor).padStart(15, "0")}:${id}`;
+    }
+
+    private static json(body: unknown, status: number = 200): Response {
+        return Response.json(body, { headers: { "content-type": "application/json" }, status });
+    }
+
+    private static error(status: number, code: string, message: string): Response {
+        return SchedulerDO.json({ error: { code, message } }, status);
+    }
+
     protected readonly state: SchedulerDOState;
 
     protected readonly env: SchedulerEnv;
 
-    constructor(state: SchedulerDOState, env: SchedulerEnv) {
+    public constructor(state: SchedulerDOState, env: SchedulerEnv) {
         this.state = state;
         this.env = env;
     }
@@ -129,64 +145,10 @@ export class SchedulerDO {
         return Response.json(
             { error: { code: "NOT_FOUND" } },
             {
-                status: 404,
                 headers: { "content-type": "application/json" },
+                status: 404,
             },
         );
-    }
-
-    /**
-     * Accept a hibernatable live subscription to the job list. The scheduler has
-     * exactly one subscription shape (the whole list), so there's no per-socket
-     * registry or dependency tracking — every accepted socket gets the full list
-     * on connect and on every change. The worker is responsible for gating the
-     * upgrade behind the admin token before it reaches here.
-     */
-    private async handleWebSocketUpgrade(): Promise<Response> {
-        if (this.state.acceptWebSocket === undefined) {
-            return this.error(501, "WS_UNSUPPORTED", "WebSocket subscriptions are not supported in this runtime");
-        }
-
-        const pair = new WebSocketPair();
-        const client = pair[0];
-        const server = pair[1];
-
-        this.state.acceptWebSocket(server);
-        // Seed the new subscriber with the current list so its first value
-        // arrives over the same channel as later changes.
-        server.send(JSON.stringify({ records: await this.listRecords(), type: "jobs" }));
-
-        return new Response(null, { status: 101, webSocket: client });
-    }
-
-    /**
-     * Re-list the jobs and push them to every connected subscriber. Called after
-     * any change (schedule / cancel / alarm-fire) so live dashboards reflect it
-     * immediately. A no-op when the runtime doesn't support hibernated sockets.
-     */
-    private async broadcastChange(): Promise<void> {
-        const sockets = this.state.getWebSockets?.();
-
-        if (sockets === undefined || sockets.length === 0) {
-            return;
-        }
-
-        const message = JSON.stringify({ records: await this.listRecords(), type: "jobs" });
-
-        for (const socket of sockets) {
-            try {
-                socket.send(message);
-            } catch {
-                /* a closing socket — the runtime will clean it up on close */
-            }
-        }
-    }
-
-    /** The current pending job records (shared by `/list` and the live channel). */
-    private async listRecords(): Promise<ScheduleRecord[]> {
-        const entries = await this.state.storage.list<ScheduleRecord>({ prefix: HEADER_PREFIX });
-
-        return [...entries.values()];
     }
 
     /** Called by the Workers runtime when the alarm previously set by `_rescheduleAlarm()` fires. */
@@ -198,9 +160,9 @@ export class SchedulerDO {
         // in ASCII so it bounds the time-padded id portion. If the runtime
         // doesn't support `end`, the `limit` keeps the page bounded.
         const indexEntries = await this.state.storage.list<string>({
-            prefix: "t:",
             end: `t:${padTime(now)}:~`,
             limit: 100,
+            prefix: "t:",
         });
 
         for (const [indexKey, recordId] of indexEntries.entries()) {
@@ -221,7 +183,7 @@ export class SchedulerDO {
             // run is interrupted and retried) the index entry is gone, so the
             // job won't be picked up again. recordRetry() will recreate a
             // fresh index entry on failure.
-            await this.state.storage.delete(this.indexKey(record.scheduledFor, record.id));
+            await this.state.storage.delete(SchedulerDO.indexKey(record.scheduledFor, record.id));
             await this.state.storage.put(`dispatched:${record.id}`, { dispatchedAt: Date.now() });
 
             const ok = await this.dispatch(record);
@@ -268,11 +230,11 @@ export class SchedulerDO {
         }
 
         const body = JSON.stringify({
-            functionPath: record.functionPath,
             args: record.args,
-            shardKey: record.shardKey,
-            scheduledFor: record.scheduledFor,
+            functionPath: record.functionPath,
             id: record.id,
+            scheduledFor: record.scheduledFor,
+            shardKey: record.shardKey,
         });
 
         const headers: Record<string, string> = { "content-type": "application/json" };
@@ -298,9 +260,9 @@ export class SchedulerDO {
 
         try {
             const response = await fetch(`${originUrl}/_cirrus/scheduler/dispatch`, {
-                method: "POST",
-                headers,
                 body,
+                headers,
+                method: "POST",
             });
 
             // Success is an explicit 2xx only. A 404 (receiver route missing),
@@ -312,6 +274,60 @@ export class SchedulerDO {
         } catch {
             return false;
         }
+    }
+
+    /**
+     * Accept a hibernatable live subscription to the job list. The scheduler has
+     * exactly one subscription shape (the whole list), so there's no per-socket
+     * registry or dependency tracking — every accepted socket gets the full list
+     * on connect and on every change. The worker is responsible for gating the
+     * upgrade behind the admin token before it reaches here.
+     */
+    private async handleWebSocketUpgrade(): Promise<Response> {
+        if (this.state.acceptWebSocket === undefined) {
+            return SchedulerDO.error(501, "WS_UNSUPPORTED", "WebSocket subscriptions are not supported in this runtime");
+        }
+
+        const pair = new WebSocketPair();
+        const client = pair[0];
+        const server = pair[1];
+
+        this.state.acceptWebSocket(server);
+        // Seed the new subscriber with the current list so its first value
+        // arrives over the same channel as later changes.
+        server.send(JSON.stringify({ records: await this.listRecords(), type: "jobs" }));
+
+        return new Response(null, { status: 101, webSocket: client });
+    }
+
+    /**
+     * Re-list the jobs and push them to every connected subscriber. Called after
+     * any change (schedule / cancel / alarm-fire) so live dashboards reflect it
+     * immediately. A no-op when the runtime doesn't support hibernated sockets.
+     */
+    private async broadcastChange(): Promise<void> {
+        const sockets = this.state.getWebSockets?.();
+
+        if (sockets === undefined || sockets.length === 0) {
+            return;
+        }
+
+        const message = JSON.stringify({ records: await this.listRecords(), type: "jobs" });
+
+        for (const socket of sockets) {
+            try {
+                socket.send(message);
+            } catch {
+                /* a closing socket — the runtime will clean it up on close */
+            }
+        }
+    }
+
+    /** The current pending job records (shared by `/list` and the live channel). */
+    private async listRecords(): Promise<ScheduleRecord[]> {
+        const entries = await this.state.storage.list<ScheduleRecord>({ prefix: HEADER_PREFIX });
+
+        return [...entries.values()];
     }
 
     /**
@@ -328,7 +344,7 @@ export class SchedulerDO {
         }
 
         const encoder = new TextEncoder();
-        const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+        const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
         const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
         const bytes = new Uint8Array(signature);
         let binary = "";
@@ -371,14 +387,14 @@ export class SchedulerDO {
         await this.state.storage.put(`${RETRY_PREFIX}${record.id}`, retryRecord);
         // Re-arm via the standard time index so the alarm fires at the right moment.
         await this.state.storage.put(`${HEADER_PREFIX}${record.id}`, retryRecord);
-        await this.state.storage.put(this.indexKey(nextScheduledFor, record.id), record.id);
+        await this.state.storage.put(SchedulerDO.indexKey(nextScheduledFor, record.id), record.id);
     }
 
     private async handleSchedule(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => null)) as ScheduleRequestBody | null;
 
         if (!body || typeof body.functionPath !== "string") {
-            return this.error(400, "INVALID_INPUT", "functionPath is required");
+            return SchedulerDO.error(400, "INVALID_INPUT", "functionPath is required");
         }
 
         // Reject NaN, +/-Infinity and non-positive timestamps. A finite
@@ -396,67 +412,67 @@ export class SchedulerDO {
             body.scheduledFor <= 0 ||
             body.scheduledFor > MAX_SCHEDULED_FOR_MS
         ) {
-            return this.error(400, "INVALID_INPUT", "scheduledFor must be a positive integer epoch-millisecond number no greater than 8640000000000000");
+            return SchedulerDO.error(400, "INVALID_INPUT", "scheduledFor must be a positive integer epoch-millisecond number no greater than 8640000000000000");
         }
 
         // Dispatch target lives only in env — never trust an `originUrl` from
         // the caller (would be an SSRF vector). Refuse schedules if the env
         // hasn't been configured: the job would be unfireable.
         if (typeof this.env.CIRRUS_ORIGIN_URL !== "string" || this.env.CIRRUS_ORIGIN_URL.length === 0) {
-            return this.error(500, "ORIGIN_NOT_CONFIGURED", "CIRRUS_ORIGIN_URL env binding must be set on the SchedulerDO");
+            return SchedulerDO.error(500, "ORIGIN_NOT_CONFIGURED", "CIRRUS_ORIGIN_URL env binding must be set on the SchedulerDO");
         }
 
         const id = generateId();
         const record: ScheduleRecord = {
-            id,
-            functionPath: body.functionPath,
             args: body.args ?? {},
+            enqueuedAt: Date.now(),
+            functionPath: body.functionPath,
+            id,
             scheduledFor: body.scheduledFor,
             shardKey: body.shardKey,
-            enqueuedAt: Date.now(),
         };
 
         await this.state.storage.put(`${HEADER_PREFIX}${id}`, record);
-        await this.state.storage.put(this.indexKey(record.scheduledFor, id), id);
+        await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, id), id);
         await this.rescheduleAlarm();
         await this.broadcastChange();
 
-        return this.json({ id, scheduledFor: record.scheduledFor });
+        return SchedulerDO.json({ id, scheduledFor: record.scheduledFor });
     }
 
     private async handleCancel(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => null)) as CancelRequestBody | null;
 
         if (!body?.id) {
-            return this.error(400, "INVALID_INPUT", "id is required");
+            return SchedulerDO.error(400, "INVALID_INPUT", "id is required");
         }
 
         const record = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${body.id}`);
 
         if (!record) {
-            return this.json({ cancelled: false });
+            return SchedulerDO.json({ cancelled: false });
         }
 
         await this.removeRecord(record);
         await this.rescheduleAlarm();
         await this.broadcastChange();
 
-        return this.json({ cancelled: true });
+        return SchedulerDO.json({ cancelled: true });
     }
 
     private async handleList(): Promise<Response> {
-        return this.json({ records: await this.listRecords() });
+        return SchedulerDO.json({ records: await this.listRecords() });
     }
 
     private async removeRecord(record: ScheduleRecord): Promise<void> {
         await this.state.storage.delete(`${HEADER_PREFIX}${record.id}`);
-        await this.state.storage.delete(this.indexKey(record.scheduledFor, record.id));
+        await this.state.storage.delete(SchedulerDO.indexKey(record.scheduledFor, record.id));
         // Drop any pending retry row so cancelled jobs don't leak storage.
         await this.state.storage.delete(`${RETRY_PREFIX}${record.id}`);
     }
 
     private async rescheduleAlarm(): Promise<void> {
-        const entries = await this.state.storage.list<string>({ prefix: "t:", limit: 1 });
+        const entries = await this.state.storage.list<string>({ limit: 1, prefix: "t:" });
         const first = entries.entries().next();
 
         if (first.done) {
@@ -472,17 +488,7 @@ export class SchedulerDO {
             await this.state.storage.setAlarm(dueAt);
         }
     }
-
-    private indexKey(scheduledFor: number, id: string): string {
-        // Zero-pad so the lexical order matches numerical order.
-        return `t:${String(scheduledFor).padStart(15, "0")}:${id}`;
-    }
-
-    private json(body: unknown, status: number = 200): Response {
-        return Response.json(body, { status, headers: { "content-type": "application/json" } });
-    }
-
-    private error(status: number, code: string, message: string): Response {
-        return this.json({ error: { code, message } }, status);
-    }
 }
+
+export { SchedulerDO };
+export type { SchedulerDOState, SchedulerEnv };

@@ -29,7 +29,7 @@
  *
  * # Cirrus integration with `@cirrus/server` plugins
  *
- * To surface a better-auth plugin's API under `ctx.auth.<key>` in
+ * To surface a better-auth plugin's API under `ctx.auth.&lt;key>` in
  * Cirrus procedures, wrap it as a `definePlugin` middleware:
  *
  * ```ts

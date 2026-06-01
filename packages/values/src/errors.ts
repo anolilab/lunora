@@ -45,7 +45,7 @@ export const formatPath = (path: ValidationPath): string => {
     return path
         .map((segment, index) => {
             if (typeof segment === "number") {
-                return `[${segment}]`;
+                return `[${String(segment)}]`;
             }
 
             return index === 0 ? segment : `.${segment}`;

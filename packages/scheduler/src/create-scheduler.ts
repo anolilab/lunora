@@ -3,15 +3,15 @@ import type { ArgsOf, CirrusSchedulerOptions, FunctionReference, RunOptions, Sch
 const callDO = async <T>(options: CirrusSchedulerOptions, path: string, body: unknown): Promise<T> => {
     const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
     const response = await stub.fetch(`https://scheduler.internal${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        headers: { "content-type": "application/json" },
+        method: "POST",
     });
 
     if (!response.ok) {
         const text = await response.text();
 
-        throw new Error(`@cirrus/scheduler: SchedulerDO ${path} failed (${response.status}): ${text}`);
+        throw new Error(`@cirrus/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
     }
 
     return await response.json();
@@ -40,11 +40,11 @@ export const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
         const scheduledFor = date instanceof Date ? date.getTime() : date;
 
         return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
-            functionPath: fn.__cirrusRef,
             args,
+            functionPath: fn.__cirrusRef,
+            originUrl: options.originUrl,
             scheduledFor,
             shardKey: opts.shardKey,
-            originUrl: options.originUrl,
         });
     };
 
@@ -63,5 +63,5 @@ export const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
 
     const cancel = async (id: string): Promise<{ cancelled: boolean }> => callDO<{ cancelled: boolean }>(options, "/cancel", { id });
 
-    return { runAfter, runAt, cancel };
+    return { cancel, runAfter, runAt };
 };

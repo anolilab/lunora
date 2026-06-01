@@ -6,12 +6,6 @@ import { overlayPlugin } from "./overlay-plugin.js";
 import type { CirrusPluginOptions, CloudflarePluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
 import { wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";
 
-export { codegenPlugin } from "./codegen-plugin.js";
-export { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin } from "./dashboard-plugin.js";
-export { overlayPlugin } from "./overlay-plugin.js";
-export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
-export { wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";
-
 const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirrusPluginOptions => {
     const opts = options ?? {};
     const schemaDir = opts.schemaDir ?? "cirrus";
@@ -44,7 +38,7 @@ const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirru
  * 3. Inject `@visulima/vite-overlay` (when installed) for runtime error overlays.
  * 4. Include `@cloudflare/vite-plugin` so users get one-import setup.
  */
-export const cirrus = async (options?: CirrusPluginOptions): Promise<ReadonlyArray<Plugin>> => {
+const cirrus = async (options?: CirrusPluginOptions): Promise<ReadonlyArray<Plugin>> => {
     const resolved = resolveOptions(options);
     const plugins: Plugin[] = [];
 
@@ -97,4 +91,11 @@ export const cirrus = async (options?: CirrusPluginOptions): Promise<ReadonlyArr
     return plugins;
 };
 
-export const VERSION = "0.0.0";
+const VERSION = "0.0.0";
+
+export { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin } from "./dashboard-plugin.js";
+export { codegenPlugin } from "./codegen-plugin.js";
+export { overlayPlugin } from "./overlay-plugin.js";
+export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
+export { wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";
+export { cirrus, VERSION };

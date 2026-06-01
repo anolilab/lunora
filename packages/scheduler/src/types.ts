@@ -54,6 +54,7 @@ export interface CirrusSchedulerOptions {
     instanceName?: string;
     /** Binding to the `SchedulerDO` durable object namespace. */
     namespace: DurableObjectNamespaceLike;
+
     /**
      * Origin where the Worker is mounted. SchedulerDO uses this base URL when
      * dispatching scheduled functions back to the Worker on alarm fire.

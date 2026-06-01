@@ -1,6 +1,6 @@
 import type { DatabaseWriter } from "@cirrus/server";
 import type { Id } from "@cirrus/values";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { RateLimiter } from "../src/rate-limiter.js";
 import type { RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery } from "../src/store.js";
@@ -21,7 +21,7 @@ const createFakeDb = (): RateLimitDb => {
 
     const insert = async <T extends string>(table: T, document: Record<string, unknown>): Promise<Id<T>> => {
         counter += 1;
-        const id = `${table}-${counter}` as Id<T>;
+        const id = `${table}-${String(counter)}` as Id<T>;
 
         rows.set(id, { _id: id, ...document });
 
@@ -37,7 +37,7 @@ const createFakeDb = (): RateLimitDb => {
     };
 
     const query = (): RateLimitDbQuery => {
-        const constraints: Array<[string, unknown]> = [];
+        const constraints: [string, unknown][] = [];
         const handle: RateLimitDbQuery = {
             first: async () => [...rows.values()].find((doc) => constraints.every(([field, value]) => doc[field] === value)) ?? null,
             withIndex: (_indexName, range) => {
@@ -66,7 +66,7 @@ const createFakeDb = (): RateLimitDb => {
 };
 
 describe("db store", () => {
-    test("round-trips, upserts, and deletes values", async () => {
+    it("round-trips, upserts, and deletes values", async () => {
         expect.assertions(4);
 
         const store = createDbStore({ db: createFakeDb() });
@@ -87,7 +87,7 @@ describe("db store", () => {
         await expect(store.get("k")).resolves.toBeUndefined();
     });
 
-    test("round-trips the sliding-window previous-window count", async () => {
+    it("round-trips the sliding-window previous-window count", async () => {
         expect.assertions(1);
 
         const store = createDbStore({ db: createFakeDb() });
@@ -97,7 +97,7 @@ describe("db store", () => {
         await expect(store.get("hits:bob")).resolves.toEqual({ prev: 7, ts: 1000, value: 3 });
     });
 
-    test("honors a custom table, index, and key field", async () => {
+    it("honors a custom table, index, and key field", async () => {
         expect.assertions(1);
 
         const store = createDbStore({ db: createFakeDb(), index: "by_id", keyField: "k", table: "limits" });
@@ -107,7 +107,7 @@ describe("db store", () => {
         await expect(store.get("x")).resolves.toEqual({ ts: 1, value: 2 });
     });
 
-    test("backs a RateLimiter end to end", async () => {
+    it("backs a RateLimiter end to end", async () => {
         expect.assertions(2);
 
         const clock = { now: 0 };
@@ -126,7 +126,7 @@ describe("db store", () => {
         await expect(limiter.limit("send", { key: "u1" })).resolves.toMatchObject({ ok: true });
     });
 
-    test("the real ctx.db writer is assignable to RateLimitDb", () => {
+    it("the real ctx.db writer is assignable to RateLimitDb", () => {
         expect.assertions(1);
 
         // Compile-time guarantee that `createDbStore({ db: ctx.db })` type-checks.

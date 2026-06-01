@@ -10,9 +10,9 @@ import { RateLimiter } from "../src/index.js";
  * a hot key across N independent sub-buckets to avoid contention; the read
  * cost grows linearly with N because we have to sum every shard.
  *
- *  - **unsharded** — one bucket; one store lookup.
- *  - **shards=8** — eight buckets; eight store lookups + sum.
- *  - **shards=32** — same scaling pushed harder.
+ * - **unsharded** — one bucket; one store lookup.
+ * - **shards=8** — eight buckets; eight store lookups + sum.
+ * - **shards=32** — same scaling pushed harder.
  *
  * Memory store so the bench measures the aggregation overhead, not store IO.
  * `limit()` uses random routing so warmth across shards is uneven; we prime

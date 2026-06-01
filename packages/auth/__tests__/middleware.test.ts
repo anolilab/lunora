@@ -1,5 +1,5 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/create-auth.js";
 import { withAuthPlugins } from "../src/middleware.js";
@@ -11,10 +11,8 @@ import { admin, organization } from "../src/plugins.js";
  * through a real `betterAuth` instance + a real in-memory adapter, so we
  * confirm:
  *
- * 1. `ctx.authApi` exposes the endpoints the configured plugins contribute
- *    (no mocks), and
- * 2. invoking an endpoint mutates the auth instance's storage the way the
- *    underlying plugin would when called via `auth.api` directly.
+ * 1. `ctx.authApi` exposes the endpoints the configured plugins contribute (no mocks), and
+ * 2. invoking an endpoint mutates the auth instance's storage the way the underlying plugin would when called via `auth.api` directly.
  */
 
 interface MockHandlerCtx {
@@ -94,11 +92,11 @@ describe("withAuthPlugins", () => {
         memoryDb = {};
     });
 
-    test("installs `authApi` onto ctx as the auth instance's api surface", async () => {
+    it("installs `authApi` onto ctx as the auth instance's api surface", async () => {
         expect.assertions(3);
 
         const middleware = withAuthPlugins(auth);
-        const ctx = await runMiddleware<MockHandlerCtx>(middleware as unknown as Parameters<typeof runMiddleware>[0], {});
+        const ctx = await runMiddleware<MockHandlerCtx>(middleware, {});
 
         expect(ctx.authApi).toBeDefined();
         expect(ctx.authApi).toBe(auth.api);
@@ -106,7 +104,7 @@ describe("withAuthPlugins", () => {
         expect(typeof ctx.authApi?.createOrganization).toBe("function");
     });
 
-    test("ctx.authApi.createOrganization writes to the underlying store", async () => {
+    it("ctx.authApi.createOrganization writes to the underlying store", async () => {
         expect.assertions(2);
 
         // Seed a user the organization can belong to. `signUpEmail` is the
@@ -118,7 +116,7 @@ describe("withAuthPlugins", () => {
         const ownerId = signUp.user.id;
 
         const middleware = withAuthPlugins(auth);
-        const ctx = await runMiddleware<MockHandlerCtx>(middleware as unknown as Parameters<typeof runMiddleware>[0], {});
+        const ctx = await runMiddleware<MockHandlerCtx>(middleware, {});
 
         // Call the plugin endpoint through the ctx — exactly how a handler
         // would reach it after composing the middleware.
@@ -128,13 +126,13 @@ describe("withAuthPlugins", () => {
 
         // Memory adapter stores rows under the table name; the plugin's
         // schema names the table `organization`.
-        const organizations = (memoryDb["organization"] ?? []) as Array<{ name?: string; slug?: string }>;
+        const organizations = (memoryDb["organization"] ?? []) as { name?: string; slug?: string }[];
 
         expect(organizations).toHaveLength(1);
         expect(organizations[0]).toMatchObject({ name: "Acme", slug: "acme" });
     });
 
-    test("composing after another middleware preserves the upstream ctx fields", async () => {
+    it("composing after another middleware preserves the upstream ctx fields", async () => {
         expect.assertions(3);
 
         // Pretend an upstream middleware has already installed `userId` on
@@ -148,9 +146,8 @@ describe("withAuthPlugins", () => {
         // extension over the incoming ctx. We model that exactly here.
         const ctxOut = await withAuthPlugins(auth)({
             ctx: ctxIn,
-            next: (async (options?: { ctx: Record<string, unknown> }) => {
-                return options?.ctx ? { ...ctxIn, ...options.ctx } : ctxIn;
-            }) as Parameters<ReturnType<typeof withAuthPlugins<typeof auth>>>[0]["next"],
+            next: (async (options?: { ctx: Record<string, unknown> }) =>
+                (options?.ctx ? { ...ctxIn, ...options.ctx } : ctxIn)),
         });
 
         // Both fields must survive into the downstream ctx — the regression
