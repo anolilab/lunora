@@ -33,14 +33,14 @@ describe("buildDashboardUrl", () => {
         expect(buildDashboardUrl({ address: { address: "127.0.0.1", family: "IPv4", port: 5173 }, base: "/app/" })).toBe("http://127.0.0.1:5173/app/__cirrus");
     });
 
-    it("falls back to a default when the address is a pipe string or null", () => {
+    it("falls back to a default when the address is a pipe string or undefined", () => {
         expect.assertions(2);
 
         // eslint-disable-next-line sonarjs/publicly-writable-directories -- not a real path, just a stand-in for a named-pipe address string
         const pipe = "/tmp/vite.sock";
 
         expect(buildDashboardUrl({ address: pipe })).toBe("http://localhost:5173/__cirrus");
-        expect(buildDashboardUrl({ address: null })).toBe("http://localhost:5173/__cirrus");
+        expect(buildDashboardUrl({ address: undefined })).toBe("http://localhost:5173/__cirrus");
     });
 });
 

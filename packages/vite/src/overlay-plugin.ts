@@ -8,7 +8,7 @@ import type { Plugin } from "vite";
  *
  * Returns a Promise because the dynamic import is async; `cirrus()` flattens it.
  */
-export const overlayPlugin = async (): Promise<Plugin | ReadonlyArray<Plugin>> => {
+const overlayPlugin = async (): Promise<Plugin | ReadonlyArray<Plugin>> => {
     let warned = false;
 
     try {
@@ -26,7 +26,11 @@ export const overlayPlugin = async (): Promise<Plugin | ReadonlyArray<Plugin>> =
 
         return created;
     } catch (error: unknown) {
+        // `warned` is module-level state mutated across calls to dedupe the warning;
+        // TS's per-call flow analysis can't see that, so it mis-reads both lines.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- warned is mutated on prior calls
         if (!warned) {
+            // eslint-disable-next-line no-useless-assignment -- read by the guard above on subsequent calls
             warned = true;
             const message = error instanceof Error ? error.message : String(error);
 
@@ -40,3 +44,5 @@ export const overlayPlugin = async (): Promise<Plugin | ReadonlyArray<Plugin>> =
         };
     }
 };
+
+export default overlayPlugin;

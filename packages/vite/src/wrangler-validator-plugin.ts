@@ -23,7 +23,7 @@ const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Err
  * validation logic to `@cirrus/config` so the rules stay in lockstep with
  * the CLI (`cirrus deploy`).
  */
-export const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
+const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
     return {
         configResolved() {
             const result = validateWranglerProject({
@@ -55,3 +55,5 @@ export const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): P
         name: "cirrus:wrangler-validator",
     };
 };
+
+export default wranglerValidatorPlugin;

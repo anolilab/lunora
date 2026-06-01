@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
-import { codegenPlugin } from "../src/codegen-plugin.js";
+import codegenPlugin from "../src/codegen-plugin.js";
 import type { ResolvedCirrusPluginOptions } from "../src/types.js";
 
 const SCHEMA_SOURCE = `import { defineSchema, defineTable, v } from "@cirrus/server";

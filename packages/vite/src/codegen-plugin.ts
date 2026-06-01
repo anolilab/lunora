@@ -37,7 +37,7 @@ const runCodegenSafely = (
  * Vite plugin that runs `@cirrus/codegen` on startup and on file changes
  * inside the cirrus schema directory.
  */
-export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
+const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
     const absoluteSchemaDirectory = resolve(options.projectRoot, options.schemaDir);
     const absoluteGeneratedDirectory = resolve(options.projectRoot, options.generatedDir);
 
@@ -127,3 +127,5 @@ export const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
         name: "cirrus:codegen",
     };
 };
+
+export default codegenPlugin;

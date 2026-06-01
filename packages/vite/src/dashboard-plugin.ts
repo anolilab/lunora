@@ -38,7 +38,7 @@ const DASHBOARD_HTML = `<!doctype html>
  * `resolvedUrls.local` (honours `host` / `base` / https); falls back to the raw
  * socket address, bracketing IPv6 and normalising the wildcard host.
  */
-const buildDashboardUrl = (input: { address?: AddressInfo | null | string; base?: string; resolvedLocal?: string }): string => {
+const buildDashboardUrl = (input: { address?: AddressInfo | string; base?: string; resolvedLocal?: string }): string => {
     const path = DASHBOARD_PATH.replace(LEADING_SLASH, "");
 
     if (input.resolvedLocal !== undefined && input.resolvedLocal !== "") {
@@ -49,7 +49,7 @@ const buildDashboardUrl = (input: { address?: AddressInfo | null | string; base?
 
     const base = input.base === undefined || input.base === "/" ? "" : input.base.replace(TRAILING_SLASH, "");
 
-    if (input.address === null || input.address === undefined || typeof input.address === "string") {
+    if (input.address === undefined || typeof input.address === "string") {
         return `http://localhost:5173${base}/${path}`;
     }
 
@@ -75,6 +75,8 @@ const dashboardPlugin = (): Plugin => {
             // non-loopback host (e.g. `--host`, or `server.host` set to an
             // external interface). The dashboard ships admin tooling that
             // assumes the developer is the only consumer.
+            // `config.server` is typed required, but partial/mocked dev-server objects omit it.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive against partial ViteDevServer objects
             const configuredHost = server.config.server?.host;
             const isNonLoopbackBind
                 = configuredHost !== undefined
@@ -106,6 +108,8 @@ const dashboardPlugin = (): Plugin => {
                         response.statusCode = 200;
                         response.setHeader("Content-Type", "text/html");
                         response.end(html);
+
+                        return undefined;
                     })
                     .catch((error: unknown) => {
                         // Surface transform failures rather than hanging the request.
@@ -120,7 +124,7 @@ const dashboardPlugin = (): Plugin => {
             return () => {
                 const announce = (): void => {
                     const url = buildDashboardUrl({
-                        address: server.httpServer?.address() ?? null,
+                        address: server.httpServer?.address() ?? undefined,
                         base: server.config.base,
                         resolvedLocal: server.resolvedUrls?.local[0],
                     });
