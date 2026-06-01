@@ -4,6 +4,12 @@ import { createConfig } from "@anolilab/eslint-config";
 // setup (no shared local preset); rules build on @anolilab/eslint-config.
 export default createConfig(
     {
+        // Enable type-aware linting and let @anolilab read the tsconfig. This gates
+        // correct behaviour: type-aware rules (no-unsafe-*, no-unnecessary-condition,
+        // require-await) only run with real type info, and for React packages the
+        // tsconfig's `jsx: "react-jsx"` flips the preset to the automatic runtime
+        // (react-in-jsx-scope off). Without tsconfigPath both silently misfire.
+        typescript: { tsconfigPath: "tsconfig.json" },
         ignores: [
             "**/dist/**",
             "**/node_modules/**",
@@ -31,6 +37,41 @@ export default createConfig(
             "**/prettier.config.js",
             "**/eslint.config.js",
         ],
+    },
+    // Test files: relax rules that are noisy or inappropriate in test code (loose
+    // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
+    // describe titles). Source files still enforce all of these.
+    {
+        files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
+        rules: {
+            "@stylistic/no-tabs": "off",
+            "@typescript-eslint/naming-convention": "off",
+            "@typescript-eslint/no-explicit-any": "off",
+            "@typescript-eslint/no-floating-promises": "off",
+            "@typescript-eslint/no-non-null-assertion": "off",
+            "@typescript-eslint/no-unnecessary-condition": "off",
+            "@typescript-eslint/no-unsafe-argument": "off",
+            "@typescript-eslint/no-unsafe-assignment": "off",
+            "@typescript-eslint/no-unsafe-call": "off",
+            "@typescript-eslint/no-unsafe-member-access": "off",
+            "@typescript-eslint/no-unsafe-return": "off",
+            "@typescript-eslint/no-use-before-define": "off",
+            "@typescript-eslint/require-await": "off",
+            "e18e/prefer-static-regex": "off",
+            "import/exports-last": "off",
+            "import/no-extraneous-dependencies": "off",
+            "n/no-unsupported-features/node-builtins": "off",
+            "no-void": "off",
+            "promise/always-return": "off",
+            "sonarjs/deprecation": "off",
+            "sonarjs/no-control-regex": "off",
+            "sonarjs/no-nested-functions": "off",
+            "unicorn/no-null": "off",
+            "unicorn/prevent-abbreviations": "off",
+            "vitest/no-conditional-expect": "off",
+            "vitest/prefer-describe-function-title": "off",
+            "vitest/prefer-strict-equal": "off",
+        },
     },
     // Markdown code blocks: don't enforce language tags.
     {

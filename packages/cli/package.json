@@ -12,6 +12,9 @@
         "LICENSE.md"
     ],
     "type": "module",
+    "engines": {
+        "node": "^22.14.0 || >=24.10.0"
+    },
     "sideEffects": false,
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
