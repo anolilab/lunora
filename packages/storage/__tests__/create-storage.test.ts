@@ -162,7 +162,7 @@ describe("createStorage", () => {
 
         expect(url.hostname).toBe("cdn.test");
         expect(url.pathname).toBe("/uploads/x.png");
-        expect(url.searchParams.get("sig")).toBeTruthy();
+        expect(url.searchParams.get("sig")).toBe(true);
         expect(Number(url.searchParams.get("exp"))).toBeGreaterThan(Math.floor(Date.now() / 1000));
     });
 });
