@@ -114,7 +114,7 @@ const assertUniqueIds = (migrations: ReadonlyArray<MigrationIR>): void => {
  * {@link MigrationIR}. `id` must be a static string literal (it's the registry
  * key); `table` is best-effort and left `""` when not a literal.
  */
-export const discoverMigrations = (project: Project, cirrusDirectory: string): MigrationIR[] => {
+const discoverMigrations = (project: Project, cirrusDirectory: string): MigrationIR[] => {
     const filePaths = listCirrusSourceFiles(cirrusDirectory);
     const migrations: MigrationIR[] = [];
 
@@ -144,3 +144,5 @@ export const discoverMigrations = (project: Project, cirrusDirectory: string): M
 
     return migrations;
 };
+
+export default discoverMigrations;

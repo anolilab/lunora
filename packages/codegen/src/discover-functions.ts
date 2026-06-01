@@ -6,7 +6,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { FunctionIR, ValidatorIR } from "./ir.js";
 import { parseObjectShape } from "./parse-validator.js";
-import { sanitizeNamespace } from "./paths.js";
+import sanitizeNamespace from "./paths.js";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
@@ -38,11 +38,11 @@ interface DiscoveredFunction {
  * Resolve a callee identifier through its import declaration, returning the
  * **imported** name (i.e. the name as exported from `@cirrus/server`). This
  * handles aliasing like `import { query as q }` where the call site uses `q`
- * but the registration kind is `query`. Returns `null` when the identifier
+ * but the registration kind is `query`. Returns `undefined` when the identifier
  * is not imported from `@cirrus/server`, so we don't accidentally pick up
  * a local `const query = ...`.
  */
-const resolveCalleeKind = (identifier: Identifier): string | null => {
+const resolveCalleeKind = (identifier: Identifier): string | undefined => {
     const symbol = identifier.getSymbol();
 
     // No type-checker info at all (no tsconfig wired up). Fall back to the
@@ -64,7 +64,7 @@ const resolveCalleeKind = (identifier: Identifier): string | null => {
 
         // Only trust identifiers imported from the public Cirrus surface.
         if (moduleSpecifier !== "@cirrus/server") {
-            return null;
+            return undefined;
         }
 
         // `import { query as q }` → declaration.getNameNode() is `query`,
@@ -76,7 +76,7 @@ const resolveCalleeKind = (identifier: Identifier): string | null => {
     // Symbol exists but no `@cirrus/server` import specifier among its
     // declarations — it's a local binding (`const query = ...`) or imported
     // from somewhere else. Reject so we don't pick it up as a registration.
-    return null;
+    return undefined;
 };
 
 /** Inspect a `query({ args, handler })` call and pull out the args validator map. */
@@ -103,17 +103,11 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
 };
 
 /**
- * Type-tree walker: returns true if any reachable symbol's declaration lives
- * in the handler's own source file but isn't exported (so it cannot be
- * referenced by name from anywhere outside that file).
+ * True when a type's own symbol resolves to a non-exported interface/type-alias
+ * declared in the handler's source file — i.e. a name unreachable from
+ * `_generated/api.ts`.
  */
-const referencesUnreachableLocalType = (type: Type, handlerFilePath: string, seen = new Set<Type>()): boolean => {
-    if (seen.has(type)) {
-        return false;
-    }
-
-    seen.add(type);
-
+const symbolDeclaredUnreachable = (type: Type, handlerFilePath: string): boolean => {
     for (const candidate of [type.getSymbol(), type.getAliasSymbol()]) {
         if (!candidate) {
             continue;
@@ -136,29 +130,41 @@ const referencesUnreachableLocalType = (type: Type, handlerFilePath: string, see
         }
     }
 
-    for (const argument of type.getTypeArguments()) {
-        if (referencesUnreachableLocalType(argument, handlerFilePath, seen)) {
-            return true;
-        }
-    }
+    return false;
+};
+
+/** Composite child types of `type` (type arguments + union/intersection members) to recurse into. */
+const childTypes = (type: Type): Type[] => {
+    const children = [...type.getTypeArguments()];
 
     if (type.isUnion()) {
-        for (const component of type.getUnionTypes()) {
-            if (referencesUnreachableLocalType(component, handlerFilePath, seen)) {
-                return true;
-            }
-        }
+        children.push(...type.getUnionTypes());
     }
 
     if (type.isIntersection()) {
-        for (const component of type.getIntersectionTypes()) {
-            if (referencesUnreachableLocalType(component, handlerFilePath, seen)) {
-                return true;
-            }
-        }
+        children.push(...type.getIntersectionTypes());
     }
 
-    return false;
+    return children;
+};
+
+/**
+ * Type-tree walker: returns true if any reachable symbol's declaration lives
+ * in the handler's own source file but isn't exported (so it cannot be
+ * referenced by name from anywhere outside that file).
+ */
+const referencesUnreachableLocalType = (type: Type, handlerFilePath: string, seen = new Set<Type>()): boolean => {
+    if (seen.has(type)) {
+        return false;
+    }
+
+    seen.add(type);
+
+    if (symbolDeclaredUnreachable(type, handlerFilePath)) {
+        return true;
+    }
+
+    return childTypes(type).some((child) => referencesUnreachableLocalType(child, handlerFilePath, seen));
 };
 
 /**
@@ -299,21 +305,21 @@ const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
  * Recognise a builder terminal registration (`c.query(...)` / `.mutation(...)`
  * / `.action(...)`). The terminal property name is the kind. The receiver must
  * carry the `__cirrusProcedure` brand so we don't pick up an unrelated method
- * named `query` on some other object. Returns `null` when this isn't a Cirrus
+ * named `query` on some other object. Returns `undefined` when this isn't a Cirrus
  * builder terminal.
  */
-const discoverBuilderProcedure = (call: CallExpression, callee: PropertyAccessExpression): DiscoveredFunction | null => {
+const discoverBuilderProcedure = (call: CallExpression, callee: PropertyAccessExpression): DiscoveredFunction | undefined => {
     const method = callee.getName();
 
     if (!FUNCTION_KINDS.has(method)) {
-        return null;
+        return undefined;
     }
 
     const receiver = callee.getExpression();
     const receiverType = receiver.getType();
 
     if (!receiverType.getProperty("__cirrusProcedure")) {
-        return null;
+        return undefined;
     }
 
     return {
@@ -332,8 +338,8 @@ const discoverBuilderProcedure = (call: CallExpression, callee: PropertyAccessEx
  * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
  * migration discovery so both walk the same file set.
  */
-export const listCirrusSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
-    let entries: string[] = [];
+const listCirrusSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
+    let entries: string[];
 
     try {
         entries = readdirSync(directory);
@@ -360,10 +366,108 @@ export const listCirrusSourceFiles = (directory: string, accumulator: string[] =
 };
 
 /**
+ * Classify a top-level `export const x = …` initializer call as a Cirrus
+ * registration, or `undefined` when it isn't one. Handles both the bare-factory
+ * form (`query({...})` / `internalQuery({...})`) and the builder terminal
+ * (`c.query(...)`).
+ */
+const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined => {
+    const callee = call.getExpression();
+
+    if (Node.isPropertyAccessExpression(callee)) {
+        return discoverBuilderProcedure(call, callee);
+    }
+
+    if (!Node.isIdentifier(callee)) {
+        return undefined;
+    }
+
+    const calleeName = resolveCalleeKind(callee);
+
+    if (!calleeName) {
+        return undefined;
+    }
+
+    if (FUNCTION_KINDS.has(calleeName)) {
+        return { args: argsFromCall(call), kind: calleeName, returnType: returnTypeFromCall(call), visibility: "public" };
+    }
+
+    const internalKind = INTERNAL_FACTORIES[calleeName];
+
+    if (internalKind) {
+        return { args: argsFromCall(call), kind: internalKind, returnType: returnTypeFromCall(call), visibility: "internal" };
+    }
+
+    return undefined;
+};
+
+/** Lift every Cirrus registration in one source file into {@link FunctionIR} entries. */
+const discoverFileFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
+    const found: FunctionIR[] = [];
+
+    for (const statement of source.getVariableStatements()) {
+        if (!statement.isExported()) {
+            continue;
+        }
+
+        for (const declaration of statement.getDeclarations()) {
+            const initializer = declaration.getInitializer();
+
+            if (initializer?.getKind() !== SyntaxKind.CallExpression) {
+                continue;
+            }
+
+            const discovered = discoverFromCall(initializer as CallExpression);
+
+            if (!discovered) {
+                continue;
+            }
+
+            found.push({
+                args: discovered.args,
+                exportName: declaration.getName(),
+                filePath: relativePath,
+                kind: discovered.kind as FunctionIR["kind"],
+                returnType: discovered.returnType,
+                visibility: discovered.visibility,
+            });
+        }
+    }
+
+    return found;
+};
+
+/**
+ * Detect namespace collisions: two distinct file paths that sanitize to the
+ * same identifier (e.g. `foo/bar.ts` and `foo-bar.ts` both → `foo_bar`).
+ * Without this guard, emit silently produces duplicate `ApiTypes` keys and an
+ * ambiguous dispatch table.
+ */
+const assertNoNamespaceCollision = (functions: ReadonlyArray<FunctionIR>): void => {
+    const namespaceOrigins = new Map<string, string>();
+
+    for (const entry of functions) {
+        const namespace = sanitizeNamespace(entry.filePath);
+        const prior = namespaceOrigins.get(namespace);
+
+        if (prior && prior !== entry.filePath) {
+            throw Object.assign(
+                new Error(
+                    `Namespace collision: "${prior}" and "${entry.filePath}" both resolve to "${namespace}". Rename one of the files so the JS-identifier-sanitized names differ. (note: case-insensitive filesystems may also cause this — \`foo\` and \`FOO\` map to the same identifier)`,
+                ),
+                { code: "NAMESPACE_COLLISION", name: "CirrusError", paths: [prior, entry.filePath], status: 500 },
+            );
+        }
+
+        namespaceOrigins.set(namespace, entry.filePath);
+    }
+};
+
+/**
  * Scan all .ts files under `cirrusDir` (skipping `_generated/` and `schema.ts`)
  * for top-level `export const x = query/mutation/action({...})` registrations.
  */
-export const discoverFunctions = (project: Project, cirrusDirectory: string): FunctionIR[] => {
+const discoverFunctions = (project: Project, cirrusDirectory: string): FunctionIR[] => {
     const filePaths = listCirrusSourceFiles(cirrusDirectory);
     const functions: FunctionIR[] = [];
 
@@ -371,79 +475,14 @@ export const discoverFunctions = (project: Project, cirrusDirectory: string): Fu
         const source: SourceFile = project.addSourceFileAtPath(filePath);
         const relativePath = relative(cirrusDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
 
-        for (const statement of source.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
-
-            for (const declaration of statement.getDeclarations()) {
-                const initializer = declaration.getInitializer();
-
-                if (initializer?.getKind() !== SyntaxKind.CallExpression) {
-                    continue;
-                }
-
-                const call = initializer as CallExpression;
-                const callee = call.getExpression();
-
-                let discovered: DiscoveredFunction | null = null;
-
-                if (Node.isIdentifier(callee)) {
-                    const calleeName = resolveCalleeKind(callee);
-
-                    if (calleeName && FUNCTION_KINDS.has(calleeName)) {
-                        discovered = { args: argsFromCall(call), kind: calleeName, returnType: returnTypeFromCall(call), visibility: "public" };
-                    } else if (calleeName && INTERNAL_FACTORIES[calleeName]) {
-                        discovered = {
-                            args: argsFromCall(call),
-                            kind: INTERNAL_FACTORIES[calleeName],
-                            returnType: returnTypeFromCall(call),
-                            visibility: "internal",
-                        };
-                    }
-                } else if (Node.isPropertyAccessExpression(callee)) {
-                    discovered = discoverBuilderProcedure(call, callee);
-                }
-
-                if (!discovered) {
-                    continue;
-                }
-
-                functions.push({
-                    args: discovered.args,
-                    exportName: declaration.getName(),
-                    filePath: relativePath,
-                    kind: discovered.kind as FunctionIR["kind"],
-                    returnType: discovered.returnType,
-                    visibility: discovered.visibility,
-                });
-            }
-        }
+        functions.push(...discoverFileFunctions(source, relativePath));
     }
 
     functions.sort((a, b) => `${a.filePath}:${a.exportName}`.localeCompare(`${b.filePath}:${b.exportName}`));
 
-    // Detect namespace collisions: two distinct file paths that sanitize to
-    // the same identifier (e.g. `foo/bar.ts` and `foo-bar.ts` both → `foo_bar`).
-    // Without this guard, emit silently produces duplicate `ApiTypes` keys
-    // and an ambiguous dispatch table.
-    const namespaceOrigins = new Map<string, string>();
-
-    for (const function_ of functions) {
-        const namespace = sanitizeNamespace(function_.filePath);
-        const prior = namespaceOrigins.get(namespace);
-
-        if (prior && prior !== function_.filePath) {
-            throw Object.assign(
-                new Error(
-                    `Namespace collision: "${prior}" and "${function_.filePath}" both resolve to "${namespace}". Rename one of the files so the JS-identifier-sanitized names differ. (note: case-insensitive filesystems may also cause this — \`foo\` and \`FOO\` map to the same identifier)`,
-                ),
-                { code: "NAMESPACE_COLLISION", name: "CirrusError", paths: [prior, function_.filePath], status: 500 },
-            );
-        }
-
-        namespaceOrigins.set(namespace, function_.filePath);
-    }
+    assertNoNamespaceCollision(functions);
 
     return functions;
 };
+
+export { discoverFunctions, listCirrusSourceFiles };

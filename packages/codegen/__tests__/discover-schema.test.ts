@@ -1,7 +1,7 @@
 import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import { discoverSchema } from "../src/discover-schema.js";
+import discoverSchema from "../src/discover-schema.js";
 import { emitDataModel } from "../src/emit.js";
 
 /**
@@ -342,6 +342,7 @@ describe("discoverSchema", () => {
         // The with-inference machinery + generic facades.
         expect(dataModel).toContain("export type WithArg<T extends keyof DataModel>");
         expect(dataModel).toContain("export type LoadWith<T extends keyof DataModel, W> = Doc<T> & LoadedRelations<T, W> & LoadedCount<W>;");
+        // eslint-disable-next-line no-secrets/no-secrets -- asserts an emitted TS type signature, not a credential
         expect(dataModel).toContain("findMany: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<QueryPage<LoadWith<T, W>>>;");
         expect(dataModel).toContain("findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;");
     });

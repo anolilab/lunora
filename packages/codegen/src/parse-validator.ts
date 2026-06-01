@@ -52,24 +52,27 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
     return { ...base, column };
 };
 
+/** Scalar `v.*` kinds that map to a bare `{ kind }` IR with no further parsing. */
+const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "null", "number", "string", "timestamp"]);
+
 /**
  * Convert a v.* call expression (or any other expression) into a {@link ValidatorIR}.
  * Used by both schema discovery and function-args discovery so the rendered
  * TS types are identical regardless of where a validator appears.
  */
-export function parseValidator(expression: Expression): ValidatorIR {
+const parseValidator = (expression: Expression): ValidatorIR => {
     if (Node.isCallExpression(expression)) {
         // parseValidatorCall <-> parseValidator/parseObjectShape are mutually
-        // recursive, so one forward reference is unavoidable here. Function
-        // declarations hoist, so this is safe at runtime.
-        // eslint-disable-next-line @typescript-eslint/no-use-before-define
+        // recursive, so one forward reference is unavoidable here. Arrow consts
+        // are all defined before any is called, so this is safe at runtime.
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion between validator parsers
         return parseValidatorCall(expression);
     }
 
     return { kind: "any", sourceText: expression.getText() };
-}
+};
 
-export function parseObjectShape(object: ObjectLiteralExpression): Record<string, ValidatorIR> {
+const parseObjectShape = (object: ObjectLiteralExpression): Record<string, ValidatorIR> => {
     const out: Record<string, ValidatorIR> = {};
 
     for (const property of object.getProperties()) {
@@ -101,53 +104,30 @@ export function parseObjectShape(object: ObjectLiteralExpression): Record<string
     }
 
     return out;
-}
+};
 
-function parseValidatorCall(call: CallExpression): ValidatorIR {
-    const callee = call.getExpression();
+/** Parse an argument node as a nested validator, or fall back when it isn't an expression. */
+const parseArgument = (argument: Node | undefined, fallback: ValidatorIR): ValidatorIR =>
+    (argument && Node.isExpression(argument) ? parseValidator(argument) : fallback);
 
-    if (!Node.isPropertyAccessExpression(callee)) {
-        return { kind: "any", sourceText: call.getText() };
+/** Parse a single `v.NAME(...)` builder call, dispatching on the member name. */
+const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): ValidatorIR => {
+    if (SCALAR_KINDS.has(member)) {
+        return { kind: member };
     }
 
-    const member = callee.getName();
-    const args = call.getArguments();
-
-    if (COLUMN_MODIFIERS.has(member)) {
-        const receiver = callee.getExpression();
-        const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
-
-        return applyColumnModifier(base, member);
-    }
+    const [first, second] = args;
 
     switch (member) {
-        case "any":
-        case "bigint":
-        case "boolean":
-        case "bytes":
-        case "date":
-        case "null":
-        case "number":
-        case "string":
-        case "timestamp": {
-            return { kind: member };
-        }
-
         case "array": {
-            const first = args[0];
-
-            return { inner: first && Node.isExpression(first) ? parseValidator(first) : { kind: "any" }, kind: "array" };
+            return { inner: parseArgument(first, { kind: "any" }), kind: "array" };
         }
 
         case "id": {
-            const first = args[0];
-
             return { kind: "id", tableName: first && Node.isStringLiteral(first) ? first.getLiteralText() : "_unknown_" };
         }
 
         case "literal": {
-            const first = args[0];
-
             return {
                 kind: "literal",
                 // Captures the source text — for string/number/boolean/null literals
@@ -157,29 +137,18 @@ function parseValidatorCall(call: CallExpression): ValidatorIR {
         }
 
         case "object": {
-            const first = args[0];
-
-            if (first && Node.isObjectLiteralExpression(first)) {
-                return { kind: "object", shape: parseObjectShape(first) };
-            }
-
-            return { kind: "object", shape: {} };
+            return first && Node.isObjectLiteralExpression(first) ? { kind: "object", shape: parseObjectShape(first) } : { kind: "object", shape: {} };
         }
 
         case "optional": {
-            const first = args[0];
-
-            return { inner: first && Node.isExpression(first) ? parseValidator(first) : { kind: "any" }, kind: "optional" };
+            return { inner: parseArgument(first, { kind: "any" }), kind: "optional" };
         }
 
         case "record": {
-            const first = args[0];
-            const second = args[1];
-
             return {
-                keyType: first && Node.isExpression(first) ? parseValidator(first) : { kind: "string" },
+                keyType: parseArgument(first, { kind: "string" }),
                 kind: "record",
-                valueType: second && Node.isExpression(second) ? parseValidator(second) : { kind: "any" },
+                valueType: parseArgument(second, { kind: "any" }),
             };
         }
 
@@ -197,4 +166,26 @@ function parseValidatorCall(call: CallExpression): ValidatorIR {
             throw new Error(`Unsupported validator kind: ${member}`);
         }
     }
-}
+};
+
+const parseValidatorCall = (call: CallExpression): ValidatorIR => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee)) {
+        return { kind: "any", sourceText: call.getText() };
+    }
+
+    const member = callee.getName();
+    const args = call.getArguments();
+
+    if (COLUMN_MODIFIERS.has(member)) {
+        const receiver = callee.getExpression();
+        const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
+
+        return applyColumnModifier(base, member);
+    }
+
+    return parseBuilderMember(member, args);
+};
+
+export { parseObjectShape, parseValidator };

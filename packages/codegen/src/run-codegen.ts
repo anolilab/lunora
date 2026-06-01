@@ -4,8 +4,8 @@ import { dirname, join } from "node:path";
 import { Project } from "ts-morph";
 
 import { discoverFunctions } from "./discover-functions.js";
-import { discoverMigrations } from "./discover-migrations.js";
-import { discoverSchema } from "./discover-schema.js";
+import discoverMigrations from "./discover-migrations.js";
+import discoverSchema from "./discover-schema.js";
 import { emitApi, emitDataModel, emitDrizzleSchema, emitServer, emitShard } from "./emit.js";
 
 const writeIfChanged = (filePath: string, content: string): void => {

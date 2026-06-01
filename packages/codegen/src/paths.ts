@@ -7,4 +7,6 @@
  *
  * If these ever disagree, runtime dispatch silently misses functions.
  */
-export const sanitizeNamespace = (filePath: string): string => filePath.replaceAll(/[^\dA-Za-z]/gu, "_");
+const sanitizeNamespace = (filePath: string): string => filePath.replaceAll(/[^\dA-Za-z]/gu, "_");
+
+export default sanitizeNamespace;

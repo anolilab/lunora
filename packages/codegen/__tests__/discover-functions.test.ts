@@ -273,6 +273,7 @@ describe("discoverFunctions", () => {
     // `__cirrusProcedure` property off the receiver's *type*, so the builder is
     // declared inline here rather than imported from `@cirrus/server` (the isolated
     // test project has no module resolution for workspace packages).
+    // eslint-disable-next-line no-secrets/no-secrets -- inline TS builder fixture (MutationBuilder<Args>, etc.), not a credential
     const BUILDER_PREAMBLE = `
     declare const v: {
         id: (table: string) => { __k: "id" };

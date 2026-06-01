@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverMigrations } from "../src/discover-migrations.js";
+import discoverMigrations from "../src/discover-migrations.js";
 
 const NON_STATIC_ID_RE = /must declare `id` as a non-empty string literal/u;
 const DUPLICATE_ID_RE = /Duplicate migration id "dup"/u;
