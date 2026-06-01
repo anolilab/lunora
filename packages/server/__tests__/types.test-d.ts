@@ -15,7 +15,7 @@ const schema = defineSchema({
 });
 
 // schema.tables.messages.shape.text is the v.string validator.
-export type _Check1 = Assert<Equal<Infer<typeof schema.tables.messages.shape.channelId>, Id<"channels">>>;
+type Check1 = Assert<Equal<Infer<typeof schema.tables.messages.shape.channelId>, Id<"channels">>>;
 
 const list = query({
     args: { limit: v.number() },
@@ -27,28 +27,28 @@ const send = mutation({
     handler: (_context, args) => args.text,
 });
 
-export type _Check2 = Assert<Equal<typeof list.kind, "query">>;
-export type _Check3 = Assert<Equal<typeof send.kind, "mutation">>;
+type Check2 = Assert<Equal<typeof list.kind, "query">>;
+type Check3 = Assert<Equal<typeof send.kind, "mutation">>;
 
 const c = initCirrus.dataModel<Record<string, never>>().create();
 
 // The builder terminal re-states the kind as a literal type.
 const builderList = c.query.input({ limit: v.number() }).query(({ args }) => args.limit);
 
-export type _Check4 = Assert<Equal<typeof builderList.kind, "query">>;
+type Check4 = Assert<Equal<typeof builderList.kind, "query">>;
 
 // `.input()` flows the validator's inferred type into the handler's `args`.
 const builderArgs = c.query.input({ channelId: v.id("channels") }).query(({ args }) => args.channelId);
 
 type BuilderArgs = Parameters<typeof builderArgs.handler>[1];
 
-export type _Check5 = Assert<Equal<BuilderArgs["channelId"], Id<"channels">>>;
+type Check5 = Assert<Equal<BuilderArgs["channelId"], Id<"channels">>>;
 
 // `.use()` returning `next({ ctx })` widens the context the handler sees — if
 // the extension weren't threaded through, `ctx.userId` wouldn't type-check.
 const builderContext = c.query.use(async ({ next }) => next({ ctx: { userId: "u" } })).query(({ ctx }) => ctx.userId);
 
-export type _Check6 = Assert<Equal<Awaited<ReturnType<typeof builderContext.handler>>, string>>;
+type Check6 = Assert<Equal<Awaited<ReturnType<typeof builderContext.handler>>, string>>;
 
 // `.output(validator)` narrows the registered return type to the validator's
 // inferred type, regardless of what the handler body would infer on its own.
@@ -57,7 +57,7 @@ const builderOutput = c.query.output(outputValidator).query(() => {
     return { count: 1 };
 });
 
-export type _Check7 = Assert<Equal<typeof builderOutput, RegisteredQuery<EmptyArgs, Infer<typeof outputValidator>>>>;
+type Check7 = Assert<Equal<typeof builderOutput, RegisteredQuery<EmptyArgs, Infer<typeof outputValidator>>>>;
 
 // `.output()` composes with `.input()` in either order: args stay typed and the
 // declared output type wins for the registered return.
@@ -66,13 +66,13 @@ const builderInputOutput = c.mutation
     .output(v.string())
     .mutation(({ args }) => args.text);
 
-export type _Check8 = Assert<Equal<Awaited<ReturnType<typeof builderInputOutput.handler>>, string>>;
+type Check8 = Assert<Equal<Awaited<ReturnType<typeof builderInputOutput.handler>>, string>>;
 
 // A handler whose return type doesn't satisfy `.output()` is a compile error.
 // @ts-expect-error - handler returns string, but .output declares { count: number }
 const builderOutputMismatch = c.query.output(v.object({ count: v.number() })).query(() => "nope");
 
-export type _Check9 = Assert<Equal<typeof builderOutputMismatch.kind, "query">>;
+type Check9 = Assert<Equal<typeof builderOutputMismatch.kind, "query">>;
 
 // `httpRoute`: `.searchParams()` / `.body()` / `.params()` flow the validator
 // maps into the handler's typed `{ searchParams, body, params }`.
@@ -80,16 +80,16 @@ const itemsRoute = httpRoute.get("/api/items/:id").searchParams({ limit: v.numbe
 
 type ItemsOptions = Parameters<Parameters<typeof itemsRoute.handler>[0]>[0];
 
-export type _Check10 = Assert<Equal<ItemsOptions["searchParams"]["limit"], number>>;
-export type _Check11 = Assert<Equal<ItemsOptions["body"]["text"], string>>;
-export type _Check11b = Assert<Equal<ItemsOptions["params"]["id"], string>>;
+type Check10 = Assert<Equal<ItemsOptions["searchParams"]["limit"], number>>;
+type Check11 = Assert<Equal<ItemsOptions["body"]["text"], string>>;
+type Check11b = Assert<Equal<ItemsOptions["params"]["id"], string>>;
 
 // The terminal `.handler()` yields a `CirrusRouteHandler`, mountable on `httpRouter`.
 const pingRoute = httpRoute.get("/api/ping").handler(() => {
     return { ok: true };
 });
 
-export type _Check12 = Assert<Equal<typeof pingRoute, CirrusRouteHandler>>;
+type Check12 = Assert<Equal<typeof pingRoute, CirrusRouteHandler>>;
 
 // `.output()` constrains the handler's return — a mismatch is a compile error.
 // The directive sits immediately before `.handler(() => 42)` because TypeScript
@@ -102,4 +102,21 @@ const routeOutputMismatch = httpRoute
     // @ts-expect-error - handler returns number, but .output declares string
     .handler(() => 42);
 
-export type _Check13 = Assert<Equal<typeof routeOutputMismatch, CirrusRouteHandler>>;
+type Check13 = Assert<Equal<typeof routeOutputMismatch, CirrusRouteHandler>>;
+
+export type {
+    Check1,
+    Check2,
+    Check3,
+    Check4,
+    Check5,
+    Check6,
+    Check7,
+    Check8,
+    Check9,
+    Check10,
+    Check11,
+    Check11b,
+    Check12,
+    Check13,
+};

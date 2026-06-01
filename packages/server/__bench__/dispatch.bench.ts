@@ -67,27 +67,27 @@ const heavyArgs = {
 };
 
 describe("query/mutation dispatch", () => {
-    bench("empty args", () => {
-        emptyArgsQuery.handler(sampleContext, {});
+    bench("empty args", async () => {
+        await emptyArgsQuery.handler(sampleContext, {});
     });
 
-    bench("single id arg", () => {
-        smallArgsQuery.handler(sampleContext, smallArgs);
+    bench("single id arg", async () => {
+        await smallArgsQuery.handler(sampleContext, smallArgs);
     });
 
-    bench("4-field mutation with optional + union", () => {
-        messageMutation.handler(sampleContext, messageArgs);
+    bench("4-field mutation with optional + union", async () => {
+        await messageMutation.handler(sampleContext, messageArgs);
     });
 
-    bench("nested object + array + record + optional", () => {
-        heavyMutation.handler(sampleContext, heavyArgs);
+    bench("nested object + array + record + optional", async () => {
+        await heavyMutation.handler(sampleContext, heavyArgs);
     });
 });
 
 describe("validation failure path", () => {
-    bench("throws ValidationError on bad arg type", () => {
+    bench("throws ValidationError on bad arg type", async () => {
         try {
-            smallArgsQuery.handler(sampleContext, { id: 123 } as unknown as { id: Id<"users"> });
+            await smallArgsQuery.handler(sampleContext, { id: 123 } as unknown as { id: Id<"users"> });
         } catch {
             /* expected — measuring the rejection cost */
         }

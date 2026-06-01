@@ -634,14 +634,16 @@ describe("rls — opt-in scope", () => {
 
         const handler = cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1"));
 
-        try {
-            await handler.handler(makeContext(database, "u1"), {});
-            throw new Error("expected to throw");
-        } catch (error) {
-            expect(error).toBeInstanceOf(CirrusError);
-            expect((error as CirrusError).status).toBe(403);
-            expect((error as CirrusError).code).toBe("FORBIDDEN");
-        }
+        const error = await handler.handler(makeContext(database, "u1"), {}).then(
+            () => {
+                throw new Error("expected to throw");
+            },
+            (error_: unknown) => error_,
+        );
+
+        expect(error).toBeInstanceOf(CirrusError);
+        expect((error as CirrusError).status).toBe(403);
+        expect((error as CirrusError).code).toBe("FORBIDDEN");
     });
 });
 
