@@ -664,8 +664,9 @@ describe("dataBrowser — editable", () => {
 
                 const { search = "", table } = args as { search?: string; table: string };
                 const needle = search.trim().toLowerCase();
-                const match = <T extends Record<string, unknown>>(source: T[]): T[] =>
-                    needle === "" ? source : source.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle)));
+                const rowMatchesNeedle = (row: Record<string, unknown>): boolean =>
+                    Object.values(row).some((value) => String(value).toLowerCase().includes(needle));
+                const match = <T extends Record<string, unknown>>(source: T[]): T[] => (needle === "" ? source : source.filter((row) => rowMatchesNeedle(row)));
 
                 if (table === "posts") {
                     return { columns: ["id", "title", "authorId"], refs: { authorId: "users" }, rows: match(POSTS), total: match(POSTS).length };

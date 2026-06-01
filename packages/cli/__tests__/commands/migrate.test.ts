@@ -371,9 +371,11 @@ export const backfillReadBy = defineMigration({
             return { json: response.json, ok: response.ok, status: response.status, text: async () => "" };
         };
 
-    const okResponse = (body: unknown = { ok: 1 }): { json: () => Promise<unknown>; ok: boolean; status: number } => {
+    const okResponse = (body?: unknown): { json: () => Promise<unknown>; ok: boolean; status: number } => {
+        const resolvedBody = body ?? { ok: 1 };
+
         return {
-            json: async () => body,
+            json: async () => resolvedBody,
             ok: true,
             status: 200,
         };

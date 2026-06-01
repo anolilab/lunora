@@ -227,9 +227,9 @@ describe("cirrus data-transfer", () => {
                 token: "t",
             });
 
-            const line_ = captured[0]!.body.split("\n").find((line) => line.length > 0);
+            const firstLine = captured[0]!.body.split("\n").find((line) => line.length > 0);
 
-            expect(JSON.parse(line_!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+            expect(JSON.parse(firstLine!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
         });
 
         it("returns a non-zero exit code when the server reports errors", async () => {

@@ -38,7 +38,14 @@ export const createFakeState = (): SchedulerDOState & {
                 // Code-unit ordering (NOT locale-aware): the time index relies on
                 // lexical byte order matching numeric order, so keep the default
                 // string comparison rather than `localeCompare`.
-                const keys = [...storageMap.keys()].filter((key) => key.startsWith(prefix)).toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+                const byteCompare = (left: string, right: string): number => {
+                    if (left < right) {
+                        return -1;
+                    }
+
+                    return left > right ? 1 : 0;
+                };
+                const keys = [...storageMap.keys()].filter((key) => key.startsWith(prefix)).toSorted(byteCompare);
 
                 for (const key of keys.slice(0, options.limit ?? keys.length)) {
                     result.set(key, storageMap.get(key) as T);

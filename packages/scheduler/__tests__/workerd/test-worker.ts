@@ -57,6 +57,7 @@ class TestSchedulerDO extends DurableObject<Env> {
         super(context, env);
         // Cast: SchedulerEnv is a bag of bindings; our test `Env` is a
         // subtype of it.
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- ConcreteScheduler and TestSchedulerDO are mutually referential; the class is fully defined by the time this constructor runs
         this.scheduler = new ConcreteScheduler(toSchedulerState(context), env as unknown as SchedulerEnv, this);
     }
 

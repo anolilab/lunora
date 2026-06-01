@@ -109,6 +109,7 @@ describe("dashboardPlugin", () => {
         await Promise.resolve();
 
         expect(dashNext).not.toHaveBeenCalled();
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server; no `this` binding to lose
         expect(server.transformIndexHtml).toHaveBeenCalledWith(DASHBOARD_PATH, expect.stringContaining("@cirrus/dashboard/mount"));
         expect(end).toHaveBeenCalledTimes(1);
         expect((end.mock.calls[0] as [string])[0]).toContain("@cirrus/dashboard/mount");
@@ -116,6 +117,7 @@ describe("dashboardPlugin", () => {
         // The post-hook announces the dashboard URL.
         post();
 
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's logger; no `this` binding to lose
         expect(server.config.logger.info).toHaveBeenCalledWith(expect.stringContaining("/__cirrus"));
     });
 });

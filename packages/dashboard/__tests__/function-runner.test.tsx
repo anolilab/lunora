@@ -249,6 +249,7 @@ describe("functionRunner", () => {
         for (let index = 0; index < 10; index += 1) {
             fireEvent.click(screen.getByTestId("run-button"));
 
+            // eslint-disable-next-line no-await-in-loop -- each run must complete before the next click (the run button disables while in-flight)
             await waitFor(() => {
                 if (screen.getAllByTestId("fn-history-row").length !== index + 1) {
                     throw new Error("query run not recorded yet");
