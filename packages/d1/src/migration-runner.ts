@@ -42,15 +42,23 @@ interface MigrationRunnerResult {
  * `;` followed only by whitespace and/or comments is allowed (and `;` is
  * stripped before submission to D1).
  *
+ * The scan is a hand-written SQL lexer: a single linear pass over the source
+ * with a small set of mutually-exclusive mode flags. Its branching IS the
+ * grammar, so splitting it across helpers (each needing the same closured
+ * cursor state) reads worse than the flat machine below — hence the inline
+ * complexity allowance, matching `@cirrus/do`'s `data-migration.ts` twin.
+ *
  * Callers wanting multiple statements per migration should split them into
  * separate `Migration` entries — `batch()` runs them atomically anyway.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- hand-written single-pass SQL lexer; the mode branching is the grammar and inlines more clearly than split helpers sharing cursor state (see @cirrus/do data-migration.ts)
 const assertSingleStatement = (migration: Migration): void => {
     const text = migration.sql;
     let inSingle = false;
     let inDouble = false;
     let inLineComment = false;
     let inBlockComment = false;
+    let seenStatement = false;
 
     for (let index = 0; index < text.length; index += 1) {
         const character = text[index];
@@ -74,8 +82,8 @@ const assertSingleStatement = (migration: Migration): void => {
         }
 
         if (inSingle) {
+            // SQL escapes a quote by doubling it.
             if (character === "'") {
-                // SQL escapes a quote by doubling it.
                 if (next === "'") {
                     index += 1;
                 } else {
@@ -121,52 +129,16 @@ const assertSingleStatement = (migration: Migration): void => {
         }
 
         if (character === ";") {
-            // Permit a trailing `;` followed only by whitespace/comments —
-            // resume the lexer past the `;` and require that no further
-            // executable token appears.
-            for (let trailing = index + 1; trailing < text.length; trailing += 1) {
-                const tail = text[trailing];
-                const tailNext = text[trailing + 1];
+            // A `;` ends the (only) statement; anything executable after it is
+            // a second statement. Trailing whitespace/comments are allowed.
+            seenStatement = true;
+            continue;
+        }
 
-                if (inLineComment) {
-                    if (tail === "\n") {
-                        inLineComment = false;
-                    }
-
-                    continue;
-                }
-
-                if (inBlockComment) {
-                    if (tail === "*" && tailNext === "/") {
-                        inBlockComment = false;
-                        trailing += 1;
-                    }
-
-                    continue;
-                }
-
-                if (tail === "-" && tailNext === "-") {
-                    inLineComment = true;
-                    trailing += 1;
-                    continue;
-                }
-
-                if (tail === "/" && tailNext === "*") {
-                    inBlockComment = true;
-                    trailing += 1;
-                    continue;
-                }
-
-                // Any whitespace is fine; anything else means a second
-                // statement starts after the `;`.
-                if (tail !== undefined && !WHITESPACE_RE.test(tail)) {
-                    throw new Error(
-                        `Migration "${migration.name}" (v${String(migration.version)}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
-                    );
-                }
-            }
-
-            return;
+        if (seenStatement && character !== undefined && !WHITESPACE_RE.test(character)) {
+            throw new Error(
+                `Migration "${migration.name}" (v${String(migration.version)}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
+            );
         }
     }
 };
@@ -215,8 +187,12 @@ class MigrationRunner {
         const applied: { name: string; version: number }[] = [];
         const skipped: { name: string; version: number }[] = [];
 
-        for (const migration of this.migrations) {
-            const hash = await hashMigration(migration.sql);
+        // Hashing is pure and order-independent, so compute every hash up front
+        // in parallel; applying then proceeds strictly in version order below.
+        const hashes = await Promise.all(this.migrations.map(async (migration) => hashMigration(migration.sql)));
+
+        for (const [index, migration] of this.migrations.entries()) {
+            const hash = hashes[index] as string;
 
             if (appliedHashes.has(hash)) {
                 skipped.push({ name: migration.name, version: migration.version });
@@ -224,6 +200,7 @@ class MigrationRunner {
                 continue;
             }
 
+            // eslint-disable-next-line no-await-in-loop -- migrations must apply strictly in version order; each applyOne writes the tracking row the next iteration relies on.
             await this.applyOne(migration, hash);
             applied.push({ name: migration.name, version: migration.version });
         }

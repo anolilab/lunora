@@ -1,3 +1,4 @@
+/* eslint-disable max-classes-per-file -- D1Session and D1Client are both public exports (re-exported by src/index.ts) and are intentionally co-located: the client mints sessions, so splitting them across files would break the cohesive Sessions-API surface consumers import together. */
 import type { D1Database } from "@cloudflare/workers-types";
 import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
 import type { DrizzleD1Database } from "drizzle-orm/d1";

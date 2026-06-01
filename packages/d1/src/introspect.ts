@@ -53,7 +53,7 @@ const isGlobalTable = (schema: SchemaLike, table: string): boolean => schema.tab
  */
 const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknown>): Record<string, unknown> => {
     const definition = schema.tables[table];
-    const document_: Record<string, unknown> = {};
+    const decoded: Record<string, unknown> = {};
 
     if (definition) {
         for (const [field, validator] of Object.entries(definition.shape)) {
@@ -63,14 +63,14 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
                 continue;
             }
 
-            document_[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
+            decoded[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
         }
     }
 
-    document_["_id"] = row["id"];
-    document_["_creationTime"] = row["_creationTime"];
+    decoded["_id"] = row["id"];
+    decoded["_creationTime"] = row["_creationTime"];
 
-    return document_;
+    return decoded;
 };
 
 const countRows = async (exec: D1Exec, quotedTable: string): Promise<number> => {
@@ -88,13 +88,12 @@ const listGlobalTables = async (exec: D1Exec, schema: SchemaLike): Promise<Globa
         .filter((name) => isGlobalTable(schema, name))
         .toSorted((a, b) => a.localeCompare(b));
 
-    const tables: GlobalTableInfo[] = [];
-
-    for (const name of names) {
-        tables.push({ name, rowCount: await countRows(exec, quoteIdentifier(name)) });
-    }
-
-    return tables;
+    // Independent COUNT(*) probes — fan out and preserve the sorted order.
+    return Promise.all(
+        names.map(async (name) => {
+            return { name, rowCount: await countRows(exec, quoteIdentifier(name)) };
+        }),
+    );
 };
 
 /**

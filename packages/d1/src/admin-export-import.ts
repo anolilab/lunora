@@ -55,7 +55,7 @@ const selectGlobalTables = (schema: SchemaLike, requested?: ReadonlyArray<string
  */
 const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknown>): Record<string, unknown> => {
     const definition = schema.tables[table];
-    const document_: Record<string, unknown> = {};
+    const decoded: Record<string, unknown> = {};
 
     if (definition) {
         for (const [field, validator] of Object.entries(definition.shape)) {
@@ -65,14 +65,14 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
                 continue;
             }
 
-            document_[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
+            decoded[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
         }
     }
 
-    document_["_id"] = row["id"];
-    document_["_creationTime"] = row["_creationTime"];
+    decoded["_id"] = row["id"];
+    decoded["_creationTime"] = row["_creationTime"];
 
-    return document_;
+    return decoded;
 };
 
 interface ExportGlobalArgs {
@@ -93,40 +93,34 @@ const exportGlobalRows = async function* (exec: D1Exec, schema: SchemaLike, args
 
     for (const table of tables) {
         let offset = 0;
+        let hasMore = true;
 
-        while (true) {
+        while (hasMore) {
+            // eslint-disable-next-line no-await-in-loop -- offset paging is inherently sequential: each page's OFFSET depends on the prior page count.
             const rows = await exec.all(`SELECT * FROM ${quoteIdentifier(table)} LIMIT ? OFFSET ?`, [batchSize, offset]);
-
-            if (rows.length === 0) {
-                break;
-            }
 
             for (const row of rows) {
                 yield { doc: decodeRow(schema, table, row), table };
             }
 
-            if (rows.length < batchSize) {
-                break;
-            }
-
+            hasMore = rows.length === batchSize;
             offset += rows.length;
         }
     }
 };
 
-const validateRow = (schema: SchemaLike, table: string, document_: Record<string, unknown>): null | string => {
+const validateRow = (schema: SchemaLike, table: string, document: Record<string, unknown>): string | undefined => {
     const definition = schema.tables[table];
 
     if (!definition) {
         return `unknown table: ${table}`;
     }
 
-    // Strip the system fields (`_id`, `_creationTime`) so only declared
-    // schema fields are validated; the rest spread holds the payload.
-    const { _creationTime: _ignoredCreationTime, _id: _ignoredId, ...payload } = document_;
-
+    // Only declared schema fields are validated; `definition.shape` never
+    // contains the system fields (`_id`, `_creationTime`), so reading straight
+    // off `document` already skips them.
     for (const [field, validator] of Object.entries(definition.shape)) {
-        const candidate = (payload as Record<string, unknown>)[field];
+        const candidate = document[field];
         const optional = validator.kind === "optional";
 
         if (candidate === undefined && optional) {
@@ -148,7 +142,7 @@ const validateRow = (schema: SchemaLike, table: string, document_: Record<string
         }
     }
 
-    return null;
+    return undefined;
 };
 
 interface ImportGlobalArgs {
@@ -171,6 +165,74 @@ interface D1ExecLike {
 }
 
 /**
+ * Probe whether `explicitId` already exists in `table`. Prefers a direct
+ * table+id `SELECT` when an exec handle is available (avoids the writer.get()
+ * fallback's per-row N-table scan). A probe error is swallowed — the writer's
+ * insert path will surface any hard error instead.
+ */
+const explicitIdConflicts = async (writer: DatabaseWriterLike, exec: D1ExecLike | undefined, table: string, explicitId: string): Promise<boolean> => {
+    try {
+        if (exec) {
+            const probe = await exec.all(`SELECT 1 AS hit FROM ${quoteIdentifier(table)} WHERE "id" = ? LIMIT 1`, [explicitId]);
+
+            return probe.length > 0;
+        }
+
+        const existing = await writer.get(explicitId);
+
+        return existing !== null;
+    } catch {
+        // The writer's insert path will surface a hard error if one is real.
+        return false;
+    }
+};
+
+type RowOutcome = { error: ImportError; kind: "error" } | { inserted: string; kind: "inserted" } | { kind: "conflict" } | { kind: "skip" };
+
+/** Resolve one import row to a single outcome, isolating the per-row branching from the accumulation loop. */
+const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportGlobalArgs, row: ExportRow, line: number): Promise<RowOutcome> => {
+    const { doc, table } = row;
+
+    // Only process globals here; shard-local rows are someone else's
+    // responsibility (the DO importers handle those).
+    if (schema.tables[table]?.shardMode?.kind !== "global") {
+        return { kind: "skip" };
+    }
+
+    // Defensive against untrusted snapshot rows: `doc` is typed non-null, but
+    // an import payload can carry a missing/malformed `doc` off the wire.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guard on untrusted parsed NDJSON, not on the declared type
+    if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+        return { error: { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table }, kind: "error" };
+    }
+
+    const failure = validateRow(schema, table, doc);
+
+    if (failure !== undefined) {
+        return { error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" };
+    }
+
+    const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
+
+    if (explicitId !== undefined && (await explicitIdConflicts(writer, args.exec, table, explicitId))) {
+        return { kind: "conflict" };
+    }
+
+    try {
+        // Trusted admin import path: preserve the pinned `_id` from the
+        // snapshot (the default insert path now strips client-chosen ids).
+        await writer.insert(table, doc, { allowExplicitId: true });
+
+        return { inserted: table, kind: "inserted" };
+    } catch (error: unknown) {
+        const code = (error as { code?: string }).code ?? "INSERT_FAILED";
+        const message = error instanceof Error ? error.message : String(error);
+
+        return { error: { code, line, message, table }, kind: "error" };
+    }
+};
+
+/**
  * Import rows into `.global()` tables via the schema-aware D1 writer. The
  * writer rejects unknown ids on `insert` (the writer assigns one when `_id` is
  * absent); we pre-probe each row's `_id` so a collision is reported as a
@@ -186,62 +248,28 @@ const importGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLike, 
     for (const row of args.rows) {
         line += 1;
 
-        const { doc, table } = row;
+        // eslint-disable-next-line no-await-in-loop -- imports apply row-by-row in input order so per-line error/conflict reporting and the shared writer stay deterministic.
+        const outcome = await importOneRow(writer, schema, args, row, line);
 
-        // Only process globals here; shard-local rows are someone else's
-        // responsibility (the DO importers handle those).
-        if (schema.tables[table]?.shardMode?.kind !== "global") {
-            continue;
-        }
-
-        if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
-            errors.push({ code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table });
-            continue;
-        }
-
-        const failure = validateRow(schema, table, doc);
-
-        if (failure !== null) {
-            errors.push({ code: "VALIDATION_ERROR", line, message: failure, table });
-            continue;
-        }
-
-        const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
-
-        if (explicitId !== undefined) {
-            try {
-                // Direct table+id probe when an exec handle is available —
-                // avoids the writer.get() fallback's per-row N-table scan.
-                if (args.exec) {
-                    const probe = await args.exec.all(`SELECT 1 AS hit FROM ${quoteIdentifier(table)} WHERE "id" = ? LIMIT 1`, [explicitId]);
-
-                    if (probe.length > 0) {
-                        conflicts += 1;
-                        continue;
-                    }
-                } else {
-                    const existing = await writer.get(explicitId);
-
-                    if (existing !== null) {
-                        conflicts += 1;
-                        continue;
-                    }
-                }
-            } catch {
-                // ignored — the writer's insert path will surface a hard error
+        switch (outcome.kind) {
+            case "conflict": {
+                conflicts += 1;
+                break;
             }
-        }
 
-        try {
-            // Trusted admin import path: preserve the pinned `_id` from the
-            // snapshot (the default insert path now strips client-chosen ids).
-            await writer.insert(table, doc, { allowExplicitId: true });
-            inserted[table] = (inserted[table] ?? 0) + 1;
-        } catch (error: unknown) {
-            const code = (error as { code?: string }).code ?? "INSERT_FAILED";
-            const message = error instanceof Error ? error.message : String(error);
+            case "error": {
+                errors.push(outcome.error);
+                break;
+            }
 
-            errors.push({ code, line, message, table });
+            case "inserted": {
+                inserted[outcome.inserted] = (inserted[outcome.inserted] ?? 0) + 1;
+                break;
+            }
+
+            default: {
+                break;
+            }
         }
     }
 

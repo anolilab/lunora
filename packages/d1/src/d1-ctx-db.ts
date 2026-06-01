@@ -10,6 +10,7 @@
  * value serialization) so the generated `ctx.db.&lt;table>` facade (1.2.7) is
  * backend-agnostic.
  */
+/* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts and every test import it as "./d1-ctx-db.js", and it deliberately mirrors @cirrus/do's "ctx-db.ts" twin. Renaming would break those importers. */
 import type {
     AggregateIndexDefinitionLike,
     AggregateOptions,
@@ -108,17 +109,26 @@ const AGGREGATE_SQL_FUNCTION: Record<string, string> = { avg: "AVG", count: "COU
 
 /** Resolve a reducer `op` to its SQL function, throwing on an off-allowlist op. */
 const aggregateSqlFunction = (op: string): string => {
-    const function_ = AGGREGATE_SQL_FUNCTION[op];
+    const sqlFunction = AGGREGATE_SQL_FUNCTION[op];
 
-    if (function_ === undefined) {
+    if (sqlFunction === undefined) {
         throw new Error(`unknown aggregate op "${op}": expected one of ${Object.keys(AGGREGATE_SQL_FUNCTION).join(", ")}`);
     }
 
-    return function_;
+    return sqlFunction;
 };
 
 /** Companion-table name for an aggregateIndex (`__agg_` infix matches the DO dialect). */
 const aggregateTableName = (table: string, indexName: string): string => `${table}__agg_${indexName}`;
+
+/** Code-unit string comparator (matches the default `Array#sort()` ordering). Hoisted so the keying stays a flat call. */
+const compareCodeUnits = (a: string, b: string): number => {
+    if (a < b) {
+        return -1;
+    }
+
+    return a > b ? 1 : 0;
+};
 
 /** Canonical-JSON encoding of a `by`-tuple — kept identical to the DO encoding so a parity test can compare bytes. */
 const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, unknown>): string => {
@@ -130,9 +140,10 @@ const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, un
 
     // Code-unit ordering (identical to a default `Array#sort()`), kept byte-for-
     // byte compatible with the DO encoding so a parity test can compare output.
-    const sortedBy = [...by].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const sortedBy = [...by].toSorted(compareCodeUnits);
 
     for (const field of sortedBy) {
+        // eslint-disable-next-line unicorn/no-null -- canonical-JSON wire shape: an absent `by`-field must serialize as `null` to stay byte-for-byte compatible with the DO encoding.
         ordered[field] = source[field] ?? null;
     }
 
@@ -169,7 +180,7 @@ const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record
     return true;
 };
 
-/** Marker keys distinguishing `RestrictableQueryOptions` from a `WhereInput`. */
+/** Marker keys that distinguish a restrictable count-options object from a plain where input. */
 const COUNT_OPTION_KEYS = new Set(["baseWhere", "restrictsCounts", "where"]);
 
 const normalizeCountArgument = (argument: RestrictableQueryOptions | undefined | WhereInput): RestrictableQueryOptions => {
@@ -248,10 +259,11 @@ const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike]
 /** Decode a SELECTed row back into a document: `id` → `_id`, and 1/0 → boolean for boolean columns. */
 const decodeRow = (definition: TableDefinitionLike, row: Record<string, unknown> | undefined): Record<string, unknown> | null => {
     if (!row) {
+        // eslint-disable-next-line unicorn/no-null -- a missing row decodes to `null`, the value writer.get() returns per the public DatabaseWriterLike contract.
         return null;
     }
 
-    const document_: Record<string, unknown> = {};
+    const decoded: Record<string, unknown> = {};
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         const raw = row[field];
@@ -260,13 +272,13 @@ const decodeRow = (definition: TableDefinitionLike, row: Record<string, unknown>
             continue;
         }
 
-        document_[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
+        decoded[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
     }
 
-    document_["_id"] = row["id"];
-    document_["_creationTime"] = row["_creationTime"];
+    decoded["_id"] = row["id"];
+    decoded["_creationTime"] = row["_creationTime"];
 
-    return document_;
+    return decoded;
 };
 
 /**
@@ -413,6 +425,242 @@ const tableNameFromId = async (exec: D1Exec, schema: SchemaLike, id: string, cac
     return undefined;
 };
 
+/** Coerce a SQL aggregate scalar into `GroupByEntry.value` (`number | null`). */
+// eslint-disable-next-line unicorn/no-null -- GroupByEntry.value / AggregateResult are `number | null`; an empty reduction is null.
+const aggregateScalar = (value: unknown): null | number => (value === null || value === undefined ? null : Number(value));
+
+/** Map raw `GROUP BY` result rows into `GroupByEntry` records, rebuilding each group's key tuple. */
+const mapGroupByRows = (by: ReadonlyArray<string>, rows: ReadonlyArray<Record<string, unknown>>): GroupByEntry[] =>
+    rows.map((row) => {
+        const key: Record<string, unknown> = {};
+
+        for (const field of by) {
+            // eslint-disable-next-line unicorn/no-null -- GroupByEntry.key mirrors SQL group values; an absent grouped column is null in the result shape.
+            key[field] = row[field] ?? null;
+        }
+
+        return { key, value: aggregateScalar((row as { value: unknown }).value) };
+    });
+
+/** Decode a result set into documents, dropping any row that fails to decode. */
+const decodeRows = (definition: TableDefinitionLike, rows: ReadonlyArray<Record<string, unknown>>): Record<string, unknown>[] => {
+    const documents: Record<string, unknown>[] = [];
+
+    for (const row of rows) {
+        const decoded = decodeRow(definition, row);
+
+        if (decoded) {
+            documents.push(decoded);
+        }
+    }
+
+    return documents;
+};
+
+/**
+ * Build the lexicographic "strictly before" OR-of-AND branches for a rank
+ * position count. Each pivot fixes the higher-priority sort columns with `IS ?`
+ * equality and applies the directional less-than/greater-than comparison on the
+ * pivot column; the final branch tie-breaks on the id column. Returns the SQL
+ * branch strings and their bind params in matching order.
+ */
+const buildRankBeforeBranches = (
+    index: RankIndexDefinitionLike,
+    sortColumns: ReadonlyArray<string>,
+    own: Record<string, unknown>,
+    rowId: string,
+): { branches: string[]; params: unknown[] } => {
+    const branches: string[] = [];
+    const params: unknown[] = [];
+
+    for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
+        const conditions: string[] = [];
+
+        for (let prefix = 0; prefix < pivot; prefix += 1) {
+            const prefixColumn = sortColumns[prefix];
+
+            if (prefixColumn === undefined) {
+                continue;
+            }
+
+            conditions.push(`${quoteIdentifier(prefixColumn)} IS ?`);
+            params.push(own[prefixColumn]);
+        }
+
+        const column = sortColumns[pivot];
+        const sortKey = index.sortBy[pivot];
+
+        if (pivot < sortColumns.length && column !== undefined && sortKey !== undefined) {
+            conditions.push(`${quoteIdentifier(column)} ${sortKey.direction === "desc" ? ">" : "<"} ?`);
+            params.push(own[column]);
+        } else {
+            conditions.push(`${quoteIdentifier(RANK_TIEBREAK)} < ?`);
+            params.push(rowId);
+        }
+
+        branches.push(conditions.length === 1 ? conditions.join(" AND ") : `(${conditions.join(" AND ")})`);
+    }
+
+    return { branches, params };
+};
+
+/**
+ * Build the lexicographic seek predicate for a rankPage cursor. `columns` is the
+ * ordered `[partition, ...sortColumns, id]` tuple with each column's direction;
+ * `decoded` is the cursor's value tuple. Pushes its bind params onto `params`
+ * (after any already present) and returns the `(... OR ...)` clause, or
+ * `undefined` when the decoded cursor length doesn't match the column tuple.
+ */
+const buildRankCursorSeek = (
+    columns: ReadonlyArray<{ column: string; direction: "asc" | "desc" }>,
+    decoded: ReadonlyArray<unknown>,
+    params: unknown[],
+): string | undefined => {
+    if (decoded.length !== columns.length) {
+        return undefined;
+    }
+
+    const branches: string[] = [];
+
+    for (const [pivot, col] of columns.entries()) {
+        const conditions: string[] = [];
+
+        for (let prefix = 0; prefix < pivot; prefix += 1) {
+            const prefixCol = columns[prefix];
+
+            if (prefixCol === undefined) {
+                continue;
+            }
+
+            conditions.push(`${quoteIdentifier(prefixCol.column)} IS ?`);
+            params.push(decoded[prefix]);
+        }
+
+        conditions.push(`${quoteIdentifier(col.column)} ${col.direction === "desc" ? "<" : ">"} ?`);
+        params.push(decoded[pivot]);
+        branches.push(conditions.length === 1 ? conditions.join(" AND ") : `(${conditions.join(" AND ")})`);
+    }
+
+    return `(${branches.join(" OR ")})`;
+};
+
+/**
+ * The rankPage column tuple in sort order: `[partition, ...sortColumns, id]`.
+ * Partition and id sort ascending; each sort column follows its index direction.
+ */
+const rankPageColumns = (index: RankIndexDefinitionLike, sortColumns: ReadonlyArray<string>): { column: string; direction: "asc" | "desc" }[] => {
+    const columns: { column: string; direction: "asc" | "desc" }[] = [{ column: "__partition__", direction: "asc" }];
+
+    for (const [i, sortKey] of index.sortBy.entries()) {
+        columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction });
+    }
+
+    columns.push({ column: RANK_TIEBREAK, direction: "asc" });
+
+    return columns;
+};
+
+/**
+ * Hydrate the source rows for a page of rank-companion ids, preserving the
+ * companion's order. Batches the lookups into `IN (?, …)` chunks: D1 documents a
+ * 100-parameter statement ceiling (https://developers.cloudflare.com/d1/platform/limits/),
+ * so a 50-id chunk leaves headroom. A 100-row page issues ⌈n/50⌉ queries instead
+ * of one-per-row. Rows that fail to decode are dropped.
+ */
+const hydrateRankRows = async (
+    exec: D1Exec,
+    definition: TableDefinitionLike,
+    tableName: string,
+    ids: ReadonlyArray<string>,
+): Promise<Record<string, unknown>[]> => {
+    const IN_CHUNK_SIZE = 50;
+    const chunks: string[][] = [];
+
+    for (let cursor = 0; cursor < ids.length; cursor += IN_CHUNK_SIZE) {
+        chunks.push(ids.slice(cursor, cursor + IN_CHUNK_SIZE));
+    }
+
+    const fetched = await Promise.all(
+        chunks.map(async (chunk) => {
+            const placeholders = chunk.map(() => "?").join(", ");
+
+            return exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" IN (${placeholders})`, chunk);
+        }),
+    );
+
+    const byId = new Map<string, Record<string, unknown>>();
+
+    for (const rows of fetched) {
+        for (const row of rows) {
+            byId.set(row["id"] as string, row);
+        }
+    }
+
+    const documents: Record<string, unknown>[] = [];
+
+    for (const id of ids) {
+        const decoded = decodeRow(definition, byId.get(id));
+
+        if (decoded) {
+            documents.push(decoded);
+        }
+    }
+
+    return documents;
+};
+
+/** Base64-encode a rankPage continuation cursor (the `[partition, ...sortValues, id]` tuple) as JSON. */
+const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
+    const json = JSON.stringify(cursorValues);
+    const bytes = new TextEncoder().encode(json);
+    let binary = "";
+
+    for (const byte of bytes) {
+        binary += String.fromCodePoint(byte);
+    }
+
+    return btoa(binary);
+};
+
+/** Fixed page size for the keyset-paged table scans the backfill helpers use. */
+const BACKFILL_BATCH_SIZE = 500;
+
+/**
+ * Stream every row of `tableName` to `onDoc` in `id`-keyset order, decoding each
+ * row into a document first. Pages by the last row's `id` (not OFFSET) so an
+ * unbounded table never has to fit in a single result buffer. Rows that fail to
+ * decode are skipped. Shared by the aggregate- and rank-counter backfills.
+ */
+const forEachRowPaged = async (
+    exec: D1Exec,
+    definition: TableDefinitionLike,
+    tableName: string,
+    onDoc: (document: Record<string, unknown>) => void,
+): Promise<void> => {
+    let cursorId: string | undefined;
+    let hasMore = true;
+
+    while (hasMore) {
+        const pageRows
+            = cursorId === undefined
+                // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
+                ? await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY "id" ASC LIMIT ?`, [BACKFILL_BATCH_SIZE])
+                // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
+                : await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" > ? ORDER BY "id" ASC LIMIT ?`, [cursorId, BACKFILL_BATCH_SIZE]);
+
+        for (const row of pageRows) {
+            const decoded = decodeRow(definition, row);
+
+            if (decoded) {
+                onDoc(decoded);
+            }
+        }
+
+        cursorId = pageRows.at(-1)?.["id"] as string | undefined;
+        hasMore = pageRows.length === BACKFILL_BATCH_SIZE;
+    }
+};
+
 const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWriterLike => {
     const { exec, schema } = options;
     const clock = options.clock ?? (() => Date.now());
@@ -478,50 +726,25 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
         const by = index.by ?? [];
         const tallies = new Map<string, number>();
-        const BATCH_SIZE = 500;
-        let cursorId: string | undefined;
 
-        // Keyset pagination on `id` — page by the last row's id rather than
-        // buffering the entire table. Tallies accumulate incrementally so the
-        // memory footprint is `unique(by) ` keys, not row count.
-        while (true) {
-            const pageRows
-                = cursorId === undefined
-                    ? await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY "id" ASC LIMIT ?`, [BATCH_SIZE])
-                    : await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" > ? ORDER BY "id" ASC LIMIT ?`, [cursorId, BATCH_SIZE]);
-
-            if (pageRows.length === 0) {
-                break;
+        // Keyset pagination on `id` — tallies accumulate incrementally so the
+        // memory footprint is `unique(by)` keys, not row count.
+        await forEachRowPaged(exec, definition, tableName, (document) => {
+            if (index.where && !matchesStaticWhere(document, index.where)) {
+                return;
             }
 
-            for (const row of pageRows) {
-                const document_ = decodeRow(definition, row);
+            const encoded = encodeAggregateKey(by, document);
 
-                if (!document_) {
-                    continue;
-                }
-
-                if (index.where && !matchesStaticWhere(document_, index.where)) {
-                    continue;
-                }
-
-                const encoded = encodeAggregateKey(by, document_);
-
-                tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
-            }
-
-            cursorId = pageRows.at(-1)?.["id"] as string | undefined;
-
-            if (pageRows.length < BATCH_SIZE) {
-                break;
-            }
-        }
+            tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
+        });
 
         const aggTable = aggregateTableName(tableName, index.name);
 
         await exec.run(`DELETE FROM ${quoteIdentifier(aggTable)}`, []);
 
         for (const [encoded, count] of tallies) {
+            // eslint-disable-next-line no-await-in-loop -- counter rows are inserted sequentially on the single shared D1 connection; D1Exec exposes no batch API here.
             await exec.run(`INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)`, [encoded, count]);
         }
 
@@ -530,13 +753,13 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         return true;
     };
 
-    const stepAggregate = async (tableName: string, index: AggregateIndexDefinitionLike, document_: Record<string, unknown>, delta: number): Promise<void> => {
-        if (index.where && !matchesStaticWhere(document_, index.where)) {
+    const stepAggregate = async (tableName: string, index: AggregateIndexDefinitionLike, document: Record<string, unknown>, delta: number): Promise<void> => {
+        if (index.where && !matchesStaticWhere(document, index.where)) {
             return;
         }
 
         const aggTable = aggregateTableName(tableName, index.name);
-        const encoded = encodeAggregateKey(index.by ?? [], document_);
+        const encoded = encodeAggregateKey(index.by ?? [], document);
 
         await exec.run(
             `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
@@ -554,6 +777,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         }
 
         for (const index of indexes) {
+            // eslint-disable-next-line no-await-in-loop -- backfills run sequentially on the single shared D1 connection to avoid interleaving DELETE/INSERT statements.
             await ensureBackfilled(tableName, index);
         }
     };
@@ -573,6 +797,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         for (const index of indexes) {
             // Skip when the user hasn't materialized the counter companion
             // table — the SCAN fallback still answers correctly.
+            // eslint-disable-next-line no-await-in-loop -- counter steps run sequentially on the single shared D1 connection so the -prev/+next writes don't interleave across indexes.
             const exists = await counterTableExists(tableName, index.name);
 
             if (!exists) {
@@ -580,10 +805,12 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             }
 
             if (previous) {
+                // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared D1 connection (see above).
                 await stepAggregate(tableName, index, previous, -1);
             }
 
             if (next) {
+                // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared D1 connection (see above).
                 await stepAggregate(tableName, index, next, 1);
             }
         }
@@ -640,41 +867,26 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
         const insertSql = `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`;
 
-        const BATCH_SIZE = 500;
-        let cursorId: string | undefined;
+        // Collect the rank tuples during the keyset scan, then insert them
+        // sequentially below (the scan callback can't itself await on the
+        // shared connection).
+        const rankTuples: unknown[][] = [];
 
-        while (true) {
-            const pageRows
-                = cursorId === undefined
-                    ? await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY "id" ASC LIMIT ?`, [BATCH_SIZE])
-                    : await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" > ? ORDER BY "id" ASC LIMIT ?`, [cursorId, BATCH_SIZE]);
-
-            if (pageRows.length === 0) {
-                break;
+        await forEachRowPaged(exec, definition, tableName, (document) => {
+            if (index.where && !matchesRankStaticWhere(document, index.where)) {
+                return;
             }
 
-            for (const row of pageRows) {
-                const document_ = decodeRow(definition, row);
+            const partitionKey = encodePartitionKey(index.partitionBy ?? [], document);
+            // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent sort-key column must bind `null`, not undefined.
+            const sortValues = index.sortBy.map((key) => serializeColumnValue(document[key.field] ?? null));
 
-                if (!document_) {
-                    continue;
-                }
+            rankTuples.push([document["_id"], partitionKey, ...sortValues]);
+        });
 
-                if (index.where && !matchesRankStaticWhere(document_, index.where)) {
-                    continue;
-                }
-
-                const partitionKey = encodePartitionKey(index.partitionBy ?? [], document_);
-                const sortValues = index.sortBy.map((key) => serializeColumnValue(document_[key.field] ?? null));
-
-                await exec.run(insertSql, [document_["_id"], partitionKey, ...sortValues]);
-            }
-
-            cursorId = pageRows.at(-1)?.["id"] as string | undefined;
-
-            if (pageRows.length < BATCH_SIZE) {
-                break;
-            }
+        for (const tuple of rankTuples) {
+            // eslint-disable-next-line no-await-in-loop -- rank rows are inserted sequentially on the single shared D1 connection; D1Exec exposes no batch API here.
+            await exec.run(insertSql, tuple);
         }
 
         rankBackfilled.set(cacheKey, true);
@@ -691,6 +903,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         }
 
         for (const index of indexes) {
+            // eslint-disable-next-line no-await-in-loop -- rank backfills run sequentially on the single shared D1 connection to avoid interleaving DELETE/INSERT statements.
             await ensureRankBackfilled(tableName, index);
         }
     };
@@ -714,6 +927,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         }
 
         for (const index of indexes) {
+            // eslint-disable-next-line no-await-in-loop -- rank syncs run sequentially on the single shared D1 connection so DELETE/INSERT pairs don't interleave across indexes.
             const exists = await rankTableExists(tableName, index.name);
 
             if (!exists) {
@@ -723,6 +937,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const rankTable = rankTableName(tableName, index.name);
 
             if (previous) {
+                // eslint-disable-next-line no-await-in-loop -- sequential companion DELETE on the shared D1 connection (see above).
                 await exec.run(`DELETE FROM ${quoteIdentifier(rankTable)} WHERE "__id__" = ?`, [id]);
             }
 
@@ -735,8 +950,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 const columnList = ["__id__", "__partition__", ...sortColumns].map((column) => quoteIdentifier(column)).join(", ");
                 const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
                 const partitionKey = encodePartitionKey(index.partitionBy ?? [], next);
+                // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent sort-key column must bind `null`, not undefined.
                 const sortValues = index.sortBy.map((key) => serializeColumnValue(next[key.field] ?? null));
 
+                // eslint-disable-next-line no-await-in-loop -- sequential companion INSERT on the shared D1 connection (see above).
                 await exec.run(`INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`, [id, partitionKey, ...sortValues]);
             }
         }
@@ -873,14 +1090,61 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         definition: TableDefinitionLike,
         id: string,
         creationTime: number,
-        document_: Record<string, unknown>,
+        document: Record<string, unknown>,
     ): { columns: string[]; values: unknown[] } => {
         const fields = Object.keys(definition.shape);
 
         return {
             columns: ["id", "_creationTime", ...fields].map((column) => quoteIdentifier(column)),
-            values: [id, creationTime, ...fields.map((field) => serializeColumnValue(document_[field] ?? null))],
+            // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
+            values: [id, creationTime, ...fields.map((field) => serializeColumnValue(document[field] ?? null))],
         };
+    };
+
+    /**
+     * Indexed `count` groupBy fast-path: when an aggregateIndex's `by` matches
+     * the request, every group answer is already in the `__agg_` companion.
+     * Returns the group entries, or `undefined` to signal "fall through to the
+     * SQL `GROUP BY` scan" (no matching index, or its counter isn't built).
+     */
+    const tryIndexedGroupBy = async (
+        tableName: string,
+        aggregateIndexes: ReadonlyArray<AggregateIndexDefinitionLike>,
+        agg: NonNullable<GroupByOptions["agg"]>,
+        groupOptions: GroupByOptions,
+    ): Promise<GroupByEntry[] | undefined> => {
+        const planned = selectIndexForGroupBy(aggregateIndexes, agg.op, agg.field, groupOptions.by, groupOptions.where);
+
+        if (!planned) {
+            return undefined;
+        }
+
+        const counterReady = await ensureBackfilled(tableName, planned.index);
+
+        if (!counterReady) {
+            return undefined;
+        }
+
+        const aggTable = aggregateTableName(tableName, planned.index.name);
+        const partialKeys = Object.keys(planned.partial);
+
+        // Fully-specified group key → at most one companion row.
+        if (partialKeys.length === (planned.index.by ?? []).length && partialKeys.length > 0) {
+            const encoded = encodeAggregateKey(planned.index.by ?? [], planned.partial);
+            const rowsIndexed = await exec.all(`SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [encoded]);
+
+            return rowsIndexed.length > 0 ? [{ key: { ...planned.partial }, value: aggregateScalar(rowsIndexed[0]?.["value"]) }] : [];
+        }
+
+        // Open group key → enumerate every companion row.
+        const rowsIndexed = await exec.all(`SELECT "__key__" AS key, "__value__" AS value FROM ${quoteIdentifier(aggTable)}`, []);
+
+        return rowsIndexed.map((row) => {
+            return {
+                key: JSON.parse(row["key"] as string) as Record<string, unknown>,
+                value: aggregateScalar((row as { value: unknown }).value),
+            };
+        });
     };
 
     const writer: DatabaseWriterLike = {
@@ -928,6 +1192,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const rows = await exec.all(querySql, params);
             const value = rows[0]?.["value"];
 
+            // eslint-disable-next-line unicorn/no-null -- AggregateResult is `number | null`; an empty reduction returns null per the public contract.
             return value === null || value === undefined ? null : Number(value);
         },
 
@@ -938,17 +1203,17 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const options_ = normalizeCountArgument(whereOrOptions);
+            const countOptions = normalizeCountArgument(whereOrOptions);
 
-            if (options_.restrictsCounts) {
+            if (countOptions.restrictsCounts) {
                 throw new CountRlsUnsupportedError(tableName);
             }
 
             // Indexed path: same planner as the DO dialect (see ctx-db.ts).
             // We only attempt the counter when no baseWhere is set; otherwise
             // we route uniformly through SQL so the RLS predicate participates.
-            if (definition.aggregateIndexes && !options_.baseWhere) {
-                const planned = selectIndexForCount(definition.aggregateIndexes, options_.where);
+            if (definition.aggregateIndexes && !countOptions.baseWhere) {
+                const planned = selectIndexForCount(definition.aggregateIndexes, countOptions.where);
 
                 if (planned) {
                     const counterReady = await ensureBackfilled(tableName, planned.index);
@@ -963,7 +1228,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 }
             }
 
-            const effective = mergeWhere(options_.baseWhere, options_.where);
+            const effective = mergeWhere(countOptions.baseWhere, countOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
 
             let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
@@ -1027,6 +1292,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 onRestrict: (message) => {
                     throw new ConflictError(message);
                 },
+                // eslint-disable-next-line unicorn/no-null -- onSetNull writes a SQL NULL into the holder column; that is the literal value being persisted.
                 onSetNull: (_holderTable, holderId, field) => writer.patch(holderId, { [field]: null }),
                 schema,
                 tableName,
@@ -1053,6 +1319,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         async findFirst(tableName, args = {}) {
             const result = await writer.findMany(tableName, { ...args, limit: 1 });
 
+            // eslint-disable-next-line unicorn/no-null -- findFirst's public return is `doc | null`; no match returns null.
             return result.page[0] ?? null;
         },
 
@@ -1102,26 +1369,19 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             }
 
             const rows = await exec.all(querySql, params);
-            const docs: Record<string, unknown>[] = [];
-
-            for (const row of rows) {
-                const document_ = decodeRow(definition, row);
-
-                if (document_) {
-                    docs.push(document_);
-                }
-            }
+            const documents = decodeRows(definition, rows);
 
             if (limit === undefined) {
                 if (args.with) {
-                    await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: docs, schema, tableName, with: args.with });
+                    await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: documents, schema, tableName, with: args.with });
                 }
 
-                return { continueCursor: null, isDone: true, page: docs };
+                // eslint-disable-next-line unicorn/no-null -- findMany's public return uses `continueCursor: string | null`; an unpaged result has no cursor.
+                return { continueCursor: null, isDone: true, page: documents };
             }
 
-            const hasMore = docs.length > limit;
-            const page = hasMore ? docs.slice(0, limit) : docs;
+            const hasMore = documents.length > limit;
+            const page = hasMore ? documents.slice(0, limit) : documents;
             const last = page.at(-1);
 
             if (args.with) {
@@ -1129,6 +1389,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             }
 
             return {
+                // eslint-disable-next-line unicorn/no-null -- public return shape: `continueCursor` is `string | null`; `null` marks the final page.
                 continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
                 isDone: !hasMore,
                 page,
@@ -1139,12 +1400,14 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
 
             if (!tableName) {
+                // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null`; an unresolved id returns null.
                 return null;
             }
 
             const definition = schema.tables[tableName];
 
             if (!definition) {
+                // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null` (see above).
                 return null;
             }
 
@@ -1179,43 +1442,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             // sum/avg/min/max would return counts. Non-count reducers fall
             // through to the correct SQL `GROUP BY` scan below.
             if (agg.op === "count" && definition.aggregateIndexes && !groupOptions.baseWhere) {
-                const planned = selectIndexForGroupBy(definition.aggregateIndexes, agg.op, agg.field, groupOptions.by, groupOptions.where);
+                const indexed = await tryIndexedGroupBy(tableName, definition.aggregateIndexes, agg, groupOptions);
 
-                if (planned) {
-                    const counterReady = await ensureBackfilled(tableName, planned.index);
-
-                    if (counterReady) {
-                        const aggTable = aggregateTableName(tableName, planned.index.name);
-                        const partialKeys = Object.keys(planned.partial);
-                        const indexedResult: GroupByEntry[] = [];
-
-                        if (partialKeys.length === (planned.index.by ?? []).length && partialKeys.length > 0) {
-                            const encoded = encodeAggregateKey(planned.index.by ?? [], planned.partial);
-                            const rowsIndexed = await exec.all(`SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [encoded]);
-
-                            if (rowsIndexed.length > 0) {
-                                const value = rowsIndexed[0]?.["value"];
-
-                                indexedResult.push({
-                                    key: { ...planned.partial },
-                                    value: value === null || value === undefined ? null : Number(value),
-                                });
-                            }
-
-                            return indexedResult;
-                        }
-
-                        const rowsIndexed = await exec.all(`SELECT "__key__" AS key, "__value__" AS value FROM ${quoteIdentifier(aggTable)}`, []);
-
-                        for (const row of rowsIndexed) {
-                            const decoded = JSON.parse(row["key"] as string) as Record<string, unknown>;
-                            const { value } = row as { value: unknown };
-
-                            indexedResult.push({ key: decoded, value: value == undefined ? null : Number(value) });
-                        }
-
-                        return indexedResult;
-                    }
+                if (indexed !== undefined) {
+                    return indexed;
                 }
             }
 
@@ -1246,21 +1476,8 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             querySql += ` GROUP BY ${groupOptions.by.map((field) => columnRef(field)).join(", ")}`;
 
             const rows = await exec.all(querySql, params);
-            const result: GroupByEntry[] = [];
 
-            for (const row of rows) {
-                const key: Record<string, unknown> = {};
-
-                for (const field of groupOptions.by) {
-                    key[field] = row[field] ?? null;
-                }
-
-                const { value } = row as { value: unknown };
-
-                result.push({ key, value: value === null || value === undefined ? null : Number(value) });
-            }
-
-            return result;
+            return mapGroupByRows(groupOptions.by, rows);
         },
 
         /**
@@ -1368,6 +1585,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             const fields = Object.keys(definition.shape);
             const assignments = fields.map((field) => `${quoteIdentifier(field)} = ?`).join(", ");
+            // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
             const values = fields.map((field) => serializeColumnValue(merged[field] ?? null));
 
             await runGuardedWrite(tableName, "UPDATE", assignments, values, snapshot);
@@ -1410,12 +1628,14 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 // No companion table — caller can't get a rank from D1 in
                 // this dialect. Surface as null (the row may exist in the
                 // source table but isn't tracked).
+                // eslint-disable-next-line unicorn/no-null -- rank's public return is `RankResult | null`; an untracked row reads as null.
                 return null;
             }
 
             const rowId = typeof rankOptions.row === "string" ? rankOptions.row : (rankOptions.row["_id"] as string | undefined);
 
             if (!rowId) {
+                // eslint-disable-next-line unicorn/no-null -- rank's public return is `RankResult | null` (see above).
                 return null;
             }
 
@@ -1430,6 +1650,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const own = ownRows[0];
 
             if (!own) {
+                // eslint-disable-next-line unicorn/no-null -- rank's public return is `RankResult | null` (see above).
                 return null;
             }
 
@@ -1442,44 +1663,14 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 const requestedKey = encodePartitionKey(index.partitionBy ?? [], partitionFromWhere);
 
                 if (requestedKey !== partitionKey) {
+                    // eslint-disable-next-line unicorn/no-null -- rank's public return is `RankResult | null`; a partition mismatch reads as null.
                     return null;
                 }
 
                 partitionKey = requestedKey;
             }
 
-            const beforeBranches: string[] = [];
-            const beforeParams: unknown[] = [];
-
-            for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
-                const conditions: string[] = [];
-
-                for (let prefix = 0; prefix < pivot; prefix += 1) {
-                    const prefixColumn = sortColumns[prefix];
-
-                    if (prefixColumn === undefined) {
-                        continue;
-                    }
-
-                    conditions.push(`${quoteIdentifier(prefixColumn)} IS ?`);
-                    beforeParams.push(own[prefixColumn]);
-                }
-
-                const column = sortColumns[pivot];
-                const sortKey = index.sortBy[pivot];
-
-                if (pivot < sortColumns.length && column !== undefined && sortKey !== undefined) {
-                    const operator = sortKey.direction === "desc" ? ">" : "<";
-
-                    conditions.push(`${quoteIdentifier(column)} ${operator} ?`);
-                    beforeParams.push(own[column]);
-                } else {
-                    conditions.push(`${quoteIdentifier(RANK_TIEBREAK)} < ?`);
-                    beforeParams.push(rowId);
-                }
-
-                beforeBranches.push(conditions.length === 1 ? conditions.join(" AND ") : `(${conditions.join(" AND ")})`);
-            }
+            const { branches: beforeBranches, params: beforeParams } = buildRankBeforeBranches(index, sortColumns, own, rowId);
 
             const beforeRows = await exec.all(
                 `SELECT COUNT(*) AS c FROM ${quoteIdentifier(rankTable)} WHERE "__partition__" = ? AND (${beforeBranches.join(" OR ")})`,
@@ -1506,6 +1697,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const counterReady = await ensureRankBackfilled(tableName, index);
 
             if (!counterReady) {
+                // eslint-disable-next-line unicorn/no-null -- RankPage's public `continueCursor` is `string | null`; an unbuilt companion returns an empty page with a null cursor.
                 return { continueCursor: null, isDone: true, page: [] };
             }
 
@@ -1515,13 +1707,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const effective = mergeWhere(rankPageOptions.baseWhere, rankPageOptions.where);
             const partitionFromWhere = resolveRankPartition(index, effective);
 
-            const orderClauses: string[] = [`"__partition__" ASC`];
-
-            for (const [i, sortKey] of index.sortBy.entries()) {
-                orderClauses.push(`${quoteIdentifier(sortColumnName(i))} ${sortKey.direction === "desc" ? "DESC" : "ASC"}`);
-            }
-
-            orderClauses.push(`${quoteIdentifier(RANK_TIEBREAK)} ASC`);
+            // Column tuple in rank order: [partition, ...sortColumns, id], all
+            // ascending except the sort columns, which follow their index.
+            const rankColumns = rankPageColumns(index, sortColumns);
+            const orderClauses = rankColumns.map((col) => `${quoteIdentifier(col.column)} ${col.direction === "desc" ? "DESC" : "ASC"}`);
 
             const whereClauses: string[] = [];
             const params: unknown[] = [];
@@ -1532,42 +1721,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             }
 
             if (rankPageOptions.cursor) {
-                const decoded = decodeCursor(rankPageOptions.cursor);
-                const expectedLength = 1 + sortColumns.length + 1;
+                const seek = buildRankCursorSeek(rankColumns, decodeCursor(rankPageOptions.cursor), params);
 
-                if (decoded.length === expectedLength) {
-                    const cols: { column: string; direction: "asc" | "desc" }[] = [{ column: "__partition__", direction: "asc" }];
-
-                    for (const [i, sortKey] of index.sortBy.entries()) {
-                        cols.push({ column: sortColumnName(i), direction: sortKey.direction });
-                    }
-
-                    cols.push({ column: RANK_TIEBREAK, direction: "asc" });
-
-                    const branches: string[] = [];
-
-                    for (const [pivot, col] of cols.entries()) {
-                        const conditions: string[] = [];
-
-                        for (let prefix = 0; prefix < pivot; prefix += 1) {
-                            const prefixCol = cols[prefix];
-
-                            if (prefixCol === undefined) {
-                                continue;
-                            }
-
-                            conditions.push(`${quoteIdentifier(prefixCol.column)} IS ?`);
-                            params.push(decoded[prefix]);
-                        }
-
-                        const operator = col.direction === "desc" ? "<" : ">";
-
-                        conditions.push(`${quoteIdentifier(col.column)} ${operator} ?`);
-                        params.push(decoded[pivot]);
-                        branches.push(conditions.length === 1 ? conditions.join(" AND ") : `(${conditions.join(" AND ")})`);
-                    }
-
-                    whereClauses.push(`(${branches.join(" OR ")})`);
+                if (seek !== undefined) {
+                    whereClauses.push(seek);
                 }
             }
 
@@ -1581,72 +1738,21 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const hasMore = rankRows.length > take;
             const usable = hasMore ? rankRows.slice(0, take) : rankRows;
 
-            // Batched hydration: a single `IN (?, ?, …)` per chunk instead of
-            // one SELECT per rank row. D1 documents a 100-parameter ceiling per
-            // statement (https://developers.cloudflare.com/d1/platform/limits/),
-            // so we chunk well below it to leave headroom for any future
-            // wrapping params and to avoid skirting the limit. A 100-row page
-            // used to issue 101 D1 queries; it now issues ⌈n/IN_CHUNK_SIZE⌉.
-            const IN_CHUNK_SIZE = 50;
             const ids = usable.map((rankRow) => rankRow[RANK_TIEBREAK] as string);
-            const chunks: string[][] = [];
+            const documents = await hydrateRankRows(exec, definition, tableName, ids);
 
-            for (let cursor = 0; cursor < ids.length; cursor += IN_CHUNK_SIZE) {
-                chunks.push(ids.slice(cursor, cursor + IN_CHUNK_SIZE));
-            }
-
-            const byId = new Map<string, Record<string, unknown>>();
-            const fetched = await Promise.all(
-                chunks.map(async (chunk) => {
-                    const placeholders = chunk.map(() => "?").join(", ");
-
-                    return exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" IN (${placeholders})`, chunk);
-                }),
-            );
-
-            for (const rows of fetched) {
-                for (const row of rows) {
-                    byId.set(row["id"] as string, row);
-                }
-            }
-
-            // Restore the rank companion's order (the IN-fetch returns rows
-            // in arbitrary order).
-            const docs: Record<string, unknown>[] = [];
-
-            for (const rankRow of usable) {
-                const document_ = decodeRow(definition, byId.get(rankRow[RANK_TIEBREAK] as string));
-
-                if (document_) {
-                    docs.push(document_);
-                }
-            }
-
+            // eslint-disable-next-line unicorn/no-null -- RankPage's public `continueCursor` is `string | null`; `null` marks the final page.
             let continueCursor: null | string = null;
 
             const last = usable.at(-1);
 
             if (hasMore && last !== undefined) {
-                const cursorValues: unknown[] = [last["__partition__"]];
+                const cursorValues: unknown[] = [last["__partition__"], ...sortColumns.map((column) => last[column]), last[RANK_TIEBREAK]];
 
-                for (const column of sortColumns) {
-                    cursorValues.push(last[column]);
-                }
-
-                cursorValues.push(last[RANK_TIEBREAK]);
-
-                const json = JSON.stringify(cursorValues);
-                const bytes = new TextEncoder().encode(json);
-                let binary = "";
-
-                for (const byte of bytes) {
-                    binary += String.fromCharCode(byte);
-                }
-
-                continueCursor = btoa(binary);
+                continueCursor = encodeRankCursor(cursorValues);
             }
 
-            return { continueCursor, isDone: !hasMore, page: docs };
+            return { continueCursor, isDone: !hasMore, page: documents };
         },
 
         async replace(id, document) {
@@ -1694,6 +1800,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             const fields = Object.keys(definition.shape);
             const assignments = ["\"_creationTime\" = ?", ...fields.map((field) => `${quoteIdentifier(field)} = ?`)].join(", ");
+            // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
             const values = [creationTime, ...fields.map((field) => serializeColumnValue(replaced[field] ?? null))];
 
             await runGuardedWrite(tableName, "UPDATE", assignments, values, snapshot);
@@ -1732,6 +1839,7 @@ const runD1AggregateMigrations = async (exec: D1Exec, schema: SchemaLike): Promi
         for (const index of indexes) {
             const aggTable = aggregateTableName(tableName, index.name);
 
+            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared D1 connection.
             await exec.run(
                 `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} (
                     "__key__" TEXT PRIMARY KEY,
@@ -1764,6 +1872,7 @@ const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<vo
             const columnDdl = sortColumns.map((column) => `${quoteIdentifier(column)} BLOB`).join(", ");
             const columnPart = sortColumns.length > 0 ? `, ${columnDdl}` : "";
 
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection; the table must exist before its index below.
             await exec.run(
                 `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(rankTable)} (
                     "__id__" TEXT PRIMARY KEY,
@@ -1782,6 +1891,7 @@ const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<vo
 
             const btreeName = `${tableName}__rank_${index.name}__btree`;
 
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
             await exec.run(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(btreeName)} ON ${quoteIdentifier(rankTable)} (${orderedColumns.join(", ")})`, []);
         }
     }
