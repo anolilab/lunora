@@ -165,6 +165,7 @@ class SchedulerDO {
             prefix: "t:",
         });
 
+        /* eslint-disable no-await-in-loop -- sequential by design: a Durable Object's storage is single-threaded local state, and the claim-before-dispatch protocol below requires each job's index/marker writes to complete in order so an alarm re-fire can't double-dispatch. */
         for (const [indexKey, recordId] of indexEntries.entries()) {
             const dueAt = Number.parseInt(indexKey.slice(2, indexKey.indexOf(":", 2)), 10);
 
@@ -197,6 +198,7 @@ class SchedulerDO {
                 await this.recordRetry(record);
             }
         }
+        /* eslint-enable no-await-in-loop */
 
         await this.rescheduleAlarm();
 
@@ -297,6 +299,7 @@ class SchedulerDO {
         // arrives over the same channel as later changes.
         server.send(JSON.stringify({ records: await this.listRecords(), type: "jobs" }));
 
+        // eslint-disable-next-line unicorn/no-null -- a 101 WebSocket-upgrade Response must have a null body
         return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -391,7 +394,7 @@ class SchedulerDO {
     }
 
     private async handleSchedule(request: Request): Promise<Response> {
-        const body = (await request.json().catch(() => null)) as ScheduleRequestBody | null;
+        const body = (await request.json().catch(() => undefined)) as ScheduleRequestBody | undefined;
 
         if (!body || typeof body.functionPath !== "string") {
             return SchedulerDO.error(400, "INVALID_INPUT", "functionPath is required");
@@ -424,6 +427,9 @@ class SchedulerDO {
 
         const id = generateId();
         const record: ScheduleRecord = {
+            // body is parsed from an untrusted request; args may be absent at runtime
+            // despite the type, so the ?? fallback is a real guard.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- parsed wire data can omit args
             args: body.args ?? {},
             enqueuedAt: Date.now(),
             functionPath: body.functionPath,
@@ -441,7 +447,7 @@ class SchedulerDO {
     }
 
     private async handleCancel(request: Request): Promise<Response> {
-        const body = (await request.json().catch(() => null)) as CancelRequestBody | null;
+        const body = (await request.json().catch(() => undefined)) as CancelRequestBody | undefined;
 
         if (!body?.id) {
             return SchedulerDO.error(400, "INVALID_INPUT", "id is required");

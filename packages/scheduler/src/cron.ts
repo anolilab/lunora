@@ -49,6 +49,8 @@ const isValidCronExpression = (schedule: string): boolean => {
  * emit the configuration here.
  */
 const createCronTrigger = (options: CronTriggerOptions): CronTriggerSnippet => {
+    // Defensive runtime guard: both are required by the type, but JS callers can omit them.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.schedule || !options.fn) {
         throw new Error("@cirrus/scheduler: createCronTrigger() requires `schedule` and `fn`");
     }
@@ -63,7 +65,7 @@ const createCronTrigger = (options: CronTriggerOptions): CronTriggerSnippet => {
                 crons: [options.schedule],
             },
         },
-        null,
+        undefined,
         2,
     );
 

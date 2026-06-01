@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createScheduler } from "../src/create-scheduler.js";
+import createScheduler from "../src/create-scheduler.js";
 import { createCronTrigger } from "../src/cron.js";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference } from "../src/types.js";
 

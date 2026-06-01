@@ -22,7 +22,10 @@ const callDO = async <T>(options: CirrusSchedulerOptions, path: string, body: un
  * `SchedulerDO` over HTTP. The DO owns the alarm and the storage; this is a
  * thin RPC wrapper.
  */
-export const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
+const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
+    // Defensive runtime guard: required by the type, but JS callers can omit it
+    // (exercised by createScheduler({} as never) in the tests).
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.namespace) {
         throw new Error("@cirrus/scheduler: `namespace` (SchedulerDO binding) is required");
     }
@@ -65,3 +68,5 @@ export const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
 
     return { cancel, runAfter, runAt };
 };
+
+export default createScheduler;
