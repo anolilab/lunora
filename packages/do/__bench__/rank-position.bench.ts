@@ -12,11 +12,11 @@ import type { RankIndexDefinitionLike } from "../src/rank.js";
  * without one, the only way to answer is "fetch the partition's ordered
  * rows and count the ones strictly before the candidate" — O(partition size).
  *
- *  - **indexed** — `writer.rank("messages", "byChannel", { row })` → seeks
- *    the rank companion table; SQLite's index does the work.
- *  - **emulated scan** — same answer via `findMany(orderBy seq asc, where
- *    channelId)`, then JS-side index-of the candidate. Mirrors what an
- *    app without a `rankIndex` has to do.
+ * - **indexed** — `writer.rank("messages", "byChannel", { row })` → seeks
+ * the rank companion table; SQLite's index does the work.
+ * - **emulated scan** — same answer via `findMany(orderBy seq asc, where
+ * channelId)`, then JS-side index-of the candidate. Mirrors what an
+ * app without a `rankIndex` has to do.
  *
  * Partition size: 1 000 rows in one channel, 10 channels total (10k rows
  * on disk). The bench picks a row at the median position so both paths do

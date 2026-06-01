@@ -115,11 +115,15 @@ describe("ctx-db constraints", () => {
 
             await writer.patch("i1", { title: "second" });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(1);
+            const afterFirstPatch = await writer.get("i1");
+
+            expect(afterFirstPatch?.["rev"]).toBe(1);
 
             await writer.patch("i1", { title: "third" });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(2);
+            const afterSecondPatch = await writer.get("i1");
+
+            expect(afterSecondPatch?.["rev"]).toBe(2);
             expect(revCalls()).toBe(2);
         });
 
@@ -132,7 +136,9 @@ describe("ctx-db constraints", () => {
 
             await writer.patch("i1", { rev: 99 });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(99);
+            const afterExplicitPatch = await writer.get("i1");
+
+            expect(afterExplicitPatch?.["rev"]).toBe(99);
             expect(revCalls()).toBe(0);
         });
 
@@ -145,11 +151,15 @@ describe("ctx-db constraints", () => {
 
             await writer.replace("i1", { slug: "a", title: "auto" });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(1);
+            const afterAutoReplace = await writer.get("i1");
+
+            expect(afterAutoReplace?.["rev"]).toBe(1);
 
             await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(42);
+            const afterManualReplace = await writer.get("i1");
+
+            expect(afterManualReplace?.["rev"]).toBe(42);
         });
     });
 

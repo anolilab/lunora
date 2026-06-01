@@ -117,13 +117,13 @@ interface ParsedCondition {
 }
 
 const parseWhere = (clause: string): ParsedCondition[] => {
-    const parts = clause.split(/\s+AND\s+/u);
+    const parts = clause.split(" AND ");
     const result: ParsedCondition[] = [];
     let placeholderIndex = 0;
 
     for (const part of parts) {
         const trimmedPart = part.trim();
-        const match = /^(.+?)\s*(=|>=|<=|[><])\s*\?$/u.exec(trimmedPart);
+        const match = /^(.+) ([<>]=?|=) \?$/u.exec(trimmedPart);
 
         if (!match) {
             throw new Error(`unsupported WHERE fragment in fake: ${part}`);
@@ -204,12 +204,12 @@ const sortRows = (rows: FakeRow[], orderClause: string | undefined): FakeRow[] =
         .map((segment) =>
             segment
                 .trim()
-                .replace(/\s+ASC$/u, "")
+                .replace(/ ASC$/u, "")
                 .trim(),
         )
         .map((expression) => parseFieldExpression(expression));
 
-    return [...rows].sort((leftRow, rightRow) => {
+    return rows.toSorted((leftRow, rightRow) => {
         for (const field of fields) {
             const leftValue = extractFieldValue(leftRow, field);
             const rightValue = extractFieldValue(rightRow, field);
@@ -224,6 +224,8 @@ const sortRows = (rows: FakeRow[], orderClause: string | undefined): FakeRow[] =
     });
 };
 
+type Handler = (sqlString: string, params: unknown[]) => SqlCursor<Record<string, unknown>> | undefined;
+
 export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
     const state: FakeSqlState = {
         indexes: new Map(),
@@ -232,11 +234,7 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
         tables: new Map(),
     };
 
-    const runner = (query: string, ...params: unknown[]): SqlCursor<Record<string, unknown>> => {
-        const sqlString = query.replaceAll(/\s+/gu, " ").trim();
-
-        state.statements.push(sqlString);
-
+    const handleDdl: Handler = (sqlString) => {
         const createTableMatch = CREATE_TABLE.exec(sqlString);
 
         if (createTableMatch) {
@@ -265,24 +263,32 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
+        return undefined;
+    };
+
+    const handleInsert: Handler = (sqlString, params) => {
         const insertMatch = INSERT.exec(sqlString);
 
-        if (insertMatch) {
-            const tableName = insertMatch[1]!;
-            const table = state.tables.get(tableName);
-
-            if (!table) {
-                throw new Error(`fake: insert into unknown table ${tableName}`);
-            }
-
-            const [id, creationTime, document_] = params as [string, number, string];
-
-            table.set(id, { __doc__: document_, _creationTime: creationTime, id });
-            state.lastChanges = 1;
-
-            return cursor<Record<string, unknown>>([]);
+        if (!insertMatch) {
+            return undefined;
         }
 
+        const tableName = insertMatch[1]!;
+        const table = state.tables.get(tableName);
+
+        if (!table) {
+            throw new Error(`fake: insert into unknown table ${tableName}`);
+        }
+
+        const [id, creationTime, document_] = params as [string, number, string];
+
+        table.set(id, { __doc__: document_, _creationTime: creationTime, id });
+        state.lastChanges = 1;
+
+        return cursor<Record<string, unknown>>([]);
+    };
+
+    const handleUpdate: Handler = (sqlString, params) => {
         const updateDocumentCasMatch = UPDATE_SET_DOC_CAS.exec(sqlString);
 
         if (updateDocumentCasMatch) {
@@ -338,6 +344,10 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
+        return undefined;
+    };
+
+    const handleDelete: Handler = (sqlString, params) => {
         const deleteCasMatch = DELETE_BY_ID_CAS.exec(sqlString);
 
         if (deleteCasMatch) {
@@ -368,6 +378,38 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             return cursor<Record<string, unknown>>([]);
         }
 
+        return undefined;
+    };
+
+    const handleSelectAll = (selectAllMatch: RegExpExecArray, params: unknown[]): SqlCursor<Record<string, unknown>> => {
+        const tableName = selectAllMatch[1]!;
+        const whereClause = selectAllMatch[2];
+        const orderClause = selectAllMatch[3];
+        const limitClause = selectAllMatch[4];
+        const table = state.tables.get(tableName);
+
+        if (!table) {
+            return cursor<Record<string, unknown>>([]);
+        }
+
+        let rows = [...table.values()];
+
+        if (whereClause) {
+            const conditions = parseWhere(whereClause);
+
+            rows = rows.filter((row) => conditions.every((condition) => conditionMatches(row, condition, params[condition.paramIndex])));
+        }
+
+        rows = sortRows(rows, orderClause);
+
+        if (limitClause) {
+            rows = rows.slice(0, Number.parseInt(limitClause, 10));
+        }
+
+        return cursor<Record<string, unknown>>(rows as unknown as Record<string, unknown>[]);
+    };
+
+    const handleRead: Handler = (sqlString, params) => {
         const changesMatch = SELECT_CHANGES.exec(sqlString);
 
         if (changesMatch) {
@@ -397,31 +439,25 @@ export const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
         const selectAllMatch = SELECT_ALL.exec(sqlString);
 
         if (selectAllMatch) {
-            const tableName = selectAllMatch[1]!;
-            const whereClause = selectAllMatch[2];
-            const orderClause = selectAllMatch[3];
-            const limitClause = selectAllMatch[4];
-            const table = state.tables.get(tableName);
+            return handleSelectAll(selectAllMatch, params);
+        }
 
-            if (!table) {
-                return cursor<Record<string, unknown>>([]);
+        return undefined;
+    };
+
+    const handlers: Handler[] = [handleDdl, handleInsert, handleUpdate, handleDelete, handleRead];
+
+    const runner = (query: string, ...params: unknown[]): SqlCursor<Record<string, unknown>> => {
+        const sqlString = query.replaceAll(/\s+/gu, " ").trim();
+
+        state.statements.push(sqlString);
+
+        for (const handler of handlers) {
+            const handled = handler(sqlString, params);
+
+            if (handled) {
+                return handled;
             }
-
-            let rows = [...table.values()];
-
-            if (whereClause) {
-                const conditions = parseWhere(whereClause);
-
-                rows = rows.filter((row) => conditions.every((condition) => conditionMatches(row, condition, params[condition.paramIndex])));
-            }
-
-            rows = sortRows(rows, orderClause);
-
-            if (limitClause) {
-                rows = rows.slice(0, Number.parseInt(limitClause, 10));
-            }
-
-            return cursor<Record<string, unknown>>(rows as unknown as Record<string, unknown>[]);
         }
 
         throw new Error(`fake: unsupported SQL: ${sqlString}`);

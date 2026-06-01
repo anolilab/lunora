@@ -11,12 +11,12 @@ import type { RankIndexDefinitionLike } from "../src/rank.js";
  * `delete` against a JSON-blob DO-SQLite table? The trigger-overhead,
  * aggregateIndex, and rankIndex maintenance benches all ride on this floor.
  *
- *  - **bare** — no triggers, no aggregateIndex, no rankIndex.
- *    The "what's the SQL write actually cost?" reading.
- *  - **+ aggregateIndex** — same writes against a schema with `byProject`.
- *    Counter companion update fires per insert/patch/delete.
- *  - **+ rankIndex** — same writes against a schema with `byChannel`.
- *    Rank companion table update fires per insert/patch/delete.
+ * - **bare** — no triggers, no aggregateIndex, no rankIndex.
+ * The "what's the SQL write actually cost?" reading.
+ * - **+ aggregateIndex** — same writes against a schema with `byProject`.
+ * Counter companion update fires per insert/patch/delete.
+ * - **+ rankIndex** — same writes against a schema with `byChannel`.
+ * Rank companion table update fires per insert/patch/delete.
  *
  * Subtract `bare` from the indexed variants to see what each maintenance
  * path costs.

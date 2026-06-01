@@ -47,7 +47,9 @@ const waitForTerminator = async (ws: FakeWebSocket, deadlineMs = 200): Promise<v
             return;
         }
 
-        await new Promise<void>((r) => setTimeout(r, 1));
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 1);
+        });
     }
 };
 
@@ -59,21 +61,9 @@ const waitForTerminator = async (ws: FakeWebSocket, deadlineMs = 200): Promise<v
 class StreamShard extends ShardDO {
     public registered = new Map<string, (args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>>();
 
+    // eslint-disable-next-line class-methods-use-this -- override stub; the streaming tests never dispatch a plain RPC
     public override async handleRpc(): Promise<unknown> {
         return null;
-    }
-
-    protected override executeStream(
-        functionPath: string,
-        args: Record<string, unknown>,
-    ): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
-        const function_ = this.registered.get(functionPath);
-
-        if (!function_) {
-            return null;
-        }
-
-        return { iterator: (signal) => function_(args, signal) };
     }
 
     public driveMessage(ws: FakeWebSocket, envelope: SubscriptionEnvelope): Promise<void> {
@@ -87,6 +77,19 @@ class StreamShard extends ShardDO {
     public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment): void {
         this.state.acceptWebSocket(ws as unknown as WebSocket);
         ws.serializeAttachment(attachment);
+    }
+
+    protected override executeStream(
+        functionPath: string,
+        args: Record<string, unknown>,
+    ): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        const function_ = this.registered.get(functionPath);
+
+        if (!function_) {
+            return null;
+        }
+
+        return { iterator: (signal) => function_(args, signal) };
     }
 }
 
@@ -157,7 +160,9 @@ describe("shardDO streaming queries", () => {
                 yielded.push(index);
                 yield index;
                 // Yield to the event loop so the cancel message can interleave.
-                await new Promise<void>((r) => setTimeout(r, 0));
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 0);
+                });
             }
         });
 
@@ -167,11 +172,15 @@ describe("shardDO streaming queries", () => {
         await shard.driveMessage(ws, { id: "stream_2", query: { functionPath: "metrics:loop" }, type: "stream" });
 
         // Wait for a couple of chunks to land before cancelling.
-        await new Promise<void>((r) => setTimeout(r, 5));
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 5);
+        });
         await shard.driveMessage(ws, { id: "stream_2", type: "unsubscribe" });
 
         // Give the iterator a few ticks to honor the abort.
-        await new Promise<void>((r) => setTimeout(r, 20));
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 20);
+        });
 
         const types = parseFrames(ws).map((f) => f.type);
 
@@ -225,9 +234,9 @@ describe("shardDO streaming queries", () => {
             // Yield once, then await an unresolved promise — the only way out
             // is the close-driven abort.
             yield 0;
-            await new Promise<void>((r) => {
+            await new Promise<void>((resolve) => {
                 signal.addEventListener("abort", () => {
-                    r();
+                    resolve();
                 });
             });
         });
@@ -238,7 +247,9 @@ describe("shardDO streaming queries", () => {
         const driving = shard.driveMessage(ws, { id: "stream_5", query: { functionPath: "metrics:hang" }, type: "stream" });
 
         // Give the iterator a turn so its first yield lands and it's parked on the abort promise.
-        await new Promise<void>((r) => setTimeout(r, 5));
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 5);
+        });
         await shard.driveClose(ws);
         await driving;
 

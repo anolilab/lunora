@@ -42,7 +42,6 @@ const setupWriter = (): DatabaseWriterLike => {
 /** Seed five users (u1..u5), each at version 0, with ascending scores 10..50. */
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let index = 1; index <= 5; index += 1) {
-        // eslint-disable-next-line no-await-in-loop -- inserts share one SQLite handle; sequential keeps ids deterministic.
         await writer.insert("users", { _id: `u${String(index)}`, name: `user ${String(index)}`, score: index * 10, version: 0 }, { allowExplicitId: true });
     }
 };
@@ -86,7 +85,10 @@ describe("runDataMigration", () => {
             const result = await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
 
             expect(result).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: false, id: "bump-version", processed: 5, status: "completed" });
-            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
 
         it("counts a row whose transform returns undefined as processed but not changed", async () => {
@@ -106,7 +108,10 @@ describe("runDataMigration", () => {
 
             expect(result.processed).toBe(5);
             expect(result.changed).toBe(3);
-            expect((await allUsers(writer)).map((document) => document["flagged"])).toEqual([undefined, undefined, true, true, true]);
+
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["flagged"])).toEqual([undefined, undefined, true, true, true]);
         });
 
         it("persists progress to the reserved state table", async () => {
@@ -220,8 +225,11 @@ describe("runDataMigration", () => {
             expect(second.status).toBe("completed");
             expect(second.processed).toBe(5);
             expect(second.changed).toBe(5);
+
             // Every row bumped exactly once — a re-scan of the first batch would show 2.
-            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
 
         it("re-running a completed migration is a no-op that returns the stored counts", async () => {
@@ -235,8 +243,11 @@ describe("runDataMigration", () => {
             const again = await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
 
             expect(again).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: false, id: "bump-version", processed: 5, status: "completed" });
+
             // No rescan: versions stay at 1 rather than climbing to 2.
-            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
     });
 
@@ -263,7 +274,10 @@ describe("runDataMigration", () => {
             const down = await runDataMigration({ direction: "down", migration, sql: harness.sql, writer });
 
             expect(down).toEqual({ changed: 5, cursor: null, direction: "down", dryRun: false, id: "versioned", processed: 5, status: "completed" });
-            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([0, 0, 0, 0, 0]);
+
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([0, 0, 0, 0, 0]);
             expect(stateRow("versioned")?.["direction"]).toBe("down");
         });
 
@@ -289,8 +303,11 @@ describe("runDataMigration", () => {
             const result = await runDataMigration({ dryRun: true, migration: bumpVersion, sql: harness.sql, writer });
 
             expect(result).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: true, id: "bump-version", processed: 5, status: "completed" });
+
             // Rows untouched...
-            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([0, 0, 0, 0, 0]);
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([0, 0, 0, 0, 0]);
 
             // ...and no state table was created.
             const tables = harness.raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, DATA_MIGRATION_STATE_TABLE);
@@ -324,8 +341,11 @@ describe("runDataMigration", () => {
             const row = stateRow("explode");
 
             expect(row).toMatchObject({ changed: 2, error: "boom", id: "explode", processed: 3, status: "failed" });
+
             // Only the rows before the failure were rewritten.
-            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 0, 0, 0]);
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 0, 0, 0]);
         });
     });
 });

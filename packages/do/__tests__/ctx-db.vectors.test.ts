@@ -25,14 +25,20 @@ const fakeVectorSearch = (): VectorSearchLike & { deletes: [string, ReadonlyArra
     const deletes: [string, ReadonlyArray<string>][] = [];
 
     return {
-        deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => void deletes.push([indexName, ids])),
+        deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => {
+            deletes.push([indexName, ids]);
+        }),
         deletes,
         getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
         query: vi.fn<VectorSearchLike["query"]>(async () => {
             return { count: 0, matches: [] };
         }),
-        upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName, input) => void upserts.push([indexName, input])),
-        upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async (indexName, input) => void upserts.push([indexName, input])),
+        upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName, input) => {
+            upserts.push([indexName, input]);
+        }),
+        upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async (indexName, input) => {
+            upserts.push([indexName, input]);
+        }),
         upserts,
     };
 };

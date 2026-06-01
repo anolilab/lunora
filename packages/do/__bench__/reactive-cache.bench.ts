@@ -9,14 +9,14 @@ import { ReactiveCache, reactiveCacheKey } from "../src/reactive-cache.js";
  * bench measures three paths so the win and the miss-overhead are both
  * visible:
  *
- *  - **hit** — `cache.run(key, deps, handler)` returns the stored result
- *    without invoking `handler`. The cost is the key lookup + LRU touch.
- *  - **miss** — same call when the key isn't cached: `handler` runs, the
- *    result is stored, the dep set is committed. This is the cost users
- *    pay on the first call (and every call when the cache is OFF).
- *  - **baseline (no cache)** — running `handler` directly so the cache
- *    overhead is visible in absolute terms. Subtract this from `miss` to
- *    see what the wrapper itself costs.
+ * - **hit** — `cache.run(key, deps, handler)` returns the stored result
+ * without invoking `handler`. The cost is the key lookup + LRU touch.
+ * - **miss** — same call when the key isn't cached: `handler` runs, the
+ * result is stored, the dep set is committed. This is the cost users
+ * pay on the first call (and every call when the cache is OFF).
+ * - **baseline (no cache)** — running `handler` directly so the cache
+ * overhead is visible in absolute terms. Subtract this from `miss` to
+ * see what the wrapper itself costs.
  *
  * `handler` is a small async work-unit (an awaited Promise that walks a
  * 100-element array) — enough that the cache hit / miss difference is

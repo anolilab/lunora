@@ -9,11 +9,11 @@ import type { MutationDelta, SocketAttachment, SubscriptionQuery } from "../src/
  * loop is the bottleneck for fan-out workloads (think a busy channel with
  * hundreds of viewers). The bench captures both:
  *
- *  - **Low fanout** — a handful of sockets, the realistic small-room case.
- *  - **High fanout** — 500 sockets, 1 sub each, all on the matching table.
- *  - **Selective fanout** — 500 sockets but most subscribe to a different
- *    table, exercising the cheap-reject branch in `matchesSubscription`.
- *  - **Filter by args** — 100 sockets where the args narrow to ~10% match.
+ * - **Low fanout** — a handful of sockets, the realistic small-room case.
+ * - **High fanout** — 500 sockets, 1 sub each, all on the matching table.
+ * - **Selective fanout** — 500 sockets but most subscribe to a different
+ * table, exercising the cheap-reject branch in `matchesSubscription`.
+ * - **Filter by args** — 100 sockets where the args narrow to ~10% match.
  *
  * The DO state is a hand-rolled fake: no Workers runtime needed, the bench
  * stays a pure node process and isolates the hot loop.
@@ -57,6 +57,7 @@ const createFakeState = (sockets: FakeWebSocket[]): ShardDOState => {
 };
 
 class BenchShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- bench stub; broadcastDelta never dispatches an RPC
     public override async handleRpc(): Promise<unknown> {
         return null;
     }
@@ -85,7 +86,7 @@ describe("broadcastDelta — fan-out", () => {
     const lowShard = buildShard(lowSockets);
 
     for (let index = 0; index < 5; index += 1) {
-        lowSockets.push(createFakeWebSocket({ [`sub-${index}`]: { table: "messages" } }));
+        lowSockets.push(createFakeWebSocket({ [`sub-${String(index)}`]: { table: "messages" } }));
     }
 
     bench("low fanout — 5 sockets × 1 sub each, table match", () => {
@@ -96,7 +97,7 @@ describe("broadcastDelta — fan-out", () => {
     const highShard = buildShard(highSockets);
 
     for (let index = 0; index < 500; index += 1) {
-        highSockets.push(createFakeWebSocket({ [`sub-${index}`]: { table: "messages" } }));
+        highSockets.push(createFakeWebSocket({ [`sub-${String(index)}`]: { table: "messages" } }));
     }
 
     bench("high fanout — 500 sockets × 1 sub each, table match", () => {
@@ -111,7 +112,7 @@ describe("broadcastDelta — fan-out", () => {
         // cheap-reject in `matchesSubscription`.
         const table = index % 10 === 0 ? "messages" : "documents";
 
-        mixedSockets.push(createFakeWebSocket({ [`sub-${index}`]: { table } }));
+        mixedSockets.push(createFakeWebSocket({ [`sub-${String(index)}`]: { table } }));
     }
 
     bench("selective fanout — 500 sockets, 10% match the delta's table", () => {
@@ -128,7 +129,7 @@ describe("broadcastDelta — args filter", () => {
     for (let index = 0; index < 100; index += 1) {
         sockets.push(
             createFakeWebSocket({
-                [`sub-${index}`]: { args: { channelId: `channels:c${index}` }, table: "messages" },
+                [`sub-${String(index)}`]: { args: { channelId: `channels:c${String(index)}` }, table: "messages" },
             }),
         );
     }
@@ -145,7 +146,7 @@ describe("broadcastDelta — delete fallback", () => {
     for (let index = 0; index < 100; index += 1) {
         sockets.push(
             createFakeWebSocket({
-                [`sub-${index}`]: { args: { channelId: "channels:c1" }, table: "messages" },
+                [`sub-${String(index)}`]: { args: { channelId: "channels:c1" }, table: "messages" },
             }),
         );
     }

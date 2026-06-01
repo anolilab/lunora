@@ -11,11 +11,11 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
  * vs scan (SUM/MAX/MIN over the table) — but the work per row is more
  * (the scan path has to read the field, not just walk a count). Bench both:
  *
- *  - **aggregate(sum)** — indexed (op="sum" counter) vs scan
- *    (`SELECT SUM(json_extract(__doc__,'$.seq')) FROM todos`).
- *  - **aggregate(max)** — same shape against an `op:"max"` index.
- *  - **groupBy({by})** — indexed (read every counter row) vs scan
- *    (GROUP BY in SQL).
+ * - **aggregate(sum)** — indexed (op="sum" counter) vs scan
+ * (`SELECT SUM(json_extract(__doc__,'$.seq')) FROM todos`).
+ * - **aggregate(max)** — same shape against an `op:"max"` index.
+ * - **groupBy({by})** — indexed (read every counter row) vs scan
+ * (GROUP BY in SQL).
  *
  * Row count: 10 000 across 10 projects so the scan and groupBy bench has
  * real cardinality to chew on.

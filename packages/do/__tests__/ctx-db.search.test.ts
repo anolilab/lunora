@@ -44,7 +44,7 @@ const setupWriter = (): DatabaseWriterLike => {
     const idGenerator = (): string => {
         counter += 1;
 
-        return `d${counter}`;
+        return `d${String(counter)}`;
     };
 
     return createShardContextDatabase({
@@ -96,7 +96,7 @@ describe("ctx-db search", () => {
                 .withSearchIndex("by_body", (q) => q.search("body", "wor"))
                 .collect();
 
-            expect(results.map((document) => document["title"]).sort()).toStrictEqual(["a", "b"]);
+            expect(results.map((document) => document["title"]).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["a", "b"]);
         });
 
         it("narrows by an .eq() filter field", async () => {

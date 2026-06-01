@@ -210,7 +210,6 @@ describe("compileWhere — AND / OR / NOT nesting", () => {
     it("fields, OR and NOT combine, preserving authoring order and param order", () => {
         expect.assertions(1);
 
-        // eslint-disable-next-line perfectionist/sort-objects -- this test asserts authoring order is preserved; the key order IS the fixture
         const where: WhereInput = {
             projectId: "p1",
             OR: [{ priority: "high" }, { status: { in: ["open", "blocked"] } }],

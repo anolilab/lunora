@@ -140,17 +140,6 @@ class ReexecShard extends ShardDO {
         return { ok: true };
     }
 
-    protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
-        void args;
-        this.execCount += 1;
-        this.userIdDuringExec = this.getCurrentUserId();
-
-        const outcome = this.outcomes.get(functionPath);
-
-        // Clone the table set so the production code can't mutate the fixture.
-        return Promise.resolve(outcome ? { result: outcome.result, tables: new Set(outcome.tables) } : null);
-    }
-
     public driveMessage(ws: FakeWebSocket, envelope: SubscriptionEnvelope): Promise<void> {
         return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
     }
@@ -168,6 +157,16 @@ class ReexecShard extends ShardDO {
                 method: "POST",
             }),
         );
+    }
+
+    protected override executeSubscription(functionPath: string, _args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        this.execCount += 1;
+        this.userIdDuringExec = this.getCurrentUserId();
+
+        const outcome = this.outcomes.get(functionPath);
+
+        // Clone the table set so the production code can't mutate the fixture.
+        return Promise.resolve(outcome ? { result: outcome.result, tables: new Set(outcome.tables) } : null);
     }
 }
 
@@ -327,6 +326,7 @@ describe("shardDO", () => {
 
         class PrefixShard extends TestShard {
             // Match only when `row.text` starts with `args.prefix`.
+            // eslint-disable-next-line class-methods-use-this -- pure predicate override; the test only checks routing
             protected override matchesSubscription(
                 query: { args?: Record<string, unknown>; table: string },
                 delta: { row?: Record<string, unknown>; table: string },

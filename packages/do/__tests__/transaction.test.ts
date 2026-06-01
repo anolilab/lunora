@@ -31,6 +31,7 @@ class TestShardDO extends ShardDO {
         super(state, {});
     }
 
+    // eslint-disable-next-line class-methods-use-this -- override stub; transaction tests never dispatch an RPC
     public override async handleRpc(): Promise<unknown> {
         return null;
     }
@@ -124,18 +125,10 @@ describe("shardDO.runInTransaction", () => {
     it("swallows secondary ROLLBACK errors so the original throw propagates", async () => {
         expect.assertions(1);
 
-        let firstCall = true;
-
         exec.mockImplementation((query: string) => {
             if (query === "ROLLBACK") {
                 throw new Error("rollback failed");
             }
-
-            if (query === "BEGIN") {
-                firstCall = false;
-            }
-
-            void firstCall;
         });
 
         const original = new Error("handler failure");

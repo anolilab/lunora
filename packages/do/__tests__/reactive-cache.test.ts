@@ -367,7 +367,7 @@ describe("reactiveCache", () => {
 
         const removed = cache.invalidate("t", "1");
 
-        expect(removed.toSorted()).toEqual(["a", "b"]);
+        expect(removed.toSorted((a, b) => a.localeCompare(b))).toEqual(["a", "b"]);
         expect(cache.size().entries).toBe(1);
     });
 

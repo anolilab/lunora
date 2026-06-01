@@ -367,22 +367,6 @@ class CachingShard extends ShardDO {
         });
     }
 
-    protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
-        const handler = this.handlers.get(functionPath);
-
-        if (!handler) {
-            return Promise.resolve(null);
-        }
-
-        return this.runCachedQuery(functionPath, args, async () => {
-            this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
-
-            return handler(args);
-        }).then((result) => {
-            return { result, tables: new Set(["users"]) };
-        });
-    }
-
     public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment = { subs: {} }): void {
         this.state.acceptWebSocket(ws as unknown as WebSocket);
         ws.serializeAttachment(attachment);
@@ -408,6 +392,22 @@ class CachingShard extends ShardDO {
     /** Test-only: expose the protected `reactiveCache` field for assertions. */
     public cacheRef(): typeof this.reactiveCache {
         return this.reactiveCache;
+    }
+
+    protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        const handler = this.handlers.get(functionPath);
+
+        if (!handler) {
+            return Promise.resolve(null);
+        }
+
+        return this.runCachedQuery(functionPath, args, async () => {
+            this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
+
+            return handler(args);
+        }).then((result) => {
+            return { result, tables: new Set(["users"]) };
+        });
     }
 }
 

@@ -278,6 +278,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
 });
 
 class ExportShardImpl extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
     public override async handleRpc(): Promise<unknown> {
         throw new Error("handleRpc must not run for admin RPCs");
     }
@@ -353,7 +354,7 @@ describe("shardDO admin export/import dispatch", () => {
         const body = await response.json<{ result: { rows: ExportRow[] } }>();
 
         expect(body.result.rows).toHaveLength(2);
-        expect(body.result.rows.map((r) => r.table).sort()).toEqual(["messages", "users"]);
+        expect(body.result.rows.map((r) => r.table).toSorted((a, b) => a.localeCompare(b))).toEqual(["messages", "users"]);
     });
 
     it("dispatches importShard and inserts rows", async () => {

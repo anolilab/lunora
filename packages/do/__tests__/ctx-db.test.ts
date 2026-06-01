@@ -380,7 +380,12 @@ describe("createShardCtxDb — onWrite", () => {
         expect.assertions(5);
 
         const events: Parameters<WriteHook>[0][] = [];
-        const { writer } = setupWriter({ idGenerator: () => "m_1", onWrite: (event) => void events.push(event) });
+        const { writer } = setupWriter({
+            idGenerator: () => "m_1",
+            onWrite: (event) => {
+                events.push(event);
+            },
+        });
 
         await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
         await writer.patch("m_1", { text: "edit" });

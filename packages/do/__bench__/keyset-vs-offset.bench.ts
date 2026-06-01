@@ -9,15 +9,15 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
  * pagination walks `offset + limit` rows. Apples-to-apples across the same
  * `findMany` API:
  *
- *  - **keyset** — second page with `cursor: &lt;seq=4999, _id=t04999>` and
- *    `limit: 50`. SQLite walks ~50 rows via the SEEK predicate the keyset
- *    helper compiles (`(seq, _id) > (?, ?)`).
- *  - **offset-style** — same depth modelled as `limit: 5050` without a
- *    cursor, then drop the first 5000 rows JS-side. Mirrors what
- *    callers using the legacy `.take(...)` path would pay at page 100.
- *  - **first page** — control: keyset behaves the same on page 1, so
- *    this should look ~identical to the keyset case and confirm the
- *    cost is in the row scan, not the abstraction.
+ * - **keyset** — second page with `cursor: &lt;seq=4999, _id=t04999>` and
+ * `limit: 50`. SQLite walks ~50 rows via the SEEK predicate the keyset
+ * helper compiles (`(seq, _id) > (?, ?)`).
+ * - **offset-style** — same depth modelled as `limit: 5050` without a
+ * cursor, then drop the first 5000 rows JS-side. Mirrors what
+ * callers using the legacy `.take(...)` path would pay at page 100.
+ * - **first page** — control: keyset behaves the same on page 1, so
+ * this should look ~identical to the keyset case and confirm the
+ * cost is in the row scan, not the abstraction.
  *
  * Row count: 10 000. SQLite is `:memory:`.
  */

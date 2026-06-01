@@ -324,7 +324,7 @@ describe("ctx-db relations", () => {
                     return { continueCursor: null, isDone: true, page };
                 },
                 async insert(_table: string, document_: Record<string, unknown>) {
-                    const id = typeof document_["_id"] === "string" ? document_["_id"] : `m_${rows.size + 1}`;
+                    const id = typeof document_["_id"] === "string" ? document_["_id"] : `m_${String(rows.size + 1)}`;
 
                     rows.set(id, { ...document_, _id: id });
 
@@ -364,7 +364,7 @@ describe("ctx-db relations", () => {
 
             // The cascade should have removed every membership pointing at g1
             // and left the one pointing at g2 alone.
-            expect([...rows.keys()].sort()).toEqual(["m3"]);
+            expect([...rows.keys()].toSorted((a, b) => a.localeCompare(b))).toEqual(["m3"]);
         });
 
         it("missing globalDb throws a helpful error rather than silently dropping the cascade", async () => {

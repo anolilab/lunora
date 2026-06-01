@@ -10,14 +10,14 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
  * declared relation per page — not a per-row N+1 — but the cost still
  * scales with the page size + the relation depth.
  *
- *  - **no `with`** — baseline; one page read, no joins.
- *  - **one one-relation** — `with: { author: true }` joins each message
- *    to its author. One extra indexed lookup batched across the page.
- *  - **one many-relation** — `with: { reactions: true }` fans each
- *    message out to its reactions. Same query shape but the result
- *    cardinality blows up.
- *  - **deep with** — `with: { author: true, reactions: true }` exercises
- *    two relation paths per row.
+ * - **no `with`** — baseline; one page read, no joins.
+ * - **one one-relation** — `with: { author: true }` joins each message
+ * to its author. One extra indexed lookup batched across the page.
+ * - **one many-relation** — `with: { reactions: true }` fans each
+ * message out to its reactions. Same query shape but the result
+ * cardinality blows up.
+ * - **deep with** — `with: { author: true, reactions: true }` exercises
+ * two relation paths per row.
  *
  * Page size: 50 messages over a population of 500 messages with 2
  * reactions each. Real SQLite — relation logic is dialect-agnostic so

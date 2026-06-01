@@ -61,7 +61,7 @@ describe("ctx-db against real SQLite", () => {
 
             // `profiles` is flagged `.global()`, so no SQLite table is created and
             // SELECTing it must fail at the engine, not silently return rows.
-            expect(() => harness.raw("SELECT * FROM \"profiles\"")).toThrow();
+            expect(() => harness.raw("SELECT * FROM \"profiles\"")).toThrow(/no such table/u);
         });
 
         it("enforces UNIQUE indexes at the engine level", async () => {
@@ -73,7 +73,7 @@ describe("ctx-db against real SQLite", () => {
 
             // `by_text` is declared unique — a second row with the same text must
             // be rejected by SQLite, not just by the adapter.
-            await expect(writer.insert("messages", { _id: "b", authorId: "u2", channelId: "c2", text: "dup" }, { allowExplicitId: true })).rejects.toThrow();
+            await expect(writer.insert("messages", { _id: "b", authorId: "u2", channelId: "c2", text: "dup" }, { allowExplicitId: true })).rejects.toThrow(/unique constraint violation/u);
         });
     });
 

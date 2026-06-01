@@ -296,7 +296,7 @@ describe("ctx-db findMany", () => {
                 where: { archived: false },
             });
 
-            expect(ids(result.page).sort()).toEqual(["t1", "t2", "t5"]);
+            expect(ids(result.page).toSorted((a, b) => String(a).localeCompare(String(b)))).toEqual(["t1", "t2", "t5"]);
         });
 
         it("baseWhere alone narrows the result with no caller `where`", async () => {

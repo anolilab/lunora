@@ -196,6 +196,7 @@ describe("shardDO admin subscriptions", () => {
 
 /** A trivial concrete shard for the upgrade-gate tests; `handleRpc` is unused. */
 class UpgradeShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; the upgrade-gate tests never dispatch an RPC
     public override handleRpc(): Promise<unknown> {
         return Promise.resolve(null);
     }

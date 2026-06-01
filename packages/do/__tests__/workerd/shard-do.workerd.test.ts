@@ -6,11 +6,11 @@
  * `__tests__/shard-do.test.ts` exercises the same surface against hand-rolled
  * doubles — the value here is catching anything mock state cannot model:
  *
- *  - The real WebSocket Hibernation API (`state.acceptWebSocket`,
- *    `serializeAttachment`, hibernation reset preserving attachments).
- *  - The real workerd lifecycle for `webSocketClose` (which throws if you
- *    re-close an already-closed socket).
- *  - SQLite-in-DO storage handed out by the runtime as `state.storage.sql`.
+ * - The real WebSocket Hibernation API (`state.acceptWebSocket`,
+ * `serializeAttachment`, hibernation reset preserving attachments).
+ * - The real workerd lifecycle for `webSocketClose` (which throws if you
+ * re-close an already-closed socket).
+ * - SQLite-in-DO storage handed out by the runtime as `state.storage.sql`.
  */
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -32,6 +32,7 @@ describe("shardDO (workerd)", () => {
         const stub = newStub("shard-rpc");
 
         await runInDurableObject(stub, async (instance) => {
+            // eslint-disable-next-line no-param-reassign -- runInDurableObject hands us the live DO so the test can configure it
             instance.rpcResult = { ok: true, who: "real-runtime" };
         });
 
@@ -149,7 +150,9 @@ describe("shardDO (workerd)", () => {
         // interval after A has already received its delta. The runtime
         // delivers messages serially per socket; if B were ever going to
         // hear about A's emission it would be by now.
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await new Promise((resolve) => {
+            setTimeout(resolve, 50);
+        });
 
         const aDeltas = subA.received.filter((m) => m.includes("\"type\":\"delta\""));
         const bDeltas = subB.received.filter((m) => m.includes("\"type\":\"delta\""));
@@ -171,7 +174,7 @@ const openSocket = async (stub: DurableObjectStub<TestShardDO>, subId: string, q
     const upgrade = await stub.fetch("https://shard.internal/_ws", { headers: { Upgrade: "websocket" } });
 
     if (!upgrade.webSocket) {
-        throw new Error(`expected websocket upgrade, got status ${upgrade.status}`);
+        throw new Error(`expected websocket upgrade, got status ${String(upgrade.status)}`);
     }
 
     const client = upgrade.webSocket;
@@ -199,7 +202,9 @@ const waitFor = async (predicate: () => boolean, { intervalMs = 10, timeoutMs = 
             return;
         }
 
-        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        await new Promise((resolve) => {
+            setTimeout(resolve, intervalMs);
+        });
     }
 
     throw new Error(`waitFor: predicate never became true within ${String(timeoutMs)}ms`);

@@ -11,12 +11,12 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
  * bench both paths against a real SQLite engine so the win shows up at a
  * realistic row count.
  *
- *  - **Indexed** — count("todos", { projectId: "p5" }) routes to the
- *    aggregateIndex `byProject` companion → constant-time lookup.
- *  - **Indexed (whole-table)** — count("todos") routes to the empty-`by`
- *    aggregateIndex `total` → one row read regardless of N.
- *  - **Scan** — same query against a schema with no aggregateIndex →
- *    SELECT COUNT(*) FROM todos[ WHERE …]. Cost grows with N.
+ * - **Indexed** — count("todos", { projectId: "p5" }) routes to the
+ * aggregateIndex `byProject` companion → constant-time lookup.
+ * - **Indexed (whole-table)** — count("todos") routes to the empty-`by`
+ * aggregateIndex `total` → one row read regardless of N.
+ * - **Scan** — same query against a schema with no aggregateIndex →
+ * SELECT COUNT(*) FROM todos[ WHERE …]. Cost grows with N.
  *
  * Row count is 10 000 spread across 10 projects. SQLite is `:memory:` so
  * the bench measures the query path, not disk IO.

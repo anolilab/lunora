@@ -9,11 +9,11 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
  * rides this path (the §3.1 maintenance fires from `runTriggers`), so the
  * absolute cost matters and shouldn't grow non-linearly with trigger count.
  *
- *  - **0 triggers** — baseline insert; no trigger map.
- *  - **1 trigger** — one after-insert no-op handler.
- *  - **4 triggers** — four after-insert no-op handlers (writes fan out to
- *    every matching trigger; this picks up dispatch overhead, not the work
- *    inside each handler).
+ * - **0 triggers** — baseline insert; no trigger map.
+ * - **1 trigger** — one after-insert no-op handler.
+ * - **4 triggers** — four after-insert no-op handlers (writes fan out to
+ * every matching trigger; this picks up dispatch overhead, not the work
+ * inside each handler).
  *
  * Handlers are intentionally empty so the bench measures the runner +
  * trigger-payload construction, not user code.

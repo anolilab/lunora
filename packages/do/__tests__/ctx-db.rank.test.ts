@@ -259,7 +259,7 @@ describe("ctx-db rank", () => {
             const writer = setupWriter(makeSchema(byScoreDesc));
 
             for (let i = 0; i < 5; i += 1) {
-                await writer.insert("messages", { _id: `m${i}`, archived: false, channelId: "c1", score: i * 10 }, { allowExplicitId: true });
+                await writer.insert("messages", { _id: `m${String(i)}`, archived: false, channelId: "c1", score: i * 10 }, { allowExplicitId: true });
             }
 
             const first = await writer.rankPage("messages", "leaderboard", { take: 2 });

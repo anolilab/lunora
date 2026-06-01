@@ -72,7 +72,7 @@ describe("shardRegistryDO", () => {
         const list = await registry.fetch(get("/list?table=messages"));
         const body = await list.json<{ shardKeys: string[] }>();
 
-        expect(body.shardKeys.toSorted()).toEqual(["channel-1", "channel-2", "channel-3"]);
+        expect(body.shardKeys.toSorted((a, b) => a.localeCompare(b))).toEqual(["channel-1", "channel-2", "channel-3"]);
     });
 
     it("tables are isolated — registering one table doesn't leak into another", async () => {
@@ -83,8 +83,10 @@ describe("shardRegistryDO", () => {
         await registry.fetch(post("/register", { shardKey: "a", table: "messages" }));
         await registry.fetch(post("/register", { shardKey: "b", table: "tasks" }));
 
-        const m = await (await registry.fetch(get("/list?table=messages"))).json();
-        const t = await (await registry.fetch(get("/list?table=tasks"))).json();
+        const messagesResponse = await registry.fetch(get("/list?table=messages"));
+        const m = await messagesResponse.json();
+        const tasksResponse = await registry.fetch(get("/list?table=tasks"));
+        const t = await tasksResponse.json();
 
         expect(m).toEqual({ shardKeys: ["a"] });
         expect(t).toEqual({ shardKeys: ["b"] });
@@ -183,7 +185,7 @@ describe("shardRegistryDO", () => {
         const response = await registry.fetch(get("/snapshot"));
         const body = await response.json<{ tables: Record<string, string[]> }>();
 
-        expect(body.tables["messages"]!.toSorted()).toEqual(["a", "b"]);
+        expect(body.tables["messages"]!.toSorted((a, b) => a.localeCompare(b))).toEqual(["a", "b"]);
         expect(body.tables["tasks"]).toEqual(["c"]);
     });
 
@@ -202,8 +204,9 @@ describe("shardRegistryDO", () => {
         // Give the blockConcurrencyWhile callback a microtask to complete.
         await Promise.resolve();
 
-        const list = await (await second.fetch(get("/list?table=messages"))).json();
+        const listResponse = await second.fetch(get("/list?table=messages"));
+        const list = await listResponse.json();
 
-        expect((list as { shardKeys: string[] }).shardKeys.toSorted()).toEqual(["alpha", "beta"]);
+        expect((list as { shardKeys: string[] }).shardKeys.toSorted((a, b) => a.localeCompare(b))).toEqual(["alpha", "beta"]);
     });
 });

@@ -55,22 +55,20 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
         // the reader can decode and order it. The id-probe and by-id reads
         // resolve to the canned rows so the patch/delete table-resolution path
         // (`tableNameFromId` + `get`) reaches the FTS write-sync.
-        let rows: Row[] = [];
+        //
+        // OCC-guarded patch/delete (finding 40) probes changes() after the
+        // write; in this single-writer double the row always matches the CAS
+        // snapshot, so report one changed row.
+        const routes: { pattern: RegExp; rows: () => Row[] }[] = [
+            { pattern: /^SELECT changes\(\) AS changed$/u, rows: () => [{ changed: 1 }] as unknown as Row[] },
+            { pattern: / MATCH /u, rows: () => matchRows as unknown as Row[] },
+            { pattern: /WHERE id = \? LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) as unknown as Row[] },
+            { pattern: /^SELECT id, _creationTime, __doc__ FROM .* WHERE id = \?$/u, rows: () => matchRows as unknown as Row[] },
+        ];
 
-        if (/^SELECT changes\(\) AS changed$/u.test(sql)) {
-            // OCC-guarded patch/delete (finding 40) probes changes() after the
-            // write; in this single-writer double the row always matches the
-            // CAS snapshot, so report one changed row.
-            rows = [{ changed: 1 }] as unknown as Row[];
-        } else if (/ MATCH /u.test(sql)) {
-            rows = matchRows as unknown as Row[];
-        } else if (/WHERE id = \? LIMIT 1$/u.test(sql)) {
-            rows = (matchRows.length > 0 ? [{ 1: 1 }] : []) as unknown as Row[];
-        } else if (/^SELECT id, _creationTime, __doc__ FROM .* WHERE id = \?$/u.test(sql)) {
-            rows = matchRows as unknown as Row[];
-        }
+        const matched = routes.find((route) => route.pattern.test(sql));
 
-        return cursor(rows);
+        return cursor(matched ? matched.rows() : []);
     };
 
     return { sql: { exec }, statements };

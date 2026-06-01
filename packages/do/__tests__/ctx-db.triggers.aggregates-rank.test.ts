@@ -119,7 +119,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
             expect(aggSeen).toEqual([10, 15]);
 
             // After the second insert: { p1: 1, p2: 1 }
-            const lastSnapshot = groupSeen.slice(-2).sort((a, b) => String(a.projectId).localeCompare(String(b.projectId)));
+            const lastSnapshot = groupSeen.slice(-2).toSorted((a, b) => String(a.projectId).localeCompare(String(b.projectId)));
 
             expect(lastSnapshot).toEqual([
                 { count: 1, projectId: "p1" },

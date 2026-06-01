@@ -14,6 +14,7 @@ import { createSqliteExec } from "./_helpers/node-sqlite.js";
  * branch in `fetch` short-circuits before user dispatch is ever reached.
  */
 class AdminShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
     public override async handleRpc(): Promise<unknown> {
         throw new Error("handleRpc must not run for admin RPCs");
     }
@@ -26,6 +27,7 @@ const ADMIN_TOKEN = "s3cret-admin";
  * counters and the log buffer can be driven through the public `fetch` surface.
  */
 class CountingShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; routes by functionPath only, no instance state
     public override async handleRpc(functionPath: string): Promise<unknown> {
         if (functionPath === "boom:explode") {
             throw new Error("boom");
@@ -178,6 +180,7 @@ const MIGRATIONS: Record<string, DataMigrationLike> = { [bumpVersion.id]: bumpVe
  * `runDataMigration` against a real-SQLite, schema-aware writer.
  */
 class MigrationShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
     public override async handleRpc(): Promise<unknown> {
         throw new Error("handleRpc must not run for admin RPCs");
     }
@@ -222,7 +225,6 @@ describe("shardDO admin data migrations", () => {
         const writer: DatabaseWriterLike = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
 
         for (let index = 1; index <= 3; index += 1) {
-            // eslint-disable-next-line no-await-in-loop -- inserts share one SQLite handle; sequential keeps ids deterministic.
             await writer.insert("users", { _id: `u${String(index)}`, name: `user ${String(index)}`, version: 0 });
         }
 
@@ -364,6 +366,7 @@ describe("shardDO admin data migrations", () => {
  * insert/patch/replace/delete land in SQLite via the admin path.
  */
 class EditableShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
     public override async handleRpc(): Promise<unknown> {
         throw new Error("handleRpc must not run for admin RPCs");
     }
@@ -503,6 +506,7 @@ describe("shardDO admin row writes", () => {
         expect.assertions(2);
 
         class BareShard extends ShardDO {
+            // eslint-disable-next-line class-methods-use-this -- override stub; the admin-write path never dispatches an RPC
             public override async handleRpc(): Promise<unknown> {
                 return null;
             }

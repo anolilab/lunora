@@ -39,8 +39,20 @@ describe("ctx-db triggers", () => {
                         indexes: [],
                         shape: { body: { kind: "string" } },
                         triggerMap: {
-                            a: { handler: (_context, event) => void events.push({ doc: event.doc, phase: "after" }), op: "insert", timing: "after" },
-                            b: { handler: (_context, event) => void events.push({ doc: event.doc, phase: "before" }), op: "insert", timing: "before" },
+                            a: {
+                                handler: (_context, event) => {
+                                    events.push({ doc: event.doc, phase: "after" });
+                                },
+                                op: "insert",
+                                timing: "after",
+                            },
+                            b: {
+                                handler: (_context, event) => {
+                                    events.push({ doc: event.doc, phase: "before" });
+                                },
+                                op: "insert",
+                                timing: "before",
+                            },
                         },
                     },
                 },
@@ -125,8 +137,20 @@ describe("ctx-db triggers", () => {
                         indexes: [],
                         shape: { body: { kind: "string" } },
                         triggerMap: {
-                            a: { handler: (_context, event) => void events.push({ phase: "before", previous: event.previous }), op: "delete", timing: "before" },
-                            b: { handler: (_context, event) => void events.push({ phase: "after", previous: event.previous }), op: "delete", timing: "after" },
+                            a: {
+                                handler: (_context, event) => {
+                                    events.push({ phase: "before", previous: event.previous });
+                                },
+                                op: "delete",
+                                timing: "before",
+                            },
+                            b: {
+                                handler: (_context, event) => {
+                                    events.push({ phase: "after", previous: event.previous });
+                                },
+                                op: "delete",
+                                timing: "after",
+                            },
                         },
                     },
                 },
@@ -221,7 +245,13 @@ describe("ctx-db triggers", () => {
                         relationMap: { message: { field: "messageId", kind: "one", onDelete: "cascade", references: "_id", table: "messages" } },
                         shape: { emoji: { kind: "string" }, messageId: { kind: "string" } },
                         triggerMap: {
-                            track: { handler: (_context, event) => void deletedReactions.push(event.id), op: "delete", timing: "after" },
+                            track: {
+                                handler: (_context, event) => {
+                                    deletedReactions.push(event.id);
+                                },
+                                op: "delete",
+                                timing: "after",
+                            },
                         },
                     },
                 },
@@ -235,7 +265,7 @@ describe("ctx-db triggers", () => {
 
             await writer.delete("m1");
 
-            expect([...deletedReactions].sort()).toEqual(["r1", "r2"]);
+            expect(deletedReactions.toSorted((a, b) => a.localeCompare(b))).toEqual(["r1", "r2"]);
         });
 
         it("ctx.scheduler reaches the injected scheduler", async () => {
