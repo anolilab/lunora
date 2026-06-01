@@ -32,7 +32,9 @@ catalogs:
     eslint-plugin-react-hooks: 7.1.1
     eslint-plugin-react-perf: ^3.3.3
     eslint-plugin-react-refresh: 0.5.2
+    "@tanstack/eslint-plugin-query": 5.100.9
     eslint-plugin-react-you-might-not-need-an-effect: 1.0.0
+    eslint-plugin-testing-library: 7.16.2
     eslint-plugin-validate-jsx-nesting: ^0.1.1
     husky: ^9.1.7
     prettier: 3.8.3

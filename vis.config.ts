@@ -10,7 +10,7 @@ export default defineConfig({
             "{workspaceRoot}/dist",
             "!{workspaceRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
             "!{workspaceRoot}/vite.config.ts",
-            "!{workspaceRoot}/eslint.config.js",
+            "!{workspaceRoot}/eslint.shared.js",
             "!{workspaceRoot}/.storybook/**/*",
             "!{workspaceRoot}/**/*.stories.@(js|jsx|ts|tsx|mdx)",
         ],
@@ -32,12 +32,12 @@ export default defineConfig({
         "lint:eslint": {
             cache: true,
             dependsOn: ["default"],
-            inputs: ["default", "{workspaceRoot}/eslint.config.js"],
+            inputs: ["default", "{workspaceRoot}/eslint.shared.js"],
         },
         "lint:eslint:fix": {
             cache: true,
             dependsOn: ["default"],
-            inputs: ["default", "{workspaceRoot}/eslint.config.js"],
+            inputs: ["default", "{workspaceRoot}/eslint.shared.js"],
         },
         "lint:package-json": {
             cache: true,
@@ -79,7 +79,13 @@ export default defineConfig({
         parallel: 5,
     },
     staged: {
-        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["pnpm exec prettier --write", "pnpm exec eslint --fix --no-warn-ignored"],
+        // Prettier formats every staged file, repo-wide.
+        "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["pnpm exec prettier --write"],
+        // ESLint lives only in packages/* (each owns an eslint.config.js); ESLint
+        // v10 resolves the config from the linted file's location. Linting a
+        // file outside any package would error ("no eslint.config found"), so we
+        // scope the ESLint step to packages/** only.
+        "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": ["pnpm exec eslint --fix --no-warn-ignored"],
         "**/*.{md,mdx}": ["pnpm exec prettier --write"],
     },
     secrets: {
