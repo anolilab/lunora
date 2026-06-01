@@ -46,12 +46,16 @@ describe("discoverFunctions", () => {
 
             expect(() => discoverFunctions(project, workdir)).toThrow(NAMESPACE_COLLISION_RE);
 
+            let caught: unknown;
+
             try {
                 discoverFunctions(project, workdir);
             } catch (error: unknown) {
-                expect(error).toMatchObject({ code: "NAMESPACE_COLLISION", name: "CirrusError", status: 500 });
-                expect((error as { paths: string[] }).paths).toEqual(expect.arrayContaining(["foo-bar", "foo/bar"]));
+                caught = error;
             }
+
+            expect(caught).toMatchObject({ code: "NAMESPACE_COLLISION", name: "CirrusError", status: 500 });
+            expect((caught as { paths: string[] }).paths).toEqual(expect.arrayContaining(["foo-bar", "foo/bar"]));
         });
 
         it("distinct sanitized namespaces do not trip the collision guard", () => {

@@ -350,7 +350,7 @@ describe("run-codegen", () => {
     });
 
     describe("emitApi", () => {
-        const function_ = (overrides: Partial<FunctionIR>): FunctionIR => {
+        const makeFunction = (overrides: Partial<FunctionIR>): FunctionIR => {
             return {
                 args: {},
                 exportName: "list",
@@ -364,7 +364,7 @@ describe("run-codegen", () => {
         it("imports Doc when a return type references it", () => {
             expect.assertions(3);
 
-            const output = emitApi([function_({ returnType: 'Doc<"posts">[]' })]);
+            const output = emitApi([makeFunction({ returnType: 'Doc<"posts">[]' })]);
 
             expect(output).toContain('import type { Doc } from "./dataModel.js";');
             expect(output).not.toContain("import type { Id }");
@@ -374,7 +374,7 @@ describe("run-codegen", () => {
         it("imports both Doc and Id when both are referenced", () => {
             expect.assertions(1);
 
-            const output = emitApi([function_({ args: { id: { kind: "id", tableName: "posts" } }, returnType: 'Doc<"posts">' })]);
+            const output = emitApi([makeFunction({ args: { id: { kind: "id", tableName: "posts" } }, returnType: 'Doc<"posts">' })]);
 
             expect(output).toContain('import type { Doc, Id } from "./dataModel.js";');
         });
@@ -382,7 +382,7 @@ describe("run-codegen", () => {
         it("imports only Id when no Doc is referenced", () => {
             expect.assertions(2);
 
-            const output = emitApi([function_({ args: { id: { kind: "id", tableName: "posts" } }, returnType: "{ ok: boolean }" })]);
+            const output = emitApi([makeFunction({ args: { id: { kind: "id", tableName: "posts" } }, returnType: "{ ok: boolean }" })]);
 
             expect(output).toContain('import type { Id } from "./dataModel.js";');
             expect(output).not.toContain("Doc");
@@ -391,7 +391,7 @@ describe("run-codegen", () => {
         it("omits the dataModel import when neither is referenced", () => {
             expect.assertions(1);
 
-            const output = emitApi([function_({ returnType: "{ ok: boolean }" })]);
+            const output = emitApi([makeFunction({ returnType: "{ ok: boolean }" })]);
 
             expect(output).not.toContain("./dataModel.js");
         });
@@ -553,7 +553,7 @@ describe("run-codegen", () => {
     });
 
     describe("emitServer", () => {
-        const function_ = (exportName: string, overrides: Partial<FunctionIR> = {}): FunctionIR => {
+        const makeFunction = (exportName: string, overrides: Partial<FunctionIR> = {}): FunctionIR => {
             return {
                 args: {},
                 exportName,
@@ -567,7 +567,7 @@ describe("run-codegen", () => {
         it("renders the caller arg as optional only when the function takes none", () => {
             expect.assertions(2);
 
-            const output = emitServer([function_("ping"), function_("get", { args: { id: { kind: "id", tableName: "posts" } } })]);
+            const output = emitServer([makeFunction("ping"), makeFunction("get", { args: { id: { kind: "id", tableName: "posts" } } })]);
 
             expect(output).toContain("ping: (args?: {}) => Promise<unknown>;");
             expect(output).toContain('get: (args: { id: Id<"posts"> }) => Promise<unknown>;');
@@ -576,7 +576,7 @@ describe("run-codegen", () => {
         it("threads a function's concrete return type through the caller", () => {
             expect.assertions(2);
 
-            const output = emitServer([function_("count", { returnType: "number" })]);
+            const output = emitServer([makeFunction("count", { returnType: "number" })]);
 
             expect(output).toContain("count: (args?: {}) => Promise<number>;");
             expect(output).toContain('count: (args) => callRegistered(context, "posts:count", args),');

@@ -140,11 +140,15 @@ describe("discover-migrations", () => {
 
             expect(() => discoverMigrations(project, workdir)).toThrow(NON_STATIC_ID_RE);
 
+            let caught: unknown;
+
             try {
                 discoverMigrations(project, workdir);
             } catch (error: unknown) {
-                expect(error).toMatchObject({ code: "MIGRATION_ID_NOT_STATIC", name: "CirrusError", status: 500 });
+                caught = error;
             }
+
+            expect(caught).toMatchObject({ code: "MIGRATION_ID_NOT_STATIC", name: "CirrusError", status: 500 });
         });
 
         it("throws DUPLICATE_MIGRATION_ID when two declarations share an id", () => {
@@ -169,12 +173,16 @@ describe("discover-migrations", () => {
 
             expect(() => discoverMigrations(project, workdir)).toThrow(DUPLICATE_ID_RE);
 
+            let caught: unknown;
+
             try {
                 discoverMigrations(project, workdir);
             } catch (error: unknown) {
-                expect(error).toMatchObject({ code: "DUPLICATE_MIGRATION_ID", id: "dup", name: "CirrusError", status: 500 });
-                expect((error as { paths: string[] }).paths).toEqual(expect.arrayContaining(["one", "two"]));
+                caught = error;
             }
+
+            expect(caught).toMatchObject({ code: "DUPLICATE_MIGRATION_ID", id: "dup", name: "CirrusError", status: 500 });
+            expect((caught as { paths: string[] }).paths).toEqual(expect.arrayContaining(["one", "two"]));
         });
     });
 });
