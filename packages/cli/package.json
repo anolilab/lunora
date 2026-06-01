@@ -13,7 +13,7 @@
     ],
     "type": "module",
     "engines": {
-        "node": "^22.14.0 || >=24.10.0"
+        "node": "^22.15.0 || >=24.10.0"
     },
     "sideEffects": false,
     "module": "./dist/index.mjs",
