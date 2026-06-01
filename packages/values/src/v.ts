@@ -220,6 +220,7 @@ const createValidator = <T>(
     // it clones the validator and lets the public signature retype the result.
     validator.$type = (() => rebuild({})) as InternalColumnValidator<T>["$type"];
     validator.nullable = () => {
+        // eslint-disable-next-line unicorn/no-null -- .nullable() represents a SQL NULL column; null is the value it must accept and return
         const nullableParser = (value: unknown, context: ParseContext): null | T => (value === null ? null : parser(value, context));
 
         return createValidator<null | T>(kind, nullableParser, { ...meta, column: { ...column, notNull: false } });
@@ -479,7 +480,9 @@ const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValid
                     }
                 }
 
-                fail(context, `union of ${String(members.length)} member(s)`, value);
+                // `fail` is `: never`; returning it makes every path of this arrow
+                // explicitly terminal (consistent-return doesn't track never-returns).
+                return fail(context, `union of ${String(members.length)} member(s)`, value);
             },
             { members },
         ),
