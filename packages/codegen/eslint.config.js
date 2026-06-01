@@ -10,6 +10,8 @@ export default createConfig(
         // tsconfig's `jsx: "react-jsx"` flips the preset to the automatic runtime
         // (react-in-jsx-scope off). Without tsconfigPath both silently misfire.
         typescript: { tsconfigPath: "tsconfig.json" },
+        // Prettier owns formatting; disable @stylistic to avoid the two-formatter ping-pong.
+        stylistic: false,
         ignores: [
             "**/dist/**",
             "**/node_modules/**",
@@ -45,6 +47,9 @@ export default createConfig(
         files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
         rules: {
             "@stylistic/no-tabs": "off",
+            "no-await-in-loop": "off",
+            "import/prefer-default-export": "off",
+            "@typescript-eslint/unbound-method": "off",
             "@typescript-eslint/naming-convention": "off",
             "@typescript-eslint/no-explicit-any": "off",
             "@typescript-eslint/no-floating-promises": "off",
