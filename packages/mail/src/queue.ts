@@ -1,6 +1,6 @@
-import type { Mailer, SendOpts as SendOptions } from "./types.js";
+import type { Mailer, SendOptions } from "./types.js";
 
-/** Serializable representation of a `SendOpts` payload — drops the `react` field. */
+/** Serializable representation of a `SendOptions` payload — drops the `react` field. */
 export interface QueuedSend {
     bcc?: string[];
     cc?: string[];

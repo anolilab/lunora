@@ -30,7 +30,7 @@ export interface SendPayload {
     to: string | string[];
 }
 
-export interface SendOpts {
+export interface SendOptions {
     bcc?: string[];
     cc?: string[];
     from?: string;
@@ -55,6 +55,6 @@ export interface CirrusMailOptions {
 }
 
 export interface Mailer {
-    queue: (options: SendOpts) => Promise<{ queued: true }>;
-    send: (options: SendOpts) => Promise<{ id: string }>;
+    queue: (options: SendOptions) => Promise<{ queued: true }>;
+    send: (options: SendOptions) => Promise<{ id: string }>;
 }

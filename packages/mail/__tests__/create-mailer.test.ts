@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createMailer } from "../src/create-mailer.js";
+import createMailer from "../src/create-mailer.js";
 import type { MailTransport, QueueLike, SendPayload } from "../src/types.js";
 
 const FROM_PATTERN = /from/;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createMailer } from "../src/create-mailer.js";
-import { renderEmail } from "../src/render.js";
+import createMailer from "../src/create-mailer.js";
+import renderEmail from "../src/render.js";
 import type { MailTransport, SendPayload } from "../src/types.js";
 
 const WelcomeEmail = ({ name }: { name: string }) => (

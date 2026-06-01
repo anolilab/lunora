@@ -1,14 +1,17 @@
 import { resendProvider } from "@visulima/email/providers/resend";
 
 import { toQueuedPayload } from "./queue.js";
-import { renderEmail } from "./render.js";
-import type { CirrusMailOptions, Mailer, MailTransport, SendOpts as SendOptions, SendPayload } from "./types.js";
+import renderEmail from "./render.js";
+import type { CirrusMailOptions, Mailer, MailTransport, SendOptions, SendPayload } from "./types.js";
 
 /** RFC 5321 caps the entire mailbox path at 320 chars; reject anything longer. */
 const MAX_EMAIL_LENGTH = 320;
 const MAX_NAME_LENGTH = 256;
 
-const ADDRESS_PATTERN = /^\s*(.*?)\s*<\s*([^>]+)\s*>\s*$/;
+// `name <email>` form. Disjoint character classes ([^<] / [^>]) with no adjacent
+// `\s*` so there's no quantifier ambiguity to backtrack on; surrounding whitespace
+// is trimmed from the captures in code instead.
+const ADDRESS_PATTERN = /^([^<]*)<([^>]*)>\s*$/;
 
 /**
  * Reject CR/LF (the classic SMTP header-injection vector — splits the header
@@ -38,22 +41,24 @@ const assertSafeHeaderValue = (label: string, value: string): void => {
 const toAddress = (input: string): { email: string; name?: string } => {
     const match = ADDRESS_PATTERN.exec(input);
 
-    if (match?.[1] && match[2]) {
-        const name = match[1];
-        const email = match[2];
+    if (match) {
+        const name = (match[1] ?? "").trim();
+        const email = (match[2] ?? "").trim();
 
-        if (name.length > MAX_NAME_LENGTH) {
-            throw new Error(`@cirrus/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
+        if (name && email) {
+            if (name.length > MAX_NAME_LENGTH) {
+                throw new Error(`@cirrus/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
+            }
+
+            if (email.length > MAX_EMAIL_LENGTH) {
+                throw new Error(`@cirrus/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
+            }
+
+            assertSafeAddressField("name", name);
+            assertSafeAddressField("email", email);
+
+            return { email, name };
         }
-
-        if (email.length > MAX_EMAIL_LENGTH) {
-            throw new Error(`@cirrus/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
-        }
-
-        assertSafeAddressField("name", name);
-        assertSafeAddressField("email", email);
-
-        return { email, name };
     }
 
     const email = input.trim();
@@ -87,7 +92,7 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
 
     return {
         send: async (payload: SendPayload) => {
-            await provider.initialize?.();
+            await provider.initialize();
 
             const toList = toAddressList(payload.to);
             const [firstRecipient] = toList ?? [];
@@ -122,6 +127,9 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
                     reason = rawError.toString();
                 } else {
                     // object | symbol | function — stringify defensively
+                    // JSON.stringify returns undefined for symbol/function inputs (the lib
+                    // types say string), so the fallback is a real runtime branch.
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify can return undefined for symbol/function despite its string type
                     reason = JSON.stringify(rawError) ?? "send failed";
                 }
 
@@ -138,7 +146,7 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
     };
 };
 
-export const createMailer = (options: CirrusMailOptions): Mailer => {
+const createMailer = (options: CirrusMailOptions): Mailer => {
     if (!options.from) {
         throw new Error("@cirrus/mail: `from` is required");
     }
@@ -213,3 +221,5 @@ export const createMailer = (options: CirrusMailOptions): Mailer => {
 
     return { queue, send };
 };
+
+export default createMailer;
