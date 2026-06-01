@@ -1,7 +1,6 @@
 import type { ReactElement } from "react";
 
-/** Root class the batteries-included app sets so the styles below stay scoped. */
-export const DASHBOARD_ROOT_CLASS = "cirrus-dashboard-root";
+import { DASHBOARD_ROOT_CLASS } from "./theme-constants.js";
 
 /**
  * Scoped dashboard stylesheet. Every rule is prefixed with
@@ -239,6 +238,9 @@ const CSS = `
 }
 `;
 
+/** Hoisted so the `dangerouslySetInnerHTML` prop keeps a stable reference across renders. */
+const STYLE_HTML = { __html: CSS } as const;
+
 /**
  * Injects the scoped dashboard stylesheet. Rendered once by the batteries-
  * included {@link DashboardApp}; a stable `data-testid` makes it assertable and
@@ -247,5 +249,5 @@ const CSS = `
  */
 export function DashboardStyles(): ReactElement {
     // eslint-disable-next-line react/no-danger -- a static, in-package stylesheet string; no user input.
-    return <style data-testid="dash-styles" dangerouslySetInnerHTML={{ __html: CSS }} />;
+    return <style data-testid="dash-styles" dangerouslySetInnerHTML={STYLE_HTML} />;
 }

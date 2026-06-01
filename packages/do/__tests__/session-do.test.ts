@@ -43,6 +43,8 @@ const authHeaders = (extra: Record<string, string> = {}): Record<string, string>
 
 describe("sessionDO", () => {
     test("create persists a record and returns it", async () => {
+        expect.assertions(3);
+
         const state = createFakeStorage();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
@@ -64,6 +66,8 @@ describe("sessionDO", () => {
     });
 
     test("get returns the persisted record, 404s for missing tokens", async () => {
+        expect.assertions(2);
+
         const state = createFakeStorage();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
@@ -88,6 +92,8 @@ describe("sessionDO", () => {
     });
 
     test("get expires sessions lazily", async () => {
+        expect.assertions(2);
+
         const state = createFakeStorage();
 
         // Inject an already-expired record so the lazy-expire branch runs.
@@ -102,6 +108,8 @@ describe("sessionDO", () => {
     });
 
     test("revoke deletes the record idempotently", async () => {
+        expect.assertions(2);
+
         const state = createFakeStorage();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
@@ -135,6 +143,8 @@ describe("sessionDO", () => {
     });
 
     test("rejects malformed create bodies", async () => {
+        expect.assertions(2);
+
         const state = createFakeStorage();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
@@ -161,6 +171,8 @@ describe("sessionDO", () => {
     });
 
     test("rejects requests missing the shared secret", async () => {
+        expect.assertions(1);
+
         const state = createFakeStorage();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
@@ -177,6 +189,8 @@ describe("sessionDO", () => {
     });
 
     test("falls back to the default TTL when none is supplied", async () => {
+        expect.assertions(1);
+
         const state = createFakeStorage();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);

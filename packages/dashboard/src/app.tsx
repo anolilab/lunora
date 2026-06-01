@@ -5,7 +5,8 @@ import { type ReactElement, useEffect, useMemo, useState } from "react";
 import { ConnectionBadge } from "./connection-badge.js";
 import { Dashboard, type DashboardProps } from "./dashboard.js";
 import { ErrorBoundary } from "./error-boundary.js";
-import { DASHBOARD_ROOT_CLASS, DashboardStyles } from "./theme.js";
+import { DashboardStyles } from "./theme.js";
+import { DASHBOARD_ROOT_CLASS } from "./theme-constants.js";
 import { loadToken, saveToken } from "./token-storage.js";
 
 export interface DashboardAppProps {

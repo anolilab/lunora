@@ -20,12 +20,14 @@ const TABLES = [{ name: "organizations", rowCount: 2 }];
 const PAGE = { columns: ["_id", "name"], rows: [{ _id: "o1", name: "Acme" }], total: 2 };
 
 const introspector = (): GlobalIntrospector => ({
-    listTables: vi.fn(async () => TABLES),
-    readTablePage: vi.fn(async () => PAGE),
+    listTables: vi.fn<GlobalIntrospector["listTables"]>(async () => TABLES),
+    readTablePage: vi.fn<GlobalIntrospector["readTablePage"]>(async () => PAGE),
 });
 
 describe("createWorker — global introspection endpoints", () => {
     test("tables rejects without a valid admin bearer (403)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: introspector(), shardDO: noopNamespace });
 
         const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/global/tables", { method: "GET" }), {}, fakeCtx);
@@ -34,6 +36,8 @@ describe("createWorker — global introspection endpoints", () => {
     });
 
     test("tables reports GLOBALS_NOT_CONFIGURED when no introspector is bound (400)", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
@@ -47,6 +51,8 @@ describe("createWorker — global introspection endpoints", () => {
     });
 
     test("tables returns the introspector's table list", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: introspector(), shardDO: noopNamespace });
 
         const response = await worker.fetch(
@@ -60,6 +66,8 @@ describe("createWorker — global introspection endpoints", () => {
     });
 
     test("table forwards table / limit / offset and returns the page", async () => {
+        expect.assertions(3);
+
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: intro, shardDO: noopNamespace });
 
@@ -78,6 +86,8 @@ describe("createWorker — global introspection endpoints", () => {
     });
 
     test("table rejects a missing `table` param (400)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: introspector(), shardDO: noopNamespace });
 
         const response = await worker.fetch(

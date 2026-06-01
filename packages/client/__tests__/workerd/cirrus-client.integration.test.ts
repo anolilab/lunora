@@ -127,6 +127,8 @@ const waitFor = async (predicate: () => boolean | Promise<boolean>, { timeoutMs 
 
 describe("cirrusClient (workerd integration)", () => {
     test("query round-trips through /_cirrus/rpc", async () => {
+        expect.hasAssertions();
+
         await runInDurableObject(rootStub(), async (instance) => {
             instance.rpcResult = { id: "u-1", name: "alice" };
         });
@@ -147,6 +149,8 @@ describe("cirrusClient (workerd integration)", () => {
     });
 
     test("mutation captures x-d1-bookmark and replays it on the next query", async () => {
+        expect.assertions(3);
+
         // Replace `fetch` with a wrapper that watches outbound headers — we
         // can't read CirrusClient's internal bookmark store directly.
         const requestHeaders: Headers[] = [];
@@ -193,6 +197,8 @@ describe("cirrusClient (workerd integration)", () => {
     });
 
     test("subscribe receives a broadcast delta over a real WebSocket", async () => {
+        expect.assertions(1);
+
         const client = makeClient();
         const received: unknown[] = [];
 

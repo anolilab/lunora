@@ -1,6 +1,8 @@
 import { type ReactElement, useState } from "react";
 
 export interface ConfirmButtonProps {
+    /** Label for the initial trigger (e.g. `Delete`). */
+    readonly children: string;
     /** Label for the confirm step; defaults to `Confirm`. */
     readonly confirmLabel?: string;
     /** Disable the trigger (e.g. while a write is in flight). */
@@ -9,8 +11,6 @@ export interface ConfirmButtonProps {
     readonly onConfirm: () => void;
     /** `data-testid` for the initial trigger; the confirm/cancel steps derive `${testId}-confirm` / `${testId}-cancel`. */
     readonly testId: string;
-    /** Label for the initial trigger (e.g. `Delete`). */
-    readonly children: string;
 }
 
 /**

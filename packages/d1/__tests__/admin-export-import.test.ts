@@ -56,141 +56,159 @@ const mergedSchema: SchemaLike = {
 let harness: ReturnType<typeof createD1Exec>;
 let writer: DatabaseWriterLike;
 
-beforeEach(() => {
-    harness = createD1Exec();
-    harness.ddl(
-        `CREATE TABLE "settings" (
+describe("d1 admin export/import globals", () => {
+    beforeEach(() => {
+        harness = createD1Exec();
+        harness.ddl(
+            `CREATE TABLE "settings" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
             "name" TEXT,
             "value" TEXT
         )`,
-    );
+        );
 
-    writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
-});
-
-afterEach(() => {
-    harness.close();
-});
-
-describe("selectGlobalTables", () => {
-    test("returns only `.global()` tables", () => {
-        expect(selectGlobalTables(mergedSchema)).toEqual(["settings"]);
+        writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
     });
 
-    test("respects an allowlist (still only globals)", () => {
-        expect(selectGlobalTables(mergedSchema, ["settings", "local"])).toEqual(["settings"]);
+    afterEach(() => {
+        harness.close();
     });
-});
 
-describe("exportGlobalRows", () => {
-    test("yields every row of each global table", async () => {
-        await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
-        await writer.insert("settings", { _id: "s2", name: "lang", value: "en" }, { allowExplicitId: true });
+    describe("selectGlobalTables", () => {
+        test("returns only `.global()` tables", () => {
+            expect.assertions(1);
 
-        const rows: unknown[] = [];
-
-        for await (const row of exportGlobalRows(harness.exec, schema, {})) {
-            rows.push(row);
-        }
-
-        expect(rows).toHaveLength(2);
-        expect(rows[0]).toMatchObject({ table: "settings" });
-    });
-});
-
-describe("importGlobalRows", () => {
-    test("inserts a batch and returns per-table counts", async () => {
-        const result = await importGlobalRows(writer, schema, {
-            rows: [
-                { doc: { _id: "s1", name: "theme", value: "dark" }, table: "settings" },
-                { doc: { _id: "s2", name: "lang", value: "en" }, table: "settings" },
-            ],
+            expect(selectGlobalTables(mergedSchema)).toEqual(["settings"]);
         });
 
-        expect(result.inserted).toEqual({ settings: 2 });
-        expect(result.errors).toEqual([]);
-        expect(result.conflicts).toBe(0);
+        test("respects an allowlist (still only globals)", () => {
+            expect.assertions(1);
+
+            expect(selectGlobalTables(mergedSchema, ["settings", "local"])).toEqual(["settings"]);
+        });
     });
 
-    test("skips non-global tables silently (someone else's responsibility)", async () => {
-        const result = await importGlobalRows(writer, mergedSchema, {
-            rows: [
-                { doc: { _id: "l1", value: "x" }, table: "local" },
-                { doc: { _id: "s1", name: "theme", value: "dark" }, table: "settings" },
-            ],
+    describe("exportGlobalRows", () => {
+        test("yields every row of each global table", async () => {
+            expect.assertions(2);
+
+            await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
+            await writer.insert("settings", { _id: "s2", name: "lang", value: "en" }, { allowExplicitId: true });
+
+            const rows: unknown[] = [];
+
+            for await (const row of exportGlobalRows(harness.exec, schema, {})) {
+                rows.push(row);
+            }
+
+            expect(rows).toHaveLength(2);
+            expect(rows[0]).toMatchObject({ table: "settings" });
+        });
+    });
+
+    describe("importGlobalRows", () => {
+        test("inserts a batch and returns per-table counts", async () => {
+            expect.assertions(3);
+
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: "s1", name: "theme", value: "dark" }, table: "settings" },
+                    { doc: { _id: "s2", name: "lang", value: "en" }, table: "settings" },
+                ],
+            });
+
+            expect(result.inserted).toEqual({ settings: 2 });
+            expect(result.errors).toEqual([]);
+            expect(result.conflicts).toBe(0);
         });
 
-        expect(result.inserted).toEqual({ settings: 1 });
-    });
+        test("skips non-global tables silently (someone else's responsibility)", async () => {
+            expect.assertions(1);
 
-    test("reports schema-failed rows in `errors` and continues", async () => {
-        const result = await importGlobalRows(writer, schema, {
-            rows: [
-                { doc: { _id: "s1", name: "ok", value: "x" }, table: "settings" },
-                { doc: { _id: "s2", name: 42 as unknown as string, value: "x" }, table: "settings" },
-                { doc: { _id: "s3", name: "ok2", value: "y" }, table: "settings" },
-            ],
+            const result = await importGlobalRows(writer, mergedSchema, {
+                rows: [
+                    { doc: { _id: "l1", value: "x" }, table: "local" },
+                    { doc: { _id: "s1", name: "theme", value: "dark" }, table: "settings" },
+                ],
+            });
+
+            expect(result.inserted).toEqual({ settings: 1 });
         });
 
-        expect(result.inserted).toEqual({ settings: 2 });
-        expect(result.errors).toHaveLength(1);
-        expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", table: "settings" });
-    });
+        test("reports schema-failed rows in `errors` and continues", async () => {
+            expect.assertions(3);
 
-    test("counts _id collisions as conflicts and skips them", async () => {
-        await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: "s1", name: "ok", value: "x" }, table: "settings" },
+                    { doc: { _id: "s2", name: 42 as unknown as string, value: "x" }, table: "settings" },
+                    { doc: { _id: "s3", name: "ok2", value: "y" }, table: "settings" },
+                ],
+            });
 
-        const result = await importGlobalRows(writer, schema, {
-            rows: [
-                { doc: { _id: "s1", name: "theme", value: "OVERWRITE" }, table: "settings" },
-                { doc: { _id: "s2", name: "lang", value: "en" }, table: "settings" },
-            ],
+            expect(result.inserted).toEqual({ settings: 2 });
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", table: "settings" });
         });
 
-        expect(result.conflicts).toBe(1);
-        expect(result.inserted).toEqual({ settings: 1 });
+        test("counts _id collisions as conflicts and skips them", async () => {
+            expect.assertions(3);
 
-        const reloaded = await writer.get("s1");
+            await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
 
-        expect(reloaded).toMatchObject({ value: "dark" });
-    });
+            const result = await importGlobalRows(writer, schema, {
+                rows: [
+                    { doc: { _id: "s1", name: "theme", value: "OVERWRITE" }, table: "settings" },
+                    { doc: { _id: "s2", name: "lang", value: "en" }, table: "settings" },
+                ],
+            });
 
-    test("roundtrip: export then re-import into a fresh D1 produces identical rows", async () => {
-        await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
-        await writer.insert("settings", { _id: "s2", name: "lang", value: "en" }, { allowExplicitId: true });
+            expect(result.conflicts).toBe(1);
+            expect(result.inserted).toEqual({ settings: 1 });
 
-        const exported: unknown[] = [];
+            const reloaded = await writer.get("s1");
 
-        for await (const row of exportGlobalRows(harness.exec, schema, {})) {
-            exported.push(row);
-        }
+            expect(reloaded).toMatchObject({ value: "dark" });
+        });
 
-        const fresh = createD1Exec();
+        test("roundtrip: export then re-import into a fresh D1 produces identical rows", async () => {
+            expect.assertions(3);
 
-        fresh.ddl(
-            `CREATE TABLE "settings" (
+            await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
+            await writer.insert("settings", { _id: "s2", name: "lang", value: "en" }, { allowExplicitId: true });
+
+            const exported: unknown[] = [];
+
+            for await (const row of exportGlobalRows(harness.exec, schema, {})) {
+                exported.push(row);
+            }
+
+            const fresh = createD1Exec();
+
+            fresh.ddl(
+                `CREATE TABLE "settings" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
                 "name" TEXT,
                 "value" TEXT
             )`,
-        );
+            );
 
-        const freshWriter = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema });
+            const freshWriter = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: fresh.exec, schema });
 
-        const result = await importGlobalRows(freshWriter, schema, {
-            rows: exported as { doc: Record<string, unknown>; table: string }[],
+            const result = await importGlobalRows(freshWriter, schema, {
+                rows: exported as { doc: Record<string, unknown>; table: string }[],
+            });
+
+            expect(result.inserted).toEqual({ settings: 2 });
+            expect(result.errors).toEqual([]);
+
+            const reload = (await freshWriter.get("s1")) as Record<string, unknown> | null;
+
+            expect(reload).toMatchObject({ name: "theme", value: "dark" });
+
+            fresh.close();
         });
-
-        expect(result.inserted).toEqual({ settings: 2 });
-        expect(result.errors).toEqual([]);
-
-        const reload = (await freshWriter.get("s1")) as Record<string, unknown> | null;
-
-        expect(reload).toMatchObject({ name: "theme", value: "dark" });
-
-        fresh.close();
     });
 });

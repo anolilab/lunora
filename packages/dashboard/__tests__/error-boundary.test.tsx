@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { type ReactElement } from "react";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ErrorBoundary } from "../src/error-boundary.js";
@@ -10,7 +10,7 @@ const Boom = (): ReactElement => {
 
 // A child whose throwing is controlled by a module-level flag, so a retry can
 // be made to succeed by flipping the flag before re-render.
-let shouldThrow = true;
+let shouldThrow: boolean;
 
 function Toggle(): ReactElement {
     if (shouldThrow) {
@@ -56,7 +56,7 @@ describe("errorBoundary", () => {
         expect(screen.getByTestId("dash-error-message").textContent).toContain("kaboom");
     });
 
-    test("Try again clears the boundary and re-renders recovered children", () => {
+    test("try again clears the boundary and re-renders recovered children", () => {
         expect.assertions(2);
 
         render(

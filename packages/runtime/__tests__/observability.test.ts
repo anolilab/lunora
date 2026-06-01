@@ -56,18 +56,24 @@ const collectEvents = (): { events: ObservabilityEvent[]; sink: ObservabilitySin
 describe("observabilitySink", () => {
     describe("emitRpcEvent", () => {
         test("no-ops when sink is undefined", () => {
+            expect.assertions(1);
+
             expect(() => {
                 emitRpcEvent(undefined, { durationMs: 1, functionPath: "x:y", ok: true });
             }).not.toThrow();
         });
 
         test("no-ops when onRpc is unset", () => {
+            expect.assertions(1);
+
             expect(() => {
                 emitRpcEvent({}, { durationMs: 1, functionPath: "x:y", ok: true });
             }).not.toThrow();
         });
 
         test("swallows sink callback errors", () => {
+            expect.assertions(1);
+
             const sink: ObservabilitySink = {
                 onRpc: () => {
                     throw new Error("sink exploded");
@@ -80,6 +86,8 @@ describe("observabilitySink", () => {
         });
 
         test("forwards the event when onRpc is set", () => {
+            expect.assertions(1);
+
             const { events, sink } = collectEvents();
 
             emitRpcEvent(sink, { durationMs: 42, functionPath: "messages:list", ok: true, shardKey: "channel-1" });
@@ -96,6 +104,8 @@ describe("observabilitySink", () => {
         });
 
         test("emits one onRpc event per single-shard dispatch", async () => {
+            expect.assertions(8);
+
             const { events, sink } = collectEvents();
             const worker = createWorker({ observability: sink, shardDO: shard.namespace });
 
@@ -119,6 +129,8 @@ describe("observabilitySink", () => {
         });
 
         test("includes envelope shardKey in event", async () => {
+            expect.assertions(1);
+
             const { events, sink } = collectEvents();
             const worker = createWorker({ observability: sink, shardDO: shard.namespace });
 
@@ -135,6 +147,8 @@ describe("observabilitySink", () => {
         });
 
         test("reports ok=false when the shard returns a non-2xx", async () => {
+            expect.assertions(3);
+
             const { events, sink } = collectEvents();
 
             shard.response = new Response("nope", { status: 500 });
@@ -155,6 +169,8 @@ describe("observabilitySink", () => {
         });
 
         test("reports ok=false with the thrown error when the fetch throws", async () => {
+            expect.assertions(6);
+
             const { events, sink } = collectEvents();
 
             shard.throwOnFetch = new Error("connection refused");
@@ -181,6 +197,8 @@ describe("observabilitySink", () => {
         });
 
         test("emits a fanOut event for cross-shard dispatch", async () => {
+            expect.assertions(5);
+
             const { events, sink } = collectEvents();
             // Use a permissive cast — observability events read only
             // `result.ok` and `result.failed`, so a partial stub is fine.
@@ -210,6 +228,8 @@ describe("observabilitySink", () => {
         });
 
         test("does not fail user dispatch when the sink throws", async () => {
+            expect.assertions(1);
+
             const sink: ObservabilitySink = {
                 onRpc: () => {
                     throw new Error("sink down");

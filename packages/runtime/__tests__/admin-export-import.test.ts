@@ -18,12 +18,14 @@ const ADMIN_TOKEN = "admin-bear";
 
 describe("createWorker — admin export endpoint", () => {
     test("rejects without a configured admin token (403)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
-                orchestrateMigration: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -43,13 +45,15 @@ describe("createWorker — admin export endpoint", () => {
     });
 
     test("rejects without an authorization header (403)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
-                orchestrateMigration: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -61,13 +65,15 @@ describe("createWorker — admin export endpoint", () => {
     });
 
     test("rejects non-POST (405)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
-                orchestrateMigration: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -79,7 +85,9 @@ describe("createWorker — admin export endpoint", () => {
     });
 
     test("streams NDJSON from orchestrateExport", async () => {
-        const orchestrateExport = vi.fn(async (_namespace: unknown, _request: { tables: ReadonlyArray<string> }) => ({
+        expect.assertions(4);
+
+        const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => ({
             failed: 0,
             ok: 1,
             shards: [
@@ -96,10 +104,10 @@ describe("createWorker — admin export endpoint", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
                 orchestrateExport: orchestrateExport as never,
-                orchestrateImport: vi.fn() as never,
-                orchestrateMigration: vi.fn() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -126,13 +134,15 @@ describe("createWorker — admin export endpoint", () => {
     });
 
     test("streams D1 globals when exportGlobals is configured", async () => {
-        const orchestrateExport = vi.fn(async (_namespace: unknown, _request: { tables: ReadonlyArray<string> }) => ({
+        expect.assertions(2);
+
+        const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => ({
             failed: 0,
             ok: 0,
             shards: [],
         }));
 
-        const exportGlobals = vi.fn(async function* globalsIter() {
+        const exportGlobals = vi.fn<() => AsyncGenerator<{ doc: Record<string, unknown>; table: string }>>(async function* globalsIter() {
             yield { doc: { _id: "g1" }, table: "settings" };
             yield { doc: { _id: "g2" }, table: "settings" };
         });
@@ -141,10 +151,10 @@ describe("createWorker — admin export endpoint", () => {
             adminToken: ADMIN_TOKEN,
             exportGlobals: exportGlobals as never,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
                 orchestrateExport: orchestrateExport as never,
-                orchestrateImport: vi.fn() as never,
-                orchestrateMigration: vi.fn() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
@@ -176,7 +186,7 @@ describe("createWorker — admin import endpoint", () => {
 
     beforeEach(() => {
         captured = null;
-        orchestrateImport = vi.fn(
+        orchestrateImport = vi.fn<(namespace: unknown, request: { batches: Exclude<typeof captured, null>["batches"] }) => Promise<unknown>>(
             async (_namespace: unknown, request: { batches: typeof captured extends null ? never : Exclude<typeof captured, null>["batches"] }) => {
                 captured = { batches: request.batches as Exclude<typeof captured, null>["batches"] };
 
@@ -201,13 +211,15 @@ describe("createWorker — admin import endpoint", () => {
     });
 
     test("rejects without an admin bearer (403)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -219,13 +231,15 @@ describe("createWorker — admin import endpoint", () => {
     });
 
     test("buckets rows by shard and forwards via orchestrateImport", async () => {
+        expect.assertions(5);
+
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
@@ -266,13 +280,15 @@ describe("createWorker — admin import endpoint", () => {
     });
 
     test("reports malformed JSON rows in `errors` but continues", async () => {
+        expect.assertions(3);
+
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -302,7 +318,9 @@ describe("createWorker — admin import endpoint", () => {
     });
 
     test("routes global-table rows through importGlobals", async () => {
-        const importGlobals = vi.fn(async (request: { rows: { doc: Record<string, unknown>; table: string }[] }) => ({
+        expect.assertions(3);
+
+        const importGlobals = vi.fn<(request: { rows: { doc: Record<string, unknown>; table: string }[] }) => Promise<unknown>>(async (request) => ({
             conflicts: 0,
             errors: [],
             inserted: { settings: request.rows.length },
@@ -312,10 +330,10 @@ describe("createWorker — admin import endpoint", () => {
             adminToken: ADMIN_TOKEN,
             importGlobals: importGlobals as never,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
@@ -346,13 +364,15 @@ describe("createWorker — admin import endpoint", () => {
     });
 
     test("reports global rows as errors when importGlobals is not configured", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
@@ -381,32 +401,36 @@ describe("createWorker — admin import endpoint", () => {
 
 describe("import streaming — large body", () => {
     test("handles a 10k-row NDJSON body without crashing", async () => {
-        const orchestrateImport = vi.fn(async (_namespace: unknown, request: { batches: { rows: { table: string }[]; shardKey: string }[] }) => {
-            const inserted: Record<string, number> = {};
+        expect.hasAssertions();
 
-            for (const batch of request.batches) {
-                for (const row of batch.rows) {
-                    inserted[row.table] = (inserted[row.table] ?? 0) + 1;
+        const orchestrateImport = vi.fn<(namespace: unknown, request: { batches: { rows: { table: string }[]; shardKey: string }[] }) => Promise<unknown>>(
+            async (_namespace, request) => {
+                const inserted: Record<string, number> = {};
+
+                for (const batch of request.batches) {
+                    for (const row of batch.rows) {
+                        inserted[row.table] = (inserted[row.table] ?? 0) + 1;
+                    }
                 }
-            }
 
-            return {
-                conflicts: 0,
-                errors: [],
-                failed: 0,
-                inserted,
-                ok: request.batches.length,
-                shards: [],
-            };
-        });
+                return {
+                    conflicts: 0,
+                    errors: [],
+                    failed: 0,
+                    inserted,
+                    ok: request.batches.length,
+                    shards: [],
+                };
+            },
+        );
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
                 orchestrateImport: orchestrateImport as never,
-                orchestrateMigration: vi.fn() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: noopNamespace,
@@ -434,13 +458,15 @@ describe("import streaming — large body", () => {
     });
 
     test("export response body is consumable as a stream", async () => {
+        expect.hasAssertions();
+
         const rows: { doc: Record<string, unknown>; table: string }[] = [];
 
         for (let index = 0; index < 10_000; index += 1) {
             rows.push({ doc: { _id: `u${index}`, email: `u${index}@x.io` }, table: "users" });
         }
 
-        const orchestrateExport = vi.fn(async () => ({
+        const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => ({
             failed: 0,
             ok: 1,
             shards: [{ rows, shardKey: "__root__" }],
@@ -449,10 +475,10 @@ describe("import streaming — large body", () => {
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
-                fanOut: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
                 orchestrateExport: orchestrateExport as never,
-                orchestrateImport: vi.fn() as never,
-                orchestrateMigration: vi.fn() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: noopNamespace,

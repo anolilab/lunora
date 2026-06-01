@@ -64,138 +64,163 @@ const writeSchema = (source: string): void => {
     writeFileSync(join(workdir, "cirrus", "schema.ts"), source, "utf8");
 };
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-config-wrangler-"));
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
-describe("validateWranglerConfig (pure)", () => {
-    test("returns valid:true when all required bindings/flags are present", () => {
-        const wrangler: WranglerConfig = {
-            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
-            compatibility_flags: [REQUIRED_FLAG],
-            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-        };
-
-        const report = validateWranglerConfig(wrangler);
-
-        expect(report.valid).toBe(true);
-        expect(report.errors).toEqual([]);
+describe("wrangler-validator", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-config-wrangler-"));
     });
 
-    test("reports the SHARD binding when missing", () => {
-        const report = validateWranglerConfig({
-            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
-            compatibility_flags: [REQUIRED_FLAG],
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    describe("validateWranglerConfig (pure)", () => {
+        test("returns valid:true when all required bindings/flags are present", () => {
+            expect.assertions(2);
+
+            const wrangler: WranglerConfig = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            };
+
+            const report = validateWranglerConfig(wrangler);
+
+            expect(report.valid).toBe(true);
+            expect(report.errors).toEqual([]);
         });
 
-        expect(report.valid).toBe(false);
-        expect(report.errors.some((line) => /SHARD.+ShardDO/u.test(line))).toBe(true);
-    });
+        test("reports the SHARD binding when missing", () => {
+            expect.assertions(2);
 
-    test("does not require the compatibility flag when compatibility_date is recent enough", () => {
-        // web_socket_auto_reply_to_close became the default on REQUIRED_COMPATIBILITY_DATE,
-        // so it should not be required (and workerd warns when it's set redundantly).
-        const report = validateWranglerConfig({
-            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
-            compatibility_flags: ["nodejs_compat"],
-            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+            });
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => /SHARD.+ShardDO/u.test(line))).toBe(true);
         });
 
-        expect(report.valid).toBe(true);
-        expect(report.errors.some((line) => line.includes(REQUIRED_FLAG))).toBe(false);
-    });
+        test("does not require the compatibility flag when compatibility_date is recent enough", () => {
+            expect.assertions(2);
 
-    test("reports an outdated compatibility_date", () => {
-        const report = validateWranglerConfig({
-            compatibility_date: "2024-01-01",
-            compatibility_flags: [REQUIRED_FLAG],
-            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            // web_socket_auto_reply_to_close became the default on REQUIRED_COMPATIBILITY_DATE,
+            // so it should not be required (and workerd warns when it's set redundantly).
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: ["nodejs_compat"],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            });
+
+            expect(report.valid).toBe(true);
+            expect(report.errors.some((line) => line.includes(REQUIRED_FLAG))).toBe(false);
         });
 
-        expect(report.errors.some((line) => line.includes("compatibility_date"))).toBe(true);
+        test("reports an outdated compatibility_date", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig({
+                compatibility_date: "2024-01-01",
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            });
+
+            expect(report.errors.some((line) => line.includes("compatibility_date"))).toBe(true);
+        });
+
+        test("requires a DB binding when the schema has any .global() table", () => {
+            expect.assertions(1);
+
+            const wrangler: WranglerConfig = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            };
+
+            const report = validateWranglerConfig(wrangler, { hasGlobalTable: true });
+
+            expect(report.errors.some((line) => line.includes("d1_databases"))).toBe(true);
+        });
+
+        test("requires a matching vectorize binding for each declared vector index", () => {
+            expect.assertions(2);
+
+            const wrangler: WranglerConfig = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            };
+
+            const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("docs-body"))).toBe(true);
+        });
+
+        test("passes when a vectorize binding declares the index_name", () => {
+            expect.assertions(2);
+
+            const wrangler: WranglerConfig = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                vectorize: [{ binding: "DOCS_BODY", index_name: "docs-body" }],
+            };
+
+            const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+
+            expect(report.valid).toBe(true);
+            expect(report.errors).toEqual([]);
+        });
+
+        test("validateWrangler is an alias for validateWranglerConfig", () => {
+            expect.assertions(1);
+
+            expect(validateWrangler).toBe(validateWranglerConfig);
+        });
+
+        test("treats a non-object wrangler as invalid", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(undefined);
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.length).toBeGreaterThan(0);
+        });
     });
 
-    test("requires a DB binding when the schema has any .global() table", () => {
-        const wrangler: WranglerConfig = {
-            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
-            compatibility_flags: [REQUIRED_FLAG],
-            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-        };
+    describe("validateWranglerProject (file-system aware)", () => {
+        test("passes when wrangler.jsonc declares everything the schema implies", () => {
+            expect.assertions(3);
 
-        const report = validateWranglerConfig(wrangler, { hasGlobalTable: true });
+            writeSchema(SCHEMA_WITH_GLOBAL);
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
-        expect(report.errors.some((line) => line.includes("d1_databases"))).toBe(true);
-    });
+            const result = validateWranglerProject({ projectRoot: workdir });
 
-    test("requires a matching vectorize binding for each declared vector index", () => {
-        const wrangler: WranglerConfig = {
-            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
-            compatibility_flags: [REQUIRED_FLAG],
-            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-        };
+            expect(result.problems).toEqual([]);
+            expect(result.report.valid).toBe(true);
+            expect(result.wranglerPath).toBe(join(workdir, "wrangler.jsonc"));
+        });
 
-        const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+        test("returns a problem when wrangler.jsonc is missing entirely", () => {
+            expect.assertions(2);
 
-        expect(report.valid).toBe(false);
-        expect(report.errors.some((line) => line.includes("docs-body"))).toBe(true);
-    });
+            writeSchema(SCHEMA_NO_GLOBAL);
 
-    test("passes when a vectorize binding declares the index_name", () => {
-        const wrangler: WranglerConfig = {
-            compatibility_date: REQUIRED_COMPATIBILITY_DATE,
-            compatibility_flags: [REQUIRED_FLAG],
-            durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-            vectorize: [{ binding: "DOCS_BODY", index_name: "docs-body" }],
-        };
+            const result = validateWranglerProject({ projectRoot: workdir });
 
-        const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+            expect(result.problems.join("\n")).toMatch(/wrangler\.jsonc not found/u);
+            expect(result.wranglerPath).toBeUndefined();
+        });
 
-        expect(report.valid).toBe(true);
-        expect(report.errors).toEqual([]);
-    });
+        test("does not require D1 when no table is global", () => {
+            expect.assertions(1);
 
-    test("validateWrangler is an alias for validateWranglerConfig", () => {
-        expect(validateWrangler).toBe(validateWranglerConfig);
-    });
-
-    test("treats a non-object wrangler as invalid", () => {
-        const report = validateWranglerConfig(undefined);
-
-        expect(report.valid).toBe(false);
-        expect(report.errors.length).toBeGreaterThan(0);
-    });
-});
-
-describe("validateWranglerProject (file-system aware)", () => {
-    test("passes when wrangler.jsonc declares everything the schema implies", () => {
-        writeSchema(SCHEMA_WITH_GLOBAL);
-        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-
-        const result = validateWranglerProject({ projectRoot: workdir });
-
-        expect(result.problems).toEqual([]);
-        expect(result.report.valid).toBe(true);
-        expect(result.wranglerPath).toBe(join(workdir, "wrangler.jsonc"));
-    });
-
-    test("returns a problem when wrangler.jsonc is missing entirely", () => {
-        writeSchema(SCHEMA_NO_GLOBAL);
-
-        const result = validateWranglerProject({ projectRoot: workdir });
-
-        expect(result.problems.join("\n")).toMatch(/wrangler\.jsonc not found/u);
-        expect(result.wranglerPath).toBeUndefined();
-    });
-
-    test("does not require D1 when no table is global", () => {
-        writeSchema(SCHEMA_NO_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
     "compatibility_flags": ["${REQUIRED_FLAG}"],
@@ -204,19 +229,21 @@ describe("validateWranglerProject (file-system aware)", () => {
     }
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const result = validateWranglerProject({ projectRoot: workdir });
+            const result = validateWranglerProject({ projectRoot: workdir });
 
-        expect(result.problems).toEqual([]);
-    });
+            expect(result.problems).toEqual([]);
+        });
 
-    test("supports jsonc comments and trailing commas", () => {
-        writeSchema(SCHEMA_NO_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `// my wrangler config
+        test("supports jsonc comments and trailing commas", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `// my wrangler config
 {
     "name": "x",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
@@ -226,37 +253,41 @@ describe("validateWranglerProject (file-system aware)", () => {
     },
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const result = validateWranglerProject({ projectRoot: workdir });
+            const result = validateWranglerProject({ projectRoot: workdir });
 
-        expect(result.problems).toEqual([]);
-    });
+            expect(result.problems).toEqual([]);
+        });
 
-    test("returns a problem when SHARD durable-object binding is missing", () => {
-        writeSchema(SCHEMA_NO_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("returns a problem when SHARD durable-object binding is missing", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
     "compatibility_flags": ["${REQUIRED_FLAG}"]
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const result = validateWranglerProject({ projectRoot: workdir });
+            const result = validateWranglerProject({ projectRoot: workdir });
 
-        expect(result.problems.some((line) => /SHARD.+ShardDO/u.test(line))).toBe(true);
-    });
+            expect(result.problems.some((line) => /SHARD.+ShardDO/u.test(line))).toBe(true);
+        });
 
-    test("flags a declared .vectorize() index with no matching vectorize binding", () => {
-        writeSchema(SCHEMA_WITH_VECTOR);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("flags a declared .vectorize() index with no matching vectorize binding", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_WITH_VECTOR);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
     "compatibility_flags": ["${REQUIRED_FLAG}"],
@@ -265,19 +296,21 @@ describe("validateWranglerProject (file-system aware)", () => {
     }
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const result = validateWranglerProject({ projectRoot: workdir });
+            const result = validateWranglerProject({ projectRoot: workdir });
 
-        expect(result.problems.some((line) => line.includes("docs-body"))).toBe(true);
-    });
+            expect(result.problems.some((line) => line.includes("docs-body"))).toBe(true);
+        });
 
-    test("passes when wrangler declares the vectorize binding for the schema's index", () => {
-        writeSchema(SCHEMA_WITH_VECTOR);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("passes when wrangler declares the vectorize binding for the schema's index", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_WITH_VECTOR);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
     "compatibility_flags": ["${REQUIRED_FLAG}"],
@@ -287,19 +320,21 @@ describe("validateWranglerProject (file-system aware)", () => {
     "vectorize": [{ "binding": "DOCS_BODY", "index_name": "docs-body" }]
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const result = validateWranglerProject({ projectRoot: workdir });
+            const result = validateWranglerProject({ projectRoot: workdir });
 
-        expect(result.problems).toEqual([]);
-    });
+            expect(result.problems).toEqual([]);
+        });
 
-    test("returns a problem when schema has .global() tables but D1 binding is missing", () => {
-        writeSchema(SCHEMA_WITH_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("returns a problem when schema has .global() tables but D1 binding is missing", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_WITH_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
     "compatibility_flags": ["${REQUIRED_FLAG}"],
@@ -308,11 +343,12 @@ describe("validateWranglerProject (file-system aware)", () => {
     }
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const result = validateWranglerProject({ projectRoot: workdir });
+            const result = validateWranglerProject({ projectRoot: workdir });
 
-        expect(result.problems.some((line) => line.includes("d1_databases"))).toBe(true);
+            expect(result.problems.some((line) => line.includes("d1_databases"))).toBe(true);
+        });
     });
 });

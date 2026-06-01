@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, test } from "vitest";
 
 import { codegenPlugin } from "../src/codegen-plugin.js";
 import type { ResolvedCirrusPluginOptions } from "../src/types.js";
@@ -61,76 +61,85 @@ const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => ({
     validateWrangler: false,
 });
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-codegen-"));
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
-describe("codegenPlugin", () => {
-    test("buildStart runs codegen and emits the three generated files", () => {
-        writeFixture(workdir);
-
-        const plugin = codegenPlugin(makeOptions(workdir));
-        const hook = plugin.buildStart;
-
-        expect(typeof hook).toBe("function");
-
-        // Vite's buildStart is invoked with a rollup-style context. We pass `undefined`
-        // because our implementation doesn't touch it.
-        (hook as (this: unknown) => void).call(undefined as unknown);
-
-        const generatedDirectory = join(workdir, "cirrus", "_generated");
-
-        expect(existsSync(join(generatedDirectory, "api.ts"))).toBe(true);
-        expect(existsSync(join(generatedDirectory, "server.ts"))).toBe(true);
-        expect(existsSync(join(generatedDirectory, "dataModel.ts"))).toBe(true);
-
-        const api = readFileSync(join(generatedDirectory, "api.ts"), "utf8");
-
-        expect(api).toContain("export interface ApiTypes");
-        expect(api).toContain("messages:");
-        expect(api).toContain('list: FunctionReference<"query"');
-        expect(api).toContain('send: FunctionReference<"mutation"');
-
-        const dataModel = readFileSync(join(generatedDirectory, "dataModel.ts"), "utf8");
-
-        expect(dataModel).toContain("export interface Doc_messages");
-        expect(dataModel).toContain("export interface Doc_users");
+describe("codegen-plugin", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-codegen-"));
     });
 
-    test("buildStart logs a warning when schema.ts is missing (does not crash)", () => {
-        const warnings: string[] = [];
-        const errors: string[] = [];
-        const originalWarn = console.warn;
-        const originalError = console.error;
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
 
-        // eslint-disable-next-line no-console
-        console.warn = (message: string) => warnings.push(message);
-        // eslint-disable-next-line no-console
-        console.error = (message: string) => errors.push(message);
+    describe("codegenPlugin", () => {
+        test("buildStart runs codegen and emits the three generated files", () => {
+            expect.assertions(10);
 
-        try {
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const hook = plugin.buildStart;
+
+            expectTypeOf(hook).toBeFunction();
+
+            // Vite's buildStart is invoked with a rollup-style context. We pass `undefined`
+            // because our implementation doesn't touch it.
+            (hook as (this: unknown) => void).call(undefined as unknown);
+
+            const generatedDirectory = join(workdir, "cirrus", "_generated");
+
+            expect(existsSync(join(generatedDirectory, "api.ts"))).toBe(true);
+            expect(existsSync(join(generatedDirectory, "server.ts"))).toBe(true);
+            expect(existsSync(join(generatedDirectory, "dataModel.ts"))).toBe(true);
+
+            const api = readFileSync(join(generatedDirectory, "api.ts"), "utf8");
+
+            expect(api).toContain("export interface ApiTypes");
+            expect(api).toContain("messages:");
+            expect(api).toContain('list: FunctionReference<"query"');
+            expect(api).toContain('send: FunctionReference<"mutation"');
+
+            const dataModel = readFileSync(join(generatedDirectory, "dataModel.ts"), "utf8");
+
+            expect(dataModel).toContain("export interface Doc_messages");
+            expect(dataModel).toContain("export interface Doc_users");
+        });
+
+        test("buildStart logs a warning when schema.ts is missing (does not crash)", () => {
+            expect.assertions(2);
+
+            const warnings: string[] = [];
+            const errors: string[] = [];
+            const originalWarn = console.warn;
+            const originalError = console.error;
+
+            // eslint-disable-next-line no-console
+            console.warn = (message: string) => warnings.push(message);
+            // eslint-disable-next-line no-console
+            console.error = (message: string) => errors.push(message);
+
+            try {
+                const plugin = codegenPlugin(makeOptions(workdir));
+
+                (plugin.buildStart as (this: unknown) => void).call(undefined as unknown);
+
+                expect(warnings.some((warning) => warning.includes("schema.ts not found"))).toBe(true);
+                expect(errors).toHaveLength(0);
+            } finally {
+                // eslint-disable-next-line no-console
+                console.warn = originalWarn;
+                // eslint-disable-next-line no-console
+                console.error = originalError;
+            }
+        });
+
+        test("plugin exposes the expected name and configureServer hook", () => {
+            expect.assertions(2);
+
             const plugin = codegenPlugin(makeOptions(workdir));
 
-            (plugin.buildStart as (this: unknown) => void).call(undefined as unknown);
+            expect(plugin.name).toBe("cirrus:codegen");
 
-            expect(warnings.some((warning) => warning.includes("schema.ts not found"))).toBe(true);
-            expect(errors).toHaveLength(0);
-        } finally {
-            // eslint-disable-next-line no-console
-            console.warn = originalWarn;
-            // eslint-disable-next-line no-console
-            console.error = originalError;
-        }
-    });
-
-    test("plugin exposes the expected name and configureServer hook", () => {
-        const plugin = codegenPlugin(makeOptions(workdir));
-
-        expect(plugin.name).toBe("cirrus:codegen");
-        expect(typeof plugin.configureServer).toBe("function");
+            expectTypeOf(plugin.configureServer).toBeFunction();
+        });
     });
 });

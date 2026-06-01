@@ -3,10 +3,10 @@ import { type ChangeEvent, type ReactElement, useId, useMemo } from "react";
 import { loadRecentShards } from "./shard-history.js";
 
 export interface ShardInputProps {
+    readonly onChange: (value: string) => void;
     /** `data-testid` for the input (panels keep their existing id, e.g. `mt-shard-input`). */
     readonly testId: string;
     readonly value: string;
-    readonly onChange: (value: string) => void;
 }
 
 /**
@@ -38,7 +38,7 @@ export function ShardInput({ onChange, testId, value }: ShardInputProps): ReactE
             {recents.length > 0 && (
                 <datalist data-testid={`${testId}-recents`} id={listId}>
                     {recents.map((shard) => (
-                        <option key={shard} value={shard} />
+                        <option key={shard} aria-label={shard} value={shard} />
                     ))}
                 </datalist>
             )}

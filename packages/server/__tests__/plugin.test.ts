@@ -8,6 +8,8 @@ import { defineSchema, defineTable } from "../src/schema.js";
 
 describe("defineSchemaExtension", () => {
     test("returns the key and tables", () => {
+        expect.assertions(2);
+
         const extension = defineSchemaExtension("ratelimit", {
             tables: {
                 ratelimit_buckets: defineTable({ count: v.number(), key: v.string() }),
@@ -19,12 +21,16 @@ describe("defineSchemaExtension", () => {
     });
 
     test("rejects empty keys", () => {
+        expect.assertions(1);
+
         expect(() => defineSchemaExtension("", { tables: {} })).toThrow(/`key` is required/);
     });
 });
 
 describe("definePlugin", () => {
     test("packages an extension and a middleware", () => {
+        expect.assertions(3);
+
         const extension = defineSchemaExtension("ratelimit", {
             tables: { ratelimit_buckets: defineTable({ count: v.number() }) },
         });
@@ -40,6 +46,8 @@ describe("definePlugin", () => {
     });
 
     test("can omit either extension or middleware", () => {
+        expect.assertions(2);
+
         const onlyExtension = definePlugin("a", {
             extension: defineSchemaExtension("a", { tables: { a_thing: defineTable({ x: v.string() }) } }),
         });
@@ -54,10 +62,14 @@ describe("definePlugin", () => {
     });
 
     test("rejects empty keys", () => {
+        expect.assertions(1);
+
         expect(() => definePlugin("", {})).toThrow(/`key` is required/);
     });
 
     test("rejects a key/extension-key mismatch", () => {
+        expect.assertions(1);
+
         const extension = defineSchemaExtension("foo", { tables: {} });
 
         expect(() => definePlugin("bar", { extension })).toThrow(/extension key "foo" does not match plugin key/);
@@ -66,6 +78,8 @@ describe("definePlugin", () => {
 
 describe("mergeSchemaExtension", () => {
     test("adds extension tables to the base schema", () => {
+        expect.assertions(2);
+
         const base = defineSchema({ todos: defineTable({ title: v.string() }) });
         const extension = defineSchemaExtension("auth", {
             tables: { auth_users: defineTable({ email: v.string() }) },
@@ -79,6 +93,8 @@ describe("mergeSchemaExtension", () => {
     });
 
     test("throws on name collision (no silent shadow)", () => {
+        expect.assertions(1);
+
         const base = defineSchema({ todos: defineTable({ title: v.string() }) });
         const colliding = defineSchemaExtension("rogue", {
             tables: { todos: defineTable({ x: v.string() }) },
@@ -88,6 +104,8 @@ describe("mergeSchemaExtension", () => {
     });
 
     test("preserves vectorIndexes from the base", () => {
+        expect.assertions(1);
+
         const base = defineSchema({ todos: defineTable({ title: v.string() }) });
         const extension = defineSchemaExtension("x", { tables: { x_thing: defineTable({ k: v.string() }) } });
 
@@ -99,6 +117,8 @@ describe("mergeSchemaExtension", () => {
 
 describe("defineSchema(...).extend(...)", () => {
     test("returns an extended schema with merged tables", () => {
+        expect.assertions(1);
+
         const ratelimit = definePlugin("ratelimit", {
             extension: defineSchemaExtension("ratelimit", {
                 tables: { ratelimit_buckets: defineTable({ count: v.number() }) },
@@ -111,6 +131,8 @@ describe("defineSchema(...).extend(...)", () => {
     });
 
     test("chains multiple extensions", () => {
+        expect.assertions(1);
+
         const a = defineSchemaExtension("a", { tables: { a_one: defineTable({ x: v.string() }) } });
         const b = defineSchemaExtension("b", { tables: { b_two: defineTable({ y: v.string() }) } });
 
@@ -122,6 +144,8 @@ describe("defineSchema(...).extend(...)", () => {
     });
 
     test("a chained call's collision is reported under the offending extension's key", () => {
+        expect.assertions(1);
+
         const conflicting = defineSchemaExtension("dupes", {
             tables: { same: defineTable({ x: v.string() }) },
         });
@@ -137,6 +161,8 @@ describe("defineSchema(...).extend(...)", () => {
 
 describe("defineComponent", () => {
     test("bundles extension, middleware, and functions", () => {
+        expect.assertions(5);
+
         const extension = defineSchemaExtension("ratelimit", {
             tables: { ratelimit_buckets: defineTable({ count: v.number(), key: v.string() }) },
         });
@@ -165,12 +191,16 @@ describe("defineComponent", () => {
     });
 
     test("returns an empty functions record when none supplied", () => {
+        expect.assertions(1);
+
         const component = defineComponent("empty", {});
 
         expect(component.functions).toEqual({});
     });
 
     test("supports re-export wiring — destructuring component.functions yields real registered functions", () => {
+        expect.assertions(1);
+
         const component = defineComponent("api", {
             functions: {
                 ping: query({
@@ -189,6 +219,8 @@ describe("defineComponent", () => {
     });
 
     test("rejects extension key mismatch (same rule as definePlugin)", () => {
+        expect.assertions(1);
+
         const extension = defineSchemaExtension("foo", { tables: {} });
 
         expect(() => defineComponent("bar", { extension })).toThrow(/extension key "foo" does not match plugin key/);
@@ -197,6 +229,8 @@ describe("defineComponent", () => {
 
 describe("plugin.middleware integration with the builder", () => {
     test("a plugin middleware composes with the builder chain", async () => {
+        expect.assertions(1);
+
         type RatelimitApi = { hit: (key: string) => boolean };
 
         const ratelimit = definePlugin<Record<string, never>, { hits: string[] }, { hits: string[]; ratelimit: RatelimitApi }>("ratelimit", {

@@ -9,98 +9,109 @@ import { discoverFunctions } from "../src/discover-functions.js";
 
 let workdir: string;
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-disco-"));
-});
+describe("discoverFunctions", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-disco-"));
+    });
 
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
 
-const writeFunction = (relative: string, source: string): void => {
-    const full = join(workdir, relative);
+    const writeFunction = (relative: string, source: string): void => {
+        const full = join(workdir, relative);
 
-    mkdirSync(full.slice(0, Math.max(0, full.lastIndexOf("/"))), { recursive: true });
-    writeFileSync(full, source);
-};
+        mkdirSync(full.slice(0, Math.max(0, full.lastIndexOf("/"))), { recursive: true });
+        writeFileSync(full, source);
+    };
 
-const tinyQuery = `
+    const tinyQuery = `
     import { query } from "@cirrus/server";
     export const list = query({ args: {}, handler: () => null });
 `;
 
-describe("discoverFunctions namespace collision", () => {
-    test("throws CirrusError when two distinct paths sanitize to the same namespace", () => {
-        // `foo/bar.ts` and `foo-bar.ts` both → `foo_bar`. Without the guard
-        // the generated ApiTypes would emit duplicate `foo_bar:` keys.
-        writeFunction("foo/bar.ts", tinyQuery);
-        writeFunction("foo-bar.ts", tinyQuery);
+    describe("discoverFunctions namespace collision", () => {
+        test("throws CirrusError when two distinct paths sanitize to the same namespace", () => {
+            expect.assertions(3);
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            // `foo/bar.ts` and `foo-bar.ts` both → `foo_bar`. Without the guard
+            // the generated ApiTypes would emit duplicate `foo_bar:` keys.
+            writeFunction("foo/bar.ts", tinyQuery);
+            writeFunction("foo-bar.ts", tinyQuery);
 
-        expect(() => discoverFunctions(project, workdir)).toThrow(/Namespace collision/u);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
-        try {
-            discoverFunctions(project, workdir);
-        } catch (error: unknown) {
-            expect(error).toMatchObject({ code: "NAMESPACE_COLLISION", name: "CirrusError", status: 500 });
-            expect((error as { paths: string[] }).paths).toEqual(expect.arrayContaining(["foo-bar", "foo/bar"]));
-        }
-    });
+            expect(() => discoverFunctions(project, workdir)).toThrow(/Namespace collision/u);
 
-    test("distinct sanitized namespaces do not trip the collision guard", () => {
-        writeFunction("foo.ts", tinyQuery);
-        writeFunction("bar.ts", tinyQuery);
+            try {
+                discoverFunctions(project, workdir);
+            } catch (error: unknown) {
+                expect(error).toMatchObject({ code: "NAMESPACE_COLLISION", name: "CirrusError", status: 500 });
+                expect((error as { paths: string[] }).paths).toEqual(expect.arrayContaining(["foo-bar", "foo/bar"]));
+            }
+        });
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        test("distinct sanitized namespaces do not trip the collision guard", () => {
+            expect.hasAssertions();
 
-        const result = discoverFunctions(project, workdir);
+            writeFunction("foo.ts", tinyQuery);
+            writeFunction("bar.ts", tinyQuery);
 
-        expect(result).toHaveLength(2);
-        expect(result.map((f) => f.filePath).sort()).toEqual(["bar", "foo"]);
-    });
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
-    test("detects aliased imports — `import { query as q }` is treated as a query", () => {
-        writeFunction(
-            "messages.ts",
-            `
+            const result = discoverFunctions(project, workdir);
+
+            expect(result).toHaveLength(2);
+            expect(result.map((f) => f.filePath).sort()).toEqual(["bar", "foo"]);
+        });
+
+        test("detects aliased imports — `import { query as q }` is treated as a query", () => {
+            expect.hasAssertions();
+
+            writeFunction(
+                "messages.ts",
+                `
             import { query as q, mutation as m } from "@cirrus/server";
             export const list = q({ args: {}, handler: () => null });
             export const send = m({ args: {}, handler: () => null });
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        const byName = new Map(result.map((f) => [f.exportName, f]));
+            const byName = new Map(result.map((f) => [f.exportName, f]));
 
-        expect(byName.get("list")?.kind).toBe("query");
-        expect(byName.get("send")?.kind).toBe("mutation");
-    });
+            expect(byName.get("list")?.kind).toBe("query");
+            expect(byName.get("send")?.kind).toBe("mutation");
+        });
 
-    test("ignores a local `const query` shadowing the @cirrus/server import", () => {
-        // A local `query` is NOT the framework helper, even if the name matches.
-        writeFunction(
-            "messages.ts",
-            `
+        test("ignores a local `const query` shadowing the @cirrus/server import", () => {
+            expect.assertions(1);
+
+            // A local `query` is NOT the framework helper, even if the name matches.
+            writeFunction(
+                "messages.ts",
+                `
             const query = (definition: { args: Record<string, unknown>; handler: () => unknown }) => definition;
             export const list = query({ args: {}, handler: () => null });
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result).toHaveLength(0);
-    });
+            expect(result).toHaveLength(0);
+        });
 
-    test("infers handler return types when the type checker can resolve them", () => {
-        // Handler returns a literal object whose type is inferrable from the
-        // body alone — no need for `@cirrus/server`/`@cirrus/values` resolution.
-        writeFunction(
-            "messages.ts",
-            `
+        test("infers handler return types when the type checker can resolve them", () => {
+            expect.hasAssertions();
+
+            // Handler returns a literal object whose type is inferrable from the
+            // body alone — no need for `@cirrus/server`/`@cirrus/values` resolution.
+            writeFunction(
+                "messages.ts",
+                `
             import { query, mutation } from "@cirrus/server";
             export const greet = query({
                 args: {},
@@ -111,49 +122,53 @@ describe("discoverFunctions namespace collision", () => {
                 handler: async (): Promise<number> => 42,
             });
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
-        const byName = new Map(result.map((f) => [f.exportName, f]));
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+            const byName = new Map(result.map((f) => [f.exportName, f]));
 
-        // Annotated literal type passes through directly.
-        expect(byName.get("greet")?.returnType).toBe('{ hello: "world"; }');
-        // Promise<T> is unwrapped to T.
-        expect(byName.get("tick")?.returnType).toBe("number");
-    });
+            // Annotated literal type passes through directly.
+            expect(byName.get("greet")?.returnType).toBe('{ hello: "world"; }');
+            // Promise<T> is unwrapped to T.
+            expect(byName.get("tick")?.returnType).toBe("number");
+        });
 
-    test("falls back to `unknown` when the checker can't resolve enough to be useful", () => {
-        // Without annotations and without args/context wired to real types,
-        // the inferred return is full of `any` — we'd rather emit `unknown`
-        // than surface a misleading partial shape.
-        writeFunction(
-            "messages.ts",
-            `
+        test("falls back to `unknown` when the checker can't resolve enough to be useful", () => {
+            expect.assertions(1);
+
+            // Without annotations and without args/context wired to real types,
+            // the inferred return is full of `any` — we'd rather emit `unknown`
+            // than surface a misleading partial shape.
+            writeFunction(
+                "messages.ts",
+                `
             import { query } from "@cirrus/server";
             export const list = query({
                 args: {},
                 handler: async (_context, args) => ({ ok: true, args }),
             });
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result[0]?.returnType).toBe("unknown");
-    });
+            expect(result[0]?.returnType).toBe("unknown");
+        });
 
-    test("falls back to `unknown` when the return type references a non-exported local type", () => {
-        // A handler whose return type names a `interface` declared in the
-        // same file but never exported would emit `CursorDoc[]` (or similar)
-        // into `_generated/api.ts` — an identifier with no reachable import
-        // from anywhere else. That produces TS2304 the moment downstream
-        // code compiles against the generated API. We'd rather surface
-        // `unknown` than wedge the consumer.
-        writeFunction(
-            "cursors.ts",
-            `
+        test("falls back to `unknown` when the return type references a non-exported local type", () => {
+            expect.assertions(1);
+
+            // A handler whose return type names a `interface` declared in the
+            // same file but never exported would emit `CursorDoc[]` (or similar)
+            // into `_generated/api.ts` — an identifier with no reachable import
+            // from anywhere else. That produces TS2304 the moment downstream
+            // code compiles against the generated API. We'd rather surface
+            // `unknown` than wedge the consumer.
+            writeFunction(
+                "cursors.ts",
+                `
             import { query } from "@cirrus/server";
 
             interface CursorDoc {
@@ -167,22 +182,24 @@ describe("discoverFunctions namespace collision", () => {
                 handler: (): CursorDoc[] => [],
             });
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result[0]?.returnType).toBe("unknown");
-    });
+            expect(result[0]?.returnType).toBe("unknown");
+        });
 
-    test("preserves return types that reference exported local types", () => {
-        // The mirror case: when the same interface IS exported, downstream
-        // code can `import { CursorDoc } from "..."` to reach it — emit
-        // is still going to need to relocate the path, but the *name* is
-        // valid so we shouldn't drop the inferred return type.
-        writeFunction(
-            "cursors.ts",
-            `
+        test("preserves return types that reference exported local types", () => {
+            expect.assertions(1);
+
+            // The mirror case: when the same interface IS exported, downstream
+            // code can `import { CursorDoc } from "..."` to reach it — emit
+            // is still going to need to relocate the path, but the *name* is
+            // valid so we shouldn't drop the inferred return type.
+            writeFunction(
+                "cursors.ts",
+                `
             import { query } from "@cirrus/server";
 
             export interface CursorDoc {
@@ -194,62 +211,66 @@ describe("discoverFunctions namespace collision", () => {
                 handler: (): CursorDoc[] => [],
             });
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result[0]?.returnType).toMatch(/CursorDoc\[\]/u);
-    });
+            expect(result[0]?.returnType).toMatch(/CursorDoc\[\]/u);
+        });
 
-    test("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
-        writeFunction(
-            "admin.ts",
-            `
+        test("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
+            expect.hasAssertions();
+
+            writeFunction(
+                "admin.ts",
+                `
             import { internalQuery, internalMutation, internalAction, query } from "@cirrus/server";
             export const stats = internalQuery({ args: {}, handler: () => null });
             export const purge = internalMutation({ args: {}, handler: () => null });
             export const sync = internalAction({ args: {}, handler: () => null });
             export const list = query({ args: {}, handler: () => null });
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
-        const byName = new Map(result.map((f) => [f.exportName, f]));
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+            const byName = new Map(result.map((f) => [f.exportName, f]));
 
-        expect(byName.get("stats")).toMatchObject({ kind: "query", visibility: "internal" });
-        expect(byName.get("purge")).toMatchObject({ kind: "mutation", visibility: "internal" });
-        expect(byName.get("sync")).toMatchObject({ kind: "action", visibility: "internal" });
-        // A plain `query` stays public.
-        expect(byName.get("list")).toMatchObject({ kind: "query", visibility: "public" });
-    });
+            expect(byName.get("stats")).toMatchObject({ kind: "query", visibility: "internal" });
+            expect(byName.get("purge")).toMatchObject({ kind: "mutation", visibility: "internal" });
+            expect(byName.get("sync")).toMatchObject({ kind: "action", visibility: "internal" });
+            // A plain `query` stays public.
+            expect(byName.get("list")).toMatchObject({ kind: "query", visibility: "public" });
+        });
 
-    test("same file producing two registrations does not trip the guard", () => {
-        // Two functions exported from the same file share a sanitized namespace
-        // but that's expected — only *distinct files* should collide.
-        writeFunction(
-            "messages.ts",
-            `
+        test("same file producing two registrations does not trip the guard", () => {
+            expect.hasAssertions();
+
+            // Two functions exported from the same file share a sanitized namespace
+            // but that's expected — only *distinct files* should collide.
+            writeFunction(
+                "messages.ts",
+                `
             import { query, mutation } from "@cirrus/server";
             export const list = query({ args: {}, handler: () => null });
             export const send = mutation({ args: {}, handler: () => null });
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result).toHaveLength(2);
-        expect(result.map((f) => f.exportName).sort()).toEqual(["list", "send"]);
+            expect(result).toHaveLength(2);
+            expect(result.map((f) => f.exportName).sort()).toEqual(["list", "send"]);
+        });
     });
-});
 
-// A self-contained branded builder. The discovery brand-guard resolves the
-// `__cirrusProcedure` property off the receiver's *type*, so the builder is
-// declared inline here rather than imported from `@cirrus/server` (the isolated
-// test project has no module resolution for workspace packages).
-const BUILDER_PREAMBLE = `
+    // A self-contained branded builder. The discovery brand-guard resolves the
+    // `__cirrusProcedure` property off the receiver's *type*, so the builder is
+    // declared inline here rather than imported from `@cirrus/server` (the isolated
+    // test project has no module resolution for workspace packages).
+    const BUILDER_PREAMBLE = `
     declare const v: {
         id: (table: string) => { __k: "id" };
         number: () => { __k: "number" };
@@ -283,12 +304,12 @@ const BUILDER_PREAMBLE = `
     };
 `;
 
-// A builder that faithfully models `.output(validator)`: the validator carries a
-// phantom `__t` for its inferred type, and once `.output()` sets `Output`, the
-// terminal types the handler's return as that declared type — exactly as the real
-// `QueryBuilder` does. This lets discovery's handler-return inference exercise the
-// `.output()` path without workspace module resolution.
-const OUTPUT_BUILDER_PREAMBLE = `
+    // A builder that faithfully models `.output(validator)`: the validator carries a
+    // phantom `__t` for its inferred type, and once `.output()` sets `Output`, the
+    // terminal types the handler's return as that declared type — exactly as the real
+    // `QueryBuilder` does. This lets discovery's handler-return inference exercise the
+    // `.output()` path without workspace module resolution.
+    const OUTPUT_BUILDER_PREAMBLE = `
     declare const v: {
         number: () => { __k: "number"; __t: number };
         string: () => { __k: "string"; __t: string };
@@ -309,171 +330,192 @@ const OUTPUT_BUILDER_PREAMBLE = `
     };
 `;
 
-describe("discoverFunctions builder procedures", () => {
-    test("discovers a builder terminal, reading the kind from the terminal method name", () => {
-        writeFunction(
-            "messages.ts",
-            `${BUILDER_PREAMBLE}
+    describe("discoverFunctions builder procedures", () => {
+        test("discovers a builder terminal, reading the kind from the terminal method name", () => {
+            expect.assertions(5);
+
+            writeFunction(
+                "messages.ts",
+                `${BUILDER_PREAMBLE}
             export const list = c.query
                 .input({ channelId: v.id("channels"), limit: v.number() })
                 .query((): { hello: "world" } => ({ hello: "world" }));
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result).toHaveLength(1);
-        expect(result[0]?.kind).toBe("query");
-        expect(result[0]?.returnType).toBe('{ hello: "world"; }');
-        expect(result[0]?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
-        expect(result[0]?.args.limit).toEqual({ kind: "number" });
-    });
+            expect(result).toHaveLength(1);
+            expect(result[0]?.kind).toBe("query");
+            expect(result[0]?.returnType).toBe('{ hello: "world"; }');
+            expect(result[0]?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
+            expect(result[0]?.args.limit).toEqual({ kind: "number" });
+        });
 
-    test("merges .input() args across the chain — a later .input() wins on collision", () => {
-        writeFunction(
-            "messages.ts",
-            `${BUILDER_PREAMBLE}
+        test("merges .input() args across the chain — a later .input() wins on collision", () => {
+            expect.assertions(1);
+
+            writeFunction(
+                "messages.ts",
+                `${BUILDER_PREAMBLE}
             export const list = c.query
                 .input({ value: v.number() })
                 .input({ value: v.string() })
                 .query(() => null);
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result[0]?.args.value).toEqual({ kind: "string" });
-    });
+            expect(result[0]?.args.value).toEqual({ kind: "string" });
+        });
 
-    test("intervening .use() links don't disturb detection or arg collection", () => {
-        writeFunction(
-            "messages.ts",
-            `${BUILDER_PREAMBLE}
+        test("intervening .use() links don't disturb detection or arg collection", () => {
+            expect.assertions(2);
+
+            writeFunction(
+                "messages.ts",
+                `${BUILDER_PREAMBLE}
             export const list = c.query
                 .input({ a: v.number() })
                 .use(({ ctx }) => ctx)
                 .query(() => null);
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result).toHaveLength(1);
-        expect(Object.keys(result[0]?.args ?? {})).toEqual(["a"]);
-    });
+            expect(result).toHaveLength(1);
+            expect(Object.keys(result[0]?.args ?? {})).toEqual(["a"]);
+        });
 
-    test("detects a mutation builder terminal with its own kind", () => {
-        writeFunction(
-            "messages.ts",
-            `${BUILDER_PREAMBLE}
+        test("detects a mutation builder terminal with its own kind", () => {
+            expect.assertions(1);
+
+            writeFunction(
+                "messages.ts",
+                `${BUILDER_PREAMBLE}
             export const send = c.mutation.input({ text: v.string() }).mutation(() => null);
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result[0]?.kind).toBe("mutation");
-    });
+            expect(result[0]?.kind).toBe("mutation");
+        });
 
-    test("ignores a `.query()` method on an object lacking the __cirrusProcedure brand", () => {
-        writeFunction(
-            "messages.ts",
-            `
+        test("ignores a `.query()` method on an object lacking the __cirrusProcedure brand", () => {
+            expect.assertions(1);
+
+            writeFunction(
+                "messages.ts",
+                `
             declare const notBuilder: { query: (handler: () => unknown) => { args: Record<never, never>; handler: () => unknown; kind: "query" } };
             export const list = notBuilder.query(() => null);
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result).toHaveLength(0);
-    });
+            expect(result).toHaveLength(0);
+        });
 
-    test("marks a builder carrying the __cirrusVisibility brand as internal, across a chain", () => {
-        writeFunction(
-            "messages.ts",
-            `${BUILDER_PREAMBLE}
+        test("marks a builder carrying the __cirrusVisibility brand as internal, across a chain", () => {
+            expect.assertions(3);
+
+            writeFunction(
+                "messages.ts",
+                `${BUILDER_PREAMBLE}
             export const stats = c.internalQuery
                 .input({ channelId: v.id("channels") })
                 .query((): { ok: true } => ({ ok: true }));
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result).toHaveLength(1);
-        expect(result[0]).toMatchObject({ kind: "query", visibility: "internal" });
-        expect(result[0]?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
-    });
+            expect(result).toHaveLength(1);
+            expect(result[0]).toMatchObject({ kind: "query", visibility: "internal" });
+            expect(result[0]?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
+        });
 
-    test("a public builder terminal stays visibility: public", () => {
-        writeFunction(
-            "messages.ts",
-            `${BUILDER_PREAMBLE}
+        test("a public builder terminal stays visibility: public", () => {
+            expect.assertions(1);
+
+            writeFunction(
+                "messages.ts",
+                `${BUILDER_PREAMBLE}
             export const list = c.query.input({ a: v.number() }).query(() => null);
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result[0]?.visibility).toBe("public");
-    });
+            expect(result[0]?.visibility).toBe("public");
+        });
 
-    test("does not register an intermediate .input() assignment that lacks a terminal", () => {
-        writeFunction(
-            "messages.ts",
-            `${BUILDER_PREAMBLE}
+        test("does not register an intermediate .input() assignment that lacks a terminal", () => {
+            expect.assertions(1);
+
+            writeFunction(
+                "messages.ts",
+                `${BUILDER_PREAMBLE}
             export const partial = c.query.input({ a: v.number() });
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result).toHaveLength(0);
-    });
+            expect(result).toHaveLength(0);
+        });
 
-    test("derives the return type from .output() — the declared validator shape wins over the handler body", () => {
-        writeFunction(
-            "messages.ts",
-            `${OUTPUT_BUILDER_PREAMBLE}
+        test("derives the return type from .output() — the declared validator shape wins over the handler body", () => {
+            expect.assertions(3);
+
+            writeFunction(
+                "messages.ts",
+                `${OUTPUT_BUILDER_PREAMBLE}
             export const stats = c.query
                 .output(v.object({ count: v.number() }))
                 .query(() => ({ count: 1 }));
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result).toHaveLength(1);
-        expect(result[0]?.kind).toBe("query");
-        expect(result[0]?.returnType).toBe("{ count: number; }");
-    });
+            expect(result).toHaveLength(1);
+            expect(result[0]?.kind).toBe("query");
+            expect(result[0]?.returnType).toBe("{ count: number; }");
+        });
 
-    test(".output() interleaved with .input() leaves arg collection and detection intact", () => {
-        writeFunction(
-            "messages.ts",
-            `${OUTPUT_BUILDER_PREAMBLE}
+        test(".output() interleaved with .input() leaves arg collection and detection intact", () => {
+            expect.assertions(3);
+
+            writeFunction(
+                "messages.ts",
+                `${OUTPUT_BUILDER_PREAMBLE}
             export const stats = c.query
                 .input({ limit: v.number() })
                 .output(v.string())
                 .query(({ args }) => String(args.limit));
         `,
-        );
+            );
 
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const result = discoverFunctions(project, workdir);
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
 
-        expect(result).toHaveLength(1);
-        expect(Object.keys(result[0]?.args ?? {})).toEqual(["limit"]);
-        expect(result[0]?.returnType).toBe("string");
+            expect(result).toHaveLength(1);
+            expect(Object.keys(result[0]?.args ?? {})).toEqual(["limit"]);
+            expect(result[0]?.returnType).toBe("string");
+        });
     });
 });

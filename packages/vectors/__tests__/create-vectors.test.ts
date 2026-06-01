@@ -1,28 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createVectors } from "../src/create-vectors.js";
-import type { VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
+import type { EmbedFn, VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
 
 const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => ({
-    upsert: vi.fn(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `upsert-${vectors.length}` })),
-    insert: vi.fn(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `insert-${vectors.length}` })),
-    query: vi.fn(
+    upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `upsert-${vectors.length}` })),
+    insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `insert-${vectors.length}` })),
+    query: vi.fn<VectorizeIndexLike["query"]>(
         async (): Promise<VectorizeMatches> => ({
             matches: [{ id: "row-1", score: 0.9 }],
             count: 1,
         }),
     ),
-    getByIds: vi.fn(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => ids.map((id) => ({ id, values: [0, 0, 0] }))),
-    deleteByIds: vi.fn(async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => ({ mutationId: `delete-${ids.length}`, count: ids.length })),
+    getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
+        async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => ids.map((id) => ({ id, values: [0, 0, 0] })),
+    ),
+    deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(
+        async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => ({ mutationId: `delete-${ids.length}`, count: ids.length }),
+    ),
     ...overrides,
 });
 
 describe("createVectors", () => {
     it("rejects construction without any index bindings", () => {
+        expect.assertions(1);
+
         expect(() => createVectors({ indexes: {} })).toThrow(/at least one index/i);
     });
 
     it("throws a descriptive error when an unknown index is referenced", async () => {
+        expect.assertions(2);
+
         const vectors = createVectors({ indexes: { "docs-body": fakeIndex() } });
 
         await expect(vectors.deleteByIds("unknown", ["a"])).rejects.toThrow(/no index registered for "unknown"/);
@@ -30,9 +38,11 @@ describe("createVectors", () => {
     });
 
     it("calls the user embedFn at upsert time and forwards id + metadata", async () => {
+        expect.assertions(2);
+
         const index = fakeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
-        const embed = vi.fn(async (value: string) => [value.length, value.length + 1, value.length + 2]);
+        const embed = vi.fn<EmbedFn<string>>(async (value: string) => [value.length, value.length + 1, value.length + 2]);
 
         await vectors.upsert("docs", {
             id: "doc-42",
@@ -54,6 +64,8 @@ describe("createVectors", () => {
     });
 
     it("batches upsertMany into a single binding call", async () => {
+        expect.assertions(3);
+
         const index = fakeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
         const embed = async (text: string): Promise<ReadonlyArray<number>> => [text.length];
@@ -74,9 +86,11 @@ describe("createVectors", () => {
     });
 
     it("queries by precomputed vector without invoking embed", async () => {
+        expect.assertions(3);
+
         const index = fakeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
-        const embed = vi.fn();
+        const embed = vi.fn<EmbedFn<string>>();
 
         const result = await vectors.query("docs", { vector: [0.1, 0.2, 0.3], topK: 5, embed });
 
@@ -86,9 +100,11 @@ describe("createVectors", () => {
     });
 
     it("queries by input + embedFn when no vector is provided", async () => {
+        expect.assertions(2);
+
         const index = fakeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
-        const embed = vi.fn(async (text: string) => [text.length, text.length]);
+        const embed = vi.fn<EmbedFn<string>>(async (text: string) => [text.length, text.length]);
 
         await vectors.query("docs", { input: "wide", embed, topK: 3, filter: { tenant: "t-1" } });
 
@@ -97,12 +113,16 @@ describe("createVectors", () => {
     });
 
     it("errors when query has neither vector nor input+embed", async () => {
+        expect.assertions(1);
+
         const vectors = createVectors({ indexes: { docs: fakeIndex() } });
 
         await expect(vectors.query("docs", {})).rejects.toThrow(/requires either/i);
     });
 
     it("passes through getByIds and deleteByIds unchanged", async () => {
+        expect.assertions(4);
+
         const index = fakeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
 
@@ -119,6 +139,8 @@ describe("createVectors", () => {
     });
 
     it("rejects describe when the binding does not implement it", async () => {
+        expect.assertions(1);
+
         const index = fakeIndex({ describe: undefined });
         const vectors = createVectors({ indexes: { docs: index } });
 
@@ -126,8 +148,10 @@ describe("createVectors", () => {
     });
 
     it("forwards describe when the binding implements it", async () => {
+        expect.assertions(1);
+
         const index = fakeIndex({
-            describe: vi.fn(async () => ({ dimensions: 1024, vectorsCount: 99 })),
+            describe: vi.fn<NonNullable<VectorizeIndexLike["describe"]>>(async () => ({ dimensions: 1024, vectorsCount: 99 })),
         });
         const vectors = createVectors({ indexes: { docs: index } });
 
@@ -137,6 +161,8 @@ describe("createVectors", () => {
     });
 
     it("supports sync embedFn return values", async () => {
+        expect.assertions(1);
+
         const index = fakeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
         const embed = (text: string): ReadonlyArray<number> => [text.length];

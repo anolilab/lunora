@@ -16,84 +16,98 @@ const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): Persi
  * written once and run against each factory. The IndexedDB factory gets a fresh
  * `fake-indexeddb` instance per test so databases never leak between cases.
  */
-const contract = (name: string, makeAdapter: () => PersistenceAdapter): void => {
-    describe(name, () => {
-        test("load() returns appended mutations in FIFO (enqueue) order", async () => {
-            const adapter = makeAdapter();
+const adapters: [string, () => PersistenceAdapter][] = [
+    ["createInMemoryPersistence", () => createInMemoryPersistence()],
+    ["createIndexedDbPersistence (fake-indexeddb)", () => createIndexedDbPersistence({ indexedDB: new IDBFactory() })],
+];
 
-            await adapter.append(mutation("a"));
-            await adapter.append(mutation("b"));
-            await adapter.append(mutation("c"));
+describe.each(adapters)("%s", (_name, makeAdapter) => {
+    test("load() returns appended mutations in FIFO (enqueue) order", async () => {
+        expect.assertions(1);
 
-            const loaded = await adapter.load();
+        const adapter = makeAdapter();
 
-            expect(loaded.map((m) => m.id)).toEqual(["a", "b", "c"]);
-        });
+        await adapter.append(mutation("a"));
+        await adapter.append(mutation("b"));
+        await adapter.append(mutation("c"));
 
-        test("load() preserves the full mutation shape", async () => {
-            const adapter = makeAdapter();
+        const loaded = await adapter.load();
 
-            await adapter.append(mutation("a", { args: { title: "hi" }, shardKey: "room-1" }));
+        expect(loaded.map((m) => m.id)).toEqual(["a", "b", "c"]);
+    });
 
-            const [loaded] = await adapter.load();
+    test("load() preserves the full mutation shape", async () => {
+        expect.assertions(1);
 
-            expect(loaded).toEqual({
-                args: { title: "hi" },
-                functionPath: "posts:create",
-                id: "a",
-                shardKey: "room-1",
-            });
-        });
+        const adapter = makeAdapter();
 
-        test("remove() drops a single mutation by id and leaves the rest in order", async () => {
-            const adapter = makeAdapter();
+        await adapter.append(mutation("a", { args: { title: "hi" }, shardKey: "room-1" }));
 
-            await adapter.append(mutation("a"));
-            await adapter.append(mutation("b"));
-            await adapter.append(mutation("c"));
+        const [loaded] = await adapter.load();
 
-            await adapter.remove("b");
-
-            const loaded = await adapter.load();
-
-            expect(loaded.map((m) => m.id)).toEqual(["a", "c"]);
-        });
-
-        test("remove() of an unknown id is a no-op", async () => {
-            const adapter = makeAdapter();
-
-            await adapter.append(mutation("a"));
-            await adapter.remove("nope");
-
-            const loaded = await adapter.load();
-
-            expect(loaded.map((m) => m.id)).toEqual(["a"]);
-        });
-
-        test("clear() drops every persisted mutation", async () => {
-            const adapter = makeAdapter();
-
-            await adapter.append(mutation("a"));
-            await adapter.append(mutation("b"));
-
-            await adapter.clear();
-
-            await expect(adapter.load()).resolves.toEqual([]);
-        });
-
-        test("load() on an empty store resolves to an empty array", async () => {
-            const adapter = makeAdapter();
-
-            await expect(adapter.load()).resolves.toEqual([]);
+        expect(loaded).toEqual({
+            args: { title: "hi" },
+            functionPath: "posts:create",
+            id: "a",
+            shardKey: "room-1",
         });
     });
-};
 
-contract("createInMemoryPersistence", () => createInMemoryPersistence());
-contract("createIndexedDbPersistence (fake-indexeddb)", () => createIndexedDbPersistence({ indexedDB: new IDBFactory() }));
+    test("remove() drops a single mutation by id and leaves the rest in order", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a"));
+        await adapter.append(mutation("b"));
+        await adapter.append(mutation("c"));
+
+        await adapter.remove("b");
+
+        const loaded = await adapter.load();
+
+        expect(loaded.map((m) => m.id)).toEqual(["a", "c"]);
+    });
+
+    test("remove() of an unknown id is a no-op", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a"));
+        await adapter.remove("nope");
+
+        const loaded = await adapter.load();
+
+        expect(loaded.map((m) => m.id)).toEqual(["a"]);
+    });
+
+    test("clear() drops every persisted mutation", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a"));
+        await adapter.append(mutation("b"));
+
+        await adapter.clear();
+
+        await expect(adapter.load()).resolves.toEqual([]);
+    });
+
+    test("load() on an empty store resolves to an empty array", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await expect(adapter.load()).resolves.toEqual([]);
+    });
+});
 
 describe("createInMemoryPersistence — isolation", () => {
     test("does not retain references to caller-supplied args", async () => {
+        expect.assertions(1);
+
         const adapter = createInMemoryPersistence();
         const args: Record<string, unknown> = { title: "before" };
 
@@ -108,6 +122,8 @@ describe("createInMemoryPersistence — isolation", () => {
 
 describe("createIndexedDbPersistence — durability across handles", () => {
     test("a fresh adapter over the same factory restores previously appended mutations", async () => {
+        expect.assertions(1);
+
         const indexedDB = new IDBFactory();
         const first = createIndexedDbPersistence({ indexedDB });
 
@@ -122,6 +138,8 @@ describe("createIndexedDbPersistence — durability across handles", () => {
     });
 
     test("throws eagerly when no IndexedDB factory is available", () => {
+        expect.assertions(1);
+
         expect(() => createIndexedDbPersistence({ indexedDB: undefined as unknown as IDBFactory })).toThrow(/no IndexedDB available/);
     });
 });

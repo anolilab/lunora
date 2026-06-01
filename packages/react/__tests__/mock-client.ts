@@ -24,22 +24,24 @@ export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unk
     const subs = new Set<SubEntry>();
     let authToken: string | null = null;
 
-    const queryFn = vi.fn(async (fn: FunctionReference, args: unknown) => {
+    const queryFn = vi.fn<(fn: FunctionReference, args: unknown) => Promise<unknown>>(async (fn: FunctionReference, args: unknown) => {
         return queryImpl ? queryImpl(fn.__cirrusRef, args) : undefined;
     });
-    const mutationFn = vi.fn(async () => undefined as unknown);
-    const actionFn = vi.fn(async () => undefined as unknown);
-    const subscribeFn = vi.fn((fn: FunctionReference, _args: unknown, cb: (value: unknown) => void): Unsubscribe => {
-        const entry: SubEntry = { ref: fn.__cirrusRef, callback: cb };
+    const mutationFn = vi.fn<() => Promise<unknown>>(async () => undefined as unknown);
+    const actionFn = vi.fn<() => Promise<unknown>>(async () => undefined as unknown);
+    const subscribeFn = vi.fn<(fn: FunctionReference, args: unknown, cb: (value: unknown) => void) => Unsubscribe>(
+        (fn: FunctionReference, _args: unknown, cb: (value: unknown) => void): Unsubscribe => {
+            const entry: SubEntry = { ref: fn.__cirrusRef, callback: cb };
 
-        subs.add(entry);
+            subs.add(entry);
 
-        return () => {
-            subs.delete(entry);
-        };
-    });
+            return () => {
+                subs.delete(entry);
+            };
+        },
+    );
     const authListeners = new Set<(token: string | null) => void>();
-    const setAuthTokenFn = vi.fn((token: string | null) => {
+    const setAuthTokenFn = vi.fn<(token: string | null) => void>((token: string | null) => {
         if (authToken === token) {
             return;
         }
@@ -50,15 +52,15 @@ export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unk
             listener(token);
         }
     });
-    const getAuthTokenFn = vi.fn(() => authToken);
-    const onAuthTokenChangeFn = vi.fn((listener: (token: string | null) => void): Unsubscribe => {
+    const getAuthTokenFn = vi.fn<() => string | null>(() => authToken);
+    const onAuthTokenChangeFn = vi.fn<(listener: (token: string | null) => void) => Unsubscribe>((listener: (token: string | null) => void): Unsubscribe => {
         authListeners.add(listener);
 
         return () => {
             authListeners.delete(listener);
         };
     });
-    const closeFn = vi.fn();
+    const closeFn = vi.fn<() => void>();
 
     const emit = (ref: string, value: unknown): void => {
         for (const entry of subs) {

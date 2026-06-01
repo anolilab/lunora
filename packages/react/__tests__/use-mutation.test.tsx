@@ -1,5 +1,5 @@
 import type { FunctionReference } from "@cirrus/client";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, test, vi } from "vitest";
 
@@ -26,6 +26,8 @@ const Harness = ({ onCall }: HarnessProps): ReactElement => {
 
 describe("useMutation", () => {
     test("invokes client.mutation and flips `pending` while in-flight", async () => {
+        expect.hasAssertions();
+
         let resolve: (value: unknown) => void = () => undefined;
         const promise = new Promise((r) => {
             resolve = r;
@@ -72,17 +74,21 @@ describe("useMutation", () => {
     });
 
     test("forwards optimistic callback to the client", async () => {
+        expect.assertions(1);
+
         const mock = createMockClient();
 
         mock.mutation.mockResolvedValue({ ok: true });
 
-        const optimistic = vi.fn(() => 5);
+        const optimistic = vi.fn<() => number>(() => 5);
         const Probe = (): ReactElement => {
             const { mutate } = useMutation(fn("counter:inc"));
 
             return (
                 <button
+                    aria-label="increment"
                     data-testid="btn"
+                    type="button"
                     onClick={() => {
                         void mutate({} as Record<string, unknown>, { optimistic });
                     }}
@@ -96,10 +102,11 @@ describe("useMutation", () => {
             </CirrusProvider>,
         );
 
-        await act(async () => {
-            screen.getByTestId("btn").click();
-        });
+        // fireEvent already wraps the dispatch in act(), so no outer act() is needed.
+        fireEvent.click(screen.getByTestId("btn"));
 
-        expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "counter:inc" }), {}, { optimistic });
+        await waitFor(() => {
+            expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "counter:inc" }), {}, { optimistic });
+        });
     });
 });

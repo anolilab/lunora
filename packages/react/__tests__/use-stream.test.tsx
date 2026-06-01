@@ -17,8 +17,8 @@ interface MockEntry {
 
 const buildClientWithStream = (): { client: CirrusClient; opened: MockEntry[]; openStream: () => MockEntry } => {
     const opened: MockEntry[] = [];
-    const streamFn = vi.fn((_fn: FunctionReference, _args: unknown) => {
-        const onCancel = vi.fn();
+    const streamFn = vi.fn<(fn: FunctionReference, args: unknown) => StreamIterable<unknown>>((_fn: FunctionReference, _args: unknown) => {
+        const onCancel = vi.fn<() => void>();
         const { handle, iterable } = createStream<unknown>({ onCancel });
         const entry: MockEntry = { handle, iterable, onCancel };
 
@@ -58,6 +58,8 @@ const Display = ({ args = {} as Record<string, unknown> }: { args?: Record<strin
 
 describe("useStream", () => {
     test("opens a stream on mount and appends chunks as they arrive", async () => {
+        expect.hasAssertions();
+
         const { client, openStream } = buildClientWithStream();
 
         render(
@@ -96,6 +98,8 @@ describe("useStream", () => {
     });
 
     test('"skip" leaves the stream un-opened', () => {
+        expect.assertions(2);
+
         const { client, opened } = buildClientWithStream();
 
         render(
@@ -109,6 +113,8 @@ describe("useStream", () => {
     });
 
     test("unmount cancels the in-flight stream", async () => {
+        expect.hasAssertions();
+
         const { client, openStream } = buildClientWithStream();
 
         const view = render(
@@ -127,6 +133,8 @@ describe("useStream", () => {
     });
 
     test("server error transitions status to 'error' and surfaces the error", async () => {
+        expect.hasAssertions();
+
         const { client, openStream } = buildClientWithStream();
 
         render(

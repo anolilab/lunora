@@ -219,7 +219,7 @@ describe("metricsPanel", () => {
         expect(screen.getByTestId("mt-requests").textContent).toBe("42");
     });
 
-    test("All shards aggregates getMetrics across the known shards", async () => {
+    test("all shards aggregates getMetrics across the known shards", async () => {
         expect.assertions(3);
 
         // Seed a recently-visited shard so the aggregate covers more than root.

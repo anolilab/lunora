@@ -6,23 +6,27 @@ import { createCtxVectors, createVectorSyncHook } from "../src/ctx.js";
 import type { VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
 
 const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => ({
-    upsert: vi.fn(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `upsert-${vectors.length}` })),
-    insert: vi.fn(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `insert-${vectors.length}` })),
-    query: vi.fn(
+    upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `upsert-${vectors.length}` })),
+    insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `insert-${vectors.length}` })),
+    query: vi.fn<VectorizeIndexLike["query"]>(
         async (): Promise<VectorizeMatches> => ({
             matches: [{ id: "row-1", score: 0.9, values: [0.1], metadata: { title: "Hi" } }],
             count: 1,
         }),
     ),
-    getByIds: vi.fn(
+    getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
         async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => ids.map((id) => ({ id, values: [1, 2], metadata: { k: id } })),
     ),
-    deleteByIds: vi.fn(async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => ({ mutationId: `delete-${ids.length}`, count: ids.length })),
+    deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(
+        async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => ({ mutationId: `delete-${ids.length}`, count: ids.length }),
+    ),
     ...overrides,
 });
 
 describe("createCtxVectors", () => {
     it("upsert + upsertNow both call cirrus.upsert inline and return void", async () => {
+        expect.assertions(4);
+
         const index = fakeIndex();
         const cirrus = createVectors({ indexes: { docs: index } });
         const ctx = createCtxVectors(cirrus);
@@ -36,6 +40,8 @@ describe("createCtxVectors", () => {
     });
 
     it("query maps Vectorize matches to the server match shape", async () => {
+        expect.assertions(1);
+
         const cirrus = createVectors({ indexes: { docs: fakeIndex() } });
         const ctx = createCtxVectors(cirrus);
 
@@ -45,6 +51,8 @@ describe("createCtxVectors", () => {
     });
 
     it("query requests metadata so it surfaces on matches", async () => {
+        expect.assertions(1);
+
         const index = fakeIndex();
         const cirrus = createVectors({ indexes: { docs: index } });
         const ctx = createCtxVectors(cirrus);
@@ -57,6 +65,8 @@ describe("createCtxVectors", () => {
     });
 
     it("getByIds maps Vectorize vectors to the server record shape", async () => {
+        expect.assertions(1);
+
         const cirrus = createVectors({ indexes: { docs: fakeIndex() } });
         const ctx = createCtxVectors(cirrus);
 
@@ -66,6 +76,8 @@ describe("createCtxVectors", () => {
     });
 
     it("deleteByIds forwards and returns void", async () => {
+        expect.assertions(2);
+
         const index = fakeIndex();
         const cirrus = createVectors({ indexes: { docs: index } });
         const ctx = createCtxVectors(cirrus);
@@ -82,17 +94,17 @@ const fakeVectorSearch = (): VectorSearchLike & { deletes: Array<[string, Readon
     return {
         upserts,
         deletes,
-        upsert: vi.fn(async (indexName, input) => {
+        upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName, input) => {
             upserts.push([indexName, input]);
         }),
-        upsertNow: vi.fn(async (indexName, input) => {
+        upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async (indexName, input) => {
             upserts.push([indexName, input]);
         }),
-        deleteByIds: vi.fn(async (indexName, ids) => {
+        deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => {
             deletes.push([indexName, ids]);
         }),
-        query: vi.fn(async () => ({ count: 0, matches: [] })),
-        getByIds: vi.fn(async () => []),
+        query: vi.fn<VectorSearchLike["query"]>(async () => ({ count: 0, matches: [] })),
+        getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
     };
 };
 
@@ -100,6 +112,8 @@ const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.le
 
 describe("createVectorSyncHook", () => {
     it("embeds Shape A source field and upserts on insert", async () => {
+        expect.assertions(1);
+
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
             tables: {
@@ -115,6 +129,8 @@ describe("createVectorSyncHook", () => {
     });
 
     it("uses Shape B select(row) and metadata(row) on update", async () => {
+        expect.assertions(1);
+
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
             tables: { docs: {} },
@@ -135,6 +151,8 @@ describe("createVectorSyncHook", () => {
     });
 
     it("deletes the row id from every index sourced from the table", async () => {
+        expect.assertions(1);
+
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
             tables: { docs: { vectorIndexes: [{ name: "docs-body", field: "body", embed }] } },
@@ -151,6 +169,8 @@ describe("createVectorSyncHook", () => {
     });
 
     it("purges Shape A indexes when the source field is nullish (clear-field)", async () => {
+        expect.assertions(2);
+
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
             tables: { messages: { vectorIndexes: [{ name: "messages-body", field: "body", embed }] } },
@@ -167,6 +187,8 @@ describe("createVectorSyncHook", () => {
     });
 
     it("threads the namespace onto upserts for tenant isolation", async () => {
+        expect.assertions(1);
+
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = {
             tables: { messages: { vectorIndexes: [{ name: "messages-body", field: "body", embed }] } },
@@ -180,6 +202,8 @@ describe("createVectorSyncHook", () => {
     });
 
     it("no-ops for tables without any vector index", async () => {
+        expect.assertions(2);
+
         const vectors = fakeVectorSearch();
         const schema: SchemaLike = { tables: { plain: {} }, vectorIndexes: {} };
         const hook = createVectorSyncHook({ schema, vectors });

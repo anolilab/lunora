@@ -90,6 +90,8 @@ const searchSchema: SchemaLike = {
 
 describe("ctx-db search — FTS5 path (emitted SQL)", () => {
     test("creates one FTS5 virtual table per search index during migration", () => {
+        expect.assertions(1);
+
         const { sql, statements } = createRecordingFts([]);
 
         runShardMigrations(sql, searchSchema);
@@ -102,6 +104,8 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
     });
 
     test("syncs indexed text on insert via delete-then-insert", async () => {
+        expect.assertions(2);
+
         const { sql, statements } = createRecordingFts([]);
 
         runShardMigrations(sql, searchSchema);
@@ -118,6 +122,8 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
     });
 
     test("clears the FTS row on delete (no re-insert)", async () => {
+        expect.assertions(2);
+
         const { sql, statements } = createRecordingFts([{ __doc__: JSON.stringify({ body: "bye", title: "a" }), _creationTime: 1, id: "d1" }]);
 
         runShardMigrations(sql, searchSchema);
@@ -137,6 +143,8 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
     });
 
     test("emits a MATCH query joined to the document table, ordered by rank", async () => {
+        expect.assertions(3);
+
         const matchRows: MatchRow[] = [
             { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), _creationTime: 1, id: "d1" },
             { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), _creationTime: 2, id: "d2" },

@@ -28,6 +28,8 @@ const wrapper =
 
 describe("useInfiniteQuery", () => {
     test("loads the first page into pages[0]", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
         const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {} as Record<string, unknown>, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
@@ -48,6 +50,8 @@ describe("useInfiniteQuery", () => {
     });
 
     test("fetchNextPage appends a discrete second page", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
         const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {} as Record<string, unknown>, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
@@ -73,6 +77,8 @@ describe("useInfiniteQuery", () => {
     });
 
     test("hasNextPage flips false once the tail reports isDone", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b"]));
         const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {} as Record<string, unknown>, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
@@ -88,6 +94,8 @@ describe("useInfiniteQuery", () => {
     });
 
     test("fetchNextPage is a no-op when there is no next page", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b"]));
         const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {} as Record<string, unknown>, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
@@ -108,6 +116,8 @@ describe("useInfiniteQuery", () => {
     });
 
     test('"skip" yields empty pages and is not loading', () => {
+        expect.assertions(6);
+
         const mock = createMockClient(makePaginator(["a", "b"]));
         const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), "skip", { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
@@ -122,6 +132,8 @@ describe("useInfiniteQuery", () => {
     });
 
     test("a delta to page 0 updates pages[0] in place while page 1 stays", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
         const { result } = renderHook(() => useInfiniteQuery(fn("items:list"), {} as Record<string, unknown>, { initialNumItems: 2 }), {
             wrapper: wrapper(mock.asClient),
@@ -156,6 +168,8 @@ describe("useInfiniteQuery", () => {
     });
 
     test("changing base args resets to the first page", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
         const { rerender, result } = renderHook(({ kind }: { kind: string }) => useInfiniteQuery(fn("items:list"), { kind }, { initialNumItems: 2 }), {
             initialProps: { kind: "first" },

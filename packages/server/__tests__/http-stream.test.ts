@@ -45,6 +45,8 @@ const readSse = async (response: Response): Promise<{ events: { data: unknown; e
 
 describe("httpRoute stream() terminal", () => {
     test("returns text/event-stream with data frames + a terminal event:complete", async () => {
+        expect.hasAssertions();
+
         const route = httpRoute.get("/api/ticks").stream(async function* ticksGen() {
             yield { tick: 1 };
             yield { tick: 2 };
@@ -63,6 +65,8 @@ describe("httpRoute stream() terminal", () => {
     });
 
     test("coerces searchParams + params and routes them through the stream handler", async () => {
+        expect.hasAssertions();
+
         const route = httpRoute
             .get("/api/feed/:room")
             .params({ room: v.string() })
@@ -84,6 +88,8 @@ describe("httpRoute stream() terminal", () => {
     });
 
     test("surfaces a thrown CirrusError as an event:error frame", async () => {
+        expect.assertions(2);
+
         // eslint-disable-next-line require-yield, sonarjs/generator-without-yield -- intentional: this generator only throws.
         const route = httpRoute.get("/api/boom").stream(async function* boomGen() {
             throw new CirrusError("FORBIDDEN", "nope");
@@ -98,6 +104,8 @@ describe("httpRoute stream() terminal", () => {
     });
 
     test("returns 400 when search-param decoding fails (rejection happens before the stream starts)", async () => {
+        expect.assertions(1);
+
         const route = httpRoute
             .get("/api/feed")
             .searchParams({ limit: v.number() })

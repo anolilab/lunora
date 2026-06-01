@@ -4,6 +4,8 @@ import { RateLimitError } from "../src/error.js";
 
 describe("rateLimitError", () => {
     test("describes a deny-list rejection", () => {
+        expect.assertions(3);
+
         const error = new RateLimitError({ ok: false, reason: "deny", retryAfter: Number.POSITIVE_INFINITY });
 
         expect(error.name).toBe("RateLimitError");
@@ -12,6 +14,8 @@ describe("rateLimitError", () => {
     });
 
     test("describes a rate rejection with a rounded retryAfter", () => {
+        expect.assertions(3);
+
         const error = new RateLimitError({ ok: false, reason: "rate", retryAfter: 99.2 });
 
         expect(error.reason).toBe("rate");
@@ -20,12 +24,16 @@ describe("rateLimitError", () => {
     });
 
     test("omits an unbounded retryAfter from the message", () => {
+        expect.assertions(1);
+
         const error = new RateLimitError({ ok: false, reason: "rate", retryAfter: Number.POSITIVE_INFINITY });
 
         expect(error.message).toBe("rate limit exceeded");
     });
 
     test("honors an explicit message override", () => {
+        expect.assertions(1);
+
         const error = new RateLimitError({ ok: false, reason: "rate", retryAfter: 100 }, "slow down");
 
         expect(error.message).toBe("slow down");

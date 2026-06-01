@@ -23,6 +23,8 @@ const Display = ({ token }: { token: Preloaded }): ReactElement => {
 
 describe("usePreloadedQuery", () => {
     test("renders the preloaded value immediately with no initial HTTP fetch", () => {
+        expect.assertions(2);
+
         // queryImpl returns a sentinel that must never appear — proving no fetch.
         const mock = createMockClient(() => ({ count: 999 }));
 
@@ -37,6 +39,8 @@ describe("usePreloadedQuery", () => {
     });
 
     test("attaches a live subscription so server pushes update the value", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(() => ({ count: 1 }));
 
         render(
@@ -63,9 +67,11 @@ describe("usePreloadedQuery", () => {
     });
 
     test("server-renders the preloaded value (SSR getServerSnapshot, no effects)", () => {
+        expect.assertions(3);
+
         const mock = createMockClient(() => ({ count: 1 }));
 
-        const html = renderToString(
+        const view = renderToString(
             <CirrusProvider client={mock.asClient}>
                 <Display token={preloaded("posts:list", { count: 42 })} />
             </CirrusProvider>,
@@ -73,7 +79,7 @@ describe("usePreloadedQuery", () => {
 
         // React HTML-escapes the quotes in the serialized JSON, so decode them
         // before matching the preloaded value the server snapshot produced.
-        expect(html.replaceAll("&quot;", '"')).toContain(JSON.stringify({ count: 42 }));
+        expect(view.replaceAll("&quot;", '"')).toContain(JSON.stringify({ count: 42 }));
         // No effects run during SSR, so neither transport is touched.
         expect(mock.query).not.toHaveBeenCalled();
         expect(mock.subscribe).not.toHaveBeenCalled();

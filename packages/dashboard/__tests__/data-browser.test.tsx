@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, test } from "vitest";
 
@@ -197,7 +197,7 @@ describe("dataBrowser", () => {
     });
 
     /** The first cell of every `db-row` in document order. */
-    const rowTexts = (): string[] => screen.getAllByTestId("db-row").map((row) => row.querySelectorAll("td")[1]?.textContent ?? "");
+    const rowTexts = (): string[] => screen.getAllByTestId("db-row").map((row) => within(row).getAllByRole("cell")[1]?.textContent ?? "");
 
     test("sorts a column ascending then descending on repeated clicks", async () => {
         expect.assertions(3);
@@ -613,10 +613,10 @@ describe("dataBrowser — editable", () => {
         // re-subscribe per keystroke to shards that were never loaded.
         fireEvent.change(screen.getByTestId("db-shard-input"), { target: { value: "tenant-7" } });
 
-        expect(mock.subscribe.mock.calls.length).toBe(callsAfterToggle);
+        expect(mock.subscribe).toHaveBeenCalledTimes(callsAfterToggle);
     });
 
-    test("Live pushes a refreshed table list (new tables appear without a reload)", async () => {
+    test("live pushes a refreshed table list (new tables appear without a reload)", async () => {
         expect.assertions(2);
 
         const mock = createBrowserClient();

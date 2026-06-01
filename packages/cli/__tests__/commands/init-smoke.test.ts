@@ -39,69 +39,75 @@ const templatesRoot = resolve(testDirectory, "..", "..", "..", "..", "templates"
 
 let workdir: string;
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-init-smoke-"));
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
-describe("cirrus init → codegen → wrangler validator (Phase 5 smoke)", () => {
-    test("vite template produces a project that codegen + wrangler validator accept", async () => {
-        const result = await runInitCommand({
-            cwd: workdir,
-            from: templatesRoot,
-            logger: silentLogger(),
-            name: "smoke-app",
-            templateType: "vite",
-        });
-
-        expect(result.code).toBe(0);
-
-        const projectRoot = join(workdir, "smoke-app");
-
-        // 1. Codegen against the scaffolded schema must succeed and emit the
-        //    three generated files.
-        const codegenResult = runCodegen({ projectRoot });
-
-        expect(existsSync(join(codegenResult.outputDirectory, "dataModel.ts"))).toBe(true);
-        expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
-        expect(existsSync(join(codegenResult.outputDirectory, "server.ts"))).toBe(true);
-
-        // The api surface should at minimum mention the `messages` table the
-        // vite template ships with — proves codegen parsed schema.ts and the
-        // function files, not just emitted boilerplate.
-        const api = readFileSync(join(codegenResult.outputDirectory, "api.ts"), "utf8");
-
-        expect(api).toContain("messages");
-
-        // 2. Wrangler validator must accept the scaffolded wrangler.jsonc
-        //    against the scaffolded schema (SHARD binding, compatibility flag).
-        const wranglerResult = validateWranglerProject({ projectRoot });
-
-        expect(wranglerResult.wranglerPath).toBeDefined();
-        expect(wranglerResult.problems).toEqual([]);
+describe("cirrus init smoke", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-init-smoke-"));
     });
 
-    test("standalone template produces a project that codegen + wrangler validator accept", async () => {
-        const result = await runInitCommand({
-            cwd: workdir,
-            from: templatesRoot,
-            logger: silentLogger(),
-            name: "worker-smoke",
-            templateType: "standalone",
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    describe("cirrus init → codegen → wrangler validator (Phase 5 smoke)", () => {
+        test("vite template produces a project that codegen + wrangler validator accept", async () => {
+            expect.assertions(7);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "smoke-app",
+                templateType: "vite",
+            });
+
+            expect(result.code).toBe(0);
+
+            const projectRoot = join(workdir, "smoke-app");
+
+            // 1. Codegen against the scaffolded schema must succeed and emit the
+            //    three generated files.
+            const codegenResult = runCodegen({ projectRoot });
+
+            expect(existsSync(join(codegenResult.outputDirectory, "dataModel.ts"))).toBe(true);
+            expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
+            expect(existsSync(join(codegenResult.outputDirectory, "server.ts"))).toBe(true);
+
+            // The api surface should at minimum mention the `messages` table the
+            // vite template ships with — proves codegen parsed schema.ts and the
+            // function files, not just emitted boilerplate.
+            const api = readFileSync(join(codegenResult.outputDirectory, "api.ts"), "utf8");
+
+            expect(api).toContain("messages");
+
+            // 2. Wrangler validator must accept the scaffolded wrangler.jsonc
+            //    against the scaffolded schema (SHARD binding, compatibility flag).
+            const wranglerResult = validateWranglerProject({ projectRoot });
+
+            expect(wranglerResult.wranglerPath).toBeDefined();
+            expect(wranglerResult.problems).toEqual([]);
         });
 
-        expect(result.code).toBe(0);
+        test("standalone template produces a project that codegen + wrangler validator accept", async () => {
+            expect.assertions(3);
 
-        const projectRoot = join(workdir, "worker-smoke");
-        const codegenResult = runCodegen({ projectRoot });
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "worker-smoke",
+                templateType: "standalone",
+            });
 
-        expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
+            expect(result.code).toBe(0);
 
-        const wranglerResult = validateWranglerProject({ projectRoot });
+            const projectRoot = join(workdir, "worker-smoke");
+            const codegenResult = runCodegen({ projectRoot });
 
-        expect(wranglerResult.problems).toEqual([]);
+            expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
+
+            const wranglerResult = validateWranglerProject({ projectRoot });
+
+            expect(wranglerResult.problems).toEqual([]);
+        });
     });
 });

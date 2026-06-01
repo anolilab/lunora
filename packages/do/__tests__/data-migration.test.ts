@@ -64,236 +64,262 @@ const bumpVersion: DataMigrationLike = {
     up: (document) => ({ ...document, version: Number(document["version"] ?? 0) + 1 }),
 };
 
-beforeEach(() => {
-    harness = createSqliteExec();
-});
-
-afterEach(() => {
-    harness.close();
-});
-
-describe("runDataMigration — up", () => {
-    test("rewrites every row and reports completed with cumulative counts", async () => {
-        const writer = setupWriter();
-
-        await seed(writer);
-
-        const result = await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
-
-        expect(result).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: false, id: "bump-version", processed: 5, status: "completed" });
-        expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+describe("runDataMigration", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
     });
 
-    test("counts a row whose transform returns undefined as processed but not changed", async () => {
-        const writer = setupWriter();
-
-        await seed(writer);
-
-        const flagHighScores: DataMigrationLike = {
-            id: "flag-high",
-            table: "users",
-            up: (document) => (Number(document["score"]) >= 30 ? { ...document, flagged: true } : undefined),
-        };
-
-        const result = await runDataMigration({ migration: flagHighScores, sql: harness.sql, writer });
-
-        expect(result.processed).toBe(5);
-        expect(result.changed).toBe(3);
-        expect((await allUsers(writer)).map((document) => document["flagged"])).toEqual([undefined, undefined, true, true, true]);
+    afterEach(() => {
+        harness.close();
     });
 
-    test("persists progress to the reserved state table", async () => {
-        const writer = setupWriter();
+    describe("runDataMigration — up", () => {
+        test("rewrites every row and reports completed with cumulative counts", async () => {
+            expect.assertions(2);
 
-        await seed(writer);
+            const writer = setupWriter();
 
-        await runDataMigration({ clock: () => 1_800_000_000_000, migration: bumpVersion, sql: harness.sql, writer });
+            await seed(writer);
 
-        const row = stateRow("bump-version");
+            const result = await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
 
-        expect(row).toMatchObject({ changed: 5, cursor: null, direction: "up", id: "bump-version", processed: 5, status: "completed" });
-        expect(row?.["started_at"]).toBe(1_800_000_000_000);
-        expect(row?.["updated_at"]).toBe(1_800_000_000_000);
-    });
-
-    test("invokes onBatch once per persisted batch with climbing progress", async () => {
-        const writer = setupWriter();
-
-        await seed(writer);
-
-        const progress: { changed: number; processed: number }[] = [];
-
-        // 5 rows at batchSize 2 → batches of 2, 2, 1.
-        await runDataMigration({
-            batchSize: 2,
-            migration: bumpVersion,
-            onBatch: ({ changed, processed }) => {
-                progress.push({ changed, processed });
-            },
-            sql: harness.sql,
-            writer,
+            expect(result).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: false, id: "bump-version", processed: 5, status: "completed" });
+            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
 
-        expect(progress).toEqual([
-            { changed: 2, processed: 2 },
-            { changed: 4, processed: 4 },
-            { changed: 5, processed: 5 },
-        ]);
-    });
+        test("counts a row whose transform returns undefined as processed but not changed", async () => {
+            expect.assertions(3);
 
-    test("does not invoke onBatch on a dry run (nothing is persisted)", async () => {
-        const writer = setupWriter();
+            const writer = setupWriter();
 
-        await seed(writer);
+            await seed(writer);
 
-        let calls = 0;
+            const flagHighScores: DataMigrationLike = {
+                id: "flag-high",
+                table: "users",
+                up: (document) => (Number(document["score"]) >= 30 ? { ...document, flagged: true } : undefined),
+            };
 
-        await runDataMigration({
-            batchSize: 2,
-            dryRun: true,
-            migration: bumpVersion,
-            onBatch: () => {
-                calls += 1;
-            },
-            sql: harness.sql,
-            writer,
+            const result = await runDataMigration({ migration: flagHighScores, sql: harness.sql, writer });
+
+            expect(result.processed).toBe(5);
+            expect(result.changed).toBe(3);
+            expect((await allUsers(writer)).map((document) => document["flagged"])).toEqual([undefined, undefined, true, true, true]);
         });
 
-        expect(calls).toBe(0);
-    });
+        test("persists progress to the reserved state table", async () => {
+            expect.assertions(3);
 
-    test("a throwing onBatch is swallowed: the run completes and is not marked failed", async () => {
-        const writer = setupWriter();
+            const writer = setupWriter();
 
-        await seed(writer);
+            await seed(writer);
 
-        // The flush/push that onBatch performs is best-effort; its failure must
-        // not abort the run nor flip the final (completed) batch to failed.
-        const result = await runDataMigration({
-            batchSize: 2,
-            migration: bumpVersion,
-            onBatch: () => {
-                throw new Error("flush boom");
-            },
-            sql: harness.sql,
-            writer,
+            await runDataMigration({ clock: () => 1_800_000_000_000, migration: bumpVersion, sql: harness.sql, writer });
+
+            const row = stateRow("bump-version");
+
+            expect(row).toMatchObject({ changed: 5, cursor: null, direction: "up", id: "bump-version", processed: 5, status: "completed" });
+            expect(row?.["started_at"]).toBe(1_800_000_000_000);
+            expect(row?.["updated_at"]).toBe(1_800_000_000_000);
         });
 
-        expect(result.status).toBe("completed");
-        expect(result.processed).toBe(5);
-        expect(stateRow("bump-version")).toMatchObject({ cursor: null, status: "completed" });
+        test("invokes onBatch once per persisted batch with climbing progress", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            const progress: { changed: number; processed: number }[] = [];
+
+            // 5 rows at batchSize 2 → batches of 2, 2, 1.
+            await runDataMigration({
+                batchSize: 2,
+                migration: bumpVersion,
+                onBatch: ({ changed, processed }) => {
+                    progress.push({ changed, processed });
+                },
+                sql: harness.sql,
+                writer,
+            });
+
+            expect(progress).toEqual([
+                { changed: 2, processed: 2 },
+                { changed: 4, processed: 4 },
+                { changed: 5, processed: 5 },
+            ]);
+        });
+
+        test("does not invoke onBatch on a dry run (nothing is persisted)", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            let calls = 0;
+
+            await runDataMigration({
+                batchSize: 2,
+                dryRun: true,
+                migration: bumpVersion,
+                onBatch: () => {
+                    calls += 1;
+                },
+                sql: harness.sql,
+                writer,
+            });
+
+            expect(calls).toBe(0);
+        });
+
+        test("a throwing onBatch is swallowed: the run completes and is not marked failed", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            // The flush/push that onBatch performs is best-effort; its failure must
+            // not abort the run nor flip the final (completed) batch to failed.
+            const result = await runDataMigration({
+                batchSize: 2,
+                migration: bumpVersion,
+                onBatch: () => {
+                    throw new Error("flush boom");
+                },
+                sql: harness.sql,
+                writer,
+            });
+
+            expect(result.status).toBe("completed");
+            expect(result.processed).toBe(5);
+            expect(stateRow("bump-version")).toMatchObject({ cursor: null, status: "completed" });
+        });
     });
-});
 
-describe("runDataMigration — resume", () => {
-    test("a maxBatches-limited run resumes and visits each row exactly once", async () => {
-        const writer = setupWriter();
+    describe("runDataMigration — resume", () => {
+        test("a maxBatches-limited run resumes and visits each row exactly once", async () => {
+            expect.assertions(7);
 
-        await seed(writer);
+            const writer = setupWriter();
 
-        const first = await runDataMigration({ batchSize: 2, maxBatches: 1, migration: bumpVersion, sql: harness.sql, writer });
+            await seed(writer);
 
-        expect(first.status).toBe("in_progress");
-        expect(first.processed).toBe(2);
-        expect(first.cursor).not.toBeNull();
+            const first = await runDataMigration({ batchSize: 2, maxBatches: 1, migration: bumpVersion, sql: harness.sql, writer });
 
-        // Resume with no maxBatches — drains the rest from the stored cursor.
-        const second = await runDataMigration({ batchSize: 2, migration: bumpVersion, sql: harness.sql, writer });
+            expect(first.status).toBe("in_progress");
+            expect(first.processed).toBe(2);
+            expect(first.cursor).not.toBeNull();
 
-        expect(second.status).toBe("completed");
-        expect(second.processed).toBe(5);
-        expect(second.changed).toBe(5);
-        // Every row bumped exactly once — a re-scan of the first batch would show 2.
-        expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+            // Resume with no maxBatches — drains the rest from the stored cursor.
+            const second = await runDataMigration({ batchSize: 2, migration: bumpVersion, sql: harness.sql, writer });
+
+            expect(second.status).toBe("completed");
+            expect(second.processed).toBe(5);
+            expect(second.changed).toBe(5);
+            // Every row bumped exactly once — a re-scan of the first batch would show 2.
+            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+        });
+
+        test("re-running a completed migration is a no-op that returns the stored counts", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
+            const again = await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
+
+            expect(again).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: false, id: "bump-version", processed: 5, status: "completed" });
+            // No rescan: versions stay at 1 rather than climbing to 2.
+            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+        });
     });
 
-    test("re-running a completed migration is a no-op that returns the stored counts", async () => {
-        const writer = setupWriter();
+    describe("runDataMigration — down", () => {
+        test("reverses via the down transform, discarding the completed up state", async () => {
+            expect.assertions(3);
 
-        await seed(writer);
+            const writer = setupWriter();
 
-        await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
-        const again = await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer });
+            await seed(writer);
 
-        expect(again).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: false, id: "bump-version", processed: 5, status: "completed" });
-        // No rescan: versions stay at 1 rather than climbing to 2.
-        expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+            const migration: DataMigrationLike = {
+                down: (document) => ({ ...document, version: Number(document["version"]) - 1 }),
+                id: "versioned",
+                table: "users",
+                up: (document) => ({ ...document, version: Number(document["version"]) + 1 }),
+            };
+
+            await runDataMigration({ migration, sql: harness.sql, writer });
+            const down = await runDataMigration({ direction: "down", migration, sql: harness.sql, writer });
+
+            expect(down).toEqual({ changed: 5, cursor: null, direction: "down", dryRun: false, id: "versioned", processed: 5, status: "completed" });
+            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([0, 0, 0, 0, 0]);
+            expect(stateRow("versioned")?.["direction"]).toBe("down");
+        });
+
+        test("throws when the requested direction has no transform", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            await expect(runDataMigration({ direction: "down", migration: bumpVersion, sql: harness.sql, writer })).rejects.toThrow(/has no `down` transform/);
+        });
     });
-});
 
-describe("runDataMigration — down", () => {
-    test("reverses via the down transform, discarding the completed up state", async () => {
-        const writer = setupWriter();
+    describe("runDataMigration — dryRun", () => {
+        test("previews counts without rewriting rows or creating the state table", async () => {
+            expect.assertions(3);
 
-        await seed(writer);
+            const writer = setupWriter();
 
-        const migration: DataMigrationLike = {
-            down: (document) => ({ ...document, version: Number(document["version"]) - 1 }),
-            id: "versioned",
-            table: "users",
-            up: (document) => ({ ...document, version: Number(document["version"]) + 1 }),
-        };
+            await seed(writer);
 
-        await runDataMigration({ migration, sql: harness.sql, writer });
-        const down = await runDataMigration({ direction: "down", migration, sql: harness.sql, writer });
+            const result = await runDataMigration({ dryRun: true, migration: bumpVersion, sql: harness.sql, writer });
 
-        expect(down).toEqual({ changed: 5, cursor: null, direction: "down", dryRun: false, id: "versioned", processed: 5, status: "completed" });
-        expect((await allUsers(writer)).map((document) => document["version"])).toEqual([0, 0, 0, 0, 0]);
-        expect(stateRow("versioned")?.["direction"]).toBe("down");
+            expect(result).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: true, id: "bump-version", processed: 5, status: "completed" });
+            // Rows untouched...
+            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([0, 0, 0, 0, 0]);
+
+            // ...and no state table was created.
+            const tables = harness.raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, DATA_MIGRATION_STATE_TABLE);
+
+            expect(tables).toHaveLength(0);
+        });
     });
 
-    test("throws when the requested direction has no transform", async () => {
-        const writer = setupWriter();
+    describe("runDataMigration — failure", () => {
+        test("persists a failed state with partial counts and rethrows", async () => {
+            expect.assertions(3);
 
-        await seed(writer);
+            const writer = setupWriter();
 
-        await expect(runDataMigration({ direction: "down", migration: bumpVersion, sql: harness.sql, writer })).rejects.toThrow(/has no `down` transform/);
-    });
-});
+            await seed(writer);
 
-describe("runDataMigration — dryRun", () => {
-    test("previews counts without rewriting rows or creating the state table", async () => {
-        const writer = setupWriter();
+            const explodeOnU3: DataMigrationLike = {
+                id: "explode",
+                table: "users",
+                up: (document) => {
+                    if (document["_id"] === "u3") {
+                        throw new Error("boom");
+                    }
 
-        await seed(writer);
+                    return { ...document, version: 1 };
+                },
+            };
 
-        const result = await runDataMigration({ dryRun: true, migration: bumpVersion, sql: harness.sql, writer });
+            await expect(runDataMigration({ batchSize: 10, migration: explodeOnU3, sql: harness.sql, writer })).rejects.toThrow("boom");
 
-        expect(result).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: true, id: "bump-version", processed: 5, status: "completed" });
-        // Rows untouched...
-        expect((await allUsers(writer)).map((document) => document["version"])).toEqual([0, 0, 0, 0, 0]);
+            const row = stateRow("explode");
 
-        // ...and no state table was created.
-        const tables = harness.raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, DATA_MIGRATION_STATE_TABLE);
-
-        expect(tables).toHaveLength(0);
-    });
-});
-
-describe("runDataMigration — failure", () => {
-    test("persists a failed state with partial counts and rethrows", async () => {
-        const writer = setupWriter();
-
-        await seed(writer);
-
-        const explodeOnU3: DataMigrationLike = {
-            id: "explode",
-            table: "users",
-            up: (document) => {
-                if (document["_id"] === "u3") {
-                    throw new Error("boom");
-                }
-
-                return { ...document, version: 1 };
-            },
-        };
-
-        await expect(runDataMigration({ batchSize: 10, migration: explodeOnU3, sql: harness.sql, writer })).rejects.toThrow("boom");
-
-        const row = stateRow("explode");
-
-        expect(row).toMatchObject({ changed: 2, error: "boom", id: "explode", processed: 3, status: "failed" });
-        // Only the rows before the failure were rewritten.
-        expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 0, 0, 0]);
+            expect(row).toMatchObject({ changed: 2, error: "boom", id: "explode", processed: 3, status: "failed" });
+            // Only the rows before the failure were rewritten.
+            expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 0, 0, 0]);
+        });
     });
 });

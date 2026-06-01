@@ -7,8 +7,8 @@ import { LiveToggle } from "./live-toggle.js";
 import { aggregateMetrics, type ShardMetricsResult, shardsToAggregate } from "./metrics-aggregate.js";
 import { loadRecentShards, recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
-import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
+import { useLiveToggle } from "./use-live-toggle.js";
 
 export interface MetricsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */

@@ -60,16 +60,18 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     await writer.insert("todos", { _id: "t5", archived: false, projectId: "p1", seq: 0 }, { allowExplicitId: true });
 };
 
-beforeEach(() => {
-    harness = createD1Exec();
-});
-
-afterEach(() => {
-    harness.close();
-});
-
 describe("d1 aggregateIndex parity", () => {
+    beforeEach(() => {
+        harness = createD1Exec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
     test("trigger-maintained counter answers indexed reads", async () => {
+        expect.assertions(3);
+
         const writer = await setupWriter(makeSchema(byProject));
 
         await seed(writer);
@@ -83,6 +85,8 @@ describe("d1 aggregateIndex parity", () => {
     });
 
     test("falls back to SCAN when the counter companion table is absent", async () => {
+        expect.assertions(1);
+
         // Skip runD1AggregateMigrations — counter table doesn't exist.
         harness.ddl(
             `CREATE TABLE "todos" (
@@ -104,6 +108,8 @@ describe("d1 aggregateIndex parity", () => {
     });
 
     test("aggregate(sum) reduces matching rows via SQL", async () => {
+        expect.assertions(1);
+
         const writer = await setupWriter(makeSchema());
 
         await seed(writer);
@@ -112,6 +118,8 @@ describe("d1 aggregateIndex parity", () => {
     });
 
     test("groupBy tallies per group via SQL", async () => {
+        expect.assertions(1);
+
         const writer = await setupWriter(makeSchema());
 
         await seed(writer);
@@ -123,6 +131,8 @@ describe("d1 aggregateIndex parity", () => {
     });
 
     test("restrictsCounts throws COUNT_RLS_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
         const writer = await setupWriter(makeSchema(byProject));
 
         await seed(writer);
@@ -134,6 +144,8 @@ describe("d1 aggregateIndex parity", () => {
     });
 
     test("baseWhere is AND-merged into the SCAN predicate", async () => {
+        expect.assertions(1);
+
         const writer = await setupWriter(makeSchema());
 
         await seed(writer);

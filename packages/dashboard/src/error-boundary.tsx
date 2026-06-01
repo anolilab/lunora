@@ -10,6 +10,10 @@ interface ErrorBoundaryState {
     readonly error: Error | null;
 }
 
+/** Static inline styles, hoisted so they keep a stable reference across renders. */
+const CONTAINER_STYLE = { border: "1px solid #cf222e", borderRadius: 6, padding: 12 } as const;
+const MESSAGE_STYLE = { overflow: "auto", whiteSpace: "pre-wrap" } as const;
+
 /**
  * Catches render/lifecycle errors in a panel so one throwing component doesn't
  * blank the whole dashboard shell. Shows the error message with a "Try again"
@@ -42,9 +46,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         }
 
         return (
-            <div data-testid="dash-error-boundary" role="alert" style={{ border: "1px solid #cf222e", borderRadius: 6, padding: 12 }}>
+            <div data-testid="dash-error-boundary" role="alert" style={CONTAINER_STYLE}>
                 <strong>{this.props.label === undefined ? "Something went wrong" : `${this.props.label} failed`}</strong>
-                <pre data-testid="dash-error-message" style={{ overflow: "auto", whiteSpace: "pre-wrap" }}>
+                <pre data-testid="dash-error-message" style={MESSAGE_STYLE}>
                     {error.message}
                 </pre>
                 <button data-testid="dash-error-retry" onClick={this.reset} type="button">

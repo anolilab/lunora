@@ -146,6 +146,8 @@ const buildCluster = (shardKeys: string[]) => {
 
 describe("admin roundtrip — 3 shards", () => {
     test("export → import across 3 shard buckets roundtrips identically", async () => {
+        expect.hasAssertions();
+
         const channelKeys = ["c1", "c2", "c3"];
         const sourceCluster = buildCluster(channelKeys);
 

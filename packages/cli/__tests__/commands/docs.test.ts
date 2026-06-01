@@ -23,6 +23,8 @@ const recordingOpener = (): { openedUrls: string[]; opener: (url: string) => Pro
 
 describe("cirrus docs", () => {
     test("opens the default docs URL when no section is given", async () => {
+        expect.assertions(2);
+
         const { openedUrls, opener } = recordingOpener();
 
         const result = await runDocsCommand({ logger: silentLogger(), opener });
@@ -32,6 +34,8 @@ describe("cirrus docs", () => {
     });
 
     test("appends the section path", async () => {
+        expect.assertions(1);
+
         const { openedUrls, opener } = recordingOpener();
 
         await runDocsCommand({ logger: silentLogger(), opener, section: "addons/dashboard" });
@@ -40,6 +44,8 @@ describe("cirrus docs", () => {
     });
 
     test("normalises leading + trailing slashes", async () => {
+        expect.assertions(1);
+
         const { openedUrls, opener } = recordingOpener();
 
         await runDocsCommand({ logger: silentLogger(), opener, section: "/migrating/from-convex/" });
@@ -48,6 +54,8 @@ describe("cirrus docs", () => {
     });
 
     test("reports opener failures", async () => {
+        expect.assertions(2);
+
         const errors: string[] = [];
 
         const result = await runDocsCommand({

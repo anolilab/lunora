@@ -21,32 +21,38 @@ const silentLogger = (): Logger => ({
 
 let workdir: string;
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-codegen-"));
-    cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
 describe("cirrus codegen", () => {
-    test("writes the three generated files", () => {
-        runCodegenCommand({ cwd: workdir, logger: silentLogger() });
-
-        const generated = join(workdir, "cirrus", "_generated");
-
-        expect(existsSync(join(generated, "dataModel.ts"))).toBe(true);
-        expect(existsSync(join(generated, "api.ts"))).toBe(true);
-        expect(existsSync(join(generated, "server.ts"))).toBe(true);
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-codegen-"));
+        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
     });
 
-    test("logs success once codegen completes", () => {
-        const success: string[] = [];
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
 
-        runCodegenCommand({ cwd: workdir, logger: { ...silentLogger(), success: (msg) => success.push(msg) } });
+    describe("cirrus codegen", () => {
+        test("writes the three generated files", () => {
+            expect.assertions(3);
 
-        expect(success).toHaveLength(1);
-        expect(success[0]).toContain("_generated");
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            const generated = join(workdir, "cirrus", "_generated");
+
+            expect(existsSync(join(generated, "dataModel.ts"))).toBe(true);
+            expect(existsSync(join(generated, "api.ts"))).toBe(true);
+            expect(existsSync(join(generated, "server.ts"))).toBe(true);
+        });
+
+        test("logs success once codegen completes", () => {
+            expect.assertions(2);
+
+            const success: string[] = [];
+
+            runCodegenCommand({ cwd: workdir, logger: { ...silentLogger(), success: (msg) => success.push(msg) } });
+
+            expect(success).toHaveLength(1);
+            expect(success[0]).toContain("_generated");
+        });
     });
 });

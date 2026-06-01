@@ -30,6 +30,8 @@ describe("@cirrus/auth/plugins", () => {
     ] as const;
 
     test.each(expectedExports)("exports `%s` as a callable factory", (name) => {
+        expect.assertions(2);
+
         expect(plugins).toHaveProperty(name);
 
         const factory = plugins[name as keyof typeof plugins];
@@ -38,6 +40,8 @@ describe("@cirrus/auth/plugins", () => {
     });
 
     test("admin() returns a plugin object with a known shape", () => {
+        expect.assertions(2);
+
         const plugin = plugins.admin();
 
         expect(plugin).toBeTypeOf("object");
@@ -45,6 +49,8 @@ describe("@cirrus/auth/plugins", () => {
     });
 
     test("organization() returns a plugin object with a known shape", () => {
+        expect.assertions(2);
+
         const plugin = plugins.organization();
 
         expect(plugin).toBeTypeOf("object");

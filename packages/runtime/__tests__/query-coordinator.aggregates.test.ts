@@ -42,6 +42,8 @@ const buildRequest = (overrides: Partial<FanOutRequest>): FanOutRequest => ({
 
 describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
     test("count fans out as sum", async () => {
+        expect.assertions(2);
+
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
         const spy = createShards({ a: 3, b: 5, c: 2 });
         const coordinator = createQueryCoordinator({ registry });
@@ -53,6 +55,8 @@ describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
     });
 
     test("max picks the largest per-shard scalar", async () => {
+        expect.assertions(1);
+
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
         const spy = createShards({ a: 7, b: 99, c: 42 });
         const coordinator = createQueryCoordinator({ registry });
@@ -63,6 +67,8 @@ describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
     });
 
     test("min picks the smallest per-shard scalar", async () => {
+        expect.assertions(1);
+
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
         const spy = createShards({ a: 7, b: 99, c: 42 });
         const coordinator = createQueryCoordinator({ registry });
@@ -73,6 +79,8 @@ describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
     });
 
     test("min / max return null when every shard payload is non-numeric", async () => {
+        expect.assertions(2);
+
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
         const spy = createShards({ a: null, b: null });
         const coordinator = createQueryCoordinator({ registry });
@@ -87,6 +95,8 @@ describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
 
 describe("cross-shard merge — groupBy", () => {
     test("groupBy(sum) reduces per-shard entries into one per distinct key", async () => {
+        expect.assertions(1);
+
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
         const spy = createShards({
             a: [
@@ -115,6 +125,8 @@ describe("cross-shard merge — groupBy", () => {
     });
 
     test("groupBy(max) reduces with max across shards", async () => {
+        expect.assertions(1);
+
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
         const spy = createShards({
             a: [{ key: { channelId: "c1" }, value: 4 }],
@@ -131,6 +143,8 @@ describe("cross-shard merge — groupBy", () => {
     });
 
     test("groupBy treats keys canonically (property order doesn't matter)", async () => {
+        expect.assertions(2);
+
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
         const spy = createShards({
             a: [{ key: { a: 1, b: 2 }, value: 5 }],
@@ -150,25 +164,35 @@ describe("cross-shard merge — groupBy", () => {
 
 describe("mergeStrategyForAggregate", () => {
     test("count → sum", () => {
+        expect.assertions(1);
+
         expect(mergeStrategyForAggregate({ kind: "count" })).toEqual({ kind: "sum" });
     });
 
     test("aggregate(sum) → sum, max → max, min → min", () => {
+        expect.assertions(3);
+
         expect(mergeStrategyForAggregate({ kind: "scalar", op: "sum" })).toEqual({ kind: "sum" });
         expect(mergeStrategyForAggregate({ kind: "scalar", op: "max" })).toEqual({ kind: "max" });
         expect(mergeStrategyForAggregate({ kind: "scalar", op: "min" })).toEqual({ kind: "min" });
     });
 
     test("aggregate(avg) throws — needs sum + count separately", () => {
+        expect.assertions(1);
+
         expect(() => mergeStrategyForAggregate({ kind: "scalar", op: "avg" })).toThrow(/avg/);
     });
 
     test("groupBy → groupBy with op-derived reducer (default sum)", () => {
+        expect.assertions(2);
+
         expect(mergeStrategyForAggregate({ kind: "groupBy" })).toEqual({ kind: "groupBy", op: "sum" });
         expect(mergeStrategyForAggregate({ agg: { op: "max" }, kind: "groupBy" })).toEqual({ kind: "groupBy", op: "max" });
     });
 
     test("groupBy(avg) throws", () => {
+        expect.assertions(1);
+
         expect(() => mergeStrategyForAggregate({ agg: { op: "avg" }, kind: "groupBy" })).toThrow(/avg/);
     });
 });

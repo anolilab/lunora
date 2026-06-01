@@ -5,7 +5,7 @@ import { renderEmail } from "../src/render.js";
 import type { MailTransport, SendPayload } from "../src/types.js";
 
 const WelcomeEmail = ({ name }: { name: string }) => (
-    <html>
+    <html lang="en">
         <body>
             <h1>Welcome, {name}!</h1>
             <p>Thanks for joining Cirrus.</p>
@@ -15,6 +15,8 @@ const WelcomeEmail = ({ name }: { name: string }) => (
 
 describe("renderEmail", () => {
     test("renders a React element to HTML and plain text", async () => {
+        expect.assertions(5);
+
         const result = await renderEmail(<WelcomeEmail name="Alice" />);
 
         // react-email injects HTML comment markers around interpolated text,
@@ -28,6 +30,8 @@ describe("renderEmail", () => {
     });
 
     test("createMailer.send() renders react templates before handing off to transport", async () => {
+        expect.assertions(3);
+
         const captured: SendPayload[] = [];
         const transport: MailTransport = {
             send: async (payload) => {

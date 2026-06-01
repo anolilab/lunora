@@ -14,13 +14,15 @@ const Probe = ({ tickMs }: { tickMs?: number }): ReactElement => {
     return <span>{handle.ok ? "ok" : "blocked"}</span>;
 };
 
-afterEach(() => {
-    clock.now = 0;
-    vi.useRealTimers();
-});
-
 describe("useRateLimit", () => {
+    afterEach(() => {
+        clock.now = 0;
+        vi.useRealTimers();
+    });
+
     test("starts available and blocks once the bucket is drained", () => {
+        expect.assertions(3);
+
         render(<Probe />);
 
         expect(handle.ok).toBe(true);
@@ -35,6 +37,8 @@ describe("useRateLimit", () => {
     });
 
     test("check does not consume", () => {
+        expect.assertions(3);
+
         render(<Probe />);
 
         let allowed = false;
@@ -50,6 +54,8 @@ describe("useRateLimit", () => {
     });
 
     test("reset restores availability", () => {
+        expect.assertions(2);
+
         render(<Probe />);
 
         act(() => {
@@ -67,6 +73,8 @@ describe("useRateLimit", () => {
     });
 
     test("re-enables on its own as tokens refill", () => {
+        expect.assertions(2);
+
         vi.useFakeTimers();
         render(<Probe tickMs={250} />);
 

@@ -34,6 +34,10 @@ describe("shardInput", () => {
         render(<Harness />);
 
         const datalist = screen.getByTestId("x-shard-recents");
+        // <option>s inside a <datalist> are a native autocomplete source, not part of the
+        // accessibility tree, so role/label queries can't reach them — direct DOM access is the
+        // only way to assert their values.
+        // eslint-disable-next-line testing-library/no-node-access -- datalist options aren't queryable via RTL
         const options = [...datalist.querySelectorAll("option")].map((option) => option.value);
 
         // Most-recent-first.

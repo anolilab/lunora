@@ -65,6 +65,8 @@ const newDb = () => {
 
 describe("ctx-db + reactiveCache integration", () => {
     test("insert invalidates the inserted row id AND the table's *scan deps", async () => {
+        expect.assertions(3);
+
         const sql = newDb();
         const cache = new ReactiveCache();
         const writer = createShardCtxDb({ sql, schema, cache });
@@ -98,6 +100,8 @@ describe("ctx-db + reactiveCache integration", () => {
     });
 
     test("patch invalidates the row's per-id deps AND *scan entries", async () => {
+        expect.assertions(1);
+
         const sql = newDb();
         const cache = new ReactiveCache();
         const writer = createShardCtxDb({ sql, schema, cache });
@@ -113,6 +117,8 @@ describe("ctx-db + reactiveCache integration", () => {
     });
 
     test("delete invalidates the row's per-id deps AND *scan entries", async () => {
+        expect.assertions(1);
+
         const sql = newDb();
         const cache = new ReactiveCache();
         const writer = createShardCtxDb({ sql, schema, cache });
@@ -127,6 +133,8 @@ describe("ctx-db + reactiveCache integration", () => {
     });
 
     test("writes to one table do not blow cache entries on another table", async () => {
+        expect.assertions(2);
+
         const sql = newDb();
         const cache = new ReactiveCache();
         const writer = createShardCtxDb({ sql, schema, cache });
@@ -147,6 +155,8 @@ describe("ctx-db + reactiveCache integration", () => {
     });
 
     test("reads via writer.get stamp per-id deps on the configured ReadHook", async () => {
+        expect.assertions(1);
+
         const sql = newDb();
         const reads: { idOrScan?: string; table: string }[] = [];
         const writer = createShardCtxDb({
@@ -165,6 +175,8 @@ describe("ctx-db + reactiveCache integration", () => {
     });
 
     test("findMany without where stamps *scan, with where stamps per-row ids", async () => {
+        expect.assertions(3);
+
         const sql = newDb();
         const reads: { idOrScan?: string; table: string }[] = [];
         const writer = createShardCtxDb({
@@ -192,6 +204,8 @@ describe("ctx-db + reactiveCache integration", () => {
     });
 
     test("count() registers *scan deps so any write to the table invalidates the cached count", async () => {
+        expect.assertions(1);
+
         const sql = newDb();
         const reads: { idOrScan?: string; table: string }[] = [];
         const writer = createShardCtxDb({
@@ -211,6 +225,8 @@ describe("ctx-db + reactiveCache integration", () => {
     });
 
     test("rank() and rankPage() register *scan deps so any write shifts the cached position", async () => {
+        expect.assertions(2);
+
         // Rank position is `count(rows-strictly-before) + 1` — any insert /
         // delete to the partition can shift it. Same SCAN_DEP semantics as
         // count() so the reactive cache invalidates rank-returning queries
@@ -290,7 +306,7 @@ const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
 
     return {
         sockets,
-        storage: { sql: { exec: vi.fn() } },
+        storage: { sql: { exec: vi.fn<(query: string) => unknown>() } },
         acceptWebSocket(ws) {
             sockets.push(ws as unknown as FakeWebSocket);
         },
@@ -394,6 +410,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     });
 
     test("cache hit: identical query+args runs handler once across two RPC dispatches", async () => {
+        expect.assertions(1);
+
         shard.handlers.set("users:list", async () => {
             shard.stampRead("users", "*scan");
 
@@ -407,6 +425,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     });
 
     test("args sensitivity: different args go to different cache slots", async () => {
+        expect.assertions(1);
+
         shard.handlers.set("users:list", async (args) => {
             shard.stampRead("users", "*scan");
 
@@ -421,6 +441,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     });
 
     test("opt-out: when no ReactiveCacheOptions is supplied, every dispatch re-runs (today's default)", async () => {
+        expect.assertions(1);
+
         const uncached = new CachingShard(state, {});
 
         uncached.handlers.set("users:list", async () => {
@@ -434,6 +456,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     });
 
     test("rLS interaction: restrictsCounts + baseWhere bake into the cache key", async () => {
+        expect.assertions(1);
+
         shard.handlers.set("users:count", async () => 1);
 
         await shard.handleRpc("users:count", {});
@@ -455,6 +479,8 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
     });
 
     test("subscriber registered on a cached query gets a re-run + push when a mutation invalidates", async () => {
+        expect.assertions(3);
+
         let counter = 0;
 
         shard.handlers.set("users:list", async () => {
@@ -504,6 +530,8 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
     });
 
     test("invalidation BEFORE broadcast: re-run after mutation sees post-write state", async () => {
+        expect.assertions(1);
+
         const sequence: string[] = [];
 
         shard.handlers.set("users:list", async () => {

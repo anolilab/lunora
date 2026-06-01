@@ -57,16 +57,18 @@ const setupWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => {
     return createD1CtxDb({ clock: () => 1_700_000_000_000, exec: harness.exec, schema });
 };
 
-beforeEach(() => {
-    harness = createD1Exec();
-});
-
-afterEach(() => {
-    harness.close();
-});
-
 describe("d1 rankIndex parity", () => {
+    beforeEach(() => {
+        harness = createD1Exec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
     test("rank() returns 1-based position + partition total", async () => {
+        expect.assertions(3);
+
         const writer = await setupWriter(makeSchema(byChannel));
 
         await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
@@ -79,6 +81,8 @@ describe("d1 rankIndex parity", () => {
     });
 
     test("update / delete keeps the companion in step", async () => {
+        expect.assertions(3);
+
         const writer = await setupWriter(makeSchema(byChannel));
 
         await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
@@ -95,6 +99,8 @@ describe("d1 rankIndex parity", () => {
     });
 
     test("desc sort returns the highest first", async () => {
+        expect.assertions(3);
+
         const writer = await setupWriter(makeSchema(byScoreDesc));
 
         await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 }, { allowExplicitId: true });
@@ -107,6 +113,8 @@ describe("d1 rankIndex parity", () => {
     });
 
     test("restrictsCounts throws COUNT_RLS_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
         const writer = await setupWriter(makeSchema(byChannel));
 
         await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
@@ -117,6 +125,8 @@ describe("d1 rankIndex parity", () => {
     });
 
     test("rankPage walks the companion in declared sort order", async () => {
+        expect.assertions(2);
+
         const writer = await setupWriter(makeSchema(byScoreDesc));
 
         await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 }, { allowExplicitId: true });
@@ -130,6 +140,8 @@ describe("d1 rankIndex parity", () => {
     });
 
     test("rankPage scoped by partition `where`", async () => {
+        expect.assertions(1);
+
         const writer = await setupWriter(makeSchema(byChannel));
 
         await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
@@ -142,6 +154,8 @@ describe("d1 rankIndex parity", () => {
     });
 
     test("falls back to null when no rank companion exists (opt-in)", async () => {
+        expect.assertions(1);
+
         // Skip runD1RankMigrations — the companion isn't materialized.
         harness.ddl(
             `CREATE TABLE "messages" (

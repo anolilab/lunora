@@ -11,6 +11,8 @@ import type { FunctionIR } from "../src/ir.js";
 
 describe("emitApi", () => {
     test("rewrites `import('./_generated/X')` qualifiers to `import('./X')` so paths resolve inside _generated/", () => {
+        expect.assertions(2);
+
         // Regression: when a handler returns a type from `_generated/dataModel`,
         // ts-morph prints `import("./_generated/dataModel.js").Doc_channels`
         // — correct from the function file, but tsc rejects it from inside
@@ -32,6 +34,8 @@ describe("emitApi", () => {
     });
 
     test("leaves absolute `import('@scope/pkg')` qualifiers untouched", () => {
+        expect.assertions(1);
+
         const functions: ReadonlyArray<FunctionIR> = [
             {
                 args: {},
@@ -48,6 +52,8 @@ describe("emitApi", () => {
     });
 
     test("rewrites the `_generated/` prefix even without a leading `./`", () => {
+        expect.assertions(2);
+
         const functions: ReadonlyArray<FunctionIR> = [
             {
                 args: {},

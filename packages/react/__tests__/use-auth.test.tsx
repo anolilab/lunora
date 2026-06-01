@@ -22,6 +22,8 @@ const Display = (): ReactElement => {
 
 describe("useAuth", () => {
     test("initial token reflects client.getAuthToken()", () => {
+        expect.assertions(1);
+
         const mock = createMockClient();
 
         mock.getAuthToken.mockReturnValue("seeded-token");
@@ -36,6 +38,8 @@ describe("useAuth", () => {
     });
 
     test("setToken updates both the hook state and the underlying client", () => {
+        expect.assertions(5);
+
         const mock = createMockClient();
 
         render(

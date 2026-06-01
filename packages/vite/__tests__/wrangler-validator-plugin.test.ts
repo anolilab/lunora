@@ -65,61 +65,70 @@ const callConfigResolved = (plugin: ReturnType<typeof wranglerValidatorPlugin>):
     (plugin.configResolved as (this: unknown) => void).call(undefined);
 };
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-wrangler-"));
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
-describe("wranglerValidatorPlugin", () => {
-    test("passes when wrangler.jsonc declares everything the schema implies", () => {
-        writeSchema(SCHEMA_WITH_GLOBAL);
-        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-
-        const plugin = wranglerValidatorPlugin(makeOptions(workdir));
-
-        expect(() => {
-            callConfigResolved(plugin);
-        }).not.toThrow();
+describe("wrangler-validator-plugin", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-wrangler-"));
     });
 
-    test("throws when wrangler.jsonc is missing entirely", () => {
-        writeSchema(SCHEMA_NO_GLOBAL);
-
-        const plugin = wranglerValidatorPlugin(makeOptions(workdir));
-
-        expect(() => {
-            callConfigResolved(plugin);
-        }).toThrow(/wrangler\.jsonc not found/u);
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
     });
 
-    test("throws when SHARD durable-object binding is missing", () => {
-        writeSchema(SCHEMA_NO_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+    describe("wranglerValidatorPlugin", () => {
+        test("passes when wrangler.jsonc declares everything the schema implies", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_WITH_GLOBAL);
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+
+            expect(() => {
+                callConfigResolved(plugin);
+            }).not.toThrow();
+        });
+
+        test("throws when wrangler.jsonc is missing entirely", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+
+            expect(() => {
+                callConfigResolved(plugin);
+            }).toThrow(/wrangler\.jsonc not found/u);
+        });
+
+        test("throws when SHARD durable-object binding is missing", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["web_socket_auto_reply_to_close"]
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => {
-            callConfigResolved(plugin);
-        }).toThrow(/SHARD.+ShardDO/u);
-    });
+            expect(() => {
+                callConfigResolved(plugin);
+            }).toThrow(/SHARD.+ShardDO/u);
+        });
 
-    test("throws when schema has .global() tables but D1 binding is missing", () => {
-        writeSchema(SCHEMA_WITH_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("throws when schema has .global() tables but D1 binding is missing", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_WITH_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["web_socket_auto_reply_to_close"],
@@ -128,21 +137,23 @@ describe("wranglerValidatorPlugin", () => {
     }
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => {
-            callConfigResolved(plugin);
-        }).toThrow(/d1_databases/u);
-    });
+            expect(() => {
+                callConfigResolved(plugin);
+            }).toThrow(/d1_databases/u);
+        });
 
-    test("does not require D1 when no table is global", () => {
-        writeSchema(SCHEMA_NO_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("does not require D1 when no table is global", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["web_socket_auto_reply_to_close"],
@@ -151,21 +162,23 @@ describe("wranglerValidatorPlugin", () => {
     }
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => {
-            callConfigResolved(plugin);
-        }).not.toThrow();
-    });
+            expect(() => {
+                callConfigResolved(plugin);
+            }).not.toThrow();
+        });
 
-    test("throws when compatibility_date is too old", () => {
-        writeSchema(SCHEMA_NO_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("throws when compatibility_date is too old", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "2024-01-01",
     "compatibility_flags": ["web_socket_auto_reply_to_close"],
@@ -174,22 +187,24 @@ describe("wranglerValidatorPlugin", () => {
     }
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => {
-            callConfigResolved(plugin);
-        }).toThrow(/compatibility_date/u);
-    });
+            expect(() => {
+                callConfigResolved(plugin);
+            }).toThrow(/compatibility_date/u);
+        });
 
-    test("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", () => {
-        // The flag became the default on 2026-04-07; workerd warns when it's set redundantly.
-        writeSchema(SCHEMA_NO_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("does not require web_socket_auto_reply_to_close when compatibility_date is recent enough", () => {
+            expect.assertions(1);
+
+            // The flag became the default on 2026-04-07; workerd warns when it's set redundantly.
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
@@ -198,21 +213,23 @@ describe("wranglerValidatorPlugin", () => {
     }
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => {
-            callConfigResolved(plugin);
-        }).not.toThrow();
-    });
+            expect(() => {
+                callConfigResolved(plugin);
+            }).not.toThrow();
+        });
 
-    test("supports jsonc comments and trailing commas", () => {
-        writeSchema(SCHEMA_NO_GLOBAL);
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `// my wrangler config
+        test("supports jsonc comments and trailing commas", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `// my wrangler config
 {
     "name": "x",
     "compatibility_date": "2026-04-07",
@@ -222,13 +239,14 @@ describe("wranglerValidatorPlugin", () => {
     },
 }
 `,
-            "utf8",
-        );
+                "utf8",
+            );
 
-        const plugin = wranglerValidatorPlugin(makeOptions(workdir));
+            const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
-        expect(() => {
-            callConfigResolved(plugin);
-        }).not.toThrow();
+            expect(() => {
+                callConfigResolved(plugin);
+            }).not.toThrow();
+        });
     });
 });

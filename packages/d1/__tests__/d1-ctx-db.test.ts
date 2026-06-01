@@ -61,313 +61,352 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
 
 const ids = (docs: Array<Record<string, unknown>>): unknown[] => docs.map((doc) => doc["_id"]);
 
-beforeEach(() => {
-    harness = createD1Exec();
-});
-
-afterEach(() => {
-    harness.close();
-});
-
-describe("findMany — where filtering", () => {
-    test("filters by an equality field, defaulting to creation+id order", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        const result = await writer.findMany("todos", { where: { projectId: "p1" } });
-
-        // Fixed clock ⇒ equal _creationTime ⇒ the id tiebreak orders them.
-        expect(ids(result.page)).toEqual(["t1", "t2", "t3", "t5"]);
-        expect(result.isDone).toBe(true);
-        expect(result.continueCursor).toBeNull();
+describe("d1 ctx-db", () => {
+    beforeEach(() => {
+        harness = createD1Exec();
     });
 
-    test("combines equality, boolean and `in` operators", async () => {
-        const writer = setupTodos();
+    afterEach(() => {
+        harness.close();
+    });
 
-        await seed(writer);
+    describe("findMany — where filtering", () => {
+        test("filters by an equality field, defaulting to creation+id order", async () => {
+            expect.assertions(3);
 
-        const result = await writer.findMany("todos", {
-            where: { archived: false, priority: { in: ["high", "medium"] }, projectId: "p1" },
+            const writer = setupTodos();
+
+            await seed(writer);
+
+            const result = await writer.findMany("todos", { where: { projectId: "p1" } });
+
+            // Fixed clock ⇒ equal _creationTime ⇒ the id tiebreak orders them.
+            expect(ids(result.page)).toEqual(["t1", "t2", "t3", "t5"]);
+            expect(result.isDone).toBe(true);
+            expect(result.continueCursor).toBeNull();
         });
 
-        expect(ids(result.page)).toEqual(["t1", "t2", "t5"]);
-    });
+        test("combines equality, boolean and `in` operators", async () => {
+            expect.assertions(1);
 
-    test("decodes a stored 1/0 column back into a boolean", async () => {
-        const writer = setupTodos();
+            const writer = setupTodos();
 
-        await seed(writer);
+            await seed(writer);
 
-        const archived = await writer.findFirst("todos", { where: { _id: "t3" } });
-        const active = await writer.findFirst("todos", { where: { _id: "t1" } });
+            const result = await writer.findMany("todos", {
+                where: { archived: false, priority: { in: ["high", "medium"] }, projectId: "p1" },
+            });
 
-        expect(archived?.["archived"]).toBe(true);
-        expect(active?.["archived"]).toBe(false);
-    });
-
-    test("returns an empty, done page when nothing matches", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        const result = await writer.findMany("todos", { where: { projectId: "nope" } });
-
-        expect(result.page).toEqual([]);
-        expect(result.isDone).toBe(true);
-        expect(result.continueCursor).toBeNull();
-    });
-});
-
-describe("findMany — orderBy", () => {
-    test("orders by a numeric field ascending and descending", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        const asc = await writer.findMany("todos", { orderBy: [{ seq: "asc" }], where: { projectId: "p1" } });
-        const desc = await writer.findMany("todos", { orderBy: [{ seq: "desc" }], where: { projectId: "p1" } });
-
-        expect(ids(asc.page)).toEqual(["t5", "t1", "t2", "t3"]);
-        expect(ids(desc.page)).toEqual(["t3", "t2", "t1", "t5"]);
-    });
-
-    test("applies a secondary sort key when the first ties", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        const result = await writer.findMany("todos", {
-            orderBy: [{ priority: "asc" }, { seq: "asc" }],
-            where: { projectId: "p1" },
+            expect(ids(result.page)).toEqual(["t1", "t2", "t5"]);
         });
 
-        expect(ids(result.page)).toEqual(["t5", "t1", "t3", "t2"]);
-    });
-});
+        test("decodes a stored 1/0 column back into a boolean", async () => {
+            expect.assertions(2);
 
-describe("findMany — keyset cursor pagination", () => {
-    test("walks pages via continueCursor, covering every row exactly once", async () => {
-        const writer = setupTodos();
+            const writer = setupTodos();
 
-        await seed(writer);
+            await seed(writer);
 
-        const first = await writer.findMany("todos", { limit: 2, orderBy: [{ seq: "asc" }], where: { projectId: "p1" } });
+            const archived = await writer.findFirst("todos", { where: { _id: "t3" } });
+            const active = await writer.findFirst("todos", { where: { _id: "t1" } });
 
-        expect(ids(first.page)).toEqual(["t5", "t1"]);
-        expect(first.isDone).toBe(false);
-        expect(first.continueCursor).not.toBeNull();
-
-        const second = await writer.findMany("todos", {
-            cursor: first.continueCursor,
-            limit: 2,
-            orderBy: [{ seq: "asc" }],
-            where: { projectId: "p1" },
+            expect(archived?.["archived"]).toBe(true);
+            expect(active?.["archived"]).toBe(false);
         });
 
-        expect(ids(second.page)).toEqual(["t2", "t3"]);
-        expect(second.isDone).toBe(true);
-        expect(second.continueCursor).toBeNull();
-    });
+        test("returns an empty, done page when nothing matches", async () => {
+            expect.assertions(3);
 
-    test("is stable when a row is inserted before the cursor between pages", async () => {
-        const writer = setupTodos();
+            const writer = setupTodos();
 
-        await seed(writer);
+            await seed(writer);
 
-        const first = await writer.findMany("todos", { limit: 2, orderBy: [{ seq: "asc" }], where: { projectId: "p1" } });
+            const result = await writer.findMany("todos", { where: { projectId: "nope" } });
 
-        await writer.insert("todos", { _id: "t6", archived: false, priority: "high", projectId: "p1", seq: 0.5 }, { allowExplicitId: true });
-
-        const second = await writer.findMany("todos", {
-            cursor: first.continueCursor,
-            limit: 2,
-            orderBy: [{ seq: "asc" }],
-            where: { projectId: "p1" },
-        });
-
-        expect(ids(second.page)).toEqual(["t2", "t3"]);
-    });
-
-    test("a final page that exactly fills the limit reports isDone with no cursor", async () => {
-        const writer = setupTodos();
-
-        await writer.insert("todos", { _id: "a", archived: false, priority: "p", projectId: "p1", seq: 1 }, { allowExplicitId: true });
-        await writer.insert("todos", { _id: "b", archived: false, priority: "p", projectId: "p1", seq: 2 }, { allowExplicitId: true });
-
-        const result = await writer.findMany("todos", { limit: 2, orderBy: [{ seq: "asc" }], where: { projectId: "p1" } });
-
-        expect(ids(result.page)).toEqual(["a", "b"]);
-        expect(result.isDone).toBe(true);
-        expect(result.continueCursor).toBeNull();
-    });
-});
-
-describe("findFirst", () => {
-    test("returns the first row under the order, or null when none match", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        const top = await writer.findFirst("todos", { orderBy: [{ seq: "desc" }], where: { projectId: "p1" } });
-        const none = await writer.findFirst("todos", { where: { projectId: "nope" } });
-
-        expect(top?.["_id"]).toBe("t3");
-        expect(none).toBeNull();
-    });
-});
-
-describe("findFirstOrThrow", () => {
-    test("returns the matched row, mirroring findFirst on a hit", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        const top = await writer.findFirstOrThrow("todos", { orderBy: [{ seq: "desc" }], where: { projectId: "p1" } });
-
-        expect(top["_id"]).toBe("t3");
-    });
-
-    test("throws NotFoundError when no row matches", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        await expect(writer.findFirstOrThrow("todos", { where: { projectId: "nope" } })).rejects.toThrow(/findFirstOrThrow/);
-    });
-});
-
-describe("count", () => {
-    test("counts rows matching the where filter", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
-        await expect(writer.count("todos", { archived: true, projectId: "p1" })).resolves.toBe(1);
-        await expect(writer.count("todos")).resolves.toBe(5);
-    });
-
-    test("aND-merges baseWhere into the count predicate", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        await expect(writer.count("todos", { baseWhere: { projectId: "p1" } })).resolves.toBe(4);
-        await expect(writer.count("todos", { baseWhere: { projectId: "p1" }, where: { archived: true } })).resolves.toBe(1);
-    });
-
-    test("count() throws COUNT_RLS_UNSUPPORTED when restrictsCounts is true", async () => {
-        const writer = setupTodos();
-
-        await seed(writer);
-
-        // The structural shape (`name: "CirrusError"` + `code` + `status`)
-        // lets the runtime error mapper route it without an `instanceof`
-        // check; `@cirrus/d1` stays free of a runtime dep on `@cirrus/server`.
-        await expect(writer.count("todos", { restrictsCounts: true })).rejects.toMatchObject({
-            code: "COUNT_RLS_UNSUPPORTED",
-            name: "CirrusError",
-            status: 422,
+            expect(result.page).toEqual([]);
+            expect(result.isDone).toBe(true);
+            expect(result.continueCursor).toBeNull();
         });
     });
-});
 
-describe("baseWhere seam (RLS / aggregates)", () => {
-    test("findMany AND-merges baseWhere before compilation", async () => {
-        const writer = setupTodos();
+    describe("findMany — orderBy", () => {
+        test("orders by a numeric field ascending and descending", async () => {
+            expect.assertions(2);
 
-        await seed(writer);
+            const writer = setupTodos();
 
-        const result = await writer.findMany("todos", {
-            baseWhere: { projectId: "p1" },
-            where: { archived: false },
+            await seed(writer);
+
+            const asc = await writer.findMany("todos", { orderBy: [{ seq: "asc" }], where: { projectId: "p1" } });
+            const desc = await writer.findMany("todos", { orderBy: [{ seq: "desc" }], where: { projectId: "p1" } });
+
+            expect(ids(asc.page)).toEqual(["t5", "t1", "t2", "t3"]);
+            expect(ids(desc.page)).toEqual(["t3", "t2", "t1", "t5"]);
         });
 
-        const matchedIds = result.page.map((row) => row["_id"]).sort();
+        test("applies a secondary sort key when the first ties", async () => {
+            expect.assertions(1);
 
-        expect(matchedIds).toEqual(["t1", "t2", "t5"]);
+            const writer = setupTodos();
+
+            await seed(writer);
+
+            const result = await writer.findMany("todos", {
+                orderBy: [{ priority: "asc" }, { seq: "asc" }],
+                where: { projectId: "p1" },
+            });
+
+            expect(ids(result.page)).toEqual(["t5", "t1", "t3", "t2"]);
+        });
     });
 
-    test("baseWhere alone narrows the result", async () => {
-        const writer = setupTodos();
+    describe("findMany — keyset cursor pagination", () => {
+        test("walks pages via continueCursor, covering every row exactly once", async () => {
+            expect.assertions(6);
 
-        await seed(writer);
+            const writer = setupTodos();
 
-        const result = await writer.findMany("todos", { baseWhere: { projectId: "p2" } });
+            await seed(writer);
 
-        expect(result.page.map((row) => row["_id"])).toEqual(["t4"]);
+            const first = await writer.findMany("todos", { limit: 2, orderBy: [{ seq: "asc" }], where: { projectId: "p1" } });
+
+            expect(ids(first.page)).toEqual(["t5", "t1"]);
+            expect(first.isDone).toBe(false);
+            expect(first.continueCursor).not.toBeNull();
+
+            const second = await writer.findMany("todos", {
+                cursor: first.continueCursor,
+                limit: 2,
+                orderBy: [{ seq: "asc" }],
+                where: { projectId: "p1" },
+            });
+
+            expect(ids(second.page)).toEqual(["t2", "t3"]);
+            expect(second.isDone).toBe(true);
+            expect(second.continueCursor).toBeNull();
+        });
+
+        test("is stable when a row is inserted before the cursor between pages", async () => {
+            expect.assertions(1);
+
+            const writer = setupTodos();
+
+            await seed(writer);
+
+            const first = await writer.findMany("todos", { limit: 2, orderBy: [{ seq: "asc" }], where: { projectId: "p1" } });
+
+            await writer.insert("todos", { _id: "t6", archived: false, priority: "high", projectId: "p1", seq: 0.5 }, { allowExplicitId: true });
+
+            const second = await writer.findMany("todos", {
+                cursor: first.continueCursor,
+                limit: 2,
+                orderBy: [{ seq: "asc" }],
+                where: { projectId: "p1" },
+            });
+
+            expect(ids(second.page)).toEqual(["t2", "t3"]);
+        });
+
+        test("a final page that exactly fills the limit reports isDone with no cursor", async () => {
+            expect.assertions(3);
+
+            const writer = setupTodos();
+
+            await writer.insert("todos", { _id: "a", archived: false, priority: "p", projectId: "p1", seq: 1 }, { allowExplicitId: true });
+            await writer.insert("todos", { _id: "b", archived: false, priority: "p", projectId: "p1", seq: 2 }, { allowExplicitId: true });
+
+            const result = await writer.findMany("todos", { limit: 2, orderBy: [{ seq: "asc" }], where: { projectId: "p1" } });
+
+            expect(ids(result.page)).toEqual(["a", "b"]);
+            expect(result.isDone).toBe(true);
+            expect(result.continueCursor).toBeNull();
+        });
     });
-});
 
-describe("get / patch / replace / delete round-trips", () => {
-    test("inserts, reads back, patches a field, and deletes by id", async () => {
-        const writer = setupTodos();
+    describe("findFirst", () => {
+        test("returns the first row under the order, or null when none match", async () => {
+            expect.assertions(2);
 
-        const id = await writer.insert("todos", { _id: "r1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
+            const writer = setupTodos();
 
-        expect((await writer.get(id))?.["priority"]).toBe("high");
+            await seed(writer);
 
-        await writer.patch(id, { priority: "low" });
+            const top = await writer.findFirst("todos", { orderBy: [{ seq: "desc" }], where: { projectId: "p1" } });
+            const none = await writer.findFirst("todos", { where: { projectId: "nope" } });
 
-        const patched = await writer.get(id);
-
-        expect(patched?.["priority"]).toBe("low");
-        expect(patched?.["projectId"]).toBe("p1");
-
-        await writer.delete(id);
-
-        await expect(writer.get(id)).resolves.toBeNull();
+            expect(top?.["_id"]).toBe("t3");
+            expect(none).toBeNull();
+        });
     });
 
-    test("replace overwrites unspecified fields with null", async () => {
-        const writer = setupTodos();
+    describe("findFirstOrThrow", () => {
+        test("returns the matched row, mirroring findFirst on a hit", async () => {
+            expect.assertions(1);
 
-        await writer.insert("todos", { _id: "r2", archived: true, priority: "high", projectId: "p1", seq: 5 }, { allowExplicitId: true });
+            const writer = setupTodos();
 
-        await writer.replace("r2", { priority: "medium", projectId: "p1" });
+            await seed(writer);
 
-        const replaced = await writer.get("r2");
+            const top = await writer.findFirstOrThrow("todos", { orderBy: [{ seq: "desc" }], where: { projectId: "p1" } });
 
-        expect(replaced?.["priority"]).toBe("medium");
-        expect(replaced?.["seq"]).toBeNull();
+            expect(top["_id"]).toBe("t3");
+        });
+
+        test("throws NotFoundError when no row matches", async () => {
+            expect.assertions(1);
+
+            const writer = setupTodos();
+
+            await seed(writer);
+
+            await expect(writer.findFirstOrThrow("todos", { where: { projectId: "nope" } })).rejects.toThrow(/findFirstOrThrow/);
+        });
     });
-});
 
-const FIXED_REV = (): { revCalls: () => number; schema: SchemaLike } => {
-    let revs = 0;
+    describe("count", () => {
+        test("counts rows matching the where filter", async () => {
+            expect.assertions(3);
 
-    return {
-        revCalls: () => revs,
-        schema: {
-            tables: {
-                items: {
-                    indexes: [],
-                    shape: {
-                        rev: col("number", {
-                            onUpdateFn: () => {
-                                revs += 1;
+            const writer = setupTodos();
 
-                                return revs;
-                            },
-                        }),
-                        seq: col("number", { defaultFn: () => 7 }),
-                        slug: col("string", { unique: true }),
-                        status: col("string", { defaultValue: "todo" }),
-                        title: col("string"),
+            await seed(writer);
+
+            await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
+            await expect(writer.count("todos", { archived: true, projectId: "p1" })).resolves.toBe(1);
+            await expect(writer.count("todos")).resolves.toBe(5);
+        });
+
+        test("aND-merges baseWhere into the count predicate", async () => {
+            expect.assertions(2);
+
+            const writer = setupTodos();
+
+            await seed(writer);
+
+            await expect(writer.count("todos", { baseWhere: { projectId: "p1" } })).resolves.toBe(4);
+            await expect(writer.count("todos", { baseWhere: { projectId: "p1" }, where: { archived: true } })).resolves.toBe(1);
+        });
+
+        test("count() throws COUNT_RLS_UNSUPPORTED when restrictsCounts is true", async () => {
+            expect.assertions(1);
+
+            const writer = setupTodos();
+
+            await seed(writer);
+
+            // The structural shape (`name: "CirrusError"` + `code` + `status`)
+            // lets the runtime error mapper route it without an `instanceof`
+            // check; `@cirrus/d1` stays free of a runtime dep on `@cirrus/server`.
+            await expect(writer.count("todos", { restrictsCounts: true })).rejects.toMatchObject({
+                code: "COUNT_RLS_UNSUPPORTED",
+                name: "CirrusError",
+                status: 422,
+            });
+        });
+    });
+
+    describe("baseWhere seam (RLS / aggregates)", () => {
+        test("findMany AND-merges baseWhere before compilation", async () => {
+            expect.assertions(1);
+
+            const writer = setupTodos();
+
+            await seed(writer);
+
+            const result = await writer.findMany("todos", {
+                baseWhere: { projectId: "p1" },
+                where: { archived: false },
+            });
+
+            const matchedIds = result.page.map((row) => row["_id"]).sort();
+
+            expect(matchedIds).toEqual(["t1", "t2", "t5"]);
+        });
+
+        test("baseWhere alone narrows the result", async () => {
+            expect.assertions(1);
+
+            const writer = setupTodos();
+
+            await seed(writer);
+
+            const result = await writer.findMany("todos", { baseWhere: { projectId: "p2" } });
+
+            expect(result.page.map((row) => row["_id"])).toEqual(["t4"]);
+        });
+    });
+
+    describe("get / patch / replace / delete round-trips", () => {
+        test("inserts, reads back, patches a field, and deletes by id", async () => {
+            expect.assertions(4);
+
+            const writer = setupTodos();
+
+            const id = await writer.insert("todos", { _id: "r1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
+
+            expect((await writer.get(id))?.["priority"]).toBe("high");
+
+            await writer.patch(id, { priority: "low" });
+
+            const patched = await writer.get(id);
+
+            expect(patched?.["priority"]).toBe("low");
+            expect(patched?.["projectId"]).toBe("p1");
+
+            await writer.delete(id);
+
+            await expect(writer.get(id)).resolves.toBeNull();
+        });
+
+        test("replace overwrites unspecified fields with null", async () => {
+            expect.assertions(2);
+
+            const writer = setupTodos();
+
+            await writer.insert("todos", { _id: "r2", archived: true, priority: "high", projectId: "p1", seq: 5 }, { allowExplicitId: true });
+
+            await writer.replace("r2", { priority: "medium", projectId: "p1" });
+
+            const replaced = await writer.get("r2");
+
+            expect(replaced?.["priority"]).toBe("medium");
+            expect(replaced?.["seq"]).toBeNull();
+        });
+    });
+
+    const FIXED_REV = (): { revCalls: () => number; schema: SchemaLike } => {
+        let revs = 0;
+
+        return {
+            revCalls: () => revs,
+            schema: {
+                tables: {
+                    items: {
+                        indexes: [],
+                        shape: {
+                            rev: col("number", {
+                                onUpdateFn: () => {
+                                    revs += 1;
+
+                                    return revs;
+                                },
+                            }),
+                            seq: col("number", { defaultFn: () => 7 }),
+                            slug: col("string", { unique: true }),
+                            status: col("string", { defaultValue: "todo" }),
+                            title: col("string"),
+                        },
                     },
                 },
             },
-        },
+        };
     };
-};
 
-const setupItems = (): { revCalls: () => number; writer: DatabaseWriterLike } => {
-    const { revCalls, schema } = FIXED_REV();
+    const setupItems = (): { revCalls: () => number; writer: DatabaseWriterLike } => {
+        const { revCalls, schema } = FIXED_REV();
 
-    harness.ddl(
-        `CREATE TABLE "items" (
+        harness.ddl(
+            `CREATE TABLE "items" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
             "rev" INTEGER,
@@ -376,502 +415,554 @@ const setupItems = (): { revCalls: () => number; writer: DatabaseWriterLike } =>
             "status" TEXT,
             "title" TEXT
         )`,
-    );
+        );
 
-    return { revCalls, writer: createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema }) };
-};
-
-describe("insert defaults", () => {
-    test("fills a `.default()` literal and a `.$defaultFn()` factory when absent", async () => {
-        const { writer } = setupItems();
-
-        const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-        const doc = await writer.get(id);
-
-        expect(doc?.["status"]).toBe("todo");
-        expect(doc?.["seq"]).toBe(7);
-    });
-
-    test("a provided value overrides the default", async () => {
-        const { writer } = setupItems();
-
-        const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
-        const doc = await writer.get(id);
-
-        expect(doc?.["status"]).toBe("done");
-        expect(doc?.["seq"]).toBe(99);
-    });
-
-    test("does not run `$onUpdateFn` on insert", async () => {
-        const { revCalls, writer } = setupItems();
-
-        const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-        const doc = await writer.get(id);
-
-        expect(doc?.["rev"]).toBeNull();
-        expect(revCalls()).toBe(0);
-    });
-});
-
-describe("$onUpdateFn", () => {
-    test("recomputes on each patch that omits the field", async () => {
-        const { revCalls, writer } = setupItems();
-
-        await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-
-        await writer.patch("i1", { title: "second" });
-
-        expect((await writer.get("i1"))?.["rev"]).toBe(1);
-
-        await writer.patch("i1", { title: "third" });
-
-        expect((await writer.get("i1"))?.["rev"]).toBe(2);
-        expect(revCalls()).toBe(2);
-    });
-
-    test("is skipped when the patch sets the field explicitly", async () => {
-        const { revCalls, writer } = setupItems();
-
-        await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-
-        await writer.patch("i1", { rev: 99 });
-
-        expect((await writer.get("i1"))?.["rev"]).toBe(99);
-        expect(revCalls()).toBe(0);
-    });
-
-    test("recomputes on replace that omits the field, but honors an explicit value", async () => {
-        const { writer } = setupItems();
-
-        await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-
-        await writer.replace("i1", { slug: "a", title: "auto" });
-
-        expect((await writer.get("i1"))?.["rev"]).toBe(1);
-
-        await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
-
-        expect((await writer.get("i1"))?.["rev"]).toBe(42);
-    });
-});
-
-describe(".unique() constraint", () => {
-    test("a duplicate insert throws a ConflictError (code CONFLICT, status 409)", async () => {
-        const { writer } = setupItems();
-
-        await writer.insert("items", { _id: "i1", slug: "dup", title: "first" }, { allowExplicitId: true });
-
-        const conflict = writer.insert("items", { _id: "i2", slug: "dup", title: "second" }, { allowExplicitId: true });
-
-        await expect(conflict).rejects.toBeInstanceOf(ConflictError);
-        await expect(conflict).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
-    });
-
-    test("a patch that collides with another row's unique value conflicts", async () => {
-        const { writer } = setupItems();
-
-        await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
-        await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
-
-        await expect(writer.patch("i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
-    });
-
-    test("distinct unique values insert cleanly", async () => {
-        const { writer } = setupItems();
-
-        await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
-        await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
-
-        await expect(writer.count("items")).resolves.toBe(2);
-    });
-});
-
-describe("relations", () => {
-    const buildRelSchema = (action?: "cascade" | "restrict" | "set null"): SchemaLike => ({
-        tables: {
-            messages: {
-                indexes: [],
-                relationMap: {
-                    author: { field: "authorId", kind: "one", onDelete: action, references: "_id", table: "users" },
-                    reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" },
-                },
-                shape: { authorId: col("string"), body: col("string") },
-            },
-            reactions: {
-                indexes: [],
-                relationMap: { message: { field: "messageId", kind: "one", onDelete: "cascade", references: "_id", table: "messages" } },
-                shape: { emoji: col("string"), messageId: col("string") },
-            },
-            users: {
-                indexes: [],
-                relationMap: { messages: { field: "authorId", kind: "many", references: "_id", table: "messages" } },
-                shape: { name: col("string") },
-            },
-        },
-    });
-
-    const setupRelations = (action?: "cascade" | "restrict" | "set null"): DatabaseWriterLike => {
-        // FK columns stay nullable so `set null` can clear them.
-        harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
-        harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "authorId" TEXT, "body" TEXT)`);
-        harness.ddl(`CREATE TABLE "reactions" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "messageId" TEXT, "emoji" TEXT)`);
-
-        return createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: buildRelSchema(action) });
+        return { revCalls, writer: createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema }) };
     };
 
-    const seedRelations = async (writer: DatabaseWriterLike): Promise<void> => {
-        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
-        await writer.insert("users", { _id: "u2", name: "Linus" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "m2", authorId: "u1", body: "yo" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "m3", authorId: "u2", body: "hey" }, { allowExplicitId: true });
-        await writer.insert("reactions", { _id: "r1", emoji: "thumbsup", messageId: "m1" }, { allowExplicitId: true });
-        await writer.insert("reactions", { _id: "r2", emoji: "party", messageId: "m1" }, { allowExplicitId: true });
-        await writer.insert("reactions", { _id: "r3", emoji: "fire", messageId: "m2" }, { allowExplicitId: true });
-    };
+    describe("insert defaults", () => {
+        test("fills a `.default()` literal and a `.$defaultFn()` factory when absent", async () => {
+            expect.assertions(2);
 
-    test("loads a one relation as Doc | null", async () => {
-        const writer = setupRelations();
+            const { writer } = setupItems();
 
-        await seedRelations(writer);
+            const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+            const doc = await writer.get(id);
 
-        const { page } = await writer.findMany("messages", { where: { authorId: "u1" }, with: { author: true } });
+            expect(doc?.["status"]).toBe("todo");
+            expect(doc?.["seq"]).toBe(7);
+        });
 
-        expect((page[0]!["author"] as Record<string, unknown>)["name"]).toBe("Ada");
+        test("a provided value overrides the default", async () => {
+            expect.assertions(2);
+
+            const { writer } = setupItems();
+
+            const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
+            const doc = await writer.get(id);
+
+            expect(doc?.["status"]).toBe("done");
+            expect(doc?.["seq"]).toBe(99);
+        });
+
+        test("does not run `$onUpdateFn` on insert", async () => {
+            expect.assertions(2);
+
+            const { revCalls, writer } = setupItems();
+
+            const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+            const doc = await writer.get(id);
+
+            expect(doc?.["rev"]).toBeNull();
+            expect(revCalls()).toBe(0);
+        });
     });
 
-    test("loads a many relation grouped per parent", async () => {
-        const writer = setupRelations();
+    describe("$onUpdateFn", () => {
+        test("recomputes on each patch that omits the field", async () => {
+            expect.assertions(3);
 
-        await seedRelations(writer);
+            const { revCalls, writer } = setupItems();
 
-        const { page } = await writer.findMany("users", { with: { messages: true } });
-        const ada = page.find((row) => row["_id"] === "u1")!;
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
 
-        expect(ids(ada["messages"] as Array<Record<string, unknown>>)).toEqual(["m1", "m2"]);
+            await writer.patch("i1", { title: "second" });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(1);
+
+            await writer.patch("i1", { title: "third" });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(2);
+            expect(revCalls()).toBe(2);
+        });
+
+        test("is skipped when the patch sets the field explicitly", async () => {
+            expect.assertions(2);
+
+            const { revCalls, writer } = setupItems();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.patch("i1", { rev: 99 });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(99);
+            expect(revCalls()).toBe(0);
+        });
+
+        test("recomputes on replace that omits the field, but honors an explicit value", async () => {
+            expect.assertions(2);
+
+            const { writer } = setupItems();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.replace("i1", { slug: "a", title: "auto" });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(1);
+
+            await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(42);
+        });
     });
 
-    test("nested with recurses (users → messages → reactions)", async () => {
-        const writer = setupRelations();
+    describe(".unique() constraint", () => {
+        test("a duplicate insert throws a ConflictError (code CONFLICT, status 409)", async () => {
+            expect.assertions(2);
 
-        await seedRelations(writer);
+            const { writer } = setupItems();
 
-        const { page } = await writer.findMany("users", { where: { _id: "u1" }, with: { messages: { with: { reactions: true } } } });
-        const messages = page[0]!["messages"] as Array<Record<string, unknown>>;
-        const m1 = messages.find((row) => row["_id"] === "m1")!;
+            await writer.insert("items", { _id: "i1", slug: "dup", title: "first" }, { allowExplicitId: true });
 
-        expect(ids(m1["reactions"] as Array<Record<string, unknown>>)).toEqual(["r1", "r2"]);
+            const conflict = writer.insert("items", { _id: "i2", slug: "dup", title: "second" }, { allowExplicitId: true });
+
+            await expect(conflict).rejects.toBeInstanceOf(ConflictError);
+            await expect(conflict).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
+        });
+
+        test("a patch that collides with another row's unique value conflicts", async () => {
+            expect.assertions(1);
+
+            const { writer } = setupItems();
+
+            await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
+            await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
+
+            await expect(writer.patch("i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
+        });
+
+        test("distinct unique values insert cleanly", async () => {
+            expect.assertions(1);
+
+            const { writer } = setupItems();
+
+            await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
+            await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
+
+            await expect(writer.count("items")).resolves.toBe(2);
+        });
     });
 
-    test("per-group limit caps a many relation in memory", async () => {
-        const writer = setupRelations();
-
-        await seedRelations(writer);
-
-        const { page } = await writer.findMany("users", { where: { _id: "u1" }, with: { messages: { limit: 1 } } });
-
-        expect(page[0]!["messages"]).toHaveLength(1);
-    });
-
-    test("_count attaches per-parent aggregate", async () => {
-        const writer = setupRelations();
-
-        await seedRelations(writer);
-
-        const { page } = await writer.findMany("messages", { orderBy: [{ _id: "asc" }], with: { _count: { reactions: true } } });
-
-        expect((page[0]!["_count"] as Record<string, number>)["reactions"]).toBe(2);
-        expect((page[2]!["_count"] as Record<string, number>)["reactions"]).toBe(0);
-    });
-
-    test("onDelete cascade removes holder rows and chains", async () => {
-        const writer = setupRelations("cascade");
-
-        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
-        await writer.insert("reactions", { _id: "r1", emoji: "thumbsup", messageId: "m1" }, { allowExplicitId: true });
-
-        await writer.delete("u1");
-
-        await expect(writer.get("m1")).resolves.toBeNull();
-        await expect(writer.get("r1")).resolves.toBeNull();
-    });
-
-    test("onDelete set null clears the FK", async () => {
-        const writer = setupRelations("set null");
-
-        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
-
-        await writer.delete("u1");
-
-        const message = await writer.get("m1");
-
-        expect(message).not.toBeNull();
-        expect(message!["authorId"]).toBeNull();
-    });
-
-    test("onDelete restrict aborts when a holder remains", async () => {
-        const writer = setupRelations("restrict");
-
-        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
-
-        await expect(writer.delete("u1")).rejects.toBeInstanceOf(ConflictError);
-        await expect(writer.get("u1")).resolves.not.toBeNull();
-    });
-
-    test("cross-backend (global → shardBy) cascade is refused with a clear message", async () => {
-        // `messages` is declared shardBy here — that's the unsupported
-        // direction from D1's POV. The writer must throw on the cascade
-        // attempt rather than silently leave the holders behind.
-        const schema: SchemaLike = {
+    describe("relations", () => {
+        const buildRelSchema = (action?: "cascade" | "restrict" | "set null"): SchemaLike => ({
             tables: {
                 messages: {
                     indexes: [],
                     relationMap: {
-                        author: { field: "authorId", kind: "one", onDelete: "cascade", references: "_id", table: "users" },
+                        author: { field: "authorId", kind: "one", onDelete: action, references: "_id", table: "users" },
+                        reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" },
                     },
                     shape: { authorId: col("string"), body: col("string") },
-                    shardMode: { field: "authorId", kind: "shardBy" },
                 },
-                users: { indexes: [], shape: { name: col("string") } },
+                reactions: {
+                    indexes: [],
+                    relationMap: { message: { field: "messageId", kind: "one", onDelete: "cascade", references: "_id", table: "messages" } },
+                    shape: { emoji: col("string"), messageId: col("string") },
+                },
+                users: {
+                    indexes: [],
+                    relationMap: { messages: { field: "authorId", kind: "many", references: "_id", table: "messages" } },
+                    shape: { name: col("string") },
+                },
             },
+        });
+
+        const setupRelations = (action?: "cascade" | "restrict" | "set null"): DatabaseWriterLike => {
+            // FK columns stay nullable so `set null` can clear them.
+            harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
+            harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "authorId" TEXT, "body" TEXT)`);
+            harness.ddl(`CREATE TABLE "reactions" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "messageId" TEXT, "emoji" TEXT)`);
+
+            return createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: buildRelSchema(action) });
         };
 
-        harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
-        // No D1 messages table — they live on shards in the real topology;
-        // the cascade must refuse before we'd reach the missing table.
+        const seedRelations = async (writer: DatabaseWriterLike): Promise<void> => {
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("users", { _id: "u2", name: "Linus" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m2", authorId: "u1", body: "yo" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m3", authorId: "u2", body: "hey" }, { allowExplicitId: true });
+            await writer.insert("reactions", { _id: "r1", emoji: "thumbsup", messageId: "m1" }, { allowExplicitId: true });
+            await writer.insert("reactions", { _id: "r2", emoji: "party", messageId: "m1" }, { allowExplicitId: true });
+            await writer.insert("reactions", { _id: "r3", emoji: "fire", messageId: "m2" }, { allowExplicitId: true });
+        };
 
-        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+        test("loads a one relation as Doc | null", async () => {
+            expect.assertions(1);
 
-        await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            const writer = setupRelations();
 
-        await expect(writer.delete("u1")).rejects.toThrow(/cross-backend cascade.*shardBy/u);
-    });
-});
+            await seedRelations(writer);
 
-describe("triggers", () => {
-    const messagesDdl = (): void => {
-        harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "locked" INTEGER)`);
-    };
+            const { page } = await writer.findMany("messages", { where: { authorId: "u1" }, with: { author: true } });
 
-    test("before/after insert fire in order with the new doc", async () => {
-        const events: Array<{ doc?: unknown; phase: string }> = [];
-        const schema: SchemaLike = {
-            tables: {
-                messages: {
-                    indexes: [],
-                    shape: { body: col("string"), locked: col("boolean") },
-                    triggerMap: {
-                        a: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "after" }), op: "insert", timing: "after" },
-                        b: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "before" }), op: "insert", timing: "before" },
+            expect((page[0]!["author"] as Record<string, unknown>)["name"]).toBe("Ada");
+        });
+
+        test("loads a many relation grouped per parent", async () => {
+            expect.assertions(1);
+
+            const writer = setupRelations();
+
+            await seedRelations(writer);
+
+            const { page } = await writer.findMany("users", { with: { messages: true } });
+            const ada = page.find((row) => row["_id"] === "u1")!;
+
+            expect(ids(ada["messages"] as Array<Record<string, unknown>>)).toEqual(["m1", "m2"]);
+        });
+
+        test("nested with recurses (users → messages → reactions)", async () => {
+            expect.assertions(1);
+
+            const writer = setupRelations();
+
+            await seedRelations(writer);
+
+            const { page } = await writer.findMany("users", { where: { _id: "u1" }, with: { messages: { with: { reactions: true } } } });
+            const messages = page[0]!["messages"] as Array<Record<string, unknown>>;
+            const m1 = messages.find((row) => row["_id"] === "m1")!;
+
+            expect(ids(m1["reactions"] as Array<Record<string, unknown>>)).toEqual(["r1", "r2"]);
+        });
+
+        test("per-group limit caps a many relation in memory", async () => {
+            expect.assertions(1);
+
+            const writer = setupRelations();
+
+            await seedRelations(writer);
+
+            const { page } = await writer.findMany("users", { where: { _id: "u1" }, with: { messages: { limit: 1 } } });
+
+            expect(page[0]!["messages"]).toHaveLength(1);
+        });
+
+        test("_count attaches per-parent aggregate", async () => {
+            expect.assertions(2);
+
+            const writer = setupRelations();
+
+            await seedRelations(writer);
+
+            const { page } = await writer.findMany("messages", { orderBy: [{ _id: "asc" }], with: { _count: { reactions: true } } });
+
+            expect((page[0]!["_count"] as Record<string, number>)["reactions"]).toBe(2);
+            expect((page[2]!["_count"] as Record<string, number>)["reactions"]).toBe(0);
+        });
+
+        test("onDelete cascade removes holder rows and chains", async () => {
+            expect.assertions(2);
+
+            const writer = setupRelations("cascade");
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
+            await writer.insert("reactions", { _id: "r1", emoji: "thumbsup", messageId: "m1" }, { allowExplicitId: true });
+
+            await writer.delete("u1");
+
+            await expect(writer.get("m1")).resolves.toBeNull();
+            await expect(writer.get("r1")).resolves.toBeNull();
+        });
+
+        test("onDelete set null clears the FK", async () => {
+            expect.assertions(2);
+
+            const writer = setupRelations("set null");
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
+
+            await writer.delete("u1");
+
+            const message = await writer.get("m1");
+
+            expect(message).not.toBeNull();
+            expect(message!["authorId"]).toBeNull();
+        });
+
+        test("onDelete restrict aborts when a holder remains", async () => {
+            expect.assertions(2);
+
+            const writer = setupRelations("restrict");
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
+
+            await expect(writer.delete("u1")).rejects.toBeInstanceOf(ConflictError);
+            await expect(writer.get("u1")).resolves.not.toBeNull();
+        });
+
+        test("cross-backend (global → shardBy) cascade is refused with a clear message", async () => {
+            expect.assertions(1);
+
+            // `messages` is declared shardBy here — that's the unsupported
+            // direction from D1's POV. The writer must throw on the cascade
+            // attempt rather than silently leave the holders behind.
+            const schema: SchemaLike = {
+                tables: {
+                    messages: {
+                        indexes: [],
+                        relationMap: {
+                            author: { field: "authorId", kind: "one", onDelete: "cascade", references: "_id", table: "users" },
+                        },
+                        shape: { authorId: col("string"), body: col("string") },
+                        shardMode: { field: "authorId", kind: "shardBy" },
                     },
+                    users: { indexes: [], shape: { name: col("string") } },
                 },
-            },
-        };
+            };
 
-        messagesDdl();
+            harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
+            // No D1 messages table — they live on shards in the real topology;
+            // the cascade must refuse before we'd reach the missing table.
 
-        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
-        await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
 
-        expect(events.map((e) => e.phase)).toEqual(["before", "after"]);
-        expect((events[1]!.doc as Record<string, unknown>)["_id"]).toBe("m1");
+            await expect(writer.delete("u1")).rejects.toThrow(/cross-backend cascade.*shardBy/u);
+        });
     });
 
-    test("update triggers see merged doc and previous on patch", async () => {
-        let captured: TriggerEventLike | undefined;
-        const schema: SchemaLike = {
-            tables: {
-                messages: {
-                    indexes: [],
-                    shape: { body: col("string"), locked: col("boolean") },
-                    triggerMap: {
-                        a: {
-                            handler: (_ctx, event) => {
-                                captured = event;
-                            },
-                            op: "update",
-                            timing: "after",
+    describe("triggers", () => {
+        const messagesDdl = (): void => {
+            harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "locked" INTEGER)`);
+        };
+
+        test("before/after insert fire in order with the new doc", async () => {
+            expect.assertions(2);
+
+            const events: Array<{ doc?: unknown; phase: string }> = [];
+            const schema: SchemaLike = {
+                tables: {
+                    messages: {
+                        indexes: [],
+                        shape: { body: col("string"), locked: col("boolean") },
+                        triggerMap: {
+                            a: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "after" }), op: "insert", timing: "after" },
+                            b: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "before" }), op: "insert", timing: "before" },
                         },
                     },
                 },
-            },
-        };
+            };
 
-        messagesDdl();
+            messagesDdl();
 
-        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
-        await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
-        await writer.patch("m1", { body: "bye" });
+            await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
 
-        expect((captured!.doc as Record<string, unknown>)["body"]).toBe("bye");
-        expect((captured!.previous as Record<string, unknown>)["body"]).toBe("hi");
-    });
+            expect(events.map((e) => e.phase)).toEqual(["before", "after"]);
+            expect((events[1]!.doc as Record<string, unknown>)["_id"]).toBe("m1");
+        });
 
-    test("a throwing beforeDelete aborts the delete — the row survives", async () => {
-        const schema: SchemaLike = {
-            tables: {
-                messages: {
-                    indexes: [],
-                    shape: { body: col("string"), locked: col("boolean") },
-                    triggerMap: {
-                        guard: {
-                            handler: (_ctx, event) => {
-                                if ((event.previous as Record<string, unknown>)["locked"]) {
-                                    throw new ConflictError("row is locked");
-                                }
+        test("update triggers see merged doc and previous on patch", async () => {
+            expect.assertions(2);
+
+            let captured: TriggerEventLike | undefined;
+            const schema: SchemaLike = {
+                tables: {
+                    messages: {
+                        indexes: [],
+                        shape: { body: col("string"), locked: col("boolean") },
+                        triggerMap: {
+                            a: {
+                                handler: (_ctx, event) => {
+                                    captured = event;
+                                },
+                                op: "update",
+                                timing: "after",
                             },
-                            op: "delete",
-                            timing: "before",
                         },
                     },
                 },
-            },
-        };
+            };
 
-        messagesDdl();
+            messagesDdl();
 
-        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
-        await writer.insert("messages", { _id: "m1", body: "hi", locked: true }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
+            await writer.patch("m1", { body: "bye" });
 
-        await expect(writer.delete("m1")).rejects.toBeInstanceOf(ConflictError);
-        await expect(writer.get("m1")).resolves.not.toBeNull();
-    });
+            expect((captured!.doc as Record<string, unknown>)["body"]).toBe("bye");
+            expect((captured!.previous as Record<string, unknown>)["body"]).toBe("hi");
+        });
 
-    test("an afterInsert handler writing another table via ctx.db persists", async () => {
-        const schema: SchemaLike = {
-            tables: {
-                audit: { indexes: [], shape: { row: col("string"), table: col("string") }, triggerMap: {} },
-                messages: {
-                    indexes: [],
-                    shape: { body: col("string"), locked: col("boolean") },
-                    triggerMap: {
-                        audit: {
-                            handler: async (ctx, event) => {
-                                await ctx.db.insert("audit", { row: event.id, table: event.table });
+        test("a throwing beforeDelete aborts the delete — the row survives", async () => {
+            expect.assertions(2);
+
+            const schema: SchemaLike = {
+                tables: {
+                    messages: {
+                        indexes: [],
+                        shape: { body: col("string"), locked: col("boolean") },
+                        triggerMap: {
+                            guard: {
+                                handler: (_ctx, event) => {
+                                    if ((event.previous as Record<string, unknown>)["locked"]) {
+                                        throw new ConflictError("row is locked");
+                                    }
+                                },
+                                op: "delete",
+                                timing: "before",
                             },
-                            op: "insert",
-                            timing: "after",
                         },
                     },
                 },
-            },
-        };
+            };
 
-        messagesDdl();
-        harness.ddl(`CREATE TABLE "audit" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "row" TEXT, "table" TEXT)`);
+            messagesDdl();
 
-        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
-        await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m1", body: "hi", locked: true }, { allowExplicitId: true });
 
-        const { page } = await writer.findMany("audit");
+            await expect(writer.delete("m1")).rejects.toBeInstanceOf(ConflictError);
+            await expect(writer.get("m1")).resolves.not.toBeNull();
+        });
 
-        expect(page).toHaveLength(1);
-        expect(page[0]!["row"]).toBe("m1");
-    });
+        test("an afterInsert handler writing another table via ctx.db persists", async () => {
+            expect.assertions(2);
 
-    test("ctx.scheduler reaches the scheduler passed to createD1CtxDb", async () => {
-        const runAfter = vi.fn(async () => "job-1");
-        const scheduler: SchedulerLike = { runAfter, runAt: async () => "job-2" };
-        const schema: SchemaLike = {
-            tables: {
-                messages: {
-                    indexes: [],
-                    shape: { body: col("string"), locked: col("boolean") },
-                    triggerMap: {
-                        bump: {
-                            handler: async (ctx, event) => {
-                                await ctx.scheduler.runAfter(0, "counters:recount", { id: event.id });
+            const schema: SchemaLike = {
+                tables: {
+                    audit: { indexes: [], shape: { row: col("string"), table: col("string") }, triggerMap: {} },
+                    messages: {
+                        indexes: [],
+                        shape: { body: col("string"), locked: col("boolean") },
+                        triggerMap: {
+                            audit: {
+                                handler: async (ctx, event) => {
+                                    await ctx.db.insert("audit", { row: event.id, table: event.table });
+                                },
+                                op: "insert",
+                                timing: "after",
                             },
-                            op: "insert",
-                            timing: "after",
                         },
                     },
                 },
-            },
-        };
+            };
 
-        messagesDdl();
+            messagesDdl();
+            harness.ddl(`CREATE TABLE "audit" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "row" TEXT, "table" TEXT)`);
 
-        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, scheduler, schema });
+            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
-        await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
 
-        expect(runAfter).toHaveBeenCalledWith(0, "counters:recount", { id: "m1" });
-    });
+            const { page } = await writer.findMany("audit");
 
-    test("the default scheduler throws when a trigger uses it unconfigured", async () => {
-        const schema: SchemaLike = {
-            tables: {
-                messages: {
-                    indexes: [],
-                    shape: { body: col("string"), locked: col("boolean") },
-                    triggerMap: {
-                        bump: {
-                            handler: async (ctx) => {
-                                await ctx.scheduler.runAfter(0, "noop");
+            expect(page).toHaveLength(1);
+            expect(page[0]!["row"]).toBe("m1");
+        });
+
+        test("ctx.scheduler reaches the scheduler passed to createD1CtxDb", async () => {
+            expect.assertions(1);
+
+            const runAfter = vi.fn<SchedulerLike["runAfter"]>(async () => "job-1");
+            const scheduler: SchedulerLike = { runAfter, runAt: async () => "job-2" };
+            const schema: SchemaLike = {
+                tables: {
+                    messages: {
+                        indexes: [],
+                        shape: { body: col("string"), locked: col("boolean") },
+                        triggerMap: {
+                            bump: {
+                                handler: async (ctx, event) => {
+                                    await ctx.scheduler.runAfter(0, "counters:recount", { id: event.id });
+                                },
+                                op: "insert",
+                                timing: "after",
                             },
-                            op: "insert",
-                            timing: "after",
                         },
                     },
                 },
-            },
-        };
+            };
 
-        messagesDdl();
+            messagesDdl();
 
-        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, scheduler, schema });
 
-        await expect(writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true })).rejects.toThrow(/no scheduler configured/);
-    });
-});
+            await writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true });
 
-describe("optimistic concurrency (OCC)", () => {
-    test("a concurrent modification during the write window raises ConflictError", async () => {
-        let raced = false;
+            expect(runAfter).toHaveBeenCalledWith(0, "counters:recount", { id: "m1" });
+        });
 
-        // A before-update trigger spans an `await`, giving a competing writer
-        // a window to commit. The handler directly mutates the same row on the
-        // first patch attempt (once) — exactly the race the CAS must catch.
-        const schema: SchemaLike = {
-            tables: {
-                todos: {
-                    indexes: [],
-                    shape: {
-                        archived: col("boolean"),
-                        priority: col("string"),
-                        projectId: col("string"),
-                        seq: col("number"),
-                    },
-                    triggerMap: {
-                        race: {
-                            handler: async () => {
-                                if (raced) {
-                                    return;
-                                }
+        test("the default scheduler throws when a trigger uses it unconfigured", async () => {
+            expect.assertions(1);
 
-                                raced = true;
-
-                                // Competing writer commits during the window.
-                                await harness.exec.run(`UPDATE "todos" SET "seq" = ? WHERE "id" = ?`, [999, "t1"]);
+            const schema: SchemaLike = {
+                tables: {
+                    messages: {
+                        indexes: [],
+                        shape: { body: col("string"), locked: col("boolean") },
+                        triggerMap: {
+                            bump: {
+                                handler: async (ctx) => {
+                                    await ctx.scheduler.runAfter(0, "noop");
+                                },
+                                op: "insert",
+                                timing: "after",
                             },
-                            op: "update",
-                            timing: "before",
                         },
                     },
                 },
-            },
-        };
+            };
 
-        harness.ddl(
-            `CREATE TABLE "todos" (
+            messagesDdl();
+
+            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+
+            await expect(writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true })).rejects.toThrow(
+                /no scheduler configured/,
+            );
+        });
+    });
+
+    describe("optimistic concurrency (OCC)", () => {
+        test("a concurrent modification during the write window raises ConflictError", async () => {
+            expect.assertions(3);
+
+            let raced = false;
+
+            // A before-update trigger spans an `await`, giving a competing writer
+            // a window to commit. The handler directly mutates the same row on the
+            // first patch attempt (once) — exactly the race the CAS must catch.
+            const schema: SchemaLike = {
+                tables: {
+                    todos: {
+                        indexes: [],
+                        shape: {
+                            archived: col("boolean"),
+                            priority: col("string"),
+                            projectId: col("string"),
+                            seq: col("number"),
+                        },
+                        triggerMap: {
+                            race: {
+                                handler: async () => {
+                                    if (raced) {
+                                        return;
+                                    }
+
+                                    raced = true;
+
+                                    // Competing writer commits during the window.
+                                    await harness.exec.run(`UPDATE "todos" SET "seq" = ? WHERE "id" = ?`, [999, "t1"]);
+                                },
+                                op: "update",
+                                timing: "before",
+                            },
+                        },
+                    },
+                },
+            };
+
+            harness.ddl(
+                `CREATE TABLE "todos" (
                 "id" TEXT PRIMARY KEY,
                 "_creationTime" INTEGER NOT NULL,
                 "archived" INTEGER,
@@ -879,49 +970,52 @@ describe("optimistic concurrency (OCC)", () => {
                 "projectId" TEXT,
                 "seq" INTEGER
             )`,
-        );
+            );
 
-        const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
+            const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
-        await writer.insert("todos", { _id: "t1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
+            await writer.insert("todos", { _id: "t1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
 
-        await expect(writer.patch("t1", { priority: "low" })).rejects.toBeInstanceOf(ConflictError);
+            await expect(writer.patch("t1", { priority: "low" })).rejects.toBeInstanceOf(ConflictError);
 
-        // The competing writer's value survives — the guarded UPDATE matched
-        // zero rows rather than clobbering it.
-        const reloaded = (await writer.get("t1")) as Record<string, unknown>;
+            // The competing writer's value survives — the guarded UPDATE matched
+            // zero rows rather than clobbering it.
+            const reloaded = (await writer.get("t1")) as Record<string, unknown>;
 
-        expect(reloaded["seq"]).toBe(999);
-        expect(reloaded["priority"]).toBe("high");
-    });
+            expect(reloaded["seq"]).toBe(999);
+            expect(reloaded["priority"]).toBe("high");
+        });
 
-    test("single-writer patch / delete / replace succeed without false conflicts", async () => {
-        const writer = setupTodos();
+        test("single-writer patch / delete / replace succeed without false conflicts", async () => {
+            expect.assertions(6);
 
-        await seed(writer);
+            const writer = setupTodos();
 
-        // patch round-trips a representative spread of column types (boolean,
-        // string, number) so a node:sqlite value round-trip mismatch would
-        // surface as a false conflict here.
-        await writer.patch("t1", { archived: true, priority: "low", seq: 42 });
+            await seed(writer);
 
-        const patched = (await writer.get("t1")) as Record<string, unknown>;
+            // patch round-trips a representative spread of column types (boolean,
+            // string, number) so a node:sqlite value round-trip mismatch would
+            // surface as a false conflict here.
+            await writer.patch("t1", { archived: true, priority: "low", seq: 42 });
 
-        expect(patched["archived"]).toBe(true);
-        expect(patched["priority"]).toBe("low");
-        expect(patched["seq"]).toBe(42);
+            const patched = (await writer.get("t1")) as Record<string, unknown>;
 
-        // replace overwrites the whole row.
-        await writer.replace("t2", { archived: false, priority: "medium", projectId: "p9", seq: 7 });
+            expect(patched["archived"]).toBe(true);
+            expect(patched["priority"]).toBe("low");
+            expect(patched["seq"]).toBe(42);
 
-        const replaced = (await writer.get("t2")) as Record<string, unknown>;
+            // replace overwrites the whole row.
+            await writer.replace("t2", { archived: false, priority: "medium", projectId: "p9", seq: 7 });
 
-        expect(replaced["projectId"]).toBe("p9");
-        expect(replaced["seq"]).toBe(7);
+            const replaced = (await writer.get("t2")) as Record<string, unknown>;
 
-        // delete removes it cleanly.
-        await writer.delete("t3");
+            expect(replaced["projectId"]).toBe("p9");
+            expect(replaced["seq"]).toBe(7);
 
-        await expect(writer.get("t3")).resolves.toBeNull();
+            // delete removes it cleanly.
+            await writer.delete("t3");
+
+            await expect(writer.get("t3")).resolves.toBeNull();
+        });
     });
 });

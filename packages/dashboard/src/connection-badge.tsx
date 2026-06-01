@@ -1,5 +1,5 @@
 import { useConnectionStatus } from "@cirrus/react";
-import type { ReactElement } from "react";
+import { type ReactElement, useMemo } from "react";
 
 /** Human-readable label + dot colour per connection status. */
 const LABELS = {
@@ -8,6 +8,11 @@ const LABELS = {
     idle: { color: "#6e7781", text: "Idle" },
     offline: { color: "#cf222e", text: "Offline" },
 } as const;
+
+/** Static wrapper styles, hoisted so they keep a stable reference across renders. */
+const WRAPPER_STYLE = { alignItems: "center", display: "inline-flex", gap: 6 } as const;
+/** Dot styles minus the status-dependent colour, hoisted; colour is merged in via `useMemo`. */
+const DOT_BASE_STYLE = { borderRadius: "50%", display: "inline-block", height: 8, width: 8 } as const;
 
 /**
  * Live-socket status indicator. Reflects the client's aggregate WebSocket health
@@ -18,16 +23,11 @@ const LABELS = {
 export function ConnectionBadge(): ReactElement {
     const status = useConnectionStatus();
     const { color, text } = LABELS[status];
+    const dotStyle = useMemo(() => ({ ...DOT_BASE_STYLE, backgroundColor: color }), [color]);
 
     return (
-        <span
-            aria-live="polite"
-            data-status={status}
-            data-testid="dash-connection"
-            role="status"
-            style={{ alignItems: "center", display: "inline-flex", gap: 6 }}
-        >
-            <span aria-hidden="true" style={{ backgroundColor: color, borderRadius: "50%", display: "inline-block", height: 8, width: 8 }} />
+        <span aria-live="polite" data-status={status} data-testid="dash-connection" role="status" style={WRAPPER_STYLE}>
+            <span aria-hidden="true" style={dotStyle} />
             {text}
         </span>
     );

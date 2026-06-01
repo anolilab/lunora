@@ -13,12 +13,12 @@ export interface AggregateMetrics {
     failed: number;
     /** Combined reactive-cache hit rate across shards with a cache, or `null` when none has one. */
     hitRate: null | number;
+    /** Shards that returned a snapshot. */
+    reachable: number;
     /** Sum of `databaseSize` across reachable shards (skips shards reporting `null`). */
     totalDatabaseSize: number;
     totalErrors: number;
     totalRequests: number;
-    /** Shards that returned a snapshot. */
-    reachable: number;
 }
 
 /**

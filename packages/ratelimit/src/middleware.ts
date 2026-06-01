@@ -55,43 +55,43 @@ const defaultMessage = (name: string, reason: RateLimitReason, retryAfter: numbe
  */
 export const rateLimit =
     <Ctx>(limiter: LimiterResolver<Ctx>, name: string, options: RateLimitMiddlewareOptions<Ctx> = {}): Middleware<Ctx, Ctx> =>
-        async ({ ctx, next }) => {
-            let status;
+    async ({ ctx, next }) => {
+        let status;
 
-            try {
-                const resolved = typeof limiter === "function" ? await limiter(ctx) : limiter;
+        try {
+            const resolved = typeof limiter === "function" ? await limiter(ctx) : limiter;
 
-                status = await resolved.limit(name, { count: options.count, key: options.key?.(ctx) });
-            } catch (error) {
+            status = await resolved.limit(name, { count: options.count, key: options.key?.(ctx) });
+        } catch (error) {
             // No logger available at this layer; emit via console so the host
             // captures the failure regardless of platform (workerd, Node).
             // eslint-disable-next-line no-console -- intentional: no injected logger
-                console.error(`@cirrus/ratelimit: rateLimit("${name}") threw; ${options.failOpen ? "failing open" : "failing closed"}`, error);
+            console.error(`@cirrus/ratelimit: rateLimit("${name}") threw; ${options.failOpen ? "failing open" : "failing closed"}`, error);
 
-                if (options.failOpen) {
-                    return next();
-                }
-
-                throw Object.assign(new Error(`rate limiter unavailable for "${name}"`), {
-                    cause: error,
-                    code: "SERVICE_UNAVAILABLE",
-                    name: "CirrusError",
-                    status: 503,
-                });
+            if (options.failOpen) {
+                return next();
             }
 
-            if (!status.ok) {
-                const reason = status.reason ?? "rate";
-                const mapped = STATUS_BY_REASON[reason];
-                const retryAfter = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
+            throw Object.assign(new Error(`rate limiter unavailable for "${name}"`), {
+                cause: error,
+                code: "SERVICE_UNAVAILABLE",
+                name: "CirrusError",
+                status: 503,
+            });
+        }
 
-                throw Object.assign(new Error(options.message ?? defaultMessage(name, reason, retryAfter)), {
-                    code: mapped.code,
-                    name: "CirrusError",
-                    retryAfter,
-                    status: mapped.status,
-                });
-            }
+        if (!status.ok) {
+            const reason = status.reason ?? "rate";
+            const mapped = STATUS_BY_REASON[reason];
+            const retryAfter = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
 
-            return next();
-        };
+            throw Object.assign(new Error(options.message ?? defaultMessage(name, reason, retryAfter)), {
+                code: mapped.code,
+                name: "CirrusError",
+                retryAfter,
+                status: mapped.status,
+            });
+        }
+
+        return next();
+    };

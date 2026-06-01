@@ -32,6 +32,8 @@ const post = (path: string, body: unknown): Request =>
 
 describe("schedulerDO", () => {
     test("/schedule persists a record and sets the alarm to the earliest pending task", async () => {
+        expect.assertions(3);
+
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const scheduledFor = Date.now() + 60_000;
@@ -56,6 +58,8 @@ describe("schedulerDO", () => {
     });
 
     test("/schedule picks the earliest of two pending records for the alarm", async () => {
+        expect.assertions(1);
+
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const later = Date.now() + 60_000;
@@ -68,6 +72,8 @@ describe("schedulerDO", () => {
     });
 
     test("/cancel removes a record and reschedules the alarm", async () => {
+        expect.assertions(3);
+
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const later = Date.now() + 60_000;
@@ -88,6 +94,8 @@ describe("schedulerDO", () => {
     });
 
     test("/cancel returns cancelled=false for an unknown id", async () => {
+        expect.assertions(1);
+
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(post("/cancel", { id: "missing" }));
@@ -97,6 +105,8 @@ describe("schedulerDO", () => {
     });
 
     test("alarm() dispatches due records and clears them from storage", async () => {
+        expect.assertions(3);
+
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const now = Date.now();
@@ -113,6 +123,8 @@ describe("schedulerDO", () => {
     });
 
     test("returns 404 for unknown routes", async () => {
+        expect.assertions(1);
+
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(new Request("https://scheduler.internal/nope", { method: "POST" }));
@@ -121,6 +133,8 @@ describe("schedulerDO", () => {
     });
 
     test("/schedule validates required fields", async () => {
+        expect.assertions(1);
+
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(post("/schedule", { args: {} }));
@@ -138,6 +152,8 @@ describe("schedulerDO — live subscriptions", () => {
     };
 
     test("pushes the job list to subscribers when a job is scheduled", async () => {
+        expect.assertions(2);
+
         const state = createFakeStateWithSockets();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
 
@@ -153,6 +169,8 @@ describe("schedulerDO — live subscriptions", () => {
     });
 
     test("pushes the updated list when a job is cancelled", async () => {
+        expect.assertions(1);
+
         const state = createFakeStateWithSockets();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
 
@@ -171,6 +189,8 @@ describe("schedulerDO — live subscriptions", () => {
     });
 
     test("does not throw when broadcasting with no live sockets", async () => {
+        expect.assertions(1);
+
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
 
@@ -183,6 +203,8 @@ describe("schedulerDO — live subscriptions", () => {
     });
 
     test("rejects a /ws upgrade when the runtime can't accept sockets", async () => {
+        expect.assertions(1);
+
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
 

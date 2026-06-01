@@ -20,6 +20,8 @@ const PAGE = { cursor: "c1", objects: [{ etag: "e1", key: "a.png", size: 10 }] }
 
 describe("createWorker — storage admin endpoint", () => {
     test("rejects without a valid admin bearer (403)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList: async () => PAGE });
 
         const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/storage", { method: "GET" }), {}, fakeCtx);
@@ -28,6 +30,8 @@ describe("createWorker — storage admin endpoint", () => {
     });
 
     test("reports STORAGE_NOT_CONFIGURED when no lister is bound (400)", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
@@ -41,6 +45,8 @@ describe("createWorker — storage admin endpoint", () => {
     });
 
     test("forwards prefix / cursor / limit to the lister and returns the page", async () => {
+        expect.assertions(3);
+
         const storageList = vi.fn<StorageListFn>(async () => PAGE);
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList });
 
@@ -59,6 +65,8 @@ describe("createWorker — storage admin endpoint", () => {
     });
 
     test("rejects non-GET (405)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList: async () => PAGE });
 
         const response = await worker.fetch(

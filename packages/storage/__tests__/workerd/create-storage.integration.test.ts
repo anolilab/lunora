@@ -16,6 +16,8 @@ const storage = (): ReturnType<typeof createStorage> => createStorage({ bucket: 
 
 describe("createStorage (workerd + Miniflare R2 integration)", () => {
     test("upload then download round-trips bytes through R2", async () => {
+        expect.assertions(6);
+
         const sut = storage();
         const payload = new TextEncoder().encode("hello cirrus");
 
@@ -37,6 +39,8 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
     });
 
     test("list returns objects matching the given prefix", async () => {
+        expect.assertions(1);
+
         const sut = storage();
 
         await sut.upload("photos/a.jpg", new Uint8Array([1, 2, 3]).buffer as ArrayBuffer);
@@ -50,6 +54,8 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
     });
 
     test("delete removes the object", async () => {
+        expect.assertions(2);
+
         const sut = storage();
 
         await sut.upload("ephemeral.txt", new TextEncoder().encode("bye").buffer as ArrayBuffer);
@@ -62,6 +68,8 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
     });
 
     test("download returns null for missing keys", async () => {
+        expect.assertions(1);
+
         const sut = storage();
 
         const got = await sut.download("does/not/exist.bin");

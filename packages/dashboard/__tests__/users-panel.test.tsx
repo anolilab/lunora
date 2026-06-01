@@ -88,6 +88,8 @@ describe("usersPanel", () => {
     });
 
     test("toggling Auto re-lists users on an interval", async () => {
+        expect.assertions(1);
+
         vi.useFakeTimers();
 
         try {
@@ -103,7 +105,7 @@ describe("usersPanel", () => {
 
             await vi.advanceTimersByTimeAsync(10_000);
 
-            expect(mock.listAuthUsers.mock.calls.length).toBe(callsAfterMount + 2);
+            expect(mock.listAuthUsers).toHaveBeenCalledTimes(callsAfterMount + 2);
         } finally {
             vi.useRealTimers();
         }

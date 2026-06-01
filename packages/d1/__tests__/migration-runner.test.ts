@@ -79,6 +79,8 @@ const createDb = async (initiallyAppliedSql: string[] = []): Promise<FakeDb> => 
 
 describe("migrationRunner", () => {
     test("applies pending migrations in order and records them", async () => {
+        expect.assertions(5);
+
         const db = await createDb();
         const runner = new MigrationRunner(db, [
             { version: 1, name: "init", sql: "CREATE TABLE a (id INTEGER);" },
@@ -95,6 +97,8 @@ describe("migrationRunner", () => {
     });
 
     test("skips already-applied migrations", async () => {
+        expect.assertions(2);
+
         const initialSql = "CREATE TABLE a (id INTEGER);";
         const db = await createDb([initialSql]);
         const runner = new MigrationRunner(db, [
@@ -109,6 +113,8 @@ describe("migrationRunner", () => {
     });
 
     test("rejects duplicate versions at construction time", async () => {
+        expect.assertions(1);
+
         const db = await createDb();
 
         expect(
@@ -121,6 +127,8 @@ describe("migrationRunner", () => {
     });
 
     test("rejects identical SQL across different versions", async () => {
+        expect.assertions(1);
+
         const db = await createDb();
         const identicalSql = "CREATE TABLE shared (id INTEGER);";
 
@@ -134,6 +142,8 @@ describe("migrationRunner", () => {
     });
 
     test("rejects multi-statement migration SQL", async () => {
+        expect.assertions(1);
+
         const db = await createDb();
         const runner = new MigrationRunner(db, [
             {
@@ -147,6 +157,8 @@ describe("migrationRunner", () => {
     });
 
     test("permits semicolons inside string literals", async () => {
+        expect.assertions(1);
+
         const db = await createDb();
         const runner = new MigrationRunner(db, [{ version: 1, name: "literal", sql: "INSERT INTO config (k, v) VALUES ('label', 'a;b');" }]);
 
@@ -156,6 +168,8 @@ describe("migrationRunner", () => {
     });
 
     test("permits semicolons inside comments", async () => {
+        expect.assertions(1);
+
         const db = await createDb();
         const runner = new MigrationRunner(db, [
             {
@@ -171,6 +185,8 @@ describe("migrationRunner", () => {
     });
 
     test("sorts out-of-order migrations before applying", async () => {
+        expect.assertions(2);
+
         const db = await createDb();
         const runner = new MigrationRunner(db, [
             { version: 2, name: "two", sql: "CREATE TABLE two (id INTEGER);" },

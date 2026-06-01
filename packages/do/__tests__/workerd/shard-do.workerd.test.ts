@@ -27,6 +27,8 @@ const newStub = (name: string): DurableObjectStub<TestShardDO> => {
 
 describe("shardDO (workerd)", () => {
     test("instantiates against a real DurableObjectState and serves /rpc", async () => {
+        expect.assertions(3);
+
         const stub = newStub("shard-rpc");
 
         await runInDurableObject(stub, async (instance) => {
@@ -48,6 +50,8 @@ describe("shardDO (workerd)", () => {
     });
 
     test("webSocket upgrade is accepted by the real Hibernation API and subscriptions round-trip via serializeAttachment", async () => {
+        expect.assertions(6);
+
         const stub = newStub("shard-ws");
 
         // Upgrade through the real runtime — verifies state.acceptWebSocket()
@@ -97,6 +101,8 @@ describe("shardDO (workerd)", () => {
     });
 
     test("broadcastDelta only reaches matching-table subscribers", async () => {
+        expect.assertions(3);
+
         const stub = newStub("shard-broadcast");
 
         // Open two sockets: one subscribed to `messages`, one to `documents`.
@@ -120,6 +126,8 @@ describe("shardDO (workerd)", () => {
     });
 
     test("broadcasts are scoped per shard — a delta emitted on shard A does not reach a subscriber on shard B", async () => {
+        expect.assertions(2);
+
         // The Phase 1 verification gate per the plan: exercise two DOs from
         // one Worker, assert a delta emitted on one shard is not delivered to
         // a subscriber on the other. This catches any accidental cross-DO

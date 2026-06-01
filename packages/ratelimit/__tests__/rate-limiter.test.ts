@@ -18,6 +18,8 @@ const makeLimiter = (overrides: { clock?: { now: number }; denyList?: string[] }
 
 describe("limit", () => {
     test("consumes capacity and then rejects", async () => {
+        expect.hasAssertions();
+
         const limiter = makeLimiter();
 
         for (let index = 0; index < 5; index += 1) {
@@ -28,6 +30,8 @@ describe("limit", () => {
     });
 
     test("isolates separate keys", async () => {
+        expect.hasAssertions();
+
         const limiter = makeLimiter();
 
         for (let index = 0; index < 5; index += 1) {
@@ -40,6 +44,8 @@ describe("limit", () => {
     });
 
     test("count consumes multiple units at once", async () => {
+        expect.assertions(2);
+
         const limiter = makeLimiter();
 
         await expect(limiter.limit("send", { count: 5 })).resolves.toMatchObject({ ok: true });
@@ -47,6 +53,8 @@ describe("limit", () => {
     });
 
     test("throws RateLimitError when throws is set", async () => {
+        expect.assertions(1);
+
         const limiter = makeLimiter();
 
         await limiter.limit("send", { count: 5 });
@@ -55,6 +63,8 @@ describe("limit", () => {
     });
 
     test("unknown limit name throws", async () => {
+        expect.assertions(1);
+
         const limiter = makeLimiter();
 
         // @ts-expect-error -- "nope" is not a configured limit name.
@@ -64,6 +74,8 @@ describe("limit", () => {
 
 describe("check", () => {
     test("does not consume", async () => {
+        expect.assertions(2);
+
         const limiter = makeLimiter();
 
         await expect(limiter.check("send")).resolves.toMatchObject({ ok: true });
@@ -77,6 +89,8 @@ describe("check", () => {
 
 describe("getValue", () => {
     test("reports a full bucket for a key that has never been seen", async () => {
+        expect.assertions(2);
+
         const limiter = makeLimiter();
 
         const value = await limiter.getValue("send", { key: "fresh" });
@@ -88,6 +102,8 @@ describe("getValue", () => {
 
 describe("reserve", () => {
     test("permits a deficit and persists the debt for later calls", async () => {
+        expect.assertions(3);
+
         const clock = { now: 0 };
         const limiter = makeLimiter({ clock });
 
@@ -106,6 +122,8 @@ describe("reserve", () => {
 
 describe("key derivation", () => {
     test("a limit named with the separator cannot collide with a keyed limit", async () => {
+        expect.assertions(1);
+
         const limiter = new RateLimiter({
             config: { "a:b": { kind: "fixed window", period: 1000, rate: 1 }, a: { kind: "fixed window", period: 1000, rate: 1 } },
             now: () => 0,
@@ -120,6 +138,8 @@ describe("key derivation", () => {
 
 describe("reset", () => {
     test("clears accumulated usage", async () => {
+        expect.assertions(2);
+
         const limiter = makeLimiter();
 
         await limiter.limit("send", { count: 5, key: "alice" });
@@ -134,6 +154,8 @@ describe("reset", () => {
 
 describe("deny list", () => {
     test("denies listed keys before any accounting", async () => {
+        expect.assertions(2);
+
         const limiter = makeLimiter({ denyList: ["banned"] });
 
         const status = await limiter.limit("send", { key: "banned" });
@@ -143,6 +165,8 @@ describe("deny list", () => {
     });
 
     test("leaves other keys unaffected", async () => {
+        expect.assertions(1);
+
         const limiter = makeLimiter({ denyList: ["banned"] });
 
         await expect(limiter.limit("send", { key: "allowed" })).resolves.toMatchObject({ ok: true });
@@ -151,6 +175,8 @@ describe("deny list", () => {
 
 describe("clock progression", () => {
     test("a fixed-window limit recovers in the next window", async () => {
+        expect.assertions(2);
+
         const clock = { now: 0 };
         const limiter = makeLimiter({ clock });
 
@@ -164,6 +190,8 @@ describe("clock progression", () => {
     });
 
     test("a sliding-window limit stays suppressed across the boundary until it decays", async () => {
+        expect.hasAssertions();
+
         const clock = { now: 0 };
         const limiter = makeLimiter({ clock });
 
@@ -187,6 +215,8 @@ describe("clock progression", () => {
 
 describe("live refill", () => {
     test("getValue projects token-bucket refill to the current clock", async () => {
+        expect.assertions(2);
+
         const clock = { now: 0 };
         const limiter = makeLimiter({ clock });
 
@@ -209,6 +239,8 @@ describe("sharding", () => {
     const shardedLimiter = () => new RateLimiter({ config: shardedConfig, now: () => 0 });
 
     test("same key always lands on the same shard (deterministic)", async () => {
+        expect.assertions(3);
+
         const limiter = shardedLimiter();
 
         // Per-shard capacity is rate/shards = 2. A single key drains exactly
@@ -220,6 +252,8 @@ describe("sharding", () => {
     });
 
     test("getValue reflects the single shard the key routes to", async () => {
+        expect.assertions(3);
+
         const limiter = shardedLimiter();
 
         const full = await limiter.getValue("hits", { key: "alice" });
@@ -239,6 +273,8 @@ describe("sharding", () => {
     });
 
     test("reset clears every shard", async () => {
+        expect.assertions(2);
+
         const limiter = shardedLimiter();
 
         await limiter.limit("hits", { key: "alice" });
@@ -252,6 +288,8 @@ describe("sharding", () => {
     });
 
     test("rejects a non-integer shard count at construction", () => {
+        expect.assertions(1);
+
         expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", period: 1000, rate: 4, shards: 1.5 } }, now: () => 0 })).toThrow(
             /positive integer/,
         );

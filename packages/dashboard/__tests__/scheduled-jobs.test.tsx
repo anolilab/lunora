@@ -17,7 +17,7 @@ describe("scheduledJobs", () => {
     test("renders jobs soonest-due first", async () => {
         expect.assertions(2);
 
-        const loadJobs = vi.fn(async () => RECORDS);
+        const loadJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => RECORDS);
 
         render(withProvider(createMockClient(), <ScheduledJobs loadJobs={loadJobs} />));
 
@@ -52,8 +52,8 @@ describe("scheduledJobs", () => {
     test("cancels a job and refetches", async () => {
         expect.assertions(2);
 
-        const loadJobs = vi.fn(async () => RECORDS);
-        const cancelJob = vi.fn(async () => ({ cancelled: true }));
+        const loadJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => RECORDS);
+        const cancelJob = vi.fn<() => Promise<{ cancelled: boolean }>>(async () => ({ cancelled: true }));
 
         render(withProvider(createMockClient(), <ScheduledJobs cancelJob={cancelJob} loadJobs={loadJobs} />));
 
@@ -101,10 +101,12 @@ describe("scheduledJobs", () => {
     });
 
     test("toggling Auto polls the loader on an interval and stops when turned off", async () => {
+        expect.assertions(2);
+
         vi.useFakeTimers();
 
         try {
-            const loadJobs = vi.fn(async () => RECORDS);
+            const loadJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => RECORDS);
 
             render(withProvider(createMockClient(), <ScheduledJobs loadJobs={loadJobs} />));
 
@@ -118,20 +120,20 @@ describe("scheduledJobs", () => {
             // Two 5s intervals → two more loads.
             await vi.advanceTimersByTimeAsync(10_000);
 
-            expect(loadJobs.mock.calls.length).toBe(callsAfterMount + 2);
+            expect(loadJobs).toHaveBeenCalledTimes(callsAfterMount + 2);
 
             fireEvent.click(screen.getByTestId("sj-auto"));
             const callsAtPause = loadJobs.mock.calls.length;
 
             await vi.advanceTimersByTimeAsync(15_000);
 
-            expect(loadJobs.mock.calls.length).toBe(callsAtPause);
+            expect(loadJobs).toHaveBeenCalledTimes(callsAtPause);
         } finally {
             vi.useRealTimers();
         }
     });
 
-    test("Live subscribes to the scheduler WS and renders pushed job lists when client-sourced", async () => {
+    test("live subscribes to the scheduler WS and renders pushed job lists when client-sourced", async () => {
         expect.assertions(3);
 
         // No custom loadJobs → the panel sources from the client, so Live uses
@@ -157,7 +159,7 @@ describe("scheduledJobs", () => {
         expect(screen.getByTestId("sj-row-pushed")).toBeDefined();
     });
 
-    test("Live falls back to polling labels when a custom loadJobs is supplied", async () => {
+    test("live falls back to polling labels when a custom loadJobs is supplied", async () => {
         expect.assertions(1);
 
         const mock = createMockClient();
@@ -195,6 +197,6 @@ describe("scheduledJobs", () => {
         // The cancel went through…
         expect(mock.cancelScheduledJob).toHaveBeenCalledWith("a");
         // …but no extra listScheduledJobs() refetch fired — the WS push covers it.
-        expect(mock.listScheduledJobs.mock.calls.length).toBe(listCallsBefore);
+        expect(mock.listScheduledJobs).toHaveBeenCalledTimes(listCallsBefore);
     });
 });

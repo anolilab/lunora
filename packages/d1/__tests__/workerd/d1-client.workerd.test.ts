@@ -39,6 +39,8 @@ describe("d1 (workerd)", () => {
     });
 
     test("migrationRunner applies migrations against a real D1 database and is idempotent", async () => {
+        expect.assertions(6);
+
         const migrations = [
             { version: 1, name: "init", sql: "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)" },
             { version: 2, name: "add_email", sql: "ALTER TABLE users ADD COLUMN email TEXT" },
@@ -71,6 +73,8 @@ describe("d1 (workerd)", () => {
     });
 
     test("migrationRunner applies separate single-statement migrations in order", async () => {
+        expect.assertions(5);
+
         // Each migration must be a single SQL statement (multi-statement
         // migrations were rejected after the security audit — semicolon-split
         // mishandles literals + comments). Two `CREATE TABLE`s become two
@@ -99,6 +103,8 @@ describe("d1 (workerd)", () => {
     });
 
     test("withSession() returns a real D1 bookmark after a write", async () => {
+        expect.assertions(2);
+
         await env.DB.prepare("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)").run();
 
         const insert = await SELF.fetch("https://test/insert", {
@@ -119,6 +125,8 @@ describe("d1 (workerd)", () => {
     });
 
     test("d1Client.prepare() works against the real binding for raw SQL", async () => {
+        expect.assertions(1);
+
         await env.DB.prepare("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)").run();
         await env.DB.prepare("INSERT INTO users (id, name) VALUES (?, ?)").bind("u2", "Linus").run();
 

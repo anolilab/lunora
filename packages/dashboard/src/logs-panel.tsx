@@ -7,8 +7,8 @@ import { adminRef, callOptions, errorMessage } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
-import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
+import { useLiveToggle } from "./use-live-toggle.js";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;

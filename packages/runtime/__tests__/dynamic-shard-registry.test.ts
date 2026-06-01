@@ -85,6 +85,8 @@ const createFakeNamespace = (stub: { fetch: (request: Request) => Promise<Respon
 
 describe("createDynamicShardRegistry", () => {
     test("listShardKeys returns the keys the DO has registered", async () => {
+        expect.assertions(1);
+
         const fakeDO = createFakeRegistryDO({ messages: ["a", "b", "c"] });
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ namespace });
@@ -95,6 +97,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("uses SHARD_REGISTRY_DO_NAME by default for the DO instance", async () => {
+        expect.assertions(1);
+
         const fakeDO = createFakeRegistryDO();
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ namespace });
@@ -105,6 +109,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("honors a custom instanceName", async () => {
+        expect.assertions(2);
+
         const fakeDO = createFakeRegistryDO();
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ instanceName: "custom-registry", namespace });
@@ -116,6 +122,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("register propagates to the DO and returns void", async () => {
+        expect.assertions(2);
+
         const fakeDO = createFakeRegistryDO();
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ namespace });
@@ -127,6 +135,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("unregister propagates to the DO", async () => {
+        expect.assertions(1);
+
         const fakeDO = createFakeRegistryDO({ messages: ["x", "y"] });
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ namespace });
@@ -137,6 +147,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("listShardKeys caches within the TTL window", async () => {
+        expect.assertions(1);
+
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ cacheTtlMs: 30_000, namespace });
@@ -151,6 +163,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("register busts the local cache", async () => {
+        expect.assertions(2);
+
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ namespace });
@@ -168,6 +182,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("unregister busts the local cache", async () => {
+        expect.assertions(1);
+
         const fakeDO = createFakeRegistryDO({ messages: ["a", "b"] });
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ namespace });
@@ -181,6 +197,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("invalidate() drops the entire cache", async () => {
+        expect.assertions(1);
+
         const fakeDO = createFakeRegistryDO({ messages: ["a"], tasks: ["x"] });
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ namespace });
@@ -197,6 +215,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("invalidate(table) drops only one entry", async () => {
+        expect.assertions(1);
+
         const fakeDO = createFakeRegistryDO({ messages: ["a"], tasks: ["x"] });
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ namespace });
@@ -215,6 +235,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("cacheTtlMs=0 disables caching entirely", async () => {
+        expect.assertions(1);
+
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ cacheTtlMs: 0, namespace });
@@ -227,6 +249,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("snapshot returns the full tables map", async () => {
+        expect.assertions(2);
+
         const fakeDO = createFakeRegistryDO({ messages: ["a"], tasks: ["x", "y"] });
         const namespace = createFakeNamespace(fakeDO);
         const registry = createDynamicShardRegistry({ namespace });
@@ -238,6 +262,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("listShardKeys throws when the DO returns non-2xx", async () => {
+        expect.assertions(1);
+
         const failingDO = {
             fetch: async () => new Response("oops", { status: 500 }),
         };
@@ -248,6 +274,8 @@ describe("createDynamicShardRegistry", () => {
     });
 
     test("dEFAULT_REGISTRY_CACHE_TTL_MS is 30s", () => {
+        expect.assertions(1);
+
         expect(DEFAULT_REGISTRY_CACHE_TTL_MS).toBe(30_000);
     });
 });

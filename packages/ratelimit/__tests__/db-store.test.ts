@@ -67,6 +67,8 @@ const createFakeDb = (): RateLimitDb => {
 
 describe("db store", () => {
     test("round-trips, upserts, and deletes values", async () => {
+        expect.assertions(4);
+
         const store = createDbStore({ db: createFakeDb() });
 
         await expect(store.get("k")).resolves.toBeUndefined();
@@ -86,6 +88,8 @@ describe("db store", () => {
     });
 
     test("round-trips the sliding-window previous-window count", async () => {
+        expect.assertions(1);
+
         const store = createDbStore({ db: createFakeDb() });
 
         await store.set("hits:bob", { prev: 7, ts: 1000, value: 3 });
@@ -94,6 +98,8 @@ describe("db store", () => {
     });
 
     test("honors a custom table, index, and key field", async () => {
+        expect.assertions(1);
+
         const store = createDbStore({ db: createFakeDb(), index: "by_id", keyField: "k", table: "limits" });
 
         await store.set("x", { ts: 1, value: 2 });
@@ -102,6 +108,8 @@ describe("db store", () => {
     });
 
     test("backs a RateLimiter end to end", async () => {
+        expect.assertions(2);
+
         const clock = { now: 0 };
         const limiter = new RateLimiter({
             config: { send: { kind: "token bucket", period: 1000, rate: 3 } },
@@ -119,6 +127,8 @@ describe("db store", () => {
     });
 
     test("the real ctx.db writer is assignable to RateLimitDb", () => {
+        expect.assertions(1);
+
         // Compile-time guarantee that `createDbStore({ db: ctx.db })` type-checks.
         const accept = (db: RateLimitDb): RateLimitDb => db;
         const writer = null as unknown as DatabaseWriter;

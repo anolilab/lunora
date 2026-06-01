@@ -20,14 +20,16 @@ const USERS = { rows: [{ email: "a@example.com", id: "u1" }], total: 1 };
 const SESSIONS = { rows: [{ id: "s1", userId: "u1" }], total: 1 };
 
 const introspector = (): AuthIntrospector => ({
-    listSessions: vi.fn(async () => SESSIONS),
-    listUsers: vi.fn(async () => USERS),
+    listSessions: vi.fn<AuthIntrospector["listSessions"]>(async () => SESSIONS),
+    listUsers: vi.fn<AuthIntrospector["listUsers"]>(async () => USERS),
 });
 
 const authed = (url: string): Request => new Request(url, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" });
 
 describe("createWorker — auth introspection endpoints", () => {
     test("users rejects without a valid admin bearer (403)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
 
         const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/auth/users", { method: "GET" }), {}, fakeCtx);
@@ -36,6 +38,8 @@ describe("createWorker — auth introspection endpoints", () => {
     });
 
     test("users reports AUTH_NOT_CONFIGURED when no introspector is bound (400)", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users"), {}, fakeCtx);
@@ -45,6 +49,8 @@ describe("createWorker — auth introspection endpoints", () => {
     });
 
     test("users returns the introspector's page and forwards paging", async () => {
+        expect.assertions(3);
+
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
 
@@ -56,6 +62,8 @@ describe("createWorker — auth introspection endpoints", () => {
     });
 
     test("sessions forwards userId + paging and returns the page", async () => {
+        expect.assertions(3);
+
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
 
@@ -67,6 +75,8 @@ describe("createWorker — auth introspection endpoints", () => {
     });
 
     test("sessions without a userId passes undefined", async () => {
+        expect.assertions(1);
+
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
 
@@ -76,6 +86,8 @@ describe("createWorker — auth introspection endpoints", () => {
     });
 
     test("users rejects non-GET (405)", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
 
         const response = await worker.fetch(

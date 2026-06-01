@@ -41,86 +41,98 @@ const recordingOpener = (): { openedUrls: string[]; opener: (url: string) => Pro
 
 let workdir: string;
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-view-"));
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
 describe("cirrus view", () => {
-    test("defaults to localhost:8787/_cirrus/dashboard", async () => {
-        const { logger } = recordingLogger();
-        const { openedUrls, opener } = recordingOpener();
-
-        const result = await runViewCommand({ cwd: workdir, logger, opener });
-
-        expect(result.code).toBe(0);
-        expect(openedUrls).toEqual(["http://localhost:8787/_cirrus/dashboard"]);
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-view-"));
     });
 
-    test("honours wrangler.dev.port for the local dashboard", async () => {
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    describe("cirrus view", () => {
+        test("defaults to localhost:8787/_cirrus/dashboard", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+            const { openedUrls, opener } = recordingOpener();
+
+            const result = await runViewCommand({ cwd: workdir, logger, opener });
+
+            expect(result.code).toBe(0);
+            expect(openedUrls).toEqual(["http://localhost:8787/_cirrus/dashboard"]);
+        });
+
+        test("honours wrangler.dev.port for the local dashboard", async () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "demo",
     "compatibility_date": "2026-04-07",
     "dev": { "port": 9091 }
 }`,
-            "utf8",
-        );
-        const { logger } = recordingLogger();
-        const { openedUrls, opener } = recordingOpener();
+                "utf8",
+            );
+            const { logger } = recordingLogger();
+            const { openedUrls, opener } = recordingOpener();
 
-        await runViewCommand({ cwd: workdir, logger, opener });
+            await runViewCommand({ cwd: workdir, logger, opener });
 
-        expect(openedUrls).toEqual(["http://localhost:9091/_cirrus/dashboard"]);
-    });
+            expect(openedUrls).toEqual(["http://localhost:9091/_cirrus/dashboard"]);
+        });
 
-    test("--remote builds a URL from wrangler.routes when present", async () => {
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("--remote builds a URL from wrangler.routes when present", async () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "demo",
     "compatibility_date": "2026-04-07",
     "routes": [{ "pattern": "api.example.com/*", "zone_name": "example.com" }]
 }`,
-            "utf8",
-        );
-        const { logger } = recordingLogger();
-        const { openedUrls, opener } = recordingOpener();
+                "utf8",
+            );
+            const { logger } = recordingLogger();
+            const { openedUrls, opener } = recordingOpener();
 
-        await runViewCommand({ cwd: workdir, logger, opener, remote: true });
+            await runViewCommand({ cwd: workdir, logger, opener, remote: true });
 
-        expect(openedUrls).toEqual(["https://api.example.com/_cirrus/dashboard"]);
-    });
+            expect(openedUrls).toEqual(["https://api.example.com/_cirrus/dashboard"]);
+        });
 
-    test("--remote falls back to <name>.workers.dev when no routes are set", async () => {
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+        test("--remote falls back to <name>.workers.dev when no routes are set", async () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "my-worker",
     "compatibility_date": "2026-04-07"
 }`,
-            "utf8",
-        );
-        const { logger } = recordingLogger();
-        const { openedUrls, opener } = recordingOpener();
+                "utf8",
+            );
+            const { logger } = recordingLogger();
+            const { openedUrls, opener } = recordingOpener();
 
-        await runViewCommand({ cwd: workdir, logger, opener, remote: true });
+            await runViewCommand({ cwd: workdir, logger, opener, remote: true });
 
-        expect(openedUrls).toEqual(["https://my-worker.workers.dev/_cirrus/dashboard"]);
-    });
+            expect(openedUrls).toEqual(["https://my-worker.workers.dev/_cirrus/dashboard"]);
+        });
 
-    test("--remote without wrangler returns 1", async () => {
-        const { logger, recorded } = recordingLogger();
-        const { openedUrls, opener } = recordingOpener();
+        test("--remote without wrangler returns 1", async () => {
+            expect.assertions(3);
 
-        const result = await runViewCommand({ cwd: workdir, logger, opener, remote: true });
+            const { logger, recorded } = recordingLogger();
+            const { openedUrls, opener } = recordingOpener();
 
-        expect(result.code).toBe(1);
-        expect(openedUrls).toEqual([]);
-        expect(recorded.errors.join("\n")).toContain("could not determine the remote URL");
+            const result = await runViewCommand({ cwd: workdir, logger, opener, remote: true });
+
+            expect(result.code).toBe(1);
+            expect(openedUrls).toEqual([]);
+            expect(recorded.errors.join("\n")).toContain("could not determine the remote URL");
+        });
     });
 });

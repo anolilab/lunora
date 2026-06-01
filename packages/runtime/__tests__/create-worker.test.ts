@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import type { ExecutionContextLike, HttpActionContext, HttpRouterLike } from "../src/create-worker.js";
+import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
@@ -47,6 +47,8 @@ describe("createWorker", () => {
     });
 
     test("returns 404 for unknown paths", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ shardDO: shard.namespace });
 
         const res = await worker.fetch(new Request("https://app.example/missing"), {}, fakeCtx);
@@ -55,6 +57,8 @@ describe("createWorker", () => {
     });
 
     test("forwards POST /_cirrus/rpc to the default __root__ shard", async () => {
+        expect.assertions(4);
+
         const worker = createWorker({ shardDO: shard.namespace });
 
         const res = await worker.fetch(
@@ -76,6 +80,8 @@ describe("createWorker", () => {
     });
 
     test("uses the envelope shardKey when provided", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ shardDO: shard.namespace });
 
         await worker.fetch(
@@ -91,6 +97,8 @@ describe("createWorker", () => {
     });
 
     test("honors defaultShardKey override", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ shardDO: shard.namespace, defaultShardKey: "tenant-1" });
 
         await worker.fetch(
@@ -106,6 +114,8 @@ describe("createWorker", () => {
     });
 
     test("rejects non-POST RPC requests with 405", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({ shardDO: shard.namespace });
 
         const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc"), {}, fakeCtx);
@@ -115,6 +125,8 @@ describe("createWorker", () => {
     });
 
     test("maps malformed RPC JSON to 400", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({ shardDO: shard.namespace });
 
         const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { method: "POST", body: "{not json" }), {}, fakeCtx);
@@ -124,6 +136,8 @@ describe("createWorker", () => {
     });
 
     test("rejects missing functionPath", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ shardDO: shard.namespace });
 
         const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { method: "POST", body: JSON.stringify({ args: {} }) }), {}, fakeCtx);
@@ -132,6 +146,8 @@ describe("createWorker", () => {
     });
 
     test("forwards /_cirrus/ws upgrades to the correct shard", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({ shardDO: shard.namespace });
 
         const upgrade = new Request("https://app.example/_cirrus/ws?shard=channel-7", {
@@ -145,6 +161,8 @@ describe("createWorker", () => {
     });
 
     test("rejects /_cirrus/ws without upgrade header", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ shardDO: shard.namespace });
 
         const res = await worker.fetch(new Request("https://app.example/_cirrus/ws?shard=x"), {}, fakeCtx);
@@ -153,7 +171,9 @@ describe("createWorker", () => {
     });
 
     test("invokes custom routes before default handlers", async () => {
-        const route = vi.fn(async () => new Response("hi", { status: 200 }));
+        expect.assertions(3);
+
+        const route = vi.fn<Route>(async () => new Response("hi", { status: 200 }));
         const worker = createWorker({ shardDO: shard.namespace, routes: { "/auth/callback": route } });
 
         const res = await worker.fetch(new Request("https://app.example/auth/callback"), {}, fakeCtx);
@@ -164,11 +184,13 @@ describe("createWorker", () => {
     });
 
     test("prefers getByName when the namespace exposes it", async () => {
-        const stub = { fetch: vi.fn(async () => new Response("via-getByName")) };
+        expect.assertions(3);
+
+        const stub = { fetch: vi.fn<(request: Request) => Promise<Response>>(async () => new Response("via-getByName")) };
         const namespace: ShardNamespaceLike = {
-            idFromName: vi.fn(),
-            get: vi.fn(),
-            getByName: vi.fn(() => stub),
+            idFromName: vi.fn<ShardNamespaceLike["idFromName"]>(),
+            get: vi.fn<ShardNamespaceLike["get"]>(),
+            getByName: vi.fn<NonNullable<ShardNamespaceLike["getByName"]>>(() => stub),
         };
 
         const worker = createWorker({ shardDO: namespace });
@@ -190,6 +212,8 @@ describe("createWorker", () => {
     });
 
     test("forwards resolveIdentity userId on the x-cirrus-userid header", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({
             shardDO: shard.namespace,
             resolveIdentity: () => ({ userId: "user_42" }),
@@ -209,6 +233,8 @@ describe("createWorker", () => {
     });
 
     test("omits identity headers when resolveIdentity returns null", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({
             shardDO: shard.namespace,
             resolveIdentity: () => null,
@@ -228,6 +254,8 @@ describe("createWorker", () => {
     });
 
     test("serialises extra identity claims as JSON on x-cirrus-identity", async () => {
+        expect.assertions(3);
+
         const worker = createWorker({
             shardDO: shard.namespace,
             resolveIdentity: () => ({ userId: "user_42", email: "u@example.com", roles: ["admin"] }),
@@ -251,7 +279,9 @@ describe("createWorker", () => {
     });
 
     test("does not invoke resolveIdentity when fanOut request would 400 (no coordinator)", async () => {
-        const resolveIdentity = vi.fn(() => ({ userId: "user_42" }));
+        expect.assertions(2);
+
+        const resolveIdentity = vi.fn<() => { userId: string }>(() => ({ userId: "user_42" }));
         const worker = createWorker({
             shardDO: shard.namespace,
             resolveIdentity,
@@ -271,7 +301,9 @@ describe("createWorker", () => {
     });
 
     test("propagates resolved identity headers through the fan-out coordinator", async () => {
-        const fanOut = vi.fn(async (_namespace, args: { headers: Record<string, string> }) => ({
+        expect.assertions(3);
+
+        const fanOut = vi.fn<(namespace: unknown, args: { headers: Record<string, string> }) => Promise<unknown>>(async (_namespace, args) => ({
             received: args.headers,
         }));
 
@@ -280,8 +312,8 @@ describe("createWorker", () => {
             queryCoordinator: {
                 fanOut: fanOut as never,
                 orchestrateMigration: fanOut as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             resolveIdentity: () => ({ userId: "user_42", email: "u@example.com" }),
@@ -305,14 +337,16 @@ describe("createWorker", () => {
     });
 
     test("denies fan-out by default when authorizeShard is set without authorizeFanOut", async () => {
-        const fanOut = vi.fn();
+        expect.assertions(3);
+
+        const fanOut = vi.fn<() => never>();
         const worker = createWorker({
             shardDO: shard.namespace,
             queryCoordinator: {
                 fanOut: fanOut as never,
-                orchestrateMigration: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             authorizeShard: () => true,
@@ -333,15 +367,17 @@ describe("createWorker", () => {
     });
 
     test("invokes authorizeFanOut with identity, table, and functionPath", async () => {
-        const fanOut = vi.fn(async () => ({ data: [], errors: [], failed: 0, ok: 0 }));
-        const authorizeFanOut = vi.fn(() => true);
+        expect.assertions(3);
+
+        const fanOut = vi.fn<() => Promise<unknown>>(async () => ({ data: [], errors: [], failed: 0, ok: 0 }));
+        const authorizeFanOut = vi.fn<() => boolean>(() => true);
         const worker = createWorker({
             shardDO: shard.namespace,
             queryCoordinator: {
                 fanOut: fanOut as never,
-                orchestrateMigration: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             authorizeFanOut,
@@ -363,14 +399,16 @@ describe("createWorker", () => {
     });
 
     test("rejects fan-out when authorizeFanOut returns false", async () => {
-        const fanOut = vi.fn();
+        expect.assertions(3);
+
+        const fanOut = vi.fn<() => never>();
         const worker = createWorker({
             shardDO: shard.namespace,
             queryCoordinator: {
                 fanOut: fanOut as never,
-                orchestrateMigration: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             authorizeFanOut: () => false,
@@ -402,24 +440,29 @@ describe("createWorker — migration endpoint", () => {
         new Request("https://app.example/_cirrus/migrate", { body: JSON.stringify(body), headers, method: "POST" });
 
     test("drives orchestrateMigration with the table, args and forwarded bearer", async () => {
-        const orchestrateMigration = vi.fn(
-            async (_namespace: unknown, _request: { args: Record<string, unknown>; functionPath: string; headers: Record<string, string>; table: string }) => ({
-                changed: 3,
-                failed: 0,
-                ok: 2,
-                processed: 3,
-                shards: [],
-                status: "completed",
-            }),
-        );
+        expect.assertions(5);
+
+        const orchestrateMigration = vi.fn<
+            (
+                namespace: unknown,
+                request: { args: Record<string, unknown>; functionPath: string; headers: Record<string, string>; table: string },
+            ) => Promise<unknown>
+        >(async (_namespace, _request) => ({
+            changed: 3,
+            failed: 0,
+            ok: 2,
+            processed: 3,
+            shards: [],
+            status: "completed",
+        }));
 
         const worker = createWorker({
             adminToken: "s3cret",
             queryCoordinator: {
-                fanOut: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
                 orchestrateMigration: orchestrateMigration as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: shard.namespace,
@@ -445,6 +488,8 @@ describe("createWorker — migration endpoint", () => {
     });
 
     test("400s when no queryCoordinator is configured", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({ adminToken: "s3cret", shardDO: shard.namespace });
 
         const res = await worker.fetch(
@@ -457,13 +502,15 @@ describe("createWorker — migration endpoint", () => {
     });
 
     test("rejects a non-migration functionPath with 400", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             adminToken: "s3cret",
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateMigration: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: shard.namespace,
@@ -475,13 +522,15 @@ describe("createWorker — migration endpoint", () => {
     });
 
     test("rejects a missing table with 400", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             adminToken: "s3cret",
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateMigration: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: shard.namespace,
@@ -493,12 +542,14 @@ describe("createWorker — migration endpoint", () => {
     });
 
     test("rejects non-POST with 405", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             queryCoordinator: {
-                fanOut: vi.fn() as never,
-                orchestrateMigration: vi.fn() as never,
-                orchestrateExport: vi.fn() as never,
-                orchestrateImport: vi.fn() as never,
+                fanOut: vi.fn<() => never>() as never,
+                orchestrateMigration: vi.fn<() => never>() as never,
+                orchestrateExport: vi.fn<() => never>() as never,
+                orchestrateImport: vi.fn<() => never>() as never,
                 registry: {} as never,
             },
             shardDO: shard.namespace,
@@ -551,6 +602,8 @@ describe("createWorker — HTTP actions", () => {
     });
 
     test("dispatches a matched request to the action handler and returns its Response", async () => {
+        expect.assertions(3);
+
         const worker = createWorker({
             httpRouter: honoApp((app) => app.get("/ping", () => new Response("pong", { status: 201 }))),
             shardDO: shard.namespace,
@@ -564,6 +617,8 @@ describe("createWorker — HTTP actions", () => {
     });
 
     test("c.var.cirrus.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
+        expect.assertions(6);
+
         shard.response = Response.json({ result: { id: "m1" } });
 
         const worker = createWorker({
@@ -592,6 +647,8 @@ describe("createWorker — HTTP actions", () => {
     });
 
     test("exposes resolveIdentity on c.var.cirrus.auth", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             httpRouter: honoApp((app) =>
                 app.get("/me", async (c) => Response.json({ claims: await c.var.cirrus.auth.getIdentity(), userId: c.var.cirrus.auth.userId })),
@@ -606,6 +663,8 @@ describe("createWorker — HTTP actions", () => {
     });
 
     test("a path-match with the wrong verb yields hono's 404", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             httpRouter: honoApp((app) => app.get("/thing", () => new Response("ok"))),
             shardDO: shard.namespace,
@@ -617,6 +676,8 @@ describe("createWorker — HTTP actions", () => {
     });
 
     test("falls through to hono's 404 when no route matches", async () => {
+        expect.assertions(1);
+
         const worker = createWorker({
             httpRouter: honoApp((app) => app.get("/known", () => new Response("ok"))),
             shardDO: shard.namespace,
@@ -628,8 +689,10 @@ describe("createWorker — HTTP actions", () => {
     });
 
     test("explicit routes win over the HTTP router", async () => {
-        const route = vi.fn(async () => new Response("explicit", { status: 200 }));
-        const action = vi.fn(() => new Response("action"));
+        expect.assertions(2);
+
+        const route = vi.fn<Route>(async () => new Response("explicit", { status: 200 }));
+        const action = vi.fn<() => Response>(() => new Response("action"));
 
         const worker = createWorker({
             httpRouter: honoApp((app) => app.get("/x", action)),
@@ -644,7 +707,9 @@ describe("createWorker — HTTP actions", () => {
     });
 
     test("the internal RPC path is never shadowed by a catch-all router", async () => {
-        const action = vi.fn(() => new Response("action"));
+        expect.assertions(3);
+
+        const action = vi.fn<() => Response>(() => new Response("action"));
 
         const worker = createWorker({
             httpRouter: honoApp((app) => app.all("*", action)),

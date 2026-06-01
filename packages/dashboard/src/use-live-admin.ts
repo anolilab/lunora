@@ -47,9 +47,16 @@ export function useLiveAdmin<T>(
             return undefined;
         }
 
-        return client.subscribe(adminRef(functionPath), argsRef.current, (value) => callbackRef.current(value as T), {
-            ...callOptions(shardKey),
-            onError: (error) => errorRef.current?.(error.message),
-        });
+        return client.subscribe(
+            adminRef(functionPath),
+            argsRef.current,
+            (value) => {
+                callbackRef.current(value as T);
+            },
+            {
+                ...callOptions(shardKey),
+                onError: (error) => errorRef.current?.(error.message),
+            },
+        );
     }, [client, functionPath, argsKey, shardKey, enabled]);
 }

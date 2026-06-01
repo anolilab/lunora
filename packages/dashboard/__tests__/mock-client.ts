@@ -38,7 +38,7 @@ export interface MockClientHooks {
 type Impl = (reference: string, args: unknown, options: unknown) => unknown;
 
 const makeMethod = (impl?: Impl): ReturnType<typeof vi.fn> =>
-    vi.fn(async (fn: FunctionReference, args: unknown, options: unknown) => {
+    vi.fn<(fn: FunctionReference, args: unknown, options: unknown) => Promise<unknown>>(async (fn: FunctionReference, args: unknown, options: unknown) => {
         return impl ? impl(fn.__cirrusRef, args, options) : undefined;
     });
 
@@ -60,18 +60,22 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const query = makeMethod(impls.query);
     const mutation = makeMethod(impls.mutation);
     const action = makeMethod(impls.action);
-    const listFunctions = vi.fn(async () => impls.listFunctions?.() ?? []);
-    const listScheduledJobs = vi.fn(async () => impls.listScheduledJobs?.() ?? []);
-    const cancelScheduledJob = vi.fn(async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true });
-    const listStorageObjects = vi.fn(
+    const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => impls.listFunctions?.() ?? []);
+    const listScheduledJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => impls.listScheduledJobs?.() ?? []);
+    const cancelScheduledJob = vi.fn<(id: string) => Promise<{ cancelled: boolean }>>(
+        async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true },
+    );
+    const listStorageObjects = vi.fn<(options?: { cursor?: string; limit?: number; prefix?: string }) => Promise<StorageListPage>>(
         async (options: { cursor?: string; limit?: number; prefix?: string } = {}) => impls.listStorageObjects?.(options) ?? { objects: [] },
     );
-    const listGlobalTables = vi.fn(async () => impls.listGlobalTables?.() ?? []);
-    const readGlobalTablePage = vi.fn(
+    const listGlobalTables = vi.fn<() => Promise<GlobalTableInfo[]>>(async () => impls.listGlobalTables?.() ?? []);
+    const readGlobalTablePage = vi.fn<(options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>>(
         async (options: { limit?: number; offset?: number; table: string }) => impls.readGlobalTablePage?.(options) ?? { columns: [], rows: [], total: 0 },
     );
-    const listAuthUsers = vi.fn(async (options: { limit?: number; offset?: number } = {}) => impls.listAuthUsers?.(options) ?? { rows: [], total: 0 });
-    const listAuthSessions = vi.fn(
+    const listAuthUsers = vi.fn<(options?: { limit?: number; offset?: number }) => Promise<AuthPage<AuthUser>>>(
+        async (options: { limit?: number; offset?: number } = {}) => impls.listAuthUsers?.(options) ?? { rows: [], total: 0 },
+    );
+    const listAuthSessions = vi.fn<(options?: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthSession>>>(
         async (options: { limit?: number; offset?: number; userId?: string } = {}) => impls.listAuthSessions?.(options) ?? { rows: [], total: 0 },
     );
 
@@ -83,19 +87,19 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         onValue: (value: unknown) => void;
     }
     const subscribers = new Map<string, Set<Sub>>();
-    const subscribe = vi.fn(
-        (fn: FunctionReference, _args: unknown, callback: (value: unknown) => void, opts?: { onError?: (error: { message: string }) => void }) => {
-            const set = subscribers.get(fn.__cirrusRef) ?? new Set<Sub>();
-            const sub: Sub = { onError: opts?.onError, onValue: callback };
+    const subscribe = vi.fn<
+        (fn: FunctionReference, args: unknown, callback: (value: unknown) => void, opts?: { onError?: (error: { message: string }) => void }) => () => void
+    >((fn: FunctionReference, _args: unknown, callback: (value: unknown) => void, opts?: { onError?: (error: { message: string }) => void }) => {
+        const set = subscribers.get(fn.__cirrusRef) ?? new Set<Sub>();
+        const sub: Sub = { onError: opts?.onError, onValue: callback };
 
-            set.add(sub);
-            subscribers.set(fn.__cirrusRef, set);
+        set.add(sub);
+        subscribers.set(fn.__cirrusRef, set);
 
-            return () => {
-                set.delete(sub);
-            };
-        },
-    );
+        return () => {
+            set.delete(sub);
+        };
+    });
     const emit = (reference: string, value: unknown): void => {
         for (const sub of subscribers.get(reference) ?? []) {
             sub.onValue(value);
@@ -109,7 +113,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
 
     // Live scheduled-jobs WS subscription: records callbacks; `emitJobs` pushes.
     const jobsCallbacks = new Set<(jobs: ScheduleRecord[]) => void>();
-    const subscribeScheduledJobs = vi.fn((onJobs: (jobs: ScheduleRecord[]) => void) => {
+    const subscribeScheduledJobs = vi.fn<(onJobs: (jobs: ScheduleRecord[]) => void) => () => void>((onJobs: (jobs: ScheduleRecord[]) => void) => {
         jobsCallbacks.add(onJobs);
 
         return () => {

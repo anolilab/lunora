@@ -66,30 +66,42 @@ const globalUsersSchema: SchemaLike = {
 
 describe("selectExportTables", () => {
     test("returns every shard-local user table when no allowlist is given", () => {
+        expect.assertions(1);
+
         expect(selectExportTables(usersSchema)).toEqual(["messages", "users"]);
     });
 
     test("filters out global tables", () => {
+        expect.assertions(1);
+
         expect(selectExportTables(globalUsersSchema)).toEqual(["local"]);
     });
 
     test("respects an explicit allowlist (still skipping globals)", () => {
+        expect.assertions(1);
+
         expect(selectExportTables(globalUsersSchema, ["global", "local"])).toEqual(["local"]);
     });
 });
 
 describe("validateImportRow", () => {
     test("accepts a well-formed row", () => {
+        expect.assertions(1);
+
         expect(validateImportRow(usersSchema, "users", { email: "a@b.com", name: "Alice" })).toBeNull();
     });
 
     test("rejects a row whose field fails the validator", () => {
+        expect.assertions(1);
+
         const result = validateImportRow(usersSchema, "users", { email: 42, name: "Alice" });
 
         expect(result).toMatch(/email/);
     });
 
     test("ignores `_id` / `_creationTime` (framework-managed)", () => {
+        expect.assertions(1);
+
         expect(
             validateImportRow(usersSchema, "users", {
                 _creationTime: 1_700_000_000_000,
@@ -101,6 +113,8 @@ describe("validateImportRow", () => {
     });
 
     test("rejects unknown tables", () => {
+        expect.assertions(1);
+
         expect(validateImportRow(usersSchema, "nope", {})).toMatch(/unknown table/);
     });
 });
@@ -132,6 +146,8 @@ describe("exportShardRows / importShardRows roundtrip", () => {
     });
 
     test("exports every row across tables", async () => {
+        expect.assertions(3);
+
         const rows: ExportRow[] = [];
 
         for await (const row of exportShardRows(writer, usersSchema, {})) {
@@ -144,6 +160,8 @@ describe("exportShardRows / importShardRows roundtrip", () => {
     });
 
     test("respects a table allowlist", async () => {
+        expect.assertions(1);
+
         const rows: ExportRow[] = [];
 
         for await (const row of exportShardRows(writer, usersSchema, { tables: ["users"] })) {
@@ -154,6 +172,8 @@ describe("exportShardRows / importShardRows roundtrip", () => {
     });
 
     test("import inserts a batch and surfaces per-table counts", async () => {
+        expect.assertions(5);
+
         const freshDb = createSqliteExec();
 
         runShardMigrations(freshDb.sql, usersSchema);
@@ -178,6 +198,8 @@ describe("exportShardRows / importShardRows roundtrip", () => {
     });
 
     test("schema-failed rows do not abort the batch — they're reported in errors[]", async () => {
+        expect.assertions(3);
+
         const freshDb = createSqliteExec();
 
         runShardMigrations(freshDb.sql, usersSchema);
@@ -199,6 +221,8 @@ describe("exportShardRows / importShardRows roundtrip", () => {
     });
 
     test("a row whose _id collides with an existing doc is skipped and counted as a conflict", async () => {
+        expect.assertions(3);
+
         const rows: ExportRow[] = [
             { doc: { _id: "u1", email: "should-not-overwrite@x.io", name: "Doppel" }, table: "users" },
             { doc: { _id: "u99", email: "ok@x.io", name: "Fresh" }, table: "users" },
@@ -216,6 +240,8 @@ describe("exportShardRows / importShardRows roundtrip", () => {
     });
 
     test("roundtrip: export then import into a fresh shard produces identical rows", async () => {
+        expect.hasAssertions();
+
         const exported: ExportRow[] = [];
 
         for await (const row of exportShardRows(writer, usersSchema, {})) {
@@ -314,6 +340,8 @@ describe("shardDO admin export/import dispatch", () => {
         });
 
     test("dispatches exportShard and returns rows", async () => {
+        expect.assertions(3);
+
         const shard = new ExportShardImpl(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.exportShard, {}));
@@ -327,6 +355,8 @@ describe("shardDO admin export/import dispatch", () => {
     });
 
     test("dispatches importShard and inserts rows", async () => {
+        expect.assertions(3);
+
         const shard = new ExportShardImpl(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(
@@ -344,6 +374,8 @@ describe("shardDO admin export/import dispatch", () => {
     });
 
     test("rejects without an admin token", async () => {
+        expect.assertions(1);
+
         const shard = new ExportShardImpl(state, {});
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.exportShard, {}));

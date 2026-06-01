@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, test } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -80,6 +80,8 @@ describe("shardDO admin introspection", () => {
     };
 
     test("lists tables when a valid admin bearer is presented", async () => {
+        expect.assertions(2);
+
         const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listTables, {}, ADMIN_TOKEN));
@@ -89,6 +91,8 @@ describe("shardDO admin introspection", () => {
     });
 
     test("reads a page of rows for a table", async () => {
+        expect.assertions(2);
+
         const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { table: "messages", limit: 1 }, ADMIN_TOKEN));
@@ -100,6 +104,8 @@ describe("shardDO admin introspection", () => {
     });
 
     test("is disabled (403) when no admin token is configured, even with a bearer", async () => {
+        expect.assertions(2);
+
         const shard = new AdminShard(state, {});
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listTables, {}, ADMIN_TOKEN));
@@ -109,6 +115,8 @@ describe("shardDO admin introspection", () => {
     });
 
     test("rejects (403) a missing or mismatched bearer when a token is configured", async () => {
+        expect.assertions(2);
+
         const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const missing = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listTables, {}));
@@ -119,6 +127,8 @@ describe("shardDO admin introspection", () => {
     });
 
     test("maps an unknown table to a 404 CirrusError", async () => {
+        expect.assertions(2);
+
         const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { table: "nope" }, ADMIN_TOKEN));
@@ -128,6 +138,8 @@ describe("shardDO admin introspection", () => {
     });
 
     test("returns 404 for an unrecognised admin op", async () => {
+        expect.assertions(2);
+
         const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest("__cirrus_admin__:bogus", {}, ADMIN_TOKEN));
@@ -235,6 +247,8 @@ describe("shardDO admin data migrations", () => {
     const versions = (): unknown[] => db.raw(`SELECT json_extract("__doc__", '$.version') AS version FROM "users" ORDER BY id`).map((row) => row["version"]);
 
     test("runs a registered migration and reports completed counts", async () => {
+        expect.assertions(3);
+
         const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, { id: "bump-version" }));
@@ -247,6 +261,8 @@ describe("shardDO admin data migrations", () => {
     });
 
     test("dryRun previews counts without rewriting rows", async () => {
+        expect.assertions(3);
+
         const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, { dryRun: true, id: "bump-version" }));
@@ -258,6 +274,8 @@ describe("shardDO admin data migrations", () => {
     });
 
     test("reports persisted status after a run, and [] before any run", async () => {
+        expect.assertions(3);
+
         const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const before = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.migrationStatus, {}));
@@ -274,6 +292,8 @@ describe("shardDO admin data migrations", () => {
     });
 
     test("rejects runMigration without an id (400)", async () => {
+        expect.assertions(2);
+
         const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, {}));
@@ -283,6 +303,8 @@ describe("shardDO admin data migrations", () => {
     });
 
     test("maps an unknown migration id to a 404 via the base hook default", async () => {
+        expect.assertions(2);
+
         // AdminShard implements `handleRpc` but not `runShardDataMigration`, so
         // the base hook's not-found rejection surfaces through the admin path.
         const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -294,6 +316,8 @@ describe("shardDO admin data migrations", () => {
     });
 
     test("getMetrics returns a health snapshot with request/error counts", async () => {
+        expect.assertions(5);
+
         const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(userRequest("messages:list"));
@@ -312,6 +336,8 @@ describe("shardDO admin data migrations", () => {
     });
 
     test("getLogs returns the captured RPC errors, newest first", async () => {
+        expect.assertions(3);
+
         // A failed dispatch is what the log buffer captures (path + message), so
         // a single boom call yields exactly one row; the successful call is not logged.
         const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -402,6 +428,8 @@ describe("shardDO admin row writes", () => {
     const rowCount = (): number => Number(db.raw(`SELECT COUNT(*) AS c FROM "users"`)[0]?.["c"] ?? 0);
 
     test("inserts a row and returns its assigned id", async () => {
+        expect.assertions(3);
+
         const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(writeRequest({ doc: { name: "Ada", version: 1 }, op: "insert", table: "users" }));
@@ -411,11 +439,15 @@ describe("shardDO admin row writes", () => {
         const body = (await response.json()) as { result: RunShardWriteResult };
 
         expect(body.result.op).toBe("insert");
-        expect(typeof body.result.id).toBe("string");
+
+        expectTypeOf(body.result.id).toBeString();
+
         expect(rowCount()).toBe(1);
     });
 
     test("patches an existing row", async () => {
+        expect.assertions(2);
+
         const seed = createShardCtxDb({ schema: usersSchema, sql: db.sql });
         const id = await seed.insert("users", { name: "old", version: 1 });
 
@@ -431,6 +463,8 @@ describe("shardDO admin row writes", () => {
     });
 
     test("deletes a row", async () => {
+        expect.assertions(2);
+
         const seed = createShardCtxDb({ schema: usersSchema, sql: db.sql });
         const id = await seed.insert("users", { name: "doomed", version: 1 });
 
@@ -443,6 +477,8 @@ describe("shardDO admin row writes", () => {
     });
 
     test("rejects an unknown op (400)", async () => {
+        expect.assertions(1);
+
         const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(writeRequest({ doc: {}, op: "bogus", table: "users" }));
@@ -451,6 +487,8 @@ describe("shardDO admin row writes", () => {
     });
 
     test("requires an id for patch (400)", async () => {
+        expect.assertions(1);
+
         const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(writeRequest({ doc: { name: "x" }, op: "patch", table: "users" }));
@@ -459,6 +497,8 @@ describe("shardDO admin row writes", () => {
     });
 
     test("base ShardDO rejects writeRow as an unknown table (no override)", async () => {
+        expect.assertions(2);
+
         class BareShard extends ShardDO {
             public override async handleRpc(): Promise<unknown> {
                 return null;

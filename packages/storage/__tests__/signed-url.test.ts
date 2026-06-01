@@ -8,6 +8,8 @@ describe("signedUrl", () => {
     });
 
     test("sign + verify roundtrip succeeds for a fresh signature", async () => {
+        expect.assertions(3);
+
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
             secret: "shh",
@@ -23,6 +25,8 @@ describe("signedUrl", () => {
     });
 
     test("rejects an expired URL", async () => {
+        expect.assertions(2);
+
         vi.useFakeTimers();
         vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
 
@@ -43,6 +47,8 @@ describe("signedUrl", () => {
     });
 
     test("rejects a URL signed with a different secret", async () => {
+        expect.assertions(2);
+
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
             secret: "right",
@@ -57,6 +63,8 @@ describe("signedUrl", () => {
     });
 
     test("rejects a URL with a tampered key path", async () => {
+        expect.assertions(2);
+
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
             secret: "shh",
@@ -72,6 +80,8 @@ describe("signedUrl", () => {
     });
 
     test("returns malformed for URLs missing sig or exp", async () => {
+        expect.assertions(2);
+
         const result = await verifySignedUrl("https://cdn.test/x", "shh");
 
         expect(result.valid).toBe(false);
@@ -79,6 +89,8 @@ describe("signedUrl", () => {
     });
 
     test("preserves PUT method in the round-trip", async () => {
+        expect.assertions(2);
+
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test",
             secret: "shh",
@@ -94,6 +106,8 @@ describe("signedUrl", () => {
     });
 
     test("handles keys with multiple path segments", async () => {
+        expect.assertions(2);
+
         const url = await buildSignedUrl({
             baseUrl: "https://cdn.test/",
             secret: "shh",

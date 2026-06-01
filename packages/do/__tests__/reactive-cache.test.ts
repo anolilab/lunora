@@ -11,6 +11,8 @@ import { ReactiveCache, reactiveCacheKey, stableStringify } from "../src/reactiv
  */
 describe("dependencyTracker", () => {
     test("recordRead stamps (table, id) and (table, scan) keys", () => {
+        expect.assertions(1);
+
         const tracker = createDependencyTracker();
 
         tracker.recordRead("users", "u1");
@@ -21,6 +23,8 @@ describe("dependencyTracker", () => {
     });
 
     test("collect returns a stable reference (caller can hand to cache)", () => {
+        expect.assertions(2);
+
         const tracker = createDependencyTracker();
         const first = tracker.collect();
 
@@ -33,6 +37,8 @@ describe("dependencyTracker", () => {
     });
 
     test("recording the same key twice is idempotent", () => {
+        expect.assertions(1);
+
         const tracker = createDependencyTracker();
 
         tracker.recordRead("users", "u1");
@@ -44,14 +50,20 @@ describe("dependencyTracker", () => {
 
 describe("stableStringify", () => {
     test("encodes object keys in lexical order regardless of input order", () => {
+        expect.assertions(1);
+
         expect(stableStringify({ a: 1, b: 2 })).toBe(stableStringify({ b: 2, a: 1 }));
     });
 
     test("treats { a: undefined } the same as {}", () => {
+        expect.assertions(1);
+
         expect(stableStringify({ a: undefined })).toBe(stableStringify({}));
     });
 
     test("encodes nested structures stably", () => {
+        expect.assertions(1);
+
         const left = stableStringify({ user: { name: "alice", id: "u1" }, limit: 10 });
         const right = stableStringify({ limit: 10, user: { id: "u1", name: "alice" } });
 
@@ -61,12 +73,16 @@ describe("stableStringify", () => {
 
 describe("reactiveCacheKey", () => {
     test("combines function path with stable args encoding", () => {
+        expect.assertions(1);
+
         expect(reactiveCacheKey("messages:list", { channelId: "A", limit: 10 }, null)).toBe(
             reactiveCacheKey("messages:list", { limit: 10, channelId: "A" }, null),
         );
     });
 
     test("scopes the key to caller identity so users never collide", () => {
+        expect.assertions(3);
+
         const a = reactiveCacheKey("profile:me", {}, "user_a");
         const b = reactiveCacheKey("profile:me", {}, "user_b");
         const anon = reactiveCacheKey("profile:me", {}, null);
@@ -101,6 +117,8 @@ const spyCounter = (returnValue?: unknown) => {
 
 describe("reactiveCache", () => {
     test("cache hit: same key returns memoized result without re-running the handler", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
         let calls = 0;
 
@@ -118,6 +136,8 @@ describe("reactiveCache", () => {
     });
 
     test("row-id invalidation: invalidate(table, id) drops entries that read that id", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
         const spy = spyCounter();
 
@@ -130,6 +150,8 @@ describe("reactiveCache", () => {
     });
 
     test("scan invalidation: any write to a table blows *scan entries on it", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
         const spy = spyCounter();
 
@@ -144,6 +166,8 @@ describe("reactiveCache", () => {
     });
 
     test("independence: invalidating one table does not blow entries on another", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
         let userCalls = 0;
         let messageCalls = 0;
@@ -174,6 +198,8 @@ describe("reactiveCache", () => {
     });
 
     test("invalidateTable nukes both per-id and *scan entries on the table", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
         let scanCalls = 0;
         let getCalls = 0;
@@ -209,6 +235,8 @@ describe("reactiveCache", () => {
     });
 
     test("lRU eviction: filling past maxEntries drops the oldest entry", async () => {
+        expect.assertions(3);
+
         const cache = new ReactiveCache({ maxEntries: 2 });
 
         await cache.run("k1", new Set([depKey("t", "1")]), async () => 1);
@@ -231,6 +259,8 @@ describe("reactiveCache", () => {
     });
 
     test("lRU eviction respects recency: touching k1 saves it from eviction", async () => {
+        expect.assertions(1);
+
         const cache = new ReactiveCache({ maxEntries: 2 });
 
         await cache.run("k1", new Set([depKey("t", "1")]), async () => 1);
@@ -254,6 +284,8 @@ describe("reactiveCache", () => {
     });
 
     test("subscribed entries pin against LRU eviction", async () => {
+        expect.assertions(1);
+
         const cache = new ReactiveCache({ maxEntries: 1 });
 
         await cache.run("k1", new Set([depKey("t", "1")]), async () => 1);
@@ -275,6 +307,8 @@ describe("reactiveCache", () => {
     });
 
     test("args sensitivity: same function, different args = different cache slots", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
         const spy = spyCounter();
 
@@ -286,6 +320,8 @@ describe("reactiveCache", () => {
     });
 
     test("rLS interaction: restrictsCounts/baseWhere bake into the cache key via argsHash", () => {
+        expect.assertions(1);
+
         const restricted = reactiveCacheKey("messages:count", { restrictsCounts: true, baseWhere: { ownerId: "u1" } }, null);
         const unrestricted = reactiveCacheKey("messages:count", {}, null);
 
@@ -293,6 +329,8 @@ describe("reactiveCache", () => {
     });
 
     test("subscribers(): snapshot returns a defensive copy", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
 
         await cache.run("k1", new Set([depKey("t", "1")]), async () => 1);
@@ -309,6 +347,8 @@ describe("reactiveCache", () => {
     });
 
     test("subscribers() returns [] for unknown keys (no entry pinned yet)", () => {
+        expect.assertions(1);
+
         const cache = new ReactiveCache();
 
         cache.subscribe("never-cached", "sub-a");
@@ -317,6 +357,8 @@ describe("reactiveCache", () => {
     });
 
     test("invalidate returns the list of removed keys for the bridge to iterate", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
 
         await cache.run("a", new Set([depKey("t", "1")]), async () => 1);
@@ -330,6 +372,8 @@ describe("reactiveCache", () => {
     });
 
     test("size reports cumulative byte charge across entries", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
 
         await cache.run("k1", new Set(), async () => "hello");
@@ -341,6 +385,8 @@ describe("reactiveCache", () => {
     });
 
     test("clear() empties all entries and indexes", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache();
 
         await cache.run("k1", new Set([depKey("t", "1")]), async () => 1);
@@ -361,6 +407,8 @@ describe("reactiveCache", () => {
     });
 
     test("stats() tracks hits, misses, and live entry count", async () => {
+        expect.assertions(5);
+
         const cache = new ReactiveCache();
         const run = async () => ({ rows: ["r1"] });
 
@@ -378,6 +426,8 @@ describe("reactiveCache", () => {
     });
 
     test("stats() counts evictions when maxEntries is exceeded", async () => {
+        expect.assertions(2);
+
         const cache = new ReactiveCache({ maxEntries: 1 });
         const run = async () => ({ ok: true });
 

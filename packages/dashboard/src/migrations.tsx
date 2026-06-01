@@ -7,8 +7,8 @@ import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
-import { useLiveToggle } from "./use-live-toggle.js";
 import { useLiveAdmin } from "./use-live-admin.js";
+import { useLiveToggle } from "./use-live-toggle.js";
 
 export interface MigrationsPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */

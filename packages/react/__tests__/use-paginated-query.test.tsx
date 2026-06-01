@@ -44,6 +44,8 @@ const Harness = ({ initialNumItems = 2, onLoadMore, skip = false }: HarnessProps
 
 describe("usePaginatedQuery", () => {
     test("loads the first page and reports CanLoadMore when more remain", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
 
         render(
@@ -64,6 +66,8 @@ describe("usePaginatedQuery", () => {
     });
 
     test("loadMore appends pages and reaches Exhausted on the final page", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
 
         let loadMore: (numItems: number) => void = () => undefined;
@@ -105,6 +109,8 @@ describe("usePaginatedQuery", () => {
     });
 
     test("loadMore is a no-op once Exhausted", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b"]));
 
         let loadMore: (numItems: number) => void = () => undefined;
@@ -135,6 +141,8 @@ describe("usePaginatedQuery", () => {
     });
 
     test('"skip" short-circuits — no query and stays LoadingFirstPage', () => {
+        expect.assertions(4);
+
         const mock = createMockClient(makePaginator(["a", "b"]));
 
         render(
@@ -150,6 +158,8 @@ describe("usePaginatedQuery", () => {
     });
 
     test("a WS delta replaces a loaded page in place", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(makePaginator(["a", "b"]));
 
         render(

@@ -12,20 +12,26 @@ describe("dashboardApp", () => {
 
     test("renders the header and token input", () => {
         expect.assertions(2);
+
         render(<DashboardApp baseUrl="https://app.example" />);
+
         expect(screen.getByTestId("dash-app-header")).toBeDefined();
         expect(screen.getByTestId("dash-app-token")).toBeDefined();
     });
 
     test("renders the dashboard shell under the provider", () => {
         expect.assertions(1);
+
         render(<DashboardApp baseUrl="https://app.example" />);
+
         expect(screen.getByTestId("cirrus-dashboard")).toBeDefined();
     });
 
     test("shows the connection badge (idle without a live socket)", () => {
         expect.assertions(1);
+
         render(<DashboardApp baseUrl="https://app.example" />);
+
         expect(screen.getByTestId("dash-connection").dataset.status).toBe("idle");
     });
 

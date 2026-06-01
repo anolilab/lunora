@@ -141,6 +141,8 @@ const embed = (input: string): ReadonlyArray<number> => {
 
 describe("upsert -> query end-to-end against a structural Vectorize fake", () => {
     it("createVectors: an upsert is visible to a subsequent query with metadata + topK", async () => {
+        expect.assertions(4);
+
         const index = createStatefulVectorizeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
 
@@ -159,6 +161,8 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
     });
 
     it("createVectors: a metadata filter narrows query results to the matching subset", async () => {
+        expect.assertions(1);
+
         const index = createStatefulVectorizeIndex();
         const vectors = createVectors({ indexes: { docs: index } });
 
@@ -174,6 +178,8 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
     });
 
     it("createCtxVectors: server-shape query returns the upserted matches with mapped fields", async () => {
+        expect.assertions(3);
+
         const index = createStatefulVectorizeIndex();
         const ctx = createCtxVectors(createVectors({ indexes: { docs: index } }));
 
@@ -188,6 +194,8 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
     });
 
     it("createCtxVectors: deleteByIds removes a row from subsequent query results", async () => {
+        expect.assertions(1);
+
         const index = createStatefulVectorizeIndex();
         const ctx = createCtxVectors(createVectors({ indexes: { docs: index } }));
 
@@ -202,6 +210,8 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
     });
 
     it("createCtxVectors: a precomputed vector skips embed and returns the same ranked list", async () => {
+        expect.assertions(1);
+
         const index = createStatefulVectorizeIndex();
         const ctx = createCtxVectors(createVectors({ indexes: { docs: index } }));
 

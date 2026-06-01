@@ -87,13 +87,13 @@ const makeHandler =
         userHandler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R,
         output?: Validator,
     ) =>
-        async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
-            const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
-            const ctx = await runMiddleware(middlewares, context);
-            const result = await userHandler({ args: parsed, ctx: ctx as Ctx });
+    async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
+        const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
+        const ctx = await runMiddleware(middlewares, context);
+        const result = await userHandler({ args: parsed, ctx: ctx as Ctx });
 
-            return (output ? output.parse(result) : result) as Awaited<R>;
-        };
+        return (output ? output.parse(result) : result) as Awaited<R>;
+    };
 
 /**
  * Wrap a streaming user handler in the same arg-validation + middleware shell
@@ -108,27 +108,27 @@ const makeStreamHandler =
         middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
         userHandler: (options: { args: InferArgs<Args>; ctx: Ctx; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
     ) =>
-        (context: unknown, rawArgs: InferArgs<Args>, signal: AbortSignal): AsyncIterable<R> => {
+    (context: unknown, rawArgs: InferArgs<Args>, signal: AbortSignal): AsyncIterable<R> => {
         // Args validation runs synchronously at call time so a bad envelope
         // surfaces before the iterator is consumed.
-            const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
+        const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
 
-            // The middleware chain may be async, but we don't want to block the
-            // caller before returning an iterable — defer the chain to the first
-            // `next()` pump by wrapping the iterator with an outer async generator.
-            return (async function* drive(): AsyncGenerator<R, void, void> {
-                const ctx = await runMiddleware(middlewares, context);
-                const iterator = userHandler({ args: parsed, ctx: ctx as Ctx, signal });
+        // The middleware chain may be async, but we don't want to block the
+        // caller before returning an iterable — defer the chain to the first
+        // `next()` pump by wrapping the iterator with an outer async generator.
+        return (async function* drive(): AsyncGenerator<R, void, void> {
+            const ctx = await runMiddleware(middlewares, context);
+            const iterator = userHandler({ args: parsed, ctx: ctx as Ctx, signal });
 
-                for await (const chunk of iterator) {
-                    yield chunk;
+            for await (const chunk of iterator) {
+                yield chunk;
 
-                    if (signal.aborted) {
-                        return;
-                    }
+                if (signal.aborted) {
+                    return;
                 }
-            })();
-        };
+            }
+        })();
+    };
 
 /**
  * Construct a kind-specific builder. The terminal method is keyed by the kind
@@ -160,19 +160,19 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
     // unconditionally keeps the runtime free of per-kind branching.
     ...(kind === "query"
         ? {
-            stream: <R>(
-                userHandler: (options: {
-                    args: Record<string, unknown>;
-                    ctx: unknown;
-                    signal: AbortSignal;
-                }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
-            ) => ({
-                args: state.args,
-                handler: makeStreamHandler(state.args, state.middlewares, userHandler),
-                kind: "stream" as const,
-                ...(visibility ? { visibility } : {}),
-            }),
-        }
+              stream: <R>(
+                  userHandler: (options: {
+                      args: Record<string, unknown>;
+                      ctx: unknown;
+                      signal: AbortSignal;
+                  }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+              ) => ({
+                  args: state.args,
+                  handler: makeStreamHandler(state.args, state.middlewares, userHandler),
+                  kind: "stream" as const,
+                  ...(visibility ? { visibility } : {}),
+              }),
+          }
         : {}),
     use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { ...state, middlewares: [...state.middlewares, middleware] }, visibility),
 });

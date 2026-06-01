@@ -15,6 +15,8 @@ import { describe, expect, test } from "vitest";
 
 describe("createWorker (workerd)", () => {
     test("forwards authorization, cookie, and x-d1-bookmark to the shard", async () => {
+        expect.assertions(5);
+
         const response = await SELF.fetch("https://app.test/_cirrus/rpc", {
             method: "POST",
             headers: {
@@ -42,6 +44,8 @@ describe("createWorker (workerd)", () => {
     });
 
     test("does NOT forward unrelated headers like user-agent or x-secret", async () => {
+        expect.assertions(3);
+
         const response = await SELF.fetch("https://app.test/_cirrus/rpc", {
             method: "POST",
             headers: {
@@ -62,6 +66,8 @@ describe("createWorker (workerd)", () => {
     });
 
     test("propagates the shard's x-d1-bookmark response header back to the client (stub-level contract)", async () => {
+        expect.assertions(1);
+
         // `createWorker` rebuilds the outbound RPC URL as
         // `https://shard.internal/rpc`, dropping any query string from the
         // inbound request. That means we can't ask the DO to emit a
@@ -81,6 +87,8 @@ describe("createWorker (workerd)", () => {
     });
 
     test("dispatches custom routes by 'METHOD path' key before falling through", async () => {
+        expect.assertions(5);
+
         const ok = await SELF.fetch("https://app.test/healthz");
 
         expect(ok.status).toBe(200);
@@ -102,6 +110,8 @@ describe("createWorker (workerd)", () => {
     });
 
     test("cirrusError surfaces its code+status; generic errors are sanitized to INTERNAL 500", async () => {
+        expect.assertions(6);
+
         const cirrus = await SELF.fetch("https://app.test/boom-cirrus");
 
         expect(cirrus.status).toBe(403);

@@ -10,7 +10,9 @@ const jsonResponse = (body: unknown): Response => Response.json(body, { status: 
 
 describe("preloadQuery", () => {
     test("executes the query over HTTP and captures a JSON-serializable token", async () => {
-        const fetchMock = vi.fn(async () => jsonResponse({ result: { rows: [1, 2, 3] } }));
+        expect.assertions(7);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { rows: [1, 2, 3] } }));
         const client = new CirrusClient({ url: "https://app.example", fetch: fetchMock as unknown as typeof fetch });
 
         const preloaded = await preloadQuery(client, fn("posts:list"), { limit: 3 });
@@ -38,7 +40,9 @@ describe("preloadQuery", () => {
     });
 
     test("carries the shardKey when one is supplied", async () => {
-        const fetchMock = vi.fn(async () => jsonResponse({ result: 7 }));
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: 7 }));
         const client = new CirrusClient({ url: "https://app.example", fetch: fetchMock as unknown as typeof fetch });
 
         const preloaded = await preloadQuery(client, fn("rooms:count"), {}, { shardKey: "room-1" });
@@ -48,7 +52,9 @@ describe("preloadQuery", () => {
     });
 
     test("surfaces a server error instead of producing a token", async () => {
-        const fetchMock = vi.fn(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }));
+        expect.assertions(1);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }));
         const client = new CirrusClient({ url: "https://app.example", fetch: fetchMock as unknown as typeof fetch });
 
         await expect(preloadQuery(client, fn("posts:list"), {})).rejects.toMatchObject({ message: "fail", code: "BOOM" });
@@ -57,6 +63,8 @@ describe("preloadQuery", () => {
 
 describe("preloadedQueryResult", () => {
     test("returns the captured value", () => {
+        expect.assertions(1);
+
         const token: Preloaded<{ ok: boolean }> = { __cirrusPreloaded: true, args: {}, functionPath: "x:y", value: { ok: true } };
 
         expect(preloadedQueryResult(token)).toEqual({ ok: true });

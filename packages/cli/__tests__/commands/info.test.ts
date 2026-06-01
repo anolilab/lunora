@@ -57,73 +57,81 @@ const WRANGLER = `{
 
 let workdir: string;
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-info-"));
-    cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
-    writeFileSync(join(workdir, "package.json"), PKG, "utf8");
-    writeFileSync(join(workdir, "wrangler.jsonc"), WRANGLER, "utf8");
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
 describe("cirrus info", () => {
-    test("collects @cirrus/* packages, wrangler summary, and schema overview", () => {
-        const { logger } = recordingLogger();
-
-        const result = runInfoCommand({ cwd: workdir, logger });
-
-        expect(result.code).toBe(0);
-
-        const cirrusNames = result.snapshot.cirrusPackages.map((p) => p.name);
-
-        expect(cirrusNames).toContain("@cirrus/server");
-        expect(cirrusNames).toContain("@cirrus/runtime");
-        expect(cirrusNames).toContain("@cirrus/vite");
-        // Non-cirrus deps are excluded.
-        expect(cirrusNames).not.toContain("lodash");
-
-        expect(result.snapshot.wrangler?.name).toBe("demo-worker");
-        expect(result.snapshot.wrangler?.bindings.durableObjects).toContain("SHARD");
-        expect(result.snapshot.wrangler?.bindings.d1).toContain("DB");
-
-        expect(result.snapshot.schema?.tables.length).toBeGreaterThan(0);
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-info-"));
+        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+        writeFileSync(join(workdir, "package.json"), PKG, "utf8");
+        writeFileSync(join(workdir, "wrangler.jsonc"), WRANGLER, "utf8");
     });
 
-    test("--json emits a machine-readable snapshot on stdout (jq-pipeable)", () => {
-        const { logger } = recordingLogger();
-        const written: string[] = [];
-        const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-            written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
 
-            return true;
-        }) as typeof process.stdout.write);
+    describe("cirrus info", () => {
+        test("collects @cirrus/* packages, wrangler summary, and schema overview", () => {
+            expect.hasAssertions();
 
-        try {
-            const result = runInfoCommand({ cwd: workdir, json: true, logger });
+            const { logger } = recordingLogger();
+
+            const result = runInfoCommand({ cwd: workdir, logger });
 
             expect(result.code).toBe(0);
 
-            // Stdout payload is just the JSON, no Pail prefixes — downstream
-            // tools like `jq` can consume it verbatim.
-            const payload = JSON.parse(written.join(""));
+            const cirrusNames = result.snapshot.cirrusPackages.map((p) => p.name);
 
-            expect(payload.cirrusPackages?.length).toBeGreaterThan(0);
-            expect(payload.wrangler?.name).toBe("demo-worker");
-        } finally {
-            spy.mockRestore();
-        }
-    });
+            expect(cirrusNames).toContain("@cirrus/server");
+            expect(cirrusNames).toContain("@cirrus/runtime");
+            expect(cirrusNames).toContain("@cirrus/vite");
+            // Non-cirrus deps are excluded.
+            expect(cirrusNames).not.toContain("lodash");
 
-    test("missing wrangler is reported but does not fail", () => {
-        rmSync(join(workdir, "wrangler.jsonc"));
-        const { logger, recorded } = recordingLogger();
+            expect(result.snapshot.wrangler?.name).toBe("demo-worker");
+            expect(result.snapshot.wrangler?.bindings.durableObjects).toContain("SHARD");
+            expect(result.snapshot.wrangler?.bindings.d1).toContain("DB");
 
-        const result = runInfoCommand({ cwd: workdir, logger });
+            expect(result.snapshot.schema?.tables.length).toBeGreaterThan(0);
+        });
 
-        expect(result.code).toBe(0);
-        expect(result.snapshot.wrangler).toBeUndefined();
-        expect(recorded.infos.join("\n")).toContain("wrangler: (not found)");
+        test("--json emits a machine-readable snapshot on stdout (jq-pipeable)", () => {
+            expect.assertions(3);
+
+            const { logger } = recordingLogger();
+            const written: string[] = [];
+            const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+                written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
+
+                return true;
+            }) as typeof process.stdout.write);
+
+            try {
+                const result = runInfoCommand({ cwd: workdir, json: true, logger });
+
+                expect(result.code).toBe(0);
+
+                // Stdout payload is just the JSON, no Pail prefixes — downstream
+                // tools like `jq` can consume it verbatim.
+                const payload = JSON.parse(written.join(""));
+
+                expect(payload.cirrusPackages?.length).toBeGreaterThan(0);
+                expect(payload.wrangler?.name).toBe("demo-worker");
+            } finally {
+                spy.mockRestore();
+            }
+        });
+
+        test("missing wrangler is reported but does not fail", () => {
+            expect.assertions(3);
+
+            rmSync(join(workdir, "wrangler.jsonc"));
+            const { logger, recorded } = recordingLogger();
+
+            const result = runInfoCommand({ cwd: workdir, logger });
+
+            expect(result.code).toBe(0);
+            expect(result.snapshot.wrangler).toBeUndefined();
+            expect(recorded.infos.join("\n")).toContain("wrangler: (not found)");
+        });
     });
 });

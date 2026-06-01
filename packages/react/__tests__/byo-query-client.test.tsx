@@ -26,6 +26,8 @@ const Display = (): ReactElement => {
 
 describe("cirrusProvider — bring-your-own QueryClient", () => {
     test("uses an explicit queryClient prop instead of creating one", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(() => ({ count: 7 }));
         const myQc = new QueryClient({ defaultOptions: { queries: { gcTime: 99, retry: 0 } } });
 
@@ -45,6 +47,8 @@ describe("cirrusProvider — bring-your-own QueryClient", () => {
     });
 
     test("inherits the QueryClient from a parent <QueryClientProvider> without double-wrapping", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(() => ({ count: 3 }));
         const parentQc = new QueryClient({ defaultOptions: { queries: { gcTime: 12_345, retry: 0 } } });
 
@@ -68,6 +72,8 @@ describe("cirrusProvider — bring-your-own QueryClient", () => {
     });
 
     test("creates a default QueryClient when none is provided", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(() => ({ count: 1 }));
 
         render(

@@ -59,10 +59,7 @@ export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
         // Better-auth accepts the D1 binding directly; no Kysely wiring.
         database: env.DB as never,
         emailAndPassword: { enabled: true },
-        plugins: [
-            organization({ allowUserToCreateOrganization: true }),
-            admin({ defaultRole: "user" }),
-        ],
+        plugins: [organization({ allowUserToCreateOrganization: true }), admin({ defaultRole: "user" })],
         secret: env.AUTH_SECRET,
     });
 ```

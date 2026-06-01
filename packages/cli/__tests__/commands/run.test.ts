@@ -13,6 +13,8 @@ const silentLogger = (): Logger => ({
 
 describe("cirrus run", () => {
     test("pOSTs the RPC payload to the configured URL", async () => {
+        expect.assertions(4);
+
         const calls: { body: unknown; url: string }[] = [];
 
         const fetchImpl: FetchLike = async (url, init) => {
@@ -44,6 +46,8 @@ describe("cirrus run", () => {
     });
 
     test("attaches --shard to the payload when given", async () => {
+        expect.assertions(1);
+
         const calls: { body: unknown }[] = [];
 
         const fetchImpl: FetchLike = async (_url, init) => {
@@ -68,6 +72,8 @@ describe("cirrus run", () => {
     });
 
     test("returns non-zero on HTTP error responses", async () => {
+        expect.assertions(1);
+
         const fetchImpl: FetchLike = async () => ({
             json: async () => ({ error: "boom" }),
             ok: false,
@@ -85,6 +91,8 @@ describe("cirrus run", () => {
     });
 
     test("returns non-zero when --args is invalid JSON", async () => {
+        expect.assertions(2);
+
         const errors: string[] = [];
 
         const fetchImpl: FetchLike = async () => ({

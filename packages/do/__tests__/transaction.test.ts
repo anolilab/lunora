@@ -13,13 +13,13 @@ interface FakeState extends ShardDOState {
     storage: { sql: { exec: ExecMock } };
 }
 
-const createFakeState = (sqlExec: ExecMock = vi.fn() as unknown as ExecMock): FakeState => {
+const createFakeState = (sqlExec: ExecMock = vi.fn<(query: string) => unknown>() as unknown as ExecMock): FakeState => {
     const state: FakeState = {
         sockets: [],
         storage: { sql: { exec: sqlExec } },
         id: { name: "test-shard" },
-        acceptWebSocket: vi.fn(),
-        getWebSockets: vi.fn(() => []),
+        acceptWebSocket: vi.fn<ShardDOState["acceptWebSocket"]>(),
+        getWebSockets: vi.fn<ShardDOState["getWebSockets"]>(() => []),
     };
 
     return state;
@@ -69,11 +69,13 @@ describe("shardDO.runInTransaction", () => {
     let shard: TestShardDO;
 
     beforeEach(() => {
-        exec = vi.fn() as unknown as ExecMock;
+        exec = vi.fn<(query: string) => unknown>() as unknown as ExecMock;
         shard = new TestShardDO(createFakeState(exec));
     });
 
     test("wraps handler in BEGIN / COMMIT on success", async () => {
+        expect.assertions(2);
+
         const result = await shard.callRunInTransaction(() => 42);
 
         expect(result).toBe(42);
@@ -81,6 +83,8 @@ describe("shardDO.runInTransaction", () => {
     });
 
     test("emits ROLLBACK when the handler throws", async () => {
+        expect.assertions(2);
+
         const boom = new Error("boom");
 
         await expect(
@@ -93,6 +97,8 @@ describe("shardDO.runInTransaction", () => {
     });
 
     test("re-throws ConflictError after rolling back", async () => {
+        expect.assertions(2);
+
         const conflict = new ConflictError("stale version");
 
         await expect(
@@ -105,6 +111,8 @@ describe("shardDO.runInTransaction", () => {
     });
 
     test("refuses nested transactions with NESTED_TRANSACTION code", async () => {
+        expect.assertions(1);
+
         await expect(
             shard.callRunInTransaction(async () => {
                 await shard.callRunInTransaction(() => 1);
@@ -113,6 +121,8 @@ describe("shardDO.runInTransaction", () => {
     });
 
     test("swallows secondary ROLLBACK errors so the original throw propagates", async () => {
+        expect.assertions(1);
+
         let firstCall = true;
 
         exec.mockImplementation((query: string) => {
@@ -137,6 +147,8 @@ describe("shardDO.runInTransaction", () => {
     });
 
     test("clears transactionDepth in the finally branch so a second tx can run", async () => {
+        expect.assertions(1);
+
         await shard.callRunInTransaction(() => 1);
         await shard.callRunInTransaction(() => 2);
 
@@ -146,6 +158,8 @@ describe("shardDO.runInTransaction", () => {
     });
 
     test("conflictError carries code / status / name as own properties", () => {
+        expect.assertions(4);
+
         const error = new ConflictError();
 
         expect(error.code).toBe("CONFLICT");
@@ -157,6 +171,8 @@ describe("shardDO.runInTransaction", () => {
 
 describe("shardDO.errorToResponse — ConflictError", () => {
     test("maps a thrown ConflictError to a 409 with code CONFLICT", async () => {
+        expect.assertions(3);
+
         const shard = new TestShardDO(createFakeState());
         const response = await shard.errorResponse(new ConflictError("version mismatch"));
 

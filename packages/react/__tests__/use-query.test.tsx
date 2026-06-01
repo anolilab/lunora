@@ -20,6 +20,8 @@ const Display = ({ args = DEFAULT_ARGS }: { args?: Record<string, unknown> | "sk
 
 describe("useQuery", () => {
     test("returns undefined initially, then the resolved value", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(() => ({ count: 1 }));
 
         render(
@@ -38,6 +40,8 @@ describe("useQuery", () => {
     });
 
     test('"skip" short-circuits the query — no client call', () => {
+        expect.assertions(3);
+
         const mock = createMockClient(() => ({ count: 1 }));
 
         render(
@@ -52,6 +56,8 @@ describe("useQuery", () => {
     });
 
     test("two components sharing args share a single network call", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(() => ({ count: 2 }));
 
         render(
@@ -76,6 +82,8 @@ describe("useQuery", () => {
     });
 
     test("wS deltas update the displayed value", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient(() => 0);
 
         render(

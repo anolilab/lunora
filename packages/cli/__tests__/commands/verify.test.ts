@@ -46,69 +46,79 @@ const recordingLogger = (): { logger: Logger; recorded: Recorded } => {
 
 let workdir: string;
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-verify-"));
-    cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
 describe("cirrus verify", () => {
-    test("returns 0 and writes nothing when wrangler + codegen are both valid", () => {
-        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-        const { logger, recorded } = recordingLogger();
-
-        const result = runVerifyCommand({ cwd: workdir, logger });
-
-        expect(result.code).toBe(0);
-        expect(result.errors).toEqual([]);
-        expect(recorded.successes.join("\n")).toContain("valid");
-        // Dry-run must not have created the _generated/ directory.
-        expect(existsSync(join(workdir, "cirrus", "_generated"))).toBe(false);
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-verify-"));
+        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
     });
 
-    test("returns 1 and surfaces wrangler errors", () => {
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    describe("cirrus verify", () => {
+        test("returns 0 and writes nothing when wrangler + codegen are both valid", () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            const { logger, recorded } = recordingLogger();
+
+            const result = runVerifyCommand({ cwd: workdir, logger });
+
+            expect(result.code).toBe(0);
+            expect(result.errors).toEqual([]);
+            expect(recorded.successes.join("\n")).toContain("valid");
+            // Dry-run must not have created the _generated/ directory.
+            expect(existsSync(join(workdir, "cirrus", "_generated"))).toBe(false);
+        });
+
+        test("returns 1 and surfaces wrangler errors", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
     "name": "x",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["web_socket_auto_reply_to_close"]
 }`,
-            "utf8",
-        );
-        const { logger, recorded } = recordingLogger();
+                "utf8",
+            );
+            const { logger, recorded } = recordingLogger();
 
-        const result = runVerifyCommand({ cwd: workdir, logger });
+            const result = runVerifyCommand({ cwd: workdir, logger });
 
-        expect(result.code).toBe(1);
-        expect(result.errors.length).toBeGreaterThan(0);
-        expect(recorded.errors.join("\n")).toContain("errors:");
-    });
+            expect(result.code).toBe(1);
+            expect(result.errors.length).toBeGreaterThan(0);
+            expect(recorded.errors.join("\n")).toContain("errors:");
+        });
 
-    test("returns 1 when codegen discovery fails (broken schema)", () => {
-        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-        writeFileSync(join(workdir, "cirrus", "schema.ts"), "this is not valid typescript syntax {{{", "utf8");
-        const { logger } = recordingLogger();
+        test("returns 1 when codegen discovery fails (broken schema)", () => {
+            expect.assertions(2);
 
-        const result = runVerifyCommand({ cwd: workdir, logger });
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "cirrus", "schema.ts"), "this is not valid typescript syntax {{{", "utf8");
+            const { logger } = recordingLogger();
 
-        expect(result.code).toBe(1);
-        expect(result.errors.some((error) => error.includes("codegen failed"))).toBe(true);
-    });
+            const result = runVerifyCommand({ cwd: workdir, logger });
 
-    test("returns 1 when wrangler.jsonc is missing", () => {
-        const { logger } = recordingLogger();
-        // No wrangler.jsonc written.
-        const filesBefore = readdirSync(workdir);
+            expect(result.code).toBe(1);
+            expect(result.errors.some((error) => error.includes("codegen failed"))).toBe(true);
+        });
 
-        expect(filesBefore).not.toContain("wrangler.jsonc");
+        test("returns 1 when wrangler.jsonc is missing", () => {
+            expect.assertions(3);
 
-        const result = runVerifyCommand({ cwd: workdir, logger });
+            const { logger } = recordingLogger();
+            // No wrangler.jsonc written.
+            const filesBefore = readdirSync(workdir);
 
-        expect(result.code).toBe(1);
-        expect(result.errors.join("\n")).toContain("wrangler.jsonc");
+            expect(filesBefore).not.toContain("wrangler.jsonc");
+
+            const result = runVerifyCommand({ cwd: workdir, logger });
+
+            expect(result.code).toBe(1);
+            expect(result.errors.join("\n")).toContain("wrangler.jsonc");
+        });
     });
 });

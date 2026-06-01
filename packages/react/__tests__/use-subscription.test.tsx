@@ -9,7 +9,11 @@ import { createMockClient } from "./mock-client.js";
 
 const fn = (ref: string): FunctionReference => ({ __cirrusRef: ref });
 
-const Display = ({ args = {} as Record<string, unknown> }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
+// Module-level stable default so it isn't recreated as an inline `as` expression
+// on every render (react-x/no-unstable-default-props).
+const EMPTY_ARGS: Record<string, unknown> = {};
+
+const Display = ({ args = EMPTY_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
     const { data, error } = useSubscription(fn("messages:list"), args as Record<string, unknown> | "skip");
 
     if (error) {
@@ -21,6 +25,8 @@ const Display = ({ args = {} as Record<string, unknown> }: { args?: Record<strin
 
 describe("useSubscription", () => {
     test("opens a subscription on mount and renders pushed values", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient();
 
         render(
@@ -46,6 +52,8 @@ describe("useSubscription", () => {
     });
 
     test('"skip" short-circuits — no subscribe call', () => {
+        expect.assertions(2);
+
         const mock = createMockClient();
 
         render(
@@ -59,8 +67,10 @@ describe("useSubscription", () => {
     });
 
     test("unmount releases the subscription", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient();
-        const unsubscribeSpy = vi.fn();
+        const unsubscribeSpy = vi.fn<() => void>();
 
         // Wrap the mock's subscribe so we can observe the unsubscribe call.
         const originalSubscribe = mock.subscribe.getMockImplementation() as (
@@ -94,6 +104,8 @@ describe("useSubscription", () => {
     });
 
     test("surfaces a thrown subscribe error", async () => {
+        expect.hasAssertions();
+
         const mock = createMockClient();
 
         mock.subscribe.mockImplementationOnce(() => {

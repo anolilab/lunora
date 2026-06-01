@@ -30,6 +30,8 @@ describe("introspect", () => {
 
     describe("listTables", () => {
         test("returns user tables with row counts, sorted, excluding internal and FTS tables", () => {
+            expect.assertions(1);
+
             expect(listTables(db.sql)).toEqual([
                 { name: "messages", rowCount: 3 },
                 { name: "users", rowCount: 1 },
@@ -37,6 +39,8 @@ describe("introspect", () => {
         });
 
         test("reports an empty table as rowCount 0", () => {
+            expect.assertions(1);
+
             db.raw(`CREATE TABLE "empty" ("__id__" TEXT PRIMARY KEY)`);
 
             const empty = listTables(db.sql).find((table) => table.name === "empty");
@@ -47,6 +51,8 @@ describe("introspect", () => {
 
     describe("readTablePage", () => {
         test("returns rows, the column list, and the total row count", () => {
+            expect.assertions(4);
+
             const page = readTablePage(db.sql, { table: "messages" });
 
             expect(page.total).toBe(3);
@@ -56,6 +62,8 @@ describe("introspect", () => {
         });
 
         test("honours limit and offset while keeping the full total", () => {
+            expect.assertions(2);
+
             const page = readTablePage(db.sql, { table: "messages", limit: 1, offset: 1 });
 
             expect(page.total).toBe(3);
@@ -63,24 +71,34 @@ describe("introspect", () => {
         });
 
         test("clamps an oversized limit to the 500 ceiling and floors a negative offset", () => {
+            expect.assertions(1);
+
             const page = readTablePage(db.sql, { table: "messages", limit: 10_000, offset: -5 });
 
             expect(page.rows).toHaveLength(3);
         });
 
         test("rejects an unknown table", () => {
+            expect.assertions(1);
+
             expect(() => readTablePage(db.sql, { table: "nope" })).toThrow(/unknown table/u);
         });
 
         test("refuses to read an internal table even though it exists", () => {
+            expect.assertions(1);
+
             expect(() => readTablePage(db.sql, { table: "_cf_KV" })).toThrow(/unknown table/u);
         });
 
         test("refuses to read an FTS shadow table", () => {
+            expect.assertions(1);
+
             expect(() => readTablePage(db.sql, { table: "messages__fts_body" })).toThrow(/unknown table/u);
         });
 
         test("search filters across every column, with total reflecting the matched set", () => {
+            expect.assertions(2);
+
             const page = readTablePage(db.sql, { search: "hello", table: "messages" });
 
             expect(page.total).toBe(1);
@@ -88,6 +106,8 @@ describe("introspect", () => {
         });
 
         test("search matches non-text columns via CAST (numeric votes)", () => {
+            expect.assertions(1);
+
             db.raw(`INSERT INTO "messages" VALUES ('z', 'zeta', 42)`);
 
             // 42 lives only in a numeric column; matching it proves the CAST path.
@@ -97,10 +117,14 @@ describe("introspect", () => {
         });
 
         test("search is case-insensitive", () => {
+            expect.assertions(1);
+
             expect(readTablePage(db.sql, { search: "WORLD", table: "messages" }).total).toBe(1);
         });
 
         test("search paginates over the filtered set", () => {
+            expect.assertions(3);
+
             // All three messages contain the letter that appears in their text;
             // narrow to the two with an 'o' (hello, world) and page through them.
             const first = readTablePage(db.sql, { limit: 1, offset: 0, search: "o", table: "messages" });
@@ -112,6 +136,8 @@ describe("introspect", () => {
         });
 
         test("a LIKE wildcard in the search is matched literally, not as a pattern", () => {
+            expect.assertions(1);
+
             db.raw(`INSERT INTO "messages" VALUES ('m4', '100%', 0)`);
 
             const page = readTablePage(db.sql, { search: "100%", table: "messages" });
@@ -121,6 +147,8 @@ describe("introspect", () => {
         });
 
         test("blank search is treated as no filter", () => {
+            expect.assertions(1);
+
             expect(readTablePage(db.sql, { search: "   ", table: "messages" }).total).toBe(3);
         });
     });
@@ -133,6 +161,8 @@ describe("introspect", () => {
         });
 
         test("expands __doc__ into per-field columns, dropping the blob column", () => {
+            expect.assertions(3);
+
             const page = readTablePage(db.sql, { table: "posts" });
 
             expect(page.columns).toEqual(["id", "_creationTime", "title", "authorId"]);
@@ -141,6 +171,8 @@ describe("introspect", () => {
         });
 
         test("server search matches values inside the doc blob", () => {
+            expect.assertions(2);
+
             const page = readTablePage(db.sql, { search: "u2", table: "posts" });
 
             expect(page.total).toBe(1);
@@ -148,16 +180,22 @@ describe("introspect", () => {
         });
 
         test("echoes only the refs whose column surfaces in the page", () => {
+            expect.assertions(1);
+
             const page = readTablePage(db.sql, { refs: { authorId: "users", missing: "nope" }, table: "posts" });
 
             expect(page.refs).toEqual({ authorId: "users" });
         });
 
         test("omits refs entirely when none are supplied", () => {
+            expect.assertions(1);
+
             expect(readTablePage(db.sql, { table: "posts" }).refs).toBeUndefined();
         });
 
         test("leaves a non-doc (column-per-field) table untouched", () => {
+            expect.assertions(1);
+
             // The `messages` fixture has no __doc__; expansion must be a no-op.
             const page = readTablePage(db.sql, { table: "messages" });
 

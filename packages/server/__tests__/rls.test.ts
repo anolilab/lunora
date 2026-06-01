@@ -143,6 +143,8 @@ const insertWithPolicy = (policy: Policy<TestCtx>) => (document: Record<string, 
 
 describe("rls — read path", () => {
     test("and-merges a policy WhereInput into findMany via baseWhere", async () => {
+        expect.assertions(1);
+
         const policy = definePolicy<TestCtx>({
             on: "read",
             table: "documents",
@@ -169,6 +171,8 @@ describe("rls — read path", () => {
     });
 
     test("policy returning true skips the merge (unrestricted)", async () => {
+        expect.assertions(1);
+
         const policy = definePolicy<TestCtx>({
             on: "read",
             table: "documents",
@@ -187,6 +191,8 @@ describe("rls — read path", () => {
     });
 
     test("policy returning false denies — empty result via OR-of-nothing predicate", async () => {
+        expect.assertions(1);
+
         const policy = definePolicy<TestCtx>({
             on: "read",
             table: "documents",
@@ -206,6 +212,8 @@ describe("rls — read path", () => {
     });
 
     test("role-branched policy reads ctx.auth.roles", async () => {
+        expect.assertions(2);
+
         const policy = definePolicy<TestCtx>({
             on: "read",
             table: "documents",
@@ -227,6 +235,8 @@ describe("rls — read path", () => {
     });
 
     test("count() throws COUNT_RLS_UNSUPPORTED when a policy applies", async () => {
+        expect.hasAssertions();
+
         // We can't observe the underlying CirrusError here without wiring the
         // fake DB to honor `restrictsCounts`. Instead we assert the wrapper
         // *passes* `restrictsCounts: true` down to the writer — the ORM is
@@ -249,6 +259,8 @@ describe("rls — read path", () => {
     });
 
     test("get() does NOT leak a row that the read policy denied (regression)", async () => {
+        expect.assertions(1);
+
         // Policy applies to "documents" and would AND-merge `{ ownerId: "u1" }`.
         // Our row has `ownerId: "u2"` so the policy denies it.
         const policy = definePolicy<TestCtx>({
@@ -282,6 +294,8 @@ describe("rls — read path", () => {
     });
 
     test("get() on a row outside every policy-gated table returns the row unrestricted", async () => {
+        expect.assertions(2);
+
         // Policy applies to "documents"; the requested row lives in "audit",
         // which carries no policy — the wrapper must pass it through, not
         // accidentally treat it as policy-denied.
@@ -302,6 +316,8 @@ describe("rls — read path", () => {
     });
 
     test("count() on a non-policy table does NOT mark restrictsCounts", async () => {
+        expect.assertions(1);
+
         const policy = definePolicy<TestCtx>({
             on: "read",
             table: "documents",
@@ -321,6 +337,8 @@ describe("rls — read path", () => {
 
 describe("rls — write path", () => {
     test("update policy denies patch with FORBIDDEN", async () => {
+        expect.assertions(2);
+
         const policy = definePolicy<TestCtx>({
             on: "update",
             table: "documents",
@@ -339,6 +357,8 @@ describe("rls — write path", () => {
     });
 
     test("update policy allows patch when the row matches", async () => {
+        expect.assertions(1);
+
         const policy = definePolicy<TestCtx>({
             on: "update",
             table: "documents",
@@ -356,6 +376,8 @@ describe("rls — write path", () => {
     });
 
     test("delete policy denies with FORBIDDEN", async () => {
+        expect.assertions(2);
+
         const policy = definePolicy<TestCtx>({
             on: "delete",
             table: "documents",
@@ -374,6 +396,8 @@ describe("rls — write path", () => {
     });
 
     test("insert policy denies a forbidden document", async () => {
+        expect.assertions(1);
+
         const policy = definePolicy<TestCtx>({
             on: "insert",
             table: "documents",
@@ -394,6 +418,8 @@ describe("rls — write path", () => {
 
 describe("rls — write policies returning a WhereInput predicate", () => {
     test("insert: predicate matches the candidate document → allow", async () => {
+        expect.assertions(1);
+
         const policy = definePolicy<TestCtx>({
             on: "insert",
             table: "documents",
@@ -411,6 +437,8 @@ describe("rls — write policies returning a WhereInput predicate", () => {
     });
 
     test("insert: predicate mismatch denies with FORBIDDEN", async () => {
+        expect.assertions(2);
+
         const policy = definePolicy<TestCtx>({
             on: "insert",
             table: "documents",
@@ -430,6 +458,8 @@ describe("rls — write policies returning a WhereInput predicate", () => {
     });
 
     test("update: predicate evaluates against the pre-write row", async () => {
+        expect.assertions(3);
+
         const policy = definePolicy<TestCtx>({
             on: "update",
             table: "documents",
@@ -452,6 +482,8 @@ describe("rls — write policies returning a WhereInput predicate", () => {
     });
 
     test("delete: predicate evaluates against the pre-write row", async () => {
+        expect.assertions(2);
+
         const policy = definePolicy<TestCtx>({
             on: "delete",
             table: "documents",
@@ -475,6 +507,8 @@ describe("rls — write policies returning a WhereInput predicate", () => {
     });
 
     test("operator coverage: lt / in / contains / AND honored on writes", async () => {
+        expect.assertions(5);
+
         const policy = definePolicy<TestCtx>({
             on: "insert",
             table: "documents",
@@ -514,6 +548,8 @@ describe("rls — write policies returning a WhereInput predicate", () => {
     });
 
     test("oR branch: any matching sub-predicate allows the write", async () => {
+        expect.assertions(1);
+
         const policy = definePolicy<TestCtx>({
             on: "insert",
             table: "documents",
@@ -540,6 +576,8 @@ describe("rls — write policies returning a WhereInput predicate", () => {
 
 describe("rls — opt-in scope", () => {
     test("policies do NOT apply to procedures whose chain omits rls()", async () => {
+        expect.hasAssertions();
+
         // A policy is declared but the procedure deliberately skips
         // `.use(rls(...))` — the policy list is dead code for this handler.
         // Holding the reference proves we're not silently activating policies
@@ -565,6 +603,8 @@ describe("rls — opt-in scope", () => {
     });
 
     test("a CirrusError thrown from a policy denial carries status 403", async () => {
+        expect.assertions(3);
+
         const policy = definePolicy<TestCtx>({
             on: "delete",
             table: "documents",
@@ -587,6 +627,8 @@ describe("rls — opt-in scope", () => {
 
 describe("rls — role registry", () => {
     test("defineRole returns the declared name + optional description", () => {
+        expect.assertions(2);
+
         expect(defineRole("admin")).toEqual({ name: "admin" });
         expect(defineRole("editor", { description: "can edit docs" })).toEqual({
             description: "can edit docs",

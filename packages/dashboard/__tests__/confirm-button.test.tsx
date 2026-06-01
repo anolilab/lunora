@@ -7,7 +7,7 @@ describe("confirmButton", () => {
     test("does not fire onConfirm until the confirm step is clicked", () => {
         expect.assertions(3);
 
-        const onConfirm = vi.fn();
+        const onConfirm = vi.fn<() => void>();
 
         render(
             <ConfirmButton onConfirm={onConfirm} testId="act">
@@ -29,7 +29,7 @@ describe("confirmButton", () => {
     test("cancel dismisses the prompt without firing", () => {
         expect.assertions(2);
 
-        const onConfirm = vi.fn();
+        const onConfirm = vi.fn<() => void>();
 
         render(
             <ConfirmButton onConfirm={onConfirm} testId="act">
@@ -48,7 +48,7 @@ describe("confirmButton", () => {
     test("disabled blocks both the trigger and the confirm step", () => {
         expect.assertions(2);
 
-        const onConfirm = vi.fn();
+        const onConfirm = vi.fn<() => void>();
 
         render(
             <ConfirmButton disabled onConfirm={onConfirm} testId="act">

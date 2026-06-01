@@ -52,6 +52,8 @@ const recordingScheduler = (): { calls: { body: string; method: string; pathname
 
 describe("createWorker — scheduled admin endpoints", () => {
     test("list rejects without a valid admin bearer (403)", async () => {
+        expect.assertions(1);
+
         const { namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
@@ -61,6 +63,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("list reports SCHEDULER_NOT_CONFIGURED when no namespace is bound (400)", async () => {
+        expect.assertions(2);
+
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
@@ -74,6 +78,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("list forwards GET /list to the default scheduler instance", async () => {
+        expect.assertions(4);
+
         const { calls, idArgs, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
@@ -90,6 +96,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("list targets a named scheduler instance", async () => {
+        expect.assertions(1);
+
         const { idArgs, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, schedulerInstanceName: "tenant-a", shardDO: noopNamespace });
 
@@ -103,6 +111,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("list rejects non-GET (405)", async () => {
+        expect.assertions(1);
+
         const { namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
@@ -116,6 +126,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("cancel forwards POST /cancel with the id", async () => {
+        expect.assertions(3);
+
         const { calls, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
@@ -135,6 +147,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("cancel rejects a missing id (400)", async () => {
+        expect.assertions(2);
+
         const { calls, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
@@ -153,6 +167,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("ws proxies the upgrade to the scheduler's /ws with a valid bearer", async () => {
+        expect.assertions(1);
+
         const { calls, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
@@ -166,6 +182,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("ws accepts the admin token via the ?token query parameter (browsers can't set headers)", async () => {
+        expect.assertions(1);
+
         const { calls, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
@@ -179,6 +197,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("ws rejects an upgrade with no admin credentials (403)", async () => {
+        expect.assertions(2);
+
         const { calls, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
@@ -189,6 +209,8 @@ describe("createWorker — scheduled admin endpoints", () => {
     });
 
     test("ws rejects a non-upgrade request (426)", async () => {
+        expect.assertions(1);
+
         const { namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 

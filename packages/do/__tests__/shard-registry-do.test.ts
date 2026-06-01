@@ -28,6 +28,8 @@ const get = (path: string): Request => new Request(`https://shard-registry.inter
 
 describe("shardRegistryDO", () => {
     test("starts empty — /list returns an empty shardKeys array", async () => {
+        expect.assertions(2);
+
         const state = createFakeState();
         const registry = new ShardRegistryDO(state, {});
         // construction kicks off blockConcurrencyWhile; the fake awaits it synchronously
@@ -40,6 +42,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("/register adds a shard key and reports changed=true on first add", async () => {
+        expect.assertions(4);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         const first = await registry.fetch(post("/register", { shardKey: "channel-1", table: "messages" }));
@@ -57,6 +61,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("/register accumulates multiple shard keys per table", async () => {
+        expect.assertions(1);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         for (const key of ["channel-1", "channel-2", "channel-3"]) {
@@ -70,6 +76,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("tables are isolated — registering one table doesn't leak into another", async () => {
+        expect.assertions(2);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         await registry.fetch(post("/register", { shardKey: "a", table: "messages" }));
@@ -83,6 +91,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("/unregister removes a key and reports changed=true once, changed=false on repeat", async () => {
+        expect.assertions(2);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         await registry.fetch(post("/register", { shardKey: "x", table: "messages" }));
@@ -97,6 +107,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("/unregister on an unknown table is a quiet no-op", async () => {
+        expect.assertions(2);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         const response = await registry.fetch(post("/unregister", { shardKey: "x", table: "ghost" }));
@@ -106,6 +118,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("/list rejects requests without a table parameter", async () => {
+        expect.assertions(2);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         const response = await registry.fetch(get("/list"));
@@ -118,6 +132,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("/register rejects missing fields", async () => {
+        expect.assertions(2);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         const noTable = await registry.fetch(post("/register", { shardKey: "x" }));
@@ -130,6 +146,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("/register rejects malformed JSON", async () => {
+        expect.assertions(1);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         const response = await registry.fetch(
@@ -144,6 +162,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("unknown route returns 404", async () => {
+        expect.assertions(1);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         const response = await registry.fetch(get("/missing"));
@@ -152,6 +172,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("/snapshot returns the full table → keys map", async () => {
+        expect.assertions(2);
+
         const registry = new ShardRegistryDO(createFakeState(), {});
 
         await registry.fetch(post("/register", { shardKey: "a", table: "messages" }));
@@ -166,6 +188,8 @@ describe("shardRegistryDO", () => {
     });
 
     test("state survives a fresh DO instance — load from storage", async () => {
+        expect.assertions(1);
+
         const state = createFakeState();
         const first = new ShardRegistryDO(state, {});
 

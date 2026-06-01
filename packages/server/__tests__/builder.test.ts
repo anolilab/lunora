@@ -6,6 +6,8 @@ const c = initCirrus.dataModel<Record<string, never>>().create();
 
 describe("builder terminal", () => {
     test("query terminal yields the { args, handler, kind } dispatch shape", async () => {
+        expect.assertions(3);
+
         const list = c.query.input({ limit: v.number() }).query(({ args }) => args.limit * 2);
 
         expect(list.kind).toBe("query");
@@ -14,6 +16,8 @@ describe("builder terminal", () => {
     });
 
     test("mutation and action terminals carry their own kind", () => {
+        expect.assertions(2);
+
         const send = c.mutation.input({ text: v.string() }).mutation(({ args }) => args.text);
         const ping = c.action.input({ url: v.string() }).action(({ args }) => args.url);
 
@@ -22,6 +26,8 @@ describe("builder terminal", () => {
     });
 
     test("the receiver carries the __cirrusProcedure brand codegen keys off", () => {
+        expect.assertions(3);
+
         expect((c.query as unknown as { __cirrusProcedure: string }).__cirrusProcedure).toBe("query");
         expect((c.mutation as unknown as { __cirrusProcedure: string }).__cirrusProcedure).toBe("mutation");
         expect((c.action as unknown as { __cirrusProcedure: string }).__cirrusProcedure).toBe("action");
@@ -30,6 +36,8 @@ describe("builder terminal", () => {
 
 describe("internal builders", () => {
     test("carry the __cirrusVisibility brand while public builders do not", () => {
+        expect.assertions(4);
+
         expect((c.internalQuery as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
         expect((c.internalMutation as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
         expect((c.internalAction as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
@@ -37,6 +45,8 @@ describe("internal builders", () => {
     });
 
     test("stamp visibility: internal onto the registered function, preserving kind + the brand across .input()", () => {
+        expect.assertions(2);
+
         const stats = c.internalQuery.input({ limit: v.number() }).query(({ args }) => args.limit);
 
         expect(stats).toMatchObject({ kind: "query", visibility: "internal" });
@@ -48,6 +58,8 @@ describe("internal builders", () => {
     });
 
     test("internal builders still validate and run their handler", async () => {
+        expect.assertions(3);
+
         const purge = c.internalMutation.input({ text: v.string() }).mutation(({ args }) => args.text);
 
         expect(purge.kind).toBe("mutation");
@@ -58,6 +70,8 @@ describe("internal builders", () => {
 
 describe("builder input accumulation", () => {
     test("merges args across multiple .input() calls", () => {
+        expect.assertions(1);
+
         const fn = c.query
             .input({ a: v.number() })
             .input({ b: v.string() })
@@ -67,6 +81,8 @@ describe("builder input accumulation", () => {
     });
 
     test("a later .input() wins on key collision", () => {
+        expect.assertions(1);
+
         const fn = c.query
             .input({ value: v.number() })
             .input({ value: v.string() })
@@ -76,7 +92,9 @@ describe("builder input accumulation", () => {
     });
 
     test("validates args before the handler runs", async () => {
-        const handler = vi.fn(() => "ok");
+        expect.assertions(2);
+
+        const handler = vi.fn<() => string>(() => "ok");
         const fn = c.query.input({ limit: v.number() }).query(handler);
 
         await expect(fn.handler({}, { limit: "five" } as unknown as { limit: number })).rejects.toBeInstanceOf(ValidationError);
@@ -86,12 +104,16 @@ describe("builder input accumulation", () => {
 
 describe("builder middleware", () => {
     test("next({ ctx }) widens the context the handler receives", async () => {
+        expect.assertions(1);
+
         const fn = c.query.use(async ({ next }) => next({ ctx: { userId: "u1" } })).query(({ ctx }) => ctx.userId);
 
         await expect(fn.handler({ base: true }, {})).resolves.toBe("u1");
     });
 
     test("middlewares run in chain order and the handler sees the final ctx", async () => {
+        expect.assertions(2);
+
         const order: string[] = [];
 
         const fn = c.query
@@ -116,6 +138,8 @@ describe("builder middleware", () => {
     });
 
     test("calling next() twice throws", async () => {
+        expect.assertions(1);
+
         const fn = c.query
             .use(async ({ next }) => {
                 await next();
@@ -128,7 +152,9 @@ describe("builder middleware", () => {
     });
 
     test("a middleware that throws aborts before the handler runs", async () => {
-        const handler = vi.fn(() => "secret");
+        expect.assertions(2);
+
+        const handler = vi.fn<() => string>(() => "secret");
 
         const fn = c.query
             .use(async ({ ctx, next }) => {
@@ -147,18 +173,24 @@ describe("builder middleware", () => {
 
 describe("builder output", () => {
     test("parses the handler result through the .output() validator, stripping undeclared keys", async () => {
+        expect.assertions(1);
+
         const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: 1, extra: "stripped" }) as { count: number });
 
         await expect(fn.handler({}, {})).resolves.toEqual({ count: 1 });
     });
 
     test("rejects when the handler result violates .output()", async () => {
+        expect.assertions(1);
+
         const fn = c.query.output(v.object({ count: v.number() })).query(() => ({ count: "nope" }) as unknown as { count: number });
 
         await expect(fn.handler({}, {})).rejects.toBeInstanceOf(ValidationError);
     });
 
     test(".output() composes with .input() and middleware regardless of chain order", async () => {
+        expect.assertions(1);
+
         const fn = c.mutation
             .input({ text: v.string() })
             .use(async ({ next }) => next({ ctx: { tag: "m" } }))

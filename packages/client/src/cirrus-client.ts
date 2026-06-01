@@ -1441,7 +1441,7 @@ export class CirrusClient {
             return null;
         }
 
-        let hash = 0x81_1c_9d_c5;
+        let hash = 0x81_1C_9D_C5;
 
         for (let index = 0; index < token.length; index += 1) {
             hash ^= token.charCodeAt(index);

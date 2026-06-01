@@ -4,6 +4,8 @@ import { createReconnect } from "../src/reconnect.js";
 
 describe("createReconnect", () => {
     test("doubles delay each attempt without jitter", () => {
+        expect.assertions(4);
+
         const reconnect = createReconnect({ initialDelayMs: 100, maxDelayMs: 10_000, jitter: false });
 
         expect(reconnect.next()).toBe(100);
@@ -13,6 +15,8 @@ describe("createReconnect", () => {
     });
 
     test("caps at maxDelayMs", () => {
+        expect.assertions(4);
+
         const reconnect = createReconnect({ initialDelayMs: 1000, maxDelayMs: 3000, jitter: false });
 
         expect(reconnect.next()).toBe(1000);
@@ -22,6 +26,8 @@ describe("createReconnect", () => {
     });
 
     test("reset() returns to initial delay", () => {
+        expect.assertions(1);
+
         const reconnect = createReconnect({ initialDelayMs: 50, maxDelayMs: 5000, jitter: false });
 
         reconnect.next();
@@ -32,6 +38,8 @@ describe("createReconnect", () => {
     });
 
     test("jittered delay stays within [delay/2, delay]", () => {
+        expect.assertions(2);
+
         const reconnect = createReconnect({ initialDelayMs: 1000, maxDelayMs: 10_000, jitter: true }, () => 0.5);
 
         const first = reconnect.next();
@@ -41,6 +49,8 @@ describe("createReconnect", () => {
     });
 
     test("uses defaults when not configured", () => {
+        expect.assertions(2);
+
         const reconnect = createReconnect({});
 
         const value = reconnect.next();

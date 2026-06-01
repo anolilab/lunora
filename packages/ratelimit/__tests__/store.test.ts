@@ -6,6 +6,8 @@ import { createSqliteSql } from "./_helpers/node-sqlite.js";
 
 describe("memory store", () => {
     test("round-trips and deletes values", () => {
+        expect.assertions(3);
+
         const store = createMemoryStore();
 
         expect(store.get("k")).toBeUndefined();
@@ -32,6 +34,8 @@ describe("sql store (real node:sqlite)", () => {
     });
 
     test("persists fractional token-bucket values across reads", () => {
+        expect.assertions(1);
+
         const store = createSqlStore({ sql: harness.sql });
 
         store.set("send:alice", { ts: 1234, value: 2.5 });
@@ -40,6 +44,8 @@ describe("sql store (real node:sqlite)", () => {
     });
 
     test("round-trips the sliding-window previous-window count", () => {
+        expect.assertions(1);
+
         const store = createSqlStore({ sql: harness.sql });
 
         store.set("hits:bob", { prev: 7, ts: 1000, value: 3 });
@@ -48,6 +54,8 @@ describe("sql store (real node:sqlite)", () => {
     });
 
     test("upserts on conflict and deletes", () => {
+        expect.assertions(3);
+
         const store = createSqlStore({ sql: harness.sql });
 
         store.set("k", { ts: 1, value: 1 });
@@ -64,6 +72,8 @@ describe("sql store (real node:sqlite)", () => {
     });
 
     test("backs a RateLimiter end to end", async () => {
+        expect.assertions(3);
+
         const clock = { now: 0 };
         const limiter = new RateLimiter({
             config: { send: { kind: "token bucket", period: 1000, rate: 3 } },

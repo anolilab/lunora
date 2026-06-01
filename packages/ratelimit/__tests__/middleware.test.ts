@@ -37,6 +37,8 @@ const makeLimiter = (denyList?: string[]) => new RateLimiter({ config: { api: { 
 
 describe("rateLimit middleware", () => {
     test("calls next when under the limit", async () => {
+        expect.assertions(2);
+
         const middleware = rateLimit<Ctx>(makeLimiter(), "api");
 
         const { called, result } = await invoke(middleware, {});
@@ -46,6 +48,8 @@ describe("rateLimit middleware", () => {
     });
 
     test("throws a structural CirrusError (429) once the limit is hit", async () => {
+        expect.assertions(4);
+
         const middleware = rateLimit<Ctx>(makeLimiter(), "api");
 
         await invoke(middleware, {});
@@ -58,6 +62,8 @@ describe("rateLimit middleware", () => {
     });
 
     test("maps a deny-list hit to FORBIDDEN (403) without a retryAfter", async () => {
+        expect.assertions(3);
+
         const middleware = rateLimit<Ctx>(makeLimiter(["banned"]), "api", { key: (ctx) => ctx.userId });
 
         const error = await catchError(() => invoke(middleware, { userId: "banned" }));
@@ -69,6 +75,8 @@ describe("rateLimit middleware", () => {
     });
 
     test("isolates limits by the derived key", async () => {
+        expect.assertions(2);
+
         const middleware = rateLimit<Ctx>(makeLimiter(), "api", { key: (ctx) => ctx.userId });
 
         await invoke(middleware, { userId: "alice" });
@@ -79,6 +87,8 @@ describe("rateLimit middleware", () => {
     });
 
     test("accepts a per-ctx limiter resolver", async () => {
+        expect.assertions(1);
+
         const shared = makeLimiter();
         const middleware = rateLimit<Ctx>((_ctx) => shared, "api");
 
@@ -88,6 +98,8 @@ describe("rateLimit middleware", () => {
     });
 
     test("honors a custom message", async () => {
+        expect.assertions(1);
+
         const middleware = rateLimit<Ctx>(makeLimiter(), "api", { message: "slow down" });
 
         await invoke(middleware, {});

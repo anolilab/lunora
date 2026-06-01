@@ -20,6 +20,8 @@ const collect = async <T>(iter: AsyncIterable<T>, signal?: AbortSignal): Promise
 
 describe("c.query.stream() terminal", () => {
     test("registers with kind:'stream' and an async-iterable handler", async () => {
+        expect.hasAssertions();
+
         const counter = c.query.input({ count: v.number() }).stream(async function* counterStream({ args }) {
             for (let index = 0; index < args.count; index += 1) {
                 yield index;
@@ -36,6 +38,8 @@ describe("c.query.stream() terminal", () => {
     });
 
     test("middleware ctx narrows for the streaming handler", async () => {
+        expect.assertions(2);
+
         let observedCtx: unknown;
 
         const authedStream = c.query
@@ -53,6 +57,8 @@ describe("c.query.stream() terminal", () => {
     });
 
     test("aborting the signal stops further yields", async () => {
+        expect.hasAssertions();
+
         const ac = new AbortController();
         const yields: number[] = [];
         const stream = c.query.stream(async function* abortableGen() {
@@ -78,6 +84,8 @@ describe("c.query.stream() terminal", () => {
     });
 
     test("rejects bad args synchronously at handler call time", () => {
+        expect.assertions(1);
+
         const guarded = c.query.input({ rooms: v.number() }).stream(async function* guardedGen() {
             yield "should not yield";
         });

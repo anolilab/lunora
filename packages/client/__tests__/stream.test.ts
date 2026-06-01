@@ -98,245 +98,271 @@ const latestSocket = (): MockSocket => {
 const fn = <T = unknown>(reference: string): FunctionReference<"stream", Record<string, never>, T> =>
     ({ __cirrusRef: reference }) as FunctionReference<"stream", Record<string, never>, T>;
 
-beforeEach(() => {
-    sockets.length = 0;
-});
-
-afterEach(() => {
-    vi.useRealTimers();
-});
-
-// --- createStream unit tests ------------------------------------------------
-
-describe("createStream", () => {
-    test("delivers pushed values to consumers in order", async () => {
-        const { handle, iterable } = createStream<number>({ onCancel: () => {} });
-
-        for (const value of [1, 2]) {
-            handle.push(value);
-        }
-
-        const iter = iterable[Symbol.asyncIterator]();
-
-        await expect(iter.next()).resolves.toEqual({ done: false, value: 1 });
-        await expect(iter.next()).resolves.toEqual({ done: false, value: 2 });
-
-        handle.complete();
-
-        await expect(iter.next()).resolves.toEqual({ done: true, value: undefined });
+describe("stream", () => {
+    beforeEach(() => {
+        sockets.length = 0;
     });
 
-    test("pending consumer resolves when a value is pushed later", async () => {
-        const { handle, iterable } = createStream<string>({ onCancel: () => {} });
-        const iter = iterable[Symbol.asyncIterator]();
+    afterEach(() => {
+        vi.useRealTimers();
+    });
 
-        const promise = iter.next();
+    // --- createStream unit tests ------------------------------------------------
 
-        // Resolve the pending next() with a delayed push.
-        queueMicrotask(() => {
-            handle.push("delivered");
+    describe("createStream", () => {
+        test("delivers pushed values to consumers in order", async () => {
+            expect.assertions(3);
+
+            const { handle, iterable } = createStream<number>({ onCancel: () => {} });
+
+            for (const value of [1, 2]) {
+                handle.push(value);
+            }
+
+            const iter = iterable[Symbol.asyncIterator]();
+
+            await expect(iter.next()).resolves.toEqual({ done: false, value: 1 });
+            await expect(iter.next()).resolves.toEqual({ done: false, value: 2 });
+
+            handle.complete();
+
+            await expect(iter.next()).resolves.toEqual({ done: true, value: undefined });
         });
 
-        await expect(promise).resolves.toEqual({ done: false, value: "delivered" });
-    });
+        test("pending consumer resolves when a value is pushed later", async () => {
+            expect.assertions(1);
 
-    test("error surfaces as a rejection on the next pull", async () => {
-        const { handle, iterable } = createStream<number>({ onCancel: () => {} });
+            const { handle, iterable } = createStream<string>({ onCancel: () => {} });
+            const iter = iterable[Symbol.asyncIterator]();
 
-        handle.fail(new Error("boom"));
+            const promise = iter.next();
 
-        const iter = iterable[Symbol.asyncIterator]();
+            // Resolve the pending next() with a delayed push.
+            queueMicrotask(() => {
+                handle.push("delivered");
+            });
 
-        await expect(iter.next()).rejects.toThrow("boom");
-    });
+            await expect(promise).resolves.toEqual({ done: false, value: "delivered" });
+        });
 
-    test("cancel() invokes onCancel exactly once and closes the iterator", async () => {
-        const onCancel = vi.fn();
-        const { iterable } = createStream<number>({ onCancel });
+        test("error surfaces as a rejection on the next pull", async () => {
+            expect.assertions(1);
 
-        iterable.cancel();
-        iterable.cancel(); // idempotent
+            const { handle, iterable } = createStream<number>({ onCancel: () => {} });
 
-        expect(onCancel).toHaveBeenCalledTimes(1);
+            handle.fail(new Error("boom"));
 
-        const iter = iterable[Symbol.asyncIterator]();
+            const iter = iterable[Symbol.asyncIterator]();
 
-        await expect(iter.next()).resolves.toEqual({ done: true, value: undefined });
-    });
+            await expect(iter.next()).rejects.toThrow("boom");
+        });
 
-    test("backpressure overflow surfaces a STREAM_BACKPRESSURE error", async () => {
-        const { handle, iterable } = createStream<number>({ maxBuffer: 2, onCancel: () => {} });
+        test("cancel() invokes onCancel exactly once and closes the iterator", async () => {
+            expect.assertions(2);
 
-        for (const value of [1, 2, 3]) {
-            handle.push(value); // third triggers fail
-        }
+            const onCancel = vi.fn<() => void>();
+            const { iterable } = createStream<number>({ onCancel });
 
-        const iter = iterable[Symbol.asyncIterator]();
+            iterable.cancel();
+            iterable.cancel(); // idempotent
 
-        // The first two queued items get cleared on fail; consumer sees the error.
-        await expect(iter.next()).rejects.toMatchObject({ code: "STREAM_BACKPRESSURE" });
-    });
+            expect(onCancel).toHaveBeenCalledTimes(1);
 
-    test("default buffer is at least 64 chunks", () => {
-        expect(DEFAULT_MAX_BUFFER).toBeGreaterThanOrEqual(64);
-    });
+            const iter = iterable[Symbol.asyncIterator]();
 
-    test("delivers `undefined` chunks without dropping them", async () => {
-        const { handle, iterable } = createStream<undefined | { ok: boolean }>({ onCancel: () => {} });
-        const iter = iterable[Symbol.asyncIterator]();
+            await expect(iter.next()).resolves.toEqual({ done: true, value: undefined });
+        });
 
-        // Pending-then-push path: schedule the next() first, then enqueue
-        // undefined via the flushOne path.
-        const pendingNext = iter.next();
+        test("backpressure overflow surfaces a STREAM_BACKPRESSURE error", async () => {
+            expect.assertions(1);
 
-        queueMicrotask(() => {
+            const { handle, iterable } = createStream<number>({ maxBuffer: 2, onCancel: () => {} });
+
+            for (const value of [1, 2, 3]) {
+                handle.push(value); // third triggers fail
+            }
+
+            const iter = iterable[Symbol.asyncIterator]();
+
+            // The first two queued items get cleared on fail; consumer sees the error.
+            await expect(iter.next()).rejects.toMatchObject({ code: "STREAM_BACKPRESSURE" });
+        });
+
+        test("default buffer is at least 64 chunks", () => {
+            expect.assertions(1);
+
+            expect(DEFAULT_MAX_BUFFER).toBeGreaterThanOrEqual(64);
+        });
+
+        test("delivers `undefined` chunks without dropping them", async () => {
+            expect.assertions(4);
+
+            const { handle, iterable } = createStream<undefined | { ok: boolean }>({ onCancel: () => {} });
+            const iter = iterable[Symbol.asyncIterator]();
+
+            // Pending-then-push path: schedule the next() first, then enqueue
+            // undefined via the flushOne path.
+            const pendingNext = iter.next();
+
+            queueMicrotask(() => {
+                handle.push(undefined);
+            });
+
+            await expect(pendingNext).resolves.toEqual({ done: false, value: undefined });
+
+            // Buffer-then-shift path: enqueue undefined first, then read it.
             handle.push(undefined);
+
+            await expect(iter.next()).resolves.toEqual({ done: false, value: undefined });
+
+            // Real value after undefined still flows.
+            handle.push({ ok: true });
+
+            await expect(iter.next()).resolves.toEqual({ done: false, value: { ok: true } });
+
+            handle.complete();
+
+            await expect(iter.next()).resolves.toEqual({ done: true, value: undefined });
+        });
+    });
+
+    // --- CirrusClient.stream() integration tests --------------------------------
+
+    describe("cirrusClient.stream()", () => {
+        test("opens a WS, sends a stream frame, and yields chunks until complete", async () => {
+            expect.assertions(3);
+
+            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const iterable = client.stream(fn<{ tick: number }>("metrics:tick"), {});
+
+            // Drive the socket to "open" so the stream frame flushes.
+            latestSocket().open();
+
+            const sent = latestSocket().sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+            const streamFrame = sent.find((f) => f.type === "stream");
+
+            expect(streamFrame).toBeDefined();
+            expect(streamFrame).toMatchObject({
+                type: "stream",
+                query: { functionPath: "metrics:tick", args: {} },
+            });
+
+            const id = streamFrame?.id as string;
+
+            // Server sends chunks.
+            latestSocket().receive({ type: "chunk", id, data: { tick: 1 } });
+            latestSocket().receive({ type: "chunk", id, data: { tick: 2 } });
+            latestSocket().receive({ type: "complete", id });
+
+            const collected: { tick: number }[] = [];
+
+            for await (const chunk of iterable) {
+                collected.push(chunk);
+            }
+
+            expect(collected).toEqual([{ tick: 1 }, { tick: 2 }]);
+
+            client.close();
         });
 
-        await expect(pendingNext).resolves.toEqual({ done: false, value: undefined });
+        test("cancel() sends an unsubscribe frame and resolves the iterator", async () => {
+            expect.assertions(2);
 
-        // Buffer-then-shift path: enqueue undefined first, then read it.
-        handle.push(undefined);
+            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-        await expect(iter.next()).resolves.toEqual({ done: false, value: undefined });
+            const iterable = client.stream(fn<number>("metrics:loop"), {});
 
-        // Real value after undefined still flows.
-        handle.push({ ok: true });
+            latestSocket().open();
+            const sent = latestSocket().sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+            const id = sent.find((f) => f.type === "stream")?.id as string;
 
-        await expect(iter.next()).resolves.toEqual({ done: false, value: { ok: true } });
+            // Push a value, then cancel before consuming all.
+            latestSocket().receive({ type: "chunk", id, data: 1 });
 
-        handle.complete();
+            iterable.cancel();
 
-        await expect(iter.next()).resolves.toEqual({ done: true, value: undefined });
-    });
-});
+            const cancelFrame = latestSocket()
+                .sent
+.map((raw) => JSON.parse(raw) as Record<string, unknown>)
+                .find((f) => f.type === "unsubscribe" && f.id === id);
 
-// --- CirrusClient.stream() integration tests --------------------------------
+            expect(cancelFrame).toBeDefined();
 
-describe("cirrusClient.stream()", () => {
-    test("opens a WS, sends a stream frame, and yields chunks until complete", async () => {
-        const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            // The iterator resolves to done after cancel.
+            const collected: number[] = [];
 
-        const iterable = client.stream(fn<{ tick: number }>("metrics:tick"), {});
+            for await (const chunk of iterable) {
+                collected.push(chunk);
+            }
 
-        // Drive the socket to "open" so the stream frame flushes.
-        latestSocket().open();
+            // Either we read the buffered chunk before cancel cleared it, or we saw nothing — both are valid termination states.
+            expect(collected.length).toBeLessThanOrEqual(1);
 
-        const sent = latestSocket().sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
-        const streamFrame = sent.find((f) => f.type === "stream");
-
-        expect(streamFrame).toBeDefined();
-        expect(streamFrame).toMatchObject({
-            type: "stream",
-            query: { functionPath: "metrics:tick", args: {} },
+            client.close();
         });
 
-        const id = streamFrame?.id as string;
+        test("server-side error surfaces as a rejection on the consumer", async () => {
+            expect.assertions(1);
 
-        // Server sends chunks.
-        latestSocket().receive({ type: "chunk", id, data: { tick: 1 } });
-        latestSocket().receive({ type: "chunk", id, data: { tick: 2 } });
-        latestSocket().receive({ type: "complete", id });
+            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-        const collected: { tick: number }[] = [];
+            const iterable = client.stream(fn<number>("metrics:boom"), {});
 
-        for await (const chunk of iterable) {
-            collected.push(chunk);
-        }
+            latestSocket().open();
+            const id = (JSON.parse(latestSocket().sent[0] as string) as Record<string, unknown>).id as string;
 
-        expect(collected).toEqual([{ tick: 1 }, { tick: 2 }]);
+            latestSocket().receive({ type: "error", id, error: { code: "FORBIDDEN", message: "nope" } });
 
-        client.close();
-    });
+            const consumer = (async () => {
+                for await (const _chunk of iterable) {
+                    /* unreachable */
+                }
+            })();
 
-    test("cancel() sends an unsubscribe frame and resolves the iterator", async () => {
-        const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            await expect(consumer).rejects.toMatchObject({ message: "nope", code: "FORBIDDEN" });
 
-        const iterable = client.stream(fn<number>("metrics:loop"), {});
+            client.close();
+        });
 
-        latestSocket().open();
-        const sent = latestSocket().sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
-        const id = sent.find((f) => f.type === "stream")?.id as string;
+        test("client.close() fails any in-flight streams", async () => {
+            expect.assertions(1);
 
-        // Push a value, then cancel before consuming all.
-        latestSocket().receive({ type: "chunk", id, data: 1 });
+            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-        iterable.cancel();
+            const iterable = client.stream(fn<number>("metrics:keepalive"), {});
 
-        const cancelFrame = latestSocket()
-            .sent
-            .map((raw) => JSON.parse(raw) as Record<string, unknown>)
-            .find((f) => f.type === "unsubscribe" && f.id === id);
+            latestSocket().open();
 
-        expect(cancelFrame).toBeDefined();
+            client.close();
 
-        // The iterator resolves to done after cancel.
-        const collected: number[] = [];
+            const consumer = (async () => {
+                for await (const _chunk of iterable) {
+                    /* unreachable */
+                }
+            })();
 
-        for await (const chunk of iterable) {
-            collected.push(chunk);
-        }
+            await expect(consumer).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+        });
 
-        // Either we read the buffered chunk before cancel cleared it, or we saw nothing — both are valid termination states.
-        expect(collected.length).toBeLessThanOrEqual(1);
+        test("buffers the start frame while the socket is connecting and flushes it on open", async () => {
+            expect.assertions(2);
 
-        client.close();
-    });
+            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const iterable = client.stream(fn<number>("metrics:tick"), {});
 
-    test("server-side error surfaces as a rejection on the consumer", async () => {
-        const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            // Before open: nothing has gone over the wire yet.
+            expect(latestSocket().sent).toHaveLength(0);
 
-        const iterable = client.stream(fn<number>("metrics:boom"), {});
+            latestSocket().open();
 
-        latestSocket().open();
-        const id = (JSON.parse(latestSocket().sent[0] as string) as Record<string, unknown>).id as string;
+            const flushed = latestSocket().sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
 
-        latestSocket().receive({ type: "error", id, error: { code: "FORBIDDEN", message: "nope" } });
+            expect(flushed.some((f) => f.type === "stream")).toBe(true);
 
-        const consumer = (async () => {
-            for await (const _chunk of iterable) {
-                /* unreachable */
-            }
-        })();
-
-        await expect(consumer).rejects.toMatchObject({ message: "nope", code: "FORBIDDEN" });
-
-        client.close();
-    });
-
-    test("client.close() fails any in-flight streams", async () => {
-        const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
-
-        const iterable = client.stream(fn<number>("metrics:keepalive"), {});
-
-        latestSocket().open();
-
-        client.close();
-
-        const consumer = (async () => {
-            for await (const _chunk of iterable) {
-                /* unreachable */
-            }
-        })();
-
-        await expect(consumer).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
-    });
-
-    test("buffers the start frame while the socket is connecting and flushes it on open", async () => {
-        const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
-        const iterable = client.stream(fn<number>("metrics:tick"), {});
-
-        // Before open: nothing has gone over the wire yet.
-        expect(latestSocket().sent).toHaveLength(0);
-
-        latestSocket().open();
-
-        const flushed = latestSocket().sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
-
-        expect(flushed.some((f) => f.type === "stream")).toBe(true);
-
-        // Cleanly tear down so the iterator doesn't hang the test process.
-        iterable.cancel();
-        client.close();
+            // Cleanly tear down so the iterator doesn't hang the test process.
+            iterable.cancel();
+            client.close();
+        });
     });
 });

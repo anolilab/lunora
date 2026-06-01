@@ -56,244 +56,276 @@ const setup = () => {
     };
 };
 
-beforeEach(() => {
-    harness = createSqliteExec();
-});
-
-afterEach(() => {
-    harness.close();
-});
-
-describe("insert defaults", () => {
-    test("fills a `.default()` literal and a `.$defaultFn()` factory when absent", async () => {
-        const { writer } = setup();
-
-        const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-        const doc = await writer.get(id);
-
-        expect(doc?.["status"]).toBe("todo");
-        expect(doc?.["seq"]).toBe(7);
+describe("ctx-db constraints", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
     });
 
-    test("a provided value overrides the default", async () => {
-        const { writer } = setup();
-
-        const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
-        const doc = await writer.get(id);
-
-        expect(doc?.["status"]).toBe("done");
-        expect(doc?.["seq"]).toBe(99);
+    afterEach(() => {
+        harness.close();
     });
 
-    test("does not run `$onUpdateFn` on insert", async () => {
-        const { revCalls, writer } = setup();
+    describe("insert defaults", () => {
+        test("fills a `.default()` literal and a `.$defaultFn()` factory when absent", async () => {
+            expect.assertions(2);
 
-        const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-        const doc = await writer.get(id);
+            const { writer } = setup();
 
-        expect(doc?.["rev"]).toBeUndefined();
-        expect(revCalls()).toBe(0);
-    });
-});
+            const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+            const doc = await writer.get(id);
 
-describe("$onUpdateFn", () => {
-    test("recomputes on each patch that omits the field", async () => {
-        const { revCalls, writer } = setup();
+            expect(doc?.["status"]).toBe("todo");
+            expect(doc?.["seq"]).toBe(7);
+        });
 
-        await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+        test("a provided value overrides the default", async () => {
+            expect.assertions(2);
 
-        await writer.patch("i1", { title: "second" });
+            const { writer } = setup();
 
-        expect((await writer.get("i1"))?.["rev"]).toBe(1);
+            const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
+            const doc = await writer.get(id);
 
-        await writer.patch("i1", { title: "third" });
+            expect(doc?.["status"]).toBe("done");
+            expect(doc?.["seq"]).toBe(99);
+        });
 
-        expect((await writer.get("i1"))?.["rev"]).toBe(2);
-        expect(revCalls()).toBe(2);
-    });
+        test("does not run `$onUpdateFn` on insert", async () => {
+            expect.assertions(2);
 
-    test("is skipped when the patch sets the field explicitly", async () => {
-        const { revCalls, writer } = setup();
+            const { revCalls, writer } = setup();
 
-        await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+            const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+            const doc = await writer.get(id);
 
-        await writer.patch("i1", { rev: 99 });
-
-        expect((await writer.get("i1"))?.["rev"]).toBe(99);
-        expect(revCalls()).toBe(0);
-    });
-
-    test("recomputes on replace that omits the field, but honors an explicit value", async () => {
-        const { writer } = setup();
-
-        await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
-
-        await writer.replace("i1", { slug: "a", title: "auto" });
-
-        expect((await writer.get("i1"))?.["rev"]).toBe(1);
-
-        await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
-
-        expect((await writer.get("i1"))?.["rev"]).toBe(42);
-    });
-});
-
-describe(".unique() constraint", () => {
-    test("a duplicate insert throws a ConflictError (code CONFLICT, status 409)", async () => {
-        const { writer } = setup();
-
-        await writer.insert("items", { _id: "i1", slug: "dup", title: "first" }, { allowExplicitId: true });
-
-        const conflict = writer.insert("items", { _id: "i2", slug: "dup", title: "second" }, { allowExplicitId: true });
-
-        await expect(conflict).rejects.toBeInstanceOf(ConflictError);
-        await expect(conflict).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
+            expect(doc?.["rev"]).toBeUndefined();
+            expect(revCalls()).toBe(0);
+        });
     });
 
-    test("a patch that collides with another row's unique value conflicts", async () => {
-        const { writer } = setup();
+    describe("$onUpdateFn", () => {
+        test("recomputes on each patch that omits the field", async () => {
+            expect.assertions(3);
 
-        await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
-        await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
+            const { revCalls, writer } = setup();
 
-        await expect(writer.patch("i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.patch("i1", { title: "second" });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(1);
+
+            await writer.patch("i1", { title: "third" });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(2);
+            expect(revCalls()).toBe(2);
+        });
+
+        test("is skipped when the patch sets the field explicitly", async () => {
+            expect.assertions(2);
+
+            const { revCalls, writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.patch("i1", { rev: 99 });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(99);
+            expect(revCalls()).toBe(0);
+        });
+
+        test("recomputes on replace that omits the field, but honors an explicit value", async () => {
+            expect.assertions(2);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.replace("i1", { slug: "a", title: "auto" });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(1);
+
+            await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
+
+            expect((await writer.get("i1"))?.["rev"]).toBe(42);
+        });
     });
 
-    test("distinct unique values insert cleanly", async () => {
-        const { writer } = setup();
+    describe(".unique() constraint", () => {
+        test("a duplicate insert throws a ConflictError (code CONFLICT, status 409)", async () => {
+            expect.assertions(2);
 
-        await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
-        await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
+            const { writer } = setup();
 
-        await expect(writer.count("items")).resolves.toBe(2);
+            await writer.insert("items", { _id: "i1", slug: "dup", title: "first" }, { allowExplicitId: true });
+
+            const conflict = writer.insert("items", { _id: "i2", slug: "dup", title: "second" }, { allowExplicitId: true });
+
+            await expect(conflict).rejects.toBeInstanceOf(ConflictError);
+            await expect(conflict).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
+        });
+
+        test("a patch that collides with another row's unique value conflicts", async () => {
+            expect.assertions(1);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
+            await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
+
+            await expect(writer.patch("i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
+        });
+
+        test("distinct unique values insert cleanly", async () => {
+            expect.assertions(1);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
+            await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
+
+            await expect(writer.count("items")).resolves.toBe(2);
+        });
     });
-});
 
-describe("composite UNIQUE indexes", () => {
-    /**
-     * `.index(name, fields, {unique: true})` already supports multiple fields —
-     * `runShardMigrations` writes `CREATE UNIQUE INDEX ... ON tbl (a, b)`. This
-     * test pins that end-to-end so a regression in the index emitter or the
-     * write-layer ConflictError mapping surfaces immediately.
-     */
-    const setupTenantSlug = () => {
-        const schema: SchemaLike = {
-            tables: {
-                pages: {
-                    indexes: [{ fields: ["tenantId", "slug"] as const, name: "by_tenant_slug", unique: true }],
-                    shape: {
-                        slug: col("string"),
-                        tenantId: col("string"),
-                        title: col("string"),
+    describe("composite UNIQUE indexes", () => {
+        /**
+         * `.index(name, fields, {unique: true})` already supports multiple fields —
+         * `runShardMigrations` writes `CREATE UNIQUE INDEX ... ON tbl (a, b)`. This
+         * test pins that end-to-end so a regression in the index emitter or the
+         * write-layer ConflictError mapping surfaces immediately.
+         */
+        const setupTenantSlug = () => {
+            const schema: SchemaLike = {
+                tables: {
+                    pages: {
+                        indexes: [{ fields: ["tenantId", "slug"] as const, name: "by_tenant_slug", unique: true }],
+                        shape: {
+                            slug: col("string"),
+                            tenantId: col("string"),
+                            title: col("string"),
+                        },
                     },
                 },
-            },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            return createShardCtxDb({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
         };
 
-        runShardMigrations(harness.sql, schema);
+        test("(tenantId, slug) duplicate inserts conflict; differing in either column is allowed", async () => {
+            expect.assertions(2);
 
-        return createShardCtxDb({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
-    };
+            const writer = setupTenantSlug();
 
-    test("(tenantId, slug) duplicate inserts conflict; differing in either column is allowed", async () => {
-        const writer = setupTenantSlug();
+            await writer.insert("pages", { _id: "p1", slug: "home", tenantId: "t1", title: "Acme home" }, { allowExplicitId: true });
 
-        await writer.insert("pages", { _id: "p1", slug: "home", tenantId: "t1", title: "Acme home" }, { allowExplicitId: true });
+            const collide = writer.insert("pages", { _id: "p2", slug: "home", tenantId: "t1", title: "duplicate" }, { allowExplicitId: true });
 
-        const collide = writer.insert("pages", { _id: "p2", slug: "home", tenantId: "t1", title: "duplicate" }, { allowExplicitId: true });
+            await expect(collide).rejects.toBeInstanceOf(ConflictError);
 
-        await expect(collide).rejects.toBeInstanceOf(ConflictError);
+            // Same slug under a different tenant is allowed.
+            await writer.insert("pages", { _id: "p3", slug: "home", tenantId: "t2", title: "Other home" }, { allowExplicitId: true });
+            // Same tenant with a different slug is allowed.
+            await writer.insert("pages", { _id: "p4", slug: "pricing", tenantId: "t1", title: "Pricing" }, { allowExplicitId: true });
 
-        // Same slug under a different tenant is allowed.
-        await writer.insert("pages", { _id: "p3", slug: "home", tenantId: "t2", title: "Other home" }, { allowExplicitId: true });
-        // Same tenant with a different slug is allowed.
-        await writer.insert("pages", { _id: "p4", slug: "pricing", tenantId: "t1", title: "Pricing" }, { allowExplicitId: true });
+            await expect(writer.count("pages")).resolves.toBe(3);
+        });
 
-        await expect(writer.count("pages")).resolves.toBe(3);
+        test("a patch that creates a (tenantId, slug) collision is rejected", async () => {
+            expect.assertions(1);
+
+            const writer = setupTenantSlug();
+
+            await writer.insert("pages", { _id: "p1", slug: "a", tenantId: "t1", title: "A" }, { allowExplicitId: true });
+            await writer.insert("pages", { _id: "p2", slug: "b", tenantId: "t1", title: "B" }, { allowExplicitId: true });
+
+            await expect(writer.patch("p2", { slug: "a" })).rejects.toBeInstanceOf(ConflictError);
+        });
     });
 
-    test("a patch that creates a (tenantId, slug) collision is rejected", async () => {
-        const writer = setupTenantSlug();
+    describe("write-time refinements (`.check()` on column validators)", () => {
+        /**
+         * Build a validator whose `parse()` runs the user predicate, mirroring
+         * what `@cirrus/values`' `.check()` returns. The DO ctx-db package has no
+         * runtime dep on `@cirrus/values` (kept light on purpose), so unit tests
+         * pass a structural fake — same shape, hand-rolled `parse`.
+         */
+        const checked = <T>(kind: string, predicate: (value: T) => boolean, message: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({
+            _meta: { column: { notNull: true, ...column } },
+            kind,
+            parse(value) {
+                if (!predicate(value as T)) {
+                    const error: Error & { code?: string } = new Error(message);
 
-        await writer.insert("pages", { _id: "p1", slug: "a", tenantId: "t1", title: "A" }, { allowExplicitId: true });
-        await writer.insert("pages", { _id: "p2", slug: "b", tenantId: "t1", title: "B" }, { allowExplicitId: true });
+                    error.code = "VALIDATION";
 
-        await expect(writer.patch("p2", { slug: "a" })).rejects.toBeInstanceOf(ConflictError);
-    });
-});
+                    throw error;
+                }
 
-describe("write-time refinements (`.check()` on column validators)", () => {
-    /**
-     * Build a validator whose `parse()` runs the user predicate, mirroring
-     * what `@cirrus/values`' `.check()` returns. The DO ctx-db package has no
-     * runtime dep on `@cirrus/values` (kept light on purpose), so unit tests
-     * pass a structural fake — same shape, hand-rolled `parse`.
-     */
-    const checked = <T>(kind: string, predicate: (value: T) => boolean, message: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({
-        _meta: { column: { notNull: true, ...column } },
-        kind,
-        parse(value) {
-            if (!predicate(value as T)) {
-                const error: Error & { code?: string } = new Error(message);
+                return value;
+            },
+        });
 
-                error.code = "VALIDATION";
-
-                throw error;
-            }
-
-            return value;
-        },
-    });
-
-    const setupCheck = () => {
-        const schema: SchemaLike = {
-            tables: {
-                orders: {
-                    indexes: [],
-                    shape: {
-                        amount: checked<number>("number", (n) => n >= 0, "amount must be non-negative"),
-                        sku: col("string"),
-                        status: col("string", { defaultValue: "pending" }),
+        const setupCheck = () => {
+            const schema: SchemaLike = {
+                tables: {
+                    orders: {
+                        indexes: [],
+                        shape: {
+                            amount: checked<number>("number", (n) => n >= 0, "amount must be non-negative"),
+                            sku: col("string"),
+                            status: col("string", { defaultValue: "pending" }),
+                        },
                     },
                 },
-            },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            return createShardCtxDb({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
         };
 
-        runShardMigrations(harness.sql, schema);
+        test("insert rejects a row that fails the refinement", async () => {
+            expect.assertions(1);
 
-        return createShardCtxDb({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
-    };
+            const writer = setupCheck();
 
-    test("insert rejects a row that fails the refinement", async () => {
-        const writer = setupCheck();
+            await expect(writer.insert("orders", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
+        });
 
-        await expect(writer.insert("orders", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
-    });
+        test("insert accepts a row that passes the refinement", async () => {
+            expect.assertions(2);
 
-    test("insert accepts a row that passes the refinement", async () => {
-        const writer = setupCheck();
+            const writer = setupCheck();
 
-        const id = await writer.insert("orders", { _id: "o1", amount: 42, sku: "OK" }, { allowExplicitId: true });
+            const id = await writer.insert("orders", { _id: "o1", amount: 42, sku: "OK" }, { allowExplicitId: true });
 
-        expect(id).toBe("o1");
-        await expect(writer.count("orders")).resolves.toBe(1);
-    });
+            expect(id).toBe("o1");
+            await expect(writer.count("orders")).resolves.toBe(1);
+        });
 
-    test("patch that flips a field to an invalid value is rejected", async () => {
-        const writer = setupCheck();
+        test("patch that flips a field to an invalid value is rejected", async () => {
+            expect.assertions(2);
 
-        await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
+            const writer = setupCheck();
 
-        await expect(writer.patch("o1", { amount: -5 })).rejects.toThrow(/non-negative/u);
-        // Prior row must remain unchanged after the rejection.
-        await expect(writer.get("o1")).resolves.toMatchObject({ amount: 10 });
-    });
+            await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
 
-    test("replace runs refinements after applyOnUpdate so defaulted fields are checked", async () => {
-        const writer = setupCheck();
+            await expect(writer.patch("o1", { amount: -5 })).rejects.toThrow(/non-negative/u);
+            // Prior row must remain unchanged after the rejection.
+            await expect(writer.get("o1")).resolves.toMatchObject({ amount: 10 });
+        });
 
-        await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
+        test("replace runs refinements after applyOnUpdate so defaulted fields are checked", async () => {
+            expect.assertions(1);
 
-        await expect(writer.replace("o1", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
+            const writer = setupCheck();
+
+            await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
+
+            await expect(writer.replace("o1", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
+        });
     });
 });

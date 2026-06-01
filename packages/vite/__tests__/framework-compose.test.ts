@@ -74,102 +74,110 @@ const reactRouterLike = (): Plugin => {
 
 let workdir: string;
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-framework-"));
-    mkdirSync(join(workdir, "cirrus"), { recursive: true });
-    writeFileSync(join(workdir, "cirrus", "schema.ts"), SCHEMA, "utf8");
-    writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
-describe("cirrus() framework composition", () => {
-    test("composes with a TanStack-Start-shaped plugin and resolveConfig succeeds", async () => {
-        const cirrusPlugins = await cirrus({
-            cloudflare: false,
-            overlay: false,
-            projectRoot: workdir,
-            validateWrangler: true,
-        });
-
-        const resolved = await resolveConfig(
-            {
-                configFile: false,
-                root: workdir,
-                plugins: [...tanstackStartLike(), ...cirrusPlugins],
-            },
-            "serve",
-        );
-
-        const names = resolved.plugins.map((plugin) => plugin.name);
-
-        expect(names).toContain("tanstack-start");
-        expect(names).toContain("tanstack-start:router");
-        expect(names).toContain("cirrus:codegen");
-        expect(names).toContain("cirrus:wrangler-validator");
-
-        // Plugin names must remain unique — Vite would otherwise warn loudly.
-        expect(new Set(names).size).toBe(names.length);
+describe("framework-compose", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-framework-"));
+        mkdirSync(join(workdir, "cirrus"), { recursive: true });
+        writeFileSync(join(workdir, "cirrus", "schema.ts"), SCHEMA, "utf8");
+        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
     });
 
-    test("composes with a React-Router-v7-shaped plugin and resolveConfig succeeds", async () => {
-        const cirrusPlugins = await cirrus({
-            cloudflare: false,
-            overlay: false,
-            projectRoot: workdir,
-            validateWrangler: true,
-        });
-
-        const resolved = await resolveConfig(
-            {
-                configFile: false,
-                root: workdir,
-                plugins: [reactRouterLike(), ...cirrusPlugins],
-            },
-            "serve",
-        );
-
-        const names = resolved.plugins.map((plugin) => plugin.name);
-
-        expect(names).toContain("react-router");
-        expect(names).toContain("cirrus:codegen");
-        expect(names).toContain("cirrus:wrangler-validator");
-        expect(new Set(names).size).toBe(names.length);
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
     });
 
-    test("wranglerValidator configResolved still fires inside a framework pipeline", async () => {
-        // Drop a wrangler.jsonc that is *missing* the SHARD binding — the
-        // validator must throw during configResolved even when wrapped by
-        // framework plugins. This guards against accidental hook-order bugs
-        // (e.g. a framework plugin swallowing our throw).
-        writeFileSync(
-            join(workdir, "wrangler.jsonc"),
-            `{
-                "name": "cirrus-framework-app",
-                "compatibility_date": "2026-04-07"
-            }
-            `,
-            "utf8",
-        );
+    describe("cirrus() framework composition", () => {
+        test("composes with a TanStack-Start-shaped plugin and resolveConfig succeeds", async () => {
+            expect.hasAssertions();
 
-        const cirrusPlugins = await cirrus({
-            cloudflare: false,
-            overlay: false,
-            projectRoot: workdir,
-            validateWrangler: true,
-        });
+            const cirrusPlugins = await cirrus({
+                cloudflare: false,
+                overlay: false,
+                projectRoot: workdir,
+                validateWrangler: true,
+            });
 
-        await expect(
-            resolveConfig(
+            const resolved = await resolveConfig(
                 {
                     configFile: false,
                     root: workdir,
                     plugins: [...tanstackStartLike(), ...cirrusPlugins],
                 },
                 "serve",
-            ),
-        ).rejects.toThrow(/\[cirrus\] wrangler/);
+            );
+
+            const names = resolved.plugins.map((plugin) => plugin.name);
+
+            expect(names).toContain("tanstack-start");
+            expect(names).toContain("tanstack-start:router");
+            expect(names).toContain("cirrus:codegen");
+            expect(names).toContain("cirrus:wrangler-validator");
+
+            // Plugin names must remain unique — Vite would otherwise warn loudly.
+            expect(new Set(names).size).toBe(names.length);
+        });
+
+        test("composes with a React-Router-v7-shaped plugin and resolveConfig succeeds", async () => {
+            expect.hasAssertions();
+
+            const cirrusPlugins = await cirrus({
+                cloudflare: false,
+                overlay: false,
+                projectRoot: workdir,
+                validateWrangler: true,
+            });
+
+            const resolved = await resolveConfig(
+                {
+                    configFile: false,
+                    root: workdir,
+                    plugins: [reactRouterLike(), ...cirrusPlugins],
+                },
+                "serve",
+            );
+
+            const names = resolved.plugins.map((plugin) => plugin.name);
+
+            expect(names).toContain("react-router");
+            expect(names).toContain("cirrus:codegen");
+            expect(names).toContain("cirrus:wrangler-validator");
+            expect(new Set(names).size).toBe(names.length);
+        });
+
+        test("wranglerValidator configResolved still fires inside a framework pipeline", async () => {
+            expect.assertions(1);
+
+            // Drop a wrangler.jsonc that is *missing* the SHARD binding — the
+            // validator must throw during configResolved even when wrapped by
+            // framework plugins. This guards against accidental hook-order bugs
+            // (e.g. a framework plugin swallowing our throw).
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+                "name": "cirrus-framework-app",
+                "compatibility_date": "2026-04-07"
+            }
+            `,
+                "utf8",
+            );
+
+            const cirrusPlugins = await cirrus({
+                cloudflare: false,
+                overlay: false,
+                projectRoot: workdir,
+                validateWrangler: true,
+            });
+
+            await expect(
+                resolveConfig(
+                    {
+                        configFile: false,
+                        root: workdir,
+                        plugins: [...tanstackStartLike(), ...cirrusPlugins],
+                    },
+                    "serve",
+                ),
+            ).rejects.toThrow(/\[cirrus\] wrangler/);
+        });
     });
 });

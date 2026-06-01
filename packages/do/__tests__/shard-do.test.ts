@@ -53,7 +53,7 @@ const createFakeState = (options: FakeStateOptions = {}): ShardDOState & { socke
 
     return {
         sockets,
-        storage: { sql: { exec: vi.fn(), databaseSize: options.databaseSize } },
+        storage: { sql: { exec: vi.fn<(query: string) => unknown>(), databaseSize: options.databaseSize } },
         id: { name: options.idName },
         acceptWebSocket(ws) {
             sockets.push(ws as unknown as FakeWebSocket);
@@ -181,6 +181,8 @@ describe("shardDO", () => {
     });
 
     test("dispatches RPC payloads via handleRpc and returns JSON", async () => {
+        expect.assertions(3);
+
         const request = new Request("https://shard.internal/rpc", {
             method: "POST",
             body: JSON.stringify({ functionPath: "messages:list", args: { limit: 10 } }),
@@ -195,6 +197,8 @@ describe("shardDO", () => {
     });
 
     test("returns 400 on malformed JSON", async () => {
+        expect.assertions(1);
+
         const request = new Request("https://shard.internal/rpc", {
             method: "POST",
             body: "{not json",
@@ -207,6 +211,8 @@ describe("shardDO", () => {
     });
 
     test("returns 500 with mapped error when handleRpc throws", async () => {
+        expect.assertions(2);
+
         shard.rpcResult = undefined;
         const failing = new TestShard(state, {});
 
@@ -226,6 +232,8 @@ describe("shardDO", () => {
     });
 
     test("subscribe updates attachment registry and acks", async () => {
+        expect.assertions(2);
+
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws);
@@ -237,6 +245,8 @@ describe("shardDO", () => {
     });
 
     test("unsubscribe clears registered subscription", async () => {
+        expect.assertions(1);
+
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { subs: { "sub-1": { table: "messages" } } });
@@ -247,6 +257,8 @@ describe("shardDO", () => {
     });
 
     test("broadcastDelta sends to matching subscribers only", () => {
+        expect.assertions(4);
+
         const matching = createFakeWebSocket();
         const other = createFakeWebSocket();
         const unrelated = createFakeWebSocket();
@@ -264,6 +276,8 @@ describe("shardDO", () => {
     });
 
     test("broadcastDelta filters by query.args — same key matches, different value skips", () => {
+        expect.assertions(3);
+
         const channelA = createFakeWebSocket();
         const channelB = createFakeWebSocket();
         const noFilter = createFakeWebSocket();
@@ -280,6 +294,8 @@ describe("shardDO", () => {
     });
 
     test("broadcastDelta delivers to every subscriber when delta.row is missing (delete fallback)", () => {
+        expect.assertions(2);
+
         const channelA = createFakeWebSocket();
         const channelB = createFakeWebSocket();
 
@@ -293,6 +309,8 @@ describe("shardDO", () => {
     });
 
     test("broadcastDelta skips when query.args requires a key absent from the row", () => {
+        expect.assertions(1);
+
         const wsA = createFakeWebSocket();
 
         shard.registerSocket(wsA, { subs: { "ch-a": { table: "messages", args: { channelId: "A" } } } });
@@ -305,6 +323,8 @@ describe("shardDO", () => {
     });
 
     test("matchesSubscription is overridable — subclass can implement custom predicates", () => {
+        expect.assertions(2);
+
         class PrefixShard extends TestShard {
             // Match only when `row.text` starts with `args.prefix`.
             protected override matchesSubscription(
@@ -339,6 +359,8 @@ describe("shardDO", () => {
     });
 
     test("exposes inbound x-d1-bookmark to handleRpc via getInboundBookmark()", async () => {
+        expect.assertions(1);
+
         const request = new Request("https://shard.internal/rpc", {
             method: "POST",
             body: JSON.stringify({ functionPath: "users:get", args: { id: "u1" } }),
@@ -351,6 +373,8 @@ describe("shardDO", () => {
     });
 
     test("echoes setOutboundBookmark on the response x-d1-bookmark header", async () => {
+        expect.assertions(1);
+
         shard.bookmarkToEmit = "bm-after-write";
         const request = new Request("https://shard.internal/rpc", {
             method: "POST",
@@ -364,6 +388,8 @@ describe("shardDO", () => {
     });
 
     test("omits x-d1-bookmark when the handler does not call setOutboundBookmark", async () => {
+        expect.assertions(1);
+
         const request = new Request("https://shard.internal/rpc", {
             method: "POST",
             body: JSON.stringify({ functionPath: "users:read", args: {} }),
@@ -376,6 +402,8 @@ describe("shardDO", () => {
     });
 
     test("does not leak inbound bookmark from a previous request to the next", async () => {
+        expect.assertions(2);
+
         // First request: bookmark present, handler observes it.
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
@@ -402,6 +430,8 @@ describe("shardDO", () => {
     });
 
     test("clears outbound bookmark between requests so a stale value never re-emits", async () => {
+        expect.assertions(2);
+
         shard.bookmarkToEmit = "bm-once";
         const first = await shard.fetch(
             new Request("https://shard.internal/rpc", {
@@ -428,6 +458,8 @@ describe("shardDO", () => {
     });
 
     test("webSocketClose clears attachment without re-closing the socket", async () => {
+        expect.assertions(2);
+
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { subs: { x: { table: "messages" } } });
@@ -459,6 +491,8 @@ describe("shardDO __root__ 1 GB warning", () => {
     };
 
     test("logs once when the __root__ DO crosses 1 GiB and stays quiet on subsequent writes", async () => {
+        expect.assertions(3);
+
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         const state = createFakeState({ idName: ROOT_SHARD_NAME, databaseSize: ROOT_DO_SIZE_WARN_BYTES });
         const shard = new TestShard(state, {});
@@ -475,6 +509,8 @@ describe("shardDO __root__ 1 GB warning", () => {
     });
 
     test("stays quiet on non-root DOs even at the same size", async () => {
+        expect.assertions(1);
+
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         const state = createFakeState({ idName: "tenant-42", databaseSize: ROOT_DO_SIZE_WARN_BYTES * 2 });
         const shard = new TestShard(state, {});
@@ -487,6 +523,8 @@ describe("shardDO __root__ 1 GB warning", () => {
     });
 
     test("stays quiet on a __root__ DO below the threshold", async () => {
+        expect.assertions(1);
+
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         const state = createFakeState({ idName: ROOT_SHARD_NAME, databaseSize: ROOT_DO_SIZE_WARN_BYTES - 1 });
         const shard = new TestShard(state, {});
@@ -509,6 +547,8 @@ describe("shardDO identity capture", () => {
     });
 
     test("exposes x-cirrus-userid to handlers via getCurrentUserId()", async () => {
+        expect.assertions(1);
+
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
                 method: "POST",
@@ -521,6 +561,8 @@ describe("shardDO identity capture", () => {
     });
 
     test("parses x-cirrus-identity JSON envelope into a plain object", async () => {
+        expect.assertions(1);
+
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
                 method: "POST",
@@ -537,6 +579,8 @@ describe("shardDO identity capture", () => {
     });
 
     test("collapses malformed x-cirrus-identity to undefined rather than throwing", async () => {
+        expect.assertions(2);
+
         const response = await shard.fetch(
             new Request("https://shard.internal/rpc", {
                 method: "POST",
@@ -550,6 +594,8 @@ describe("shardDO identity capture", () => {
     });
 
     test("clears identity headers between requests so they don't leak across clients", async () => {
+        expect.assertions(2);
+
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
                 method: "POST",
@@ -594,12 +640,16 @@ describe("shardDO upgrade gating", () => {
     };
 
     test("allows upgrade when no origin allowlist and no bearer are configured", async () => {
+        expect.hasAssertions();
+
         const shard = new TestShard(createFakeState(), {});
 
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/"));
     });
 
     test("rejects upgrade with 403 when origin missing and allowlist configured", async () => {
+        expect.assertions(1);
+
         const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example" });
         const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
 
@@ -607,6 +657,8 @@ describe("shardDO upgrade gating", () => {
     });
 
     test("rejects upgrade with 403 when origin not in allowlist", async () => {
+        expect.assertions(1);
+
         const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example" });
         const response = await shard.fetch(upgradeRequest("https://shard.internal/", { headers: { Origin: "https://evil.example" } }));
 
@@ -614,12 +666,16 @@ describe("shardDO upgrade gating", () => {
     });
 
     test("passes the gate when origin matches the allowlist", async () => {
+        expect.hasAssertions();
+
         const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example,https://staging.example" });
 
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Origin: "https://staging.example" } }));
     });
 
     test("rejects upgrade with 403 when bearer required but missing", async () => {
+        expect.assertions(1);
+
         const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
         const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
 
@@ -627,6 +683,8 @@ describe("shardDO upgrade gating", () => {
     });
 
     test("rejects upgrade with 403 when bearer token mismatches", async () => {
+        expect.assertions(1);
+
         const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
         const response = await shard.fetch(upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer wrong" } }));
 
@@ -634,12 +692,16 @@ describe("shardDO upgrade gating", () => {
     });
 
     test("accepts bearer via Authorization header", async () => {
+        expect.hasAssertions();
+
         const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
 
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer s3cret" } }));
     });
 
     test("accepts bearer via ?token query parameter as a browser escape hatch", async () => {
+        expect.hasAssertions();
+
         const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
 
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/?token=s3cret"));
@@ -662,6 +724,8 @@ describe("shardDO subscription re-execution", () => {
     };
 
     test("pushes the initial full result on subscribe, then the refreshed result on a write to a read table", async () => {
+        expect.assertions(3);
+
         const shard = new ReexecShard(state, {});
         const ws = createFakeWebSocket();
 
@@ -683,6 +747,8 @@ describe("shardDO subscription re-execution", () => {
     });
 
     test("re-executes but does not re-send when the result is byte-identical", async () => {
+        expect.assertions(2);
+
         const shard = new ReexecShard(state, {});
         const ws = createFakeWebSocket();
 
@@ -703,6 +769,8 @@ describe("shardDO subscription re-execution", () => {
     });
 
     test("skips re-execution entirely when the write touches a table the subscription never read", async () => {
+        expect.assertions(1);
+
         const shard = new ReexecShard(state, {});
         const ws = createFakeWebSocket();
 
@@ -720,6 +788,8 @@ describe("shardDO subscription re-execution", () => {
     });
 
     test("re-executes anonymously — the writer's identity never leaks into the pushed view", async () => {
+        expect.assertions(2);
+
         const shard = new ReexecShard(state, {});
         const ws = createFakeWebSocket();
 
@@ -738,6 +808,8 @@ describe("shardDO subscription re-execution", () => {
     });
 
     test("legacy subscriptions without functionPath get no initial push and never re-execute", async () => {
+        expect.assertions(3);
+
         const shard = new ReexecShard(state, {});
         const ws = createFakeWebSocket();
 
@@ -755,6 +827,8 @@ describe("shardDO subscription re-execution", () => {
     });
 
     test("drops the subscription memo on unsubscribe so a later re-subscribe re-pushes", async () => {
+        expect.assertions(2);
+
         const shard = new ReexecShard(state, {});
         const ws = createFakeWebSocket();
 

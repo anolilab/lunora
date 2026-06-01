@@ -13,6 +13,8 @@ const Probe = (): ReactElement => {
 
 describe("cirrusProvider", () => {
     test("useCirrus returns the provided client", () => {
+        expect.assertions(1);
+
         const mock = createMockClient();
 
         render(
@@ -25,6 +27,8 @@ describe("cirrusProvider", () => {
     });
 
     test("useCirrus throws when used outside the provider", () => {
+        expect.assertions(1);
+
         // Suppress React's error logging for this test.
         const { error } = console;
 

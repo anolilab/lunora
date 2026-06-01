@@ -5,7 +5,7 @@
         "rootDir": ".",
         "moduleResolution": "bundler",
         "jsx": "react-jsx",
-        "types": ["node"]
+        "types": ["node", "vitest/globals"]
     },
     "include": ["src/**/*", "__tests__/**/*"]
 }

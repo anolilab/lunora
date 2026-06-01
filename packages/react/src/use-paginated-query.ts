@@ -135,6 +135,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
 
             // Trigger the initial fetch via TanStack so its dedup applies
             // even when two mounts ask for the same page.
+            // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above.
             void queryClient.fetchQuery({
                 queryFn: () => client.query(desired.fn, entry.args as ArgsOf<F>, { shardKey: desired.shardKey }),
                 queryKey: entry.key,

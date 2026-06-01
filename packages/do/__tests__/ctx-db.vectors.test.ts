@@ -25,12 +25,12 @@ const fakeVectorSearch = (): VectorSearchLike & { deletes: Array<[string, Readon
     const deletes: Array<[string, ReadonlyArray<string>]> = [];
 
     return {
-        deleteByIds: vi.fn(async (indexName, ids) => void deletes.push([indexName, ids])),
+        deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => void deletes.push([indexName, ids])),
         deletes,
-        getByIds: vi.fn(async () => []),
-        query: vi.fn(async () => ({ count: 0, matches: [] })),
-        upsert: vi.fn(async (indexName, input) => void upserts.push([indexName, input])),
-        upsertNow: vi.fn(async (indexName, input) => void upserts.push([indexName, input])),
+        getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
+        query: vi.fn<VectorSearchLike["query"]>(async () => ({ count: 0, matches: [] })),
+        upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName, input) => void upserts.push([indexName, input])),
+        upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async (indexName, input) => void upserts.push([indexName, input])),
         upserts,
     };
 };
@@ -56,6 +56,8 @@ const setup = (): { vectors: ReturnType<typeof fakeVectorSearch>; writer: Return
 
 describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => {
     test("a committed insert syncs an upsert to the vector index", async () => {
+        expect.assertions(3);
+
         const { vectors, writer } = setup();
 
         const id = await writer.insert("messages", { authorId: "ann", channelId: "c1", text: "hello world" });
@@ -66,6 +68,8 @@ describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => 
     });
 
     test("a committed update re-embeds the merged row", async () => {
+        expect.assertions(1);
+
         const { vectors, writer } = setup();
 
         await writer.insert("messages", { authorId: "ann", channelId: "c1", text: "hello world" });
@@ -77,6 +81,8 @@ describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => 
     });
 
     test("a committed delete propagates deleteByIds to the index", async () => {
+        expect.assertions(1);
+
         const { vectors, writer } = setup();
 
         await writer.insert("messages", { authorId: "ann", channelId: "c1", text: "hello world" });
@@ -86,6 +92,8 @@ describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => 
     });
 
     test("writes to a table with no vector index are not synced", async () => {
+        expect.assertions(2);
+
         const { vectors, writer } = setup();
 
         await writer.insert("roomMembers", { roomId: "r1", userId: "u1" });

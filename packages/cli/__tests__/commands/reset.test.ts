@@ -16,84 +16,96 @@ const silentLogger = (): Logger => ({
 
 let workdir: string;
 
-beforeEach(() => {
-    workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-reset-"));
-});
-
-afterEach(() => {
-    rmSync(workdir, { force: true, recursive: true });
-});
-
 describe("cirrus reset", () => {
-    test("removes .wrangler/state if present", async () => {
-        const stateDir = join(workdir, ".wrangler", "state");
-
-        mkdirSync(stateDir, { recursive: true });
-        writeFileSync(join(stateDir, "marker.txt"), "x", "utf8");
-
-        const result = await runResetCommand({ cwd: workdir, logger: silentLogger(), yes: true });
-
-        expect(existsSync(stateDir)).toBe(false);
-        expect(result.removed).toContain(stateDir);
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-reset-"));
     });
 
-    test("--all also removes .cirrus-cache", async () => {
-        const stateDir = join(workdir, ".wrangler", "state");
-        const cacheDir = join(workdir, ".cirrus-cache");
-
-        mkdirSync(stateDir, { recursive: true });
-        mkdirSync(cacheDir, { recursive: true });
-
-        const result = await runResetCommand({ all: true, cwd: workdir, logger: silentLogger(), yes: true });
-
-        expect(existsSync(stateDir)).toBe(false);
-        expect(existsSync(cacheDir)).toBe(false);
-        expect(result.removed).toContain(stateDir);
-        expect(result.removed).toContain(cacheDir);
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
     });
 
-    test("no-ops cleanly when target is absent", async () => {
-        const infos: string[] = [];
+    describe("cirrus reset", () => {
+        test("removes .wrangler/state if present", async () => {
+            expect.assertions(2);
 
-        const result = await runResetCommand({
-            cwd: workdir,
-            logger: { ...silentLogger(), info: (msg) => infos.push(msg) },
-            yes: true,
+            const stateDir = join(workdir, ".wrangler", "state");
+
+            mkdirSync(stateDir, { recursive: true });
+            writeFileSync(join(stateDir, "marker.txt"), "x", "utf8");
+
+            const result = await runResetCommand({ cwd: workdir, logger: silentLogger(), yes: true });
+
+            expect(existsSync(stateDir)).toBe(false);
+            expect(result.removed).toContain(stateDir);
         });
 
-        expect(result.removed).toEqual([]);
-        expect(infos.some((line) => line.includes("skipped"))).toBe(true);
-    });
+        test("--all also removes .cirrus-cache", async () => {
+            expect.assertions(4);
 
-    test("aborts via injected confirmer when neither --yes nor TTY", async () => {
-        const stateDir = join(workdir, ".wrangler", "state");
+            const stateDir = join(workdir, ".wrangler", "state");
+            const cacheDir = join(workdir, ".cirrus-cache");
 
-        mkdirSync(stateDir, { recursive: true });
+            mkdirSync(stateDir, { recursive: true });
+            mkdirSync(cacheDir, { recursive: true });
 
-        const result = await runResetCommand({
-            confirm: async () => false,
-            cwd: workdir,
-            logger: silentLogger(),
+            const result = await runResetCommand({ all: true, cwd: workdir, logger: silentLogger(), yes: true });
+
+            expect(existsSync(stateDir)).toBe(false);
+            expect(existsSync(cacheDir)).toBe(false);
+            expect(result.removed).toContain(stateDir);
+            expect(result.removed).toContain(cacheDir);
         });
 
-        expect(result.code).toBe(1);
-        expect(result.removed).toEqual([]);
-        expect(existsSync(stateDir)).toBe(true);
-    });
+        test("no-ops cleanly when target is absent", async () => {
+            expect.assertions(2);
 
-    test("refuses without --yes when stdin is not a TTY", async () => {
-        const errors: string[] = [];
-        const stateDir = join(workdir, ".wrangler", "state");
+            const infos: string[] = [];
 
-        mkdirSync(stateDir, { recursive: true });
+            const result = await runResetCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), info: (msg) => infos.push(msg) },
+                yes: true,
+            });
 
-        const result = await runResetCommand({
-            cwd: workdir,
-            logger: { ...silentLogger(), error: (msg) => errors.push(msg) },
+            expect(result.removed).toEqual([]);
+            expect(infos.some((line) => line.includes("skipped"))).toBe(true);
         });
 
-        expect(result.code).toBe(1);
-        expect(errors.some((line) => line.includes("--yes"))).toBe(true);
-        expect(existsSync(stateDir)).toBe(true);
+        test("aborts via injected confirmer when neither --yes nor TTY", async () => {
+            expect.assertions(3);
+
+            const stateDir = join(workdir, ".wrangler", "state");
+
+            mkdirSync(stateDir, { recursive: true });
+
+            const result = await runResetCommand({
+                confirm: async () => false,
+                cwd: workdir,
+                logger: silentLogger(),
+            });
+
+            expect(result.code).toBe(1);
+            expect(result.removed).toEqual([]);
+            expect(existsSync(stateDir)).toBe(true);
+        });
+
+        test("refuses without --yes when stdin is not a TTY", async () => {
+            expect.assertions(3);
+
+            const errors: string[] = [];
+            const stateDir = join(workdir, ".wrangler", "state");
+
+            mkdirSync(stateDir, { recursive: true });
+
+            const result = await runResetCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), error: (msg) => errors.push(msg) },
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.some((line) => line.includes("--yes"))).toBe(true);
+            expect(existsSync(stateDir)).toBe(true);
+        });
     });
 });

@@ -4,13 +4,17 @@ import { defineTable, v } from "../src/index.js";
 
 describe("defineTable().triggers", () => {
     test("table without .triggers exposes an empty triggerMap", () => {
+        expect.assertions(1);
+
         const messages = defineTable({ body: v.string() });
 
         expect(messages.triggerMap).toEqual({});
     });
 
     test("records correct timing+op descriptors per builder method", () => {
-        const noop = vi.fn();
+        expect.assertions(6);
+
+        const noop = vi.fn<() => void>();
         const messages = defineTable({ body: v.string(), locked: v.boolean() }).triggers((t) => ({
             auditDelete: t.afterDelete(noop),
             auditInsert: t.afterInsert(noop),
@@ -29,7 +33,9 @@ describe("defineTable().triggers", () => {
     });
 
     test("stores the supplied handler on each descriptor", () => {
-        const handler = vi.fn();
+        expect.assertions(1);
+
+        const handler = vi.fn<() => void>();
         const messages = defineTable({ body: v.string() }).triggers((t) => ({
             log: t.afterInsert(handler),
         }));
@@ -38,6 +44,8 @@ describe("defineTable().triggers", () => {
     });
 
     test("multiple named handlers for the same lifecycle point coexist", () => {
+        expect.assertions(3);
+
         const messages = defineTable({ authorId: v.id("users"), body: v.string() }).triggers((t) => ({
             audit: t.afterInsert(vi.fn()),
             bumpCount: t.afterInsert(vi.fn()),
@@ -49,6 +57,8 @@ describe("defineTable().triggers", () => {
     });
 
     test(".triggers returns the same builder instance", () => {
+        expect.assertions(1);
+
         const builder = defineTable({ body: v.string() });
         const chained = builder.triggers((t) => ({ log: t.afterInsert(vi.fn()) }));
 
@@ -56,6 +66,8 @@ describe("defineTable().triggers", () => {
     });
 
     test("coexists with .relations() and .index() on the same table", () => {
+        expect.assertions(3);
+
         const messages = defineTable({ authorId: v.id("users"), body: v.string() })
             .index("by_author", ["authorId"])
             .relations((r) => ({ author: r.one("users", { field: "authorId" }) }))

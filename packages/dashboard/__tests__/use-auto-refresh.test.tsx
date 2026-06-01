@@ -23,7 +23,7 @@ describe("useAutoRefresh", () => {
     test("ticks on the interval while enabled", () => {
         expect.assertions(1);
 
-        const onTick = vi.fn();
+        const onTick = vi.fn<() => void>();
 
         render(<Harness enabled intervalMs={1000} onTick={onTick} />);
 
@@ -35,7 +35,7 @@ describe("useAutoRefresh", () => {
     test("does not tick while disabled", () => {
         expect.assertions(1);
 
-        const onTick = vi.fn();
+        const onTick = vi.fn<() => void>();
 
         render(<Harness enabled={false} intervalMs={1000} onTick={onTick} />);
 
@@ -47,7 +47,7 @@ describe("useAutoRefresh", () => {
     test("stops ticking after unmount", () => {
         expect.assertions(1);
 
-        const onTick = vi.fn();
+        const onTick = vi.fn<() => void>();
 
         const { unmount } = render(<Harness enabled intervalMs={1000} onTick={onTick} />);
 
@@ -61,7 +61,7 @@ describe("useAutoRefresh", () => {
     test("skips ticks while the document is hidden", () => {
         expect.assertions(2);
 
-        const onTick = vi.fn();
+        const onTick = vi.fn<() => void>();
         const hiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
 
         render(<Harness enabled intervalMs={1000} onTick={onTick} />);

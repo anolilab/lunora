@@ -7,6 +7,8 @@ const ctx = {} as HttpActionCtx;
 
 describe("httpAction", () => {
     test("hands the injected ctx and the raw request to the wrapped handler", async () => {
+        expect.assertions(4);
+
         const seen: { ctx: HttpActionCtx; method: string }[] = [];
         const app = httpRouter();
 
@@ -29,6 +31,8 @@ describe("httpAction", () => {
     });
 
     test("passes the raw Response through unchanged", async () => {
+        expect.assertions(2);
+
         const app = httpRouter();
 
         app.post(
@@ -45,6 +49,8 @@ describe("httpAction", () => {
 
 describe("httpRouter", () => {
     test("routes by method", async () => {
+        expect.assertions(2);
+
         const app = httpRouter();
 
         app.get(
@@ -61,6 +67,8 @@ describe("httpRouter", () => {
     });
 
     test("returns hono's 404 for an unmatched path", async () => {
+        expect.assertions(1);
+
         const app = httpRouter();
 
         app.get(
@@ -72,6 +80,8 @@ describe("httpRouter", () => {
     });
 
     test("a path-match with the wrong verb is a 404", async () => {
+        expect.assertions(1);
+
         const app = httpRouter();
 
         app.get(
@@ -83,6 +93,8 @@ describe("httpRouter", () => {
     });
 
     test("errors when the action context was not injected (router used outside the runtime)", async () => {
+        expect.assertions(1);
+
         const app = httpRouter();
 
         app.get(

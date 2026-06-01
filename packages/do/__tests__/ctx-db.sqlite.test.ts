@@ -32,199 +32,225 @@ const setupWriter = (
     return { writer, deltas };
 };
 
-beforeEach(() => {
-    harness = createSqliteExec();
-});
-
-afterEach(() => {
-    harness.close();
-});
-
-describe("ctx-db against real SQLite — migrations", () => {
-    test("creates queryable tables for every non-global schema table", async () => {
-        const { writer } = setupWriter({ idGenerator: () => "m_1" });
-
-        await writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
-        await writer.insert("roomMembers", { _id: "rm_1", roomId: "r1", userId: "u1" }, { allowExplicitId: true });
-
-        await expect(writer.query("messages").collect()).resolves.toHaveLength(1);
-        await expect(writer.query("roomMembers").collect()).resolves.toHaveLength(1);
+describe("ctx-db against real SQLite", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
     });
 
-    test("does not create a table for .global() tables", () => {
-        setupWriter();
-
-        // `profiles` is flagged `.global()`, so no SQLite table is created and
-        // SELECTing it must fail at the engine, not silently return rows.
-        expect(() => harness.raw('SELECT * FROM "profiles"')).toThrow();
+    afterEach(() => {
+        harness.close();
     });
 
-    test("enforces UNIQUE indexes at the engine level", async () => {
-        const { writer } = setupWriter();
+    describe("ctx-db against real SQLite — migrations", () => {
+        test("creates queryable tables for every non-global schema table", async () => {
+            expect.assertions(2);
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "dup", authorId: "u1" }, { allowExplicitId: true });
+            const { writer } = setupWriter({ idGenerator: () => "m_1" });
 
-        // `by_text` is declared unique — a second row with the same text must
-        // be rejected by SQLite, not just by the adapter.
-        await expect(writer.insert("messages", { _id: "b", channelId: "c2", text: "dup", authorId: "u2" }, { allowExplicitId: true })).rejects.toThrow();
-    });
-});
+            await writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
+            await writer.insert("roomMembers", { _id: "rm_1", roomId: "r1", userId: "u1" }, { allowExplicitId: true });
 
-describe("ctx-db against real SQLite — round-trips", () => {
-    test("preserves boolean, null, number, and array types through JSON", async () => {
-        const { writer } = setupWriter({ idGenerator: () => "m_1" });
-
-        await writer.insert("messages", {
-            channelId: "c1",
-            text: "typed",
-            authorId: "u1",
-            pinned: true,
-            deletedAt: null,
-            score: 3.5,
-            tags: ["x", "y"],
+            await expect(writer.query("messages").collect()).resolves.toHaveLength(1);
+            await expect(writer.query("roomMembers").collect()).resolves.toHaveLength(1);
         });
 
-        const fetched = await writer.get("m_1");
+        test("does not create a table for .global() tables", () => {
+            expect.assertions(1);
 
-        expect(fetched).toMatchObject({
-            pinned: true,
-            deletedAt: null,
-            score: 3.5,
-            tags: ["x", "y"],
+            setupWriter();
+
+            // `profiles` is flagged `.global()`, so no SQLite table is created and
+            // SELECTing it must fail at the engine, not silently return rows.
+            expect(() => harness.raw('SELECT * FROM "profiles"')).toThrow();
+        });
+
+        test("enforces UNIQUE indexes at the engine level", async () => {
+            expect.assertions(1);
+
+            const { writer } = setupWriter();
+
+            await writer.insert("messages", { _id: "a", channelId: "c1", text: "dup", authorId: "u1" }, { allowExplicitId: true });
+
+            // `by_text` is declared unique — a second row with the same text must
+            // be rejected by SQLite, not just by the adapter.
+            await expect(writer.insert("messages", { _id: "b", channelId: "c2", text: "dup", authorId: "u2" }, { allowExplicitId: true })).rejects.toThrow();
         });
     });
 
-    test("get() returns null for an unknown id", async () => {
-        const { writer } = setupWriter();
+    describe("ctx-db against real SQLite — round-trips", () => {
+        test("preserves boolean, null, number, and array types through JSON", async () => {
+            expect.assertions(1);
 
-        await expect(writer.get("nope")).resolves.toBeNull();
-    });
+            const { writer } = setupWriter({ idGenerator: () => "m_1" });
 
-    test("patch merges, replace overwrites, delete removes — verified by re-read", async () => {
-        const { writer } = setupWriter({ idGenerator: () => "m_1" });
+            await writer.insert("messages", {
+                channelId: "c1",
+                text: "typed",
+                authorId: "u1",
+                pinned: true,
+                deletedAt: null,
+                score: 3.5,
+                tags: ["x", "y"],
+            });
 
-        await writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
+            const fetched = await writer.get("m_1");
 
-        await writer.patch("m_1", { text: "edited" });
-
-        await expect(writer.get("m_1")).resolves.toMatchObject({ text: "edited", channelId: "c1" });
-
-        await writer.replace("m_1", { channelId: "c2", text: "fresh", authorId: "u2" });
-
-        await expect(writer.get("m_1")).resolves.toMatchObject({ _id: "m_1", channelId: "c2", text: "fresh", authorId: "u2" });
-
-        await writer.delete("m_1");
-
-        await expect(writer.get("m_1")).resolves.toBeNull();
-    });
-});
-
-describe("ctx-db against real SQLite — queries", () => {
-    test("collect() orders by _creationTime ascending", async () => {
-        let now = 0;
-        const { writer } = setupWriter({
-            clock: () => {
-                now += 10;
-
-                return now;
-            },
+            expect(fetched).toMatchObject({
+                pinned: true,
+                deletedAt: null,
+                score: 3.5,
+                tags: ["x", "y"],
+            });
         });
 
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" }, { allowExplicitId: true });
+        test("get() returns null for an unknown id", async () => {
+            expect.assertions(1);
 
-        const rows = await writer.query("messages").collect();
+            const { writer } = setupWriter();
 
-        // Insertion order is b, a and creation time is b<a, so order stays b,a.
-        expect(rows.map((row) => row["_id"])).toEqual(["b", "a"]);
-    });
-
-    test("withIndex().eq() filters in the engine", async () => {
-        const { writer } = setupWriter();
-
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "x", authorId: "u1" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "b", channelId: "c2", text: "y", authorId: "u1" }, { allowExplicitId: true });
-
-        const rows = await writer
-            .query("messages")
-            .withIndex("by_channel", (q) => q.eq("channelId", "c2"))
-            .collect();
-
-        expect(rows).toHaveLength(1);
-        expect(rows[0]).toMatchObject({ _id: "b" });
-    });
-
-    test("withIndex() range on _creationTime uses real numeric comparison", async () => {
-        let now = 0;
-        const { writer } = setupWriter({
-            clock: () => {
-                now += 10;
-
-                return now;
-            },
+            await expect(writer.get("nope")).resolves.toBeNull();
         });
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }, { allowExplicitId: true }); // t=10
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }, { allowExplicitId: true }); // t=20
-        await writer.insert("messages", { _id: "c", channelId: "c1", text: "3", authorId: "u1" }, { allowExplicitId: true }); // t=30
+        test("patch merges, replace overwrites, delete removes — verified by re-read", async () => {
+            expect.assertions(3);
 
-        const rows = await writer
-            .query("messages")
-            .withIndex("by_channel_creation", (q) => q.eq("channelId", "c1").gte("_creationTime", 20))
-            .collect();
+            const { writer } = setupWriter({ idGenerator: () => "m_1" });
 
-        expect(rows.map((row) => row["_id"])).toEqual(["b", "c"]);
+            await writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
+
+            await writer.patch("m_1", { text: "edited" });
+
+            await expect(writer.get("m_1")).resolves.toMatchObject({ text: "edited", channelId: "c1" });
+
+            await writer.replace("m_1", { channelId: "c2", text: "fresh", authorId: "u2" });
+
+            await expect(writer.get("m_1")).resolves.toMatchObject({ _id: "m_1", channelId: "c2", text: "fresh", authorId: "u2" });
+
+            await writer.delete("m_1");
+
+            await expect(writer.get("m_1")).resolves.toBeNull();
+        });
     });
 
-    test("take(n) limits at the engine when there is no in-memory filter", async () => {
-        let now = 0;
-        const { writer } = setupWriter({
-            clock: () => {
-                now += 10;
+    describe("ctx-db against real SQLite — queries", () => {
+        test("collect() orders by _creationTime ascending", async () => {
+            expect.assertions(1);
 
-                return now;
-            },
+            let now = 0;
+            const { writer } = setupWriter({
+                clock: () => {
+                    now += 10;
+
+                    return now;
+                },
+            });
+
+            await writer.insert("messages", { _id: "b", channelId: "c1", text: "second", authorId: "u1" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "a", channelId: "c1", text: "first", authorId: "u1" }, { allowExplicitId: true });
+
+            const rows = await writer.query("messages").collect();
+
+            // Insertion order is b, a and creation time is b<a, so order stays b,a.
+            expect(rows.map((row) => row["_id"])).toEqual(["b", "a"]);
         });
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "c", channelId: "c1", text: "3", authorId: "u1" }, { allowExplicitId: true });
+        test("withIndex().eq() filters in the engine", async () => {
+            expect.assertions(2);
 
-        const rows = await writer.query("messages").take(2);
+            const { writer } = setupWriter();
 
-        expect(rows.map((row) => row["_id"])).toEqual(["a", "b"]);
-    });
+            await writer.insert("messages", { _id: "a", channelId: "c1", text: "x", authorId: "u1" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "b", channelId: "c2", text: "y", authorId: "u1" }, { allowExplicitId: true });
 
-    test("filter() applies in JS after the engine fetch", async () => {
-        const { writer } = setupWriter();
+            const rows = await writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "c2"))
+                .collect();
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "keep", authorId: "u1" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "drop", authorId: "u1" }, { allowExplicitId: true });
-
-        const rows = await writer
-            .query("messages")
-            .filter((document) => document["text"] === "keep")
-            .collect();
-
-        expect(rows).toHaveLength(1);
-        expect(rows[0]).toMatchObject({ _id: "a" });
-    });
-
-    test("first() returns the earliest row or null", async () => {
-        let now = 0;
-        const { writer } = setupWriter({
-            clock: () => {
-                now += 10;
-
-                return now;
-            },
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({ _id: "b" });
         });
 
-        await expect(writer.query("messages").first()).resolves.toBeNull();
+        test("withIndex() range on _creationTime uses real numeric comparison", async () => {
+            expect.assertions(1);
 
-        await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }, { allowExplicitId: true });
-        await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }, { allowExplicitId: true });
+            let now = 0;
+            const { writer } = setupWriter({
+                clock: () => {
+                    now += 10;
 
-        await expect(writer.query("messages").first()).resolves.toMatchObject({ _id: "a" });
+                    return now;
+                },
+            });
+
+            await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }, { allowExplicitId: true }); // t=10
+            await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }, { allowExplicitId: true }); // t=20
+            await writer.insert("messages", { _id: "c", channelId: "c1", text: "3", authorId: "u1" }, { allowExplicitId: true }); // t=30
+
+            const rows = await writer
+                .query("messages")
+                .withIndex("by_channel_creation", (q) => q.eq("channelId", "c1").gte("_creationTime", 20))
+                .collect();
+
+            expect(rows.map((row) => row["_id"])).toEqual(["b", "c"]);
+        });
+
+        test("take(n) limits at the engine when there is no in-memory filter", async () => {
+            expect.assertions(1);
+
+            let now = 0;
+            const { writer } = setupWriter({
+                clock: () => {
+                    now += 10;
+
+                    return now;
+                },
+            });
+
+            await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "c", channelId: "c1", text: "3", authorId: "u1" }, { allowExplicitId: true });
+
+            const rows = await writer.query("messages").take(2);
+
+            expect(rows.map((row) => row["_id"])).toEqual(["a", "b"]);
+        });
+
+        test("filter() applies in JS after the engine fetch", async () => {
+            expect.assertions(2);
+
+            const { writer } = setupWriter();
+
+            await writer.insert("messages", { _id: "a", channelId: "c1", text: "keep", authorId: "u1" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "b", channelId: "c1", text: "drop", authorId: "u1" }, { allowExplicitId: true });
+
+            const rows = await writer
+                .query("messages")
+                .filter((document) => document["text"] === "keep")
+                .collect();
+
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({ _id: "a" });
+        });
+
+        test("first() returns the earliest row or null", async () => {
+            expect.assertions(2);
+
+            let now = 0;
+            const { writer } = setupWriter({
+                clock: () => {
+                    now += 10;
+
+                    return now;
+                },
+            });
+
+            await expect(writer.query("messages").first()).resolves.toBeNull();
+
+            await writer.insert("messages", { _id: "a", channelId: "c1", text: "1", authorId: "u1" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "b", channelId: "c1", text: "2", authorId: "u1" }, { allowExplicitId: true });
+
+            await expect(writer.query("messages").first()).resolves.toMatchObject({ _id: "a" });
+        });
     });
 });

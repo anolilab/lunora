@@ -13,7 +13,13 @@ export function useConnectionStatus(): ConnectionStatus {
     const client = useCirrus();
 
     return useSyncExternalStore(
-        useCallback((onChange) => client.onConnectionStatus(() => onChange()), [client]),
+        useCallback(
+            (onChange) =>
+                client.onConnectionStatus(() => {
+                    onChange();
+                }),
+            [client],
+        ),
         () => client.connectionStatus(),
         () => client.connectionStatus(),
     );

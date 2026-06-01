@@ -59,7 +59,7 @@ const resolveDevPort = (wrangler: Record<string, unknown> | undefined): number =
     const { dev } = wrangler;
 
     if (dev !== null && typeof dev === "object") {
-        const { port } = (dev as Record<string, unknown>);
+        const { port } = dev as Record<string, unknown>;
 
         if (typeof port === "number" && Number.isFinite(port)) {
             return port;
@@ -85,7 +85,7 @@ const resolveRemoteUrl = (wrangler: Record<string, unknown> | undefined): string
         }
 
         if (first !== null && typeof first === "object") {
-            const { pattern } = (first as Record<string, unknown>);
+            const { pattern } = first as Record<string, unknown>;
 
             if (typeof pattern === "string" && pattern.length > 0) {
                 return `https://${pattern.split("/")[0] ?? pattern}${DASHBOARD_PATH}`;

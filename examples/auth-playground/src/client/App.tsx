@@ -173,7 +173,13 @@ const SignedInView = (): ReactElement => {
                 <>
                     <h3>Invite a member</h3>
                     <form onSubmit={onInvite} style={{ display: "flex", gap: 8 }}>
-                        <input onChange={(event) => setInviteEmail(event.target.value)} placeholder="invitee@example.com" style={{ flex: 1 }} type="email" value={inviteEmail} />
+                        <input
+                            onChange={(event) => setInviteEmail(event.target.value)}
+                            placeholder="invitee@example.com"
+                            style={{ flex: 1 }}
+                            type="email"
+                            value={inviteEmail}
+                        />
                         <button type="submit">Send invite</button>
                     </form>
                 </>

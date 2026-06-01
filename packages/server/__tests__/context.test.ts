@@ -13,6 +13,8 @@ type Extends<X, Y> = X extends Y ? true : false;
 
 describe("queryCtx.storage / MutationCtx.storage", () => {
     test("exposes the read-only storage surface (getSignedUrl, getUrl, download)", () => {
+        expect.assertions(0);
+
         // Build a minimal `ReadOnlyStorage` double and verify it satisfies
         // both `QueryCtx["storage"]` and `MutationCtx["storage"]`.
         const storage: ReadOnlyStorage = {
@@ -31,6 +33,8 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
     });
 
     test("does NOT expose write operations on QueryCtx.storage at the type level", () => {
+        expect.assertions(1);
+
         // `upload` lives only on the full `cirrus-storage` Storage / on
         // `ActionCtx`. Asserting at compile-time that `QueryCtx["storage"]`
         // never grows it back guards against accidental regressions where
@@ -54,6 +58,8 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
     });
 
     test("a query handler can call ctx.storage.getSignedUrl", async () => {
+        expect.assertions(2);
+
         const calls: Array<{ expiresInSeconds?: number; key: string }> = [];
 
         const storage: ReadOnlyStorage = {

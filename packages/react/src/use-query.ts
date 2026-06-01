@@ -30,6 +30,7 @@ export function useQuery<F extends FunctionReference>(fn: F, args: ArgsOf<F> | "
     // via TanStack's hash, not reference equality of the args object.
     const queryKey = useMemo(() => cirrusQueryKey(fn, argsRecord, shardKey), [fn.__cirrusRef, JSON.stringify(argsRecord), shardKey]);
 
+    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<ReturnOf<F>>({
         enabled: !skipped,
         queryFn: () => client.query<F>(fn, argsRecord as ArgsOf<F>, { shardKey }) as Promise<ReturnOf<F>>,

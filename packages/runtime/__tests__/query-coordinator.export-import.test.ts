@@ -38,6 +38,8 @@ const json = (value: unknown): Response => Response.json(value, { headers: { "co
 
 describe("orchestrateExport", () => {
     test("fans out exportShard across every live shard for the requested tables", async () => {
+        expect.assertions(5);
+
         const registry = createStaticShardRegistry({ messages: ["c1", "c2", "c3"], users: [] });
         const coordinator = createQueryCoordinator({ registry });
 
@@ -58,6 +60,8 @@ describe("orchestrateExport", () => {
     });
 
     test("rolls up errors per shard without throwing", async () => {
+        expect.assertions(3);
+
         const registry = createStaticShardRegistry({ messages: ["c1", "c2"] });
         const coordinator = createQueryCoordinator({ registry, perShardTimeoutMs: 100 });
 
@@ -80,6 +84,8 @@ describe("orchestrateExport", () => {
     });
 
     test("unions live shard keys across multiple tables", async () => {
+        expect.assertions(1);
+
         const registry = createStaticShardRegistry({ messages: ["c1", "c2"], notifications: ["c2", "c3"] });
         const coordinator = createQueryCoordinator({ registry });
 
@@ -95,6 +101,8 @@ describe("orchestrateExport", () => {
 
 describe("orchestrateImport", () => {
     test("forwards one batch per shard and sums the inserted counts", async () => {
+        expect.assertions(3);
+
         const registry = createStaticShardRegistry({ messages: ["c1", "c2"] });
         const coordinator = createQueryCoordinator({ registry });
 
@@ -126,6 +134,8 @@ describe("orchestrateImport", () => {
     });
 
     test("collects per-shard errors but does not throw", async () => {
+        expect.assertions(4);
+
         const registry = createStaticShardRegistry({ messages: ["c1", "c2"] });
         const coordinator = createQueryCoordinator({ registry });
 

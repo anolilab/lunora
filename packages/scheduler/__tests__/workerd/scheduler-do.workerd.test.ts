@@ -31,6 +31,8 @@ const post = async (stub: DurableObjectStub<TestSchedulerDO>, path: string, body
 
 describe("schedulerDO (workerd)", () => {
     test("/schedule arms the runtime alarm for the earliest pending task", async () => {
+        expect.hasAssertions();
+
         const stub = newStub("alarm-arm");
         const scheduledFor = Date.now() + 60_000;
 
@@ -52,6 +54,8 @@ describe("schedulerDO (workerd)", () => {
     });
 
     test("runDurableObjectAlarm() fires due records and reschedules to the next", async () => {
+        expect.hasAssertions();
+
         const stub = newStub("alarm-fire");
         const now = Date.now();
 
@@ -76,6 +80,8 @@ describe("schedulerDO (workerd)", () => {
     });
 
     test("/cancel removes the record and re-arms the alarm to the next pending entry", async () => {
+        expect.hasAssertions();
+
         const stub = newStub("alarm-cancel");
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;

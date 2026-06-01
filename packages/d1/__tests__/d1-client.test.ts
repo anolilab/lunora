@@ -5,27 +5,29 @@ import { D1Client } from "../src/d1-client.js";
 
 const createStmt = (returnValue: { results: unknown[]; success: boolean } = { results: [], success: true }): D1PreparedStatementLike => {
     const stmt: D1PreparedStatementLike = {
-        bind: vi.fn(() => stmt),
-        first: vi.fn(async () => null) as D1PreparedStatementLike["first"],
-        all: vi.fn(async () => returnValue) as unknown as D1PreparedStatementLike["all"],
-        run: vi.fn(async () => ({ success: true })) as D1PreparedStatementLike["run"],
-        raw: vi.fn(async () => []) as D1PreparedStatementLike["raw"],
+        bind: vi.fn<D1PreparedStatementLike["bind"]>(() => stmt),
+        first: vi.fn<() => Promise<null>>(async () => null) as D1PreparedStatementLike["first"],
+        all: vi.fn<() => Promise<typeof returnValue>>(async () => returnValue) as unknown as D1PreparedStatementLike["all"],
+        run: vi.fn<() => Promise<{ success: boolean }>>(async () => ({ success: true })) as D1PreparedStatementLike["run"],
+        raw: vi.fn<() => Promise<never[]>>(async () => []) as D1PreparedStatementLike["raw"],
     };
 
     return stmt;
 };
 
 const createSession = (bookmark: string | null): D1SessionLike => ({
-    prepare: vi.fn(() => createStmt()),
-    getBookmark: vi.fn(() => bookmark),
+    prepare: vi.fn<D1SessionLike["prepare"]>(() => createStmt()),
+    getBookmark: vi.fn<D1SessionLike["getBookmark"]>(() => bookmark),
 });
 
 describe("d1Client", () => {
     test("withSession() forwards no bookmark when none is provided", () => {
+        expect.assertions(2);
+
         const session = createSession("bookmark-new");
         const db: D1DatabaseLike = {
-            withSession: vi.fn(() => session),
-            prepare: vi.fn(() => createStmt()),
+            withSession: vi.fn<D1DatabaseLike["withSession"]>(() => session),
+            prepare: vi.fn<D1DatabaseLike["prepare"]>(() => createStmt()),
         };
 
         const client = new D1Client(db);
@@ -36,10 +38,12 @@ describe("d1Client", () => {
     });
 
     test("withSession(bookmark) plumbs the incoming bookmark through", () => {
+        expect.assertions(2);
+
         const session = createSession("bookmark-2");
         const db: D1DatabaseLike = {
-            withSession: vi.fn(() => session),
-            prepare: vi.fn(() => createStmt()),
+            withSession: vi.fn<D1DatabaseLike["withSession"]>(() => session),
+            prepare: vi.fn<D1DatabaseLike["prepare"]>(() => createStmt()),
         };
 
         const client = new D1Client(db);
@@ -50,10 +54,12 @@ describe("d1Client", () => {
     });
 
     test("getBookmark returns undefined when D1 has not issued one", () => {
+        expect.assertions(1);
+
         const session = createSession(null);
         const db: D1DatabaseLike = {
-            withSession: vi.fn(() => session),
-            prepare: vi.fn(() => createStmt()),
+            withSession: vi.fn<D1DatabaseLike["withSession"]>(() => session),
+            prepare: vi.fn<D1DatabaseLike["prepare"]>(() => createStmt()),
         };
 
         const handle = new D1Client(db).withSession();
@@ -62,14 +68,16 @@ describe("d1Client", () => {
     });
 
     test("session.run binds positional args via prepare().bind().run()", async () => {
+        expect.assertions(3);
+
         const stmt = createStmt();
         const session: D1SessionLike = {
-            prepare: vi.fn(() => stmt),
+            prepare: vi.fn<D1SessionLike["prepare"]>(() => stmt),
             getBookmark: () => "bk",
         };
         const db: D1DatabaseLike = {
             withSession: () => session,
-            prepare: vi.fn(() => createStmt()),
+            prepare: vi.fn<D1DatabaseLike["prepare"]>(() => createStmt()),
         };
 
         const handle = new D1Client(db).withSession();
@@ -82,14 +90,16 @@ describe("d1Client", () => {
     });
 
     test("session.prepare caches by SQL: same query -> one underlying prepare", async () => {
+        expect.assertions(2);
+
         const stmt = createStmt();
         const session: D1SessionLike = {
-            prepare: vi.fn(() => stmt),
+            prepare: vi.fn<D1SessionLike["prepare"]>(() => stmt),
             getBookmark: () => null,
         };
         const db: D1DatabaseLike = {
             withSession: () => session,
-            prepare: vi.fn(() => createStmt()),
+            prepare: vi.fn<D1DatabaseLike["prepare"]>(() => createStmt()),
         };
 
         const handle = new D1Client(db).withSession();
@@ -103,11 +113,13 @@ describe("d1Client", () => {
     });
 
     test("session.prepare returns distinct entries for different SQL text", async () => {
+        expect.assertions(1);
+
         const stmtA = createStmt();
         const stmtB = createStmt();
         let call = 0;
         const session: D1SessionLike = {
-            prepare: vi.fn((_: string) => {
+            prepare: vi.fn<D1SessionLike["prepare"]>((_: string) => {
                 call += 1;
 
                 return call === 1 ? stmtA : stmtB;
@@ -116,7 +128,7 @@ describe("d1Client", () => {
         };
         const db: D1DatabaseLike = {
             withSession: () => session,
-            prepare: vi.fn(() => createStmt()),
+            prepare: vi.fn<D1DatabaseLike["prepare"]>(() => createStmt()),
         };
 
         const handle = new D1Client(db).withSession();
@@ -130,9 +142,11 @@ describe("d1Client", () => {
     });
 
     test("d1Client.prepare (non-session escape hatch) also caches by SQL", () => {
-        const dbPrepare = vi.fn(() => createStmt());
+        expect.assertions(2);
+
+        const dbPrepare = vi.fn<D1DatabaseLike["prepare"]>(() => createStmt());
         const db: D1DatabaseLike = {
-            withSession: vi.fn(() => createSession(null)),
+            withSession: vi.fn<D1DatabaseLike["withSession"]>(() => createSession(null)),
             prepare: dbPrepare,
         };
 

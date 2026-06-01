@@ -4,12 +4,16 @@ import { defineTable, v } from "../src/index.js";
 
 describe("defineTable().relations", () => {
     test("table without .relations exposes an empty relationMap", () => {
+        expect.assertions(1);
+
         const messages = defineTable({ body: v.string() });
 
         expect(messages.relationMap).toEqual({});
     });
 
     test("records one and many descriptors keyed by accessor name", () => {
+        expect.assertions(2);
+
         const messages = defineTable({ authorId: v.id("users"), body: v.string() }).relations((r) => ({
             author: r.one("users", { field: "authorId", onDelete: "cascade" }),
             reactions: r.many("reactions", { field: "messageId" }),
@@ -31,6 +35,8 @@ describe("defineTable().relations", () => {
     });
 
     test("references defaults to _id and is overridable", () => {
+        expect.assertions(1);
+
         const orders = defineTable({ customerSlug: v.string() }).relations((r) => ({
             customer: r.one("customers", { field: "customerSlug", references: "slug" }),
         }));
@@ -39,6 +45,8 @@ describe("defineTable().relations", () => {
     });
 
     test("one without onDelete leaves the action undefined", () => {
+        expect.assertions(1);
+
         const messages = defineTable({ authorId: v.id("users") }).relations((r) => ({
             author: r.one("users", { field: "authorId" }),
         }));
@@ -47,6 +55,8 @@ describe("defineTable().relations", () => {
     });
 
     test("supports self-referential relations", () => {
+        expect.assertions(2);
+
         const categories = defineTable({ parentId: v.id("categories") }).relations((r) => ({
             children: r.many("categories", { field: "parentId" }),
             parent: r.one("categories", { field: "parentId" }),
@@ -57,6 +67,8 @@ describe("defineTable().relations", () => {
     });
 
     test(".relations returns the same builder instance", () => {
+        expect.assertions(1);
+
         const builder = defineTable({ authorId: v.id("users") });
         const chained = builder.relations((r) => ({ author: r.one("users", { field: "authorId" }) }));
 
@@ -64,6 +76,8 @@ describe("defineTable().relations", () => {
     });
 
     test("chains alongside other builder methods", () => {
+        expect.assertions(2);
+
         const messages = defineTable({ authorId: v.id("users"), body: v.string() })
             .index("by_author", ["authorId"])
             .relations((r) => ({ author: r.one("users", { field: "authorId" }) }));

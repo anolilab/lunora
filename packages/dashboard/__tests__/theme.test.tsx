@@ -2,10 +2,11 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import { DashboardApp } from "../src/app.js";
-import { DASHBOARD_ROOT_CLASS, DashboardStyles } from "../src/theme.js";
+import { DashboardStyles } from "../src/theme.js";
+import { DASHBOARD_ROOT_CLASS } from "../src/theme-constants.js";
 
 describe("dashboard theme", () => {
-    test("DashboardApp applies the scoped root class and injects the stylesheet", () => {
+    test("dashboardApp applies the scoped root class and injects the stylesheet", () => {
         expect.assertions(2);
 
         render(<DashboardApp baseUrl="https://app.example" />);

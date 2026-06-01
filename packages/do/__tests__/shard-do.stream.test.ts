@@ -115,6 +115,8 @@ describe("shardDO streaming queries", () => {
     });
 
     test("drives an async generator into ack -> chunk frames -> complete", async () => {
+        expect.assertions(4);
+
         const shard = new StreamShard(state, {});
 
         shard.registered.set("metrics:tick", async function* tickGen(_args) {
@@ -139,6 +141,8 @@ describe("shardDO streaming queries", () => {
     });
 
     test("client unsubscribe mid-stream aborts the iterator and stops further chunks", async () => {
+        expect.assertions(3);
+
         const shard = new StreamShard(state, {});
         const yielded: number[] = [];
 
@@ -177,6 +181,8 @@ describe("shardDO streaming queries", () => {
     });
 
     test("returns NOT_FOUND error when the function isn't a registered stream", async () => {
+        expect.assertions(2);
+
         const shard = new StreamShard(state, {});
         const ws = createFakeWebSocket();
 
@@ -191,6 +197,8 @@ describe("shardDO streaming queries", () => {
     });
 
     test("admin-prefixed function path is rejected before lookup", async () => {
+        expect.assertions(2);
+
         const shard = new StreamShard(state, {});
         const ws = createFakeWebSocket();
 
@@ -204,6 +212,8 @@ describe("shardDO streaming queries", () => {
     });
 
     test("webSocketClose aborts in-flight streams bound to that socket", async () => {
+        expect.assertions(1);
+
         const shard = new StreamShard(state, {});
         let abortedSignal: AbortSignal | undefined;
 
@@ -234,6 +244,8 @@ describe("shardDO streaming queries", () => {
     });
 
     test("a handler that throws surfaces an event-shaped error frame with code + message", async () => {
+        expect.assertions(4);
+
         const shard = new StreamShard(state, {});
 
         shard.registered.set("metrics:boom", async function* boomGen() {
