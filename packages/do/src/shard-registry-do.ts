@@ -9,15 +9,15 @@
  *
  * `ShardRegistryDO` is the persistent source of truth. A worker:
  *
- *  - calls `POST /register {table, shardKey}` when a sharded table first
- *    sees a write on a new key (typically from `ctx.db.&lt;table>.insert` via
- *    the worker's onWrite hook, fired through `ctx.waitUntil` so the
- *    user-facing write doesn't pay the registry round-trip);
- *  - calls `POST /unregister {table, shardKey}` when a shard is decommissioned;
- *  - calls `GET /list?table=X` to materialise the fan-out target list. The
- *    client (`createDynamicShardRegistry` in `@cirrus/runtime`) caches the
- *    answer with a small TTL so a wide fan-out doesn't pay a registry
- *    round-trip on every call.
+ * - calls `POST /register {table, shardKey}` when a sharded table first
+ * sees a write on a new key (typically from `ctx.db.&lt;table>.insert` via
+ * the worker's onWrite hook, fired through `ctx.waitUntil` so the
+ * user-facing write doesn't pay the registry round-trip);
+ * - calls `POST /unregister {table, shardKey}` when a shard is decommissioned;
+ * - calls `GET /list?table=X` to materialise the fan-out target list. The
+ * client (`createDynamicShardRegistry` in `@cirrus/runtime`) caches the
+ * answer with a small TTL so a wide fan-out doesn't pay a registry
+ * round-trip on every call.
  *
  * Single-instance contract: deploy one DO instance per environment, by
  * convention named {@link SHARD_REGISTRY_DO_NAME}. The DO is small (just a
@@ -27,16 +27,16 @@
  *
  * Wire shape: HTTP only, never RPC.
  *
- *   POST /register   body: { table, shardKey }
- *   POST /unregister body: { table, shardKey }
- *   GET  /list?table=...
- *   GET  /snapshot                (debug: returns the full table → [keys] map)
+ * POST /register   body: { table, shardKey }
+ * POST /unregister body: { table, shardKey }
+ * GET  /list?table=...
+ * GET  /snapshot                (debug: returns the full table → [keys] map)
  *
  * Responses are JSON; the client shapes them. Keep the surface narrow.
  */
 
-/** Conventional DO instance name. Use as `namespace.idFromName(SHARD_REGISTRY_DO_NAME)`. */
-export const SHARD_REGISTRY_DO_NAME: string = "__cirrus_shard_registry__";
+/** Conventional DO instance name, passed to `idFromName` to address the single registry instance. */
+const SHARD_REGISTRY_DO_NAME: string = "__cirrus_shard_registry__";
 
 /** Single key under which the full `table → [keys]` snapshot is persisted. */
 const STORAGE_KEY = "__tables__";
@@ -103,7 +103,7 @@ const readTableShardBody = async (
  * required. The runtime's `createDynamicShardRegistry` takes the namespace
  * binding and the conventional instance name and produces a `ShardRegistry`.
  */
-export class ShardRegistryDO {
+class ShardRegistryDO {
     protected env: unknown;
 
     protected state: ShardRegistryDOState;
@@ -179,14 +179,14 @@ export class ShardRegistryDO {
         });
     }
 
-    private async handleList(url: URL): Promise<Response> {
+    private handleList(url: URL): Response {
         const table = url.searchParams.get("table");
 
         if (!table) {
             return jsonResponse(400, { error: { code: "BAD_REQUEST", message: "missing required query parameter: table" } });
         }
 
-        return jsonResponse(200, { shardKeys: [...this.tables.get(table) ?? []] });
+        return jsonResponse(200, { shardKeys: [...(this.tables.get(table) ?? [])] });
     }
 
     private async handleRegister(request: Request): Promise<Response> {
@@ -221,7 +221,7 @@ export class ShardRegistryDO {
         });
     }
 
-    private async handleSnapshot(): Promise<Response> {
+    private handleSnapshot(): Response {
         const out: PersistedTables = {};
 
         for (const [table, set] of this.tables) {
@@ -273,3 +273,5 @@ export class ShardRegistryDO {
         await this.state.storage.put(STORAGE_KEY, out);
     }
 }
+
+export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO };

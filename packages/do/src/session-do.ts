@@ -10,13 +10,13 @@
  *
  * Wire shape: HTTP only, never RPC. The auth package calls
  *
- *     await env.SESSION.get(env.SESSION.idFromName(prefix)).fetch(...)
+ * `await env.SESSION.get(env.SESSION.idFromName(prefix)).fetch(...)`
  *
  * with one of:
  *
- *   POST   /create   body: { token, userId, ttlSeconds }
- *   GET    /get      header: `x-cirrus-session-token: &lt;token>`
- *   DELETE /revoke   header: `x-cirrus-session-token: &lt;token>`
+ * POST   /create   body: { token, userId, ttlSeconds }
+ * GET    /get      header: `x-cirrus-session-token: &lt;token>`
+ * DELETE /revoke   header: `x-cirrus-session-token: &lt;token>`
  *
  * Every request must additionally carry an `x-cirrus-session-secret` header
  * whose value matches `env.SESSION_DO_SECRET`. The DO is reachable from any
@@ -37,10 +37,10 @@
  */
 
 /** Default TTL for new sessions (7 days), matching `@cirrus/auth`. */
-export const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;
+const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;
 
 /** Hard ceiling on the requested TTL — 90 days. Longer sessions should ride on top via refresh. */
-export const SESSION_DO_TTL_MAX: number = 90 * 24 * 60 * 60;
+const SESSION_DO_TTL_MAX: number = 90 * 24 * 60 * 60;
 
 /** Header used to authenticate the calling worker to the SessionDO. */
 const SESSION_SECRET_HEADER = "x-cirrus-session-do-secret";
@@ -59,7 +59,7 @@ const MAX_USER_ID_LENGTH = 256;
  * Persisted session payload. Stored under `s:${token}` so the token never
  * leaves the cookie — we only ever look up by exact match.
  */
-export interface SessionRecord {
+interface SessionRecord {
     createdAt: number;
     expiresAt: number;
     userId: string;
@@ -82,8 +82,8 @@ interface SessionDOState {
  * Worker declares; we only enumerate the ones this DO depends on.
  *
  * - `SESSION_DO_SECRET` — shared secret every caller must present in the
- *   `x-cirrus-session-do-secret` header. Provisioned via `wrangler secret`.
- *   When unset, every request is rejected with 401 (closed by default).
+ * `x-cirrus-session-do-secret` header. Provisioned via `wrangler secret`.
+ * When unset, every request is rejected with 401 (closed by default).
  */
 interface SessionDOEnv {
     SESSION_DO_SECRET?: string;
@@ -103,13 +103,17 @@ const jsonResponse = (status: number, body: unknown): Response =>
  */
 const constantTimeEqual = (a: string, b: string): boolean => {
     const max = Math.max(a.length, b.length);
+    // eslint-disable-next-line no-bitwise -- constant-time compare folds length + every code-unit delta into one accumulator
     let diff = a.length ^ b.length;
 
     for (let index = 0; index < max; index += 1) {
-        const ca = index < a.length ? a.charCodeAt(index) : 0;
-        const callback = index < b.length ? b.charCodeAt(index) : 0;
+        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
+        const charA = index < a.length ? a.charCodeAt(index) : 0;
+        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
+        const charB = index < b.length ? b.charCodeAt(index) : 0;
 
-        diff |= ca ^ callback;
+        // eslint-disable-next-line no-bitwise -- accumulate per-code-unit difference without branching to keep the compare constant-time
+        diff |= charA ^ charB;
     }
 
     return diff === 0;
@@ -131,17 +135,41 @@ const isAuthorized = (request: Request, env: SessionDOEnv): boolean => {
     return constantTimeEqual(expected, supplied);
 };
 
-const validateToken = (value: unknown): null | string => {
+/**
+ * Resolve the requested TTL. A missing/`null` field accepts the default; a
+ * number must sit in the legal window. Any other shape — or an out-of-range
+ * number — yields `undefined` so the caller rejects it (no silent default for
+ * malformed input like strings or negatives).
+ */
+const resolveTtlSeconds = (raw: unknown): number | undefined => {
+    let ttlSeconds: number;
+
+    if (raw === undefined || raw === null) {
+        ttlSeconds = SESSION_DO_TTL_DEFAULT;
+    } else if (typeof raw === "number") {
+        ttlSeconds = raw;
+    } else {
+        return undefined;
+    }
+
+    if (!Number.isFinite(ttlSeconds) || !Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > SESSION_DO_TTL_MAX) {
+        return undefined;
+    }
+
+    return ttlSeconds;
+};
+
+const validateToken = (value: unknown): string | undefined => {
     if (typeof value !== "string") {
-        return null;
+        return undefined;
     }
 
     if (value.length < MIN_TOKEN_LENGTH || value.length > MAX_TOKEN_LENGTH) {
-        return null;
+        return undefined;
     }
 
     if (!SESSION_TOKEN_PATTERN.test(value)) {
-        return null;
+        return undefined;
     }
 
     return value;
@@ -151,15 +179,15 @@ const validateToken = (value: unknown): null | string => {
  * Concrete (not abstract) DO class. Subclass and register the subclass as
  * the `SESSION` binding in `wrangler.jsonc`:
  *
- *     import { SessionDO } from "@cirrus/do";
+ * `import { SessionDO } from "@cirrus/do";`
  *
- *     export class AppSessionDO extends SessionDO {}
+ * `export class AppSessionDO extends SessionDO {}`
  *
  * The platform DO binding requires a concrete class today, hence the
  * subclass step. The structural state/env shapes are preserved so unit
  * tests can pass plain-object doubles without depending on `cloudflare:workers`.
  */
-export class SessionDO {
+class SessionDO {
     protected state: SessionDOState;
 
     protected env: unknown;
@@ -179,87 +207,90 @@ export class SessionDO {
         const url = new URL(request.url);
 
         if (request.method === "POST" && url.pathname === "/create") {
-            let body: { token?: unknown; ttlSeconds?: unknown; userId?: unknown };
-
-            try {
-                body = await request.json();
-            } catch {
-                return jsonResponse(400, { error: "invalid_request" });
-            }
-
-            const token = validateToken(body.token);
-
-            if (token === null) {
-                return jsonResponse(400, { error: "invalid_request" });
-            }
-
-            const { userId } = body;
-
-            if (typeof userId !== "string" || userId.length === 0 || userId.length > MAX_USER_ID_LENGTH) {
-                return jsonResponse(400, { error: "invalid_request" });
-            }
-
-            // Default the TTL when unset, then validate the (defaulted) value
-            // sits in the legal window. A `null`/missing field accepts the
-            // default; any other shape is a hard error so callers can't pass
-            // strings or negative numbers and silently get the default.
-            let ttlSeconds: number;
-
-            if (body.ttlSeconds === undefined || body.ttlSeconds === null) {
-                ttlSeconds = SESSION_DO_TTL_DEFAULT;
-            } else if (typeof body.ttlSeconds === "number") {
-                ttlSeconds = body.ttlSeconds;
-            } else {
-                return jsonResponse(400, { error: "invalid_request" });
-            }
-
-            if (!Number.isFinite(ttlSeconds) || !Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > SESSION_DO_TTL_MAX) {
-                return jsonResponse(400, { error: "invalid_request" });
-            }
-
-            const now = Date.now();
-            const record: SessionRecord = { createdAt: now, expiresAt: now + ttlSeconds * 1000, userId };
-
-            await this.state.storage.put(`s:${token}`, record);
-
-            return jsonResponse(201, { token, ...record });
+            return this.handleCreate(request);
         }
 
         if (request.method === "GET" && url.pathname === "/get") {
-            const token = request.headers.get(SESSION_TOKEN_HEADER);
-
-            if (!token) {
-                return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });
-            }
-
-            const record = await this.state.storage.get<SessionRecord>(`s:${token}`);
-
-            if (!record) {
-                return jsonResponse(404, { error: { code: "NOT_FOUND", message: "session not found" } });
-            }
-
-            // Expire lazily on read so we don't need an alarm just to GC.
-            if (record.expiresAt < Date.now()) {
-                await this.state.storage.delete(`s:${token}`);
-
-                return jsonResponse(404, { error: { code: "EXPIRED", message: "session expired" } });
-            }
-
-            return jsonResponse(200, { token, ...record });
+            return this.handleGet(request);
         }
 
         if (request.method === "DELETE" && url.pathname === "/revoke") {
-            const token = request.headers.get(SESSION_TOKEN_HEADER);
-
-            if (!token) {
-                return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });
-            }
-
-            await this.state.storage.delete(`s:${token}`);
-
-            return jsonResponse(200, { ok: true });
+            return this.handleRevoke(request);
         }
 
         return jsonResponse(404, { error: { code: "NOT_FOUND", message: "no such session route" } });
     }
+
+    private async handleCreate(request: Request): Promise<Response> {
+        let body: { token?: unknown; ttlSeconds?: unknown; userId?: unknown };
+
+        try {
+            body = await request.json();
+        } catch {
+            return jsonResponse(400, { error: "invalid_request" });
+        }
+
+        const token = validateToken(body.token);
+
+        if (token === undefined) {
+            return jsonResponse(400, { error: "invalid_request" });
+        }
+
+        const { userId } = body;
+
+        if (typeof userId !== "string" || userId.length === 0 || userId.length > MAX_USER_ID_LENGTH) {
+            return jsonResponse(400, { error: "invalid_request" });
+        }
+
+        const ttlSeconds = resolveTtlSeconds(body.ttlSeconds);
+
+        if (ttlSeconds === undefined) {
+            return jsonResponse(400, { error: "invalid_request" });
+        }
+
+        const now = Date.now();
+        const record: SessionRecord = { createdAt: now, expiresAt: now + ttlSeconds * 1000, userId };
+
+        await this.state.storage.put(`s:${token}`, record);
+
+        return jsonResponse(201, { token, ...record });
+    }
+
+    private async handleGet(request: Request): Promise<Response> {
+        const token = request.headers.get(SESSION_TOKEN_HEADER);
+
+        if (!token) {
+            return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });
+        }
+
+        const record = await this.state.storage.get<SessionRecord>(`s:${token}`);
+
+        if (!record) {
+            return jsonResponse(404, { error: { code: "NOT_FOUND", message: "session not found" } });
+        }
+
+        // Expire lazily on read so we don't need an alarm just to GC.
+        if (record.expiresAt < Date.now()) {
+            await this.state.storage.delete(`s:${token}`);
+
+            return jsonResponse(404, { error: { code: "EXPIRED", message: "session expired" } });
+        }
+
+        return jsonResponse(200, { token, ...record });
+    }
+
+    private async handleRevoke(request: Request): Promise<Response> {
+        const token = request.headers.get(SESSION_TOKEN_HEADER);
+
+        if (!token) {
+            return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });
+        }
+
+        await this.state.storage.delete(`s:${token}`);
+
+        return jsonResponse(200, { ok: true });
+    }
 }
+
+export { SESSION_DO_TTL_DEFAULT, SESSION_DO_TTL_MAX, SessionDO };
+export type { SessionRecord };

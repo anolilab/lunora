@@ -1,12 +1,12 @@
 /** Severity of a buffered log entry, mirroring the usual console levels. */
-export type LogLevel = "debug" | "error" | "info" | "warn";
+type LogLevel = "debug" | "error" | "info" | "warn";
 
 /**
  * One buffered log line. `functionPath` is the RPC that produced it (when the
  * entry came from the RPC dispatch site); `timestamp` is `Date.now()` at the
  * moment it was pushed.
  */
-export interface LogEntry {
+interface LogEntry {
     functionPath?: string;
     level: LogLevel;
     message: string;
@@ -25,7 +25,7 @@ const DEFAULT_CAPACITY = 500;
  * feature. Capacity is fixed at construction; once full, the oldest entry is
  * evicted to make room (FIFO), so memory stays bounded regardless of traffic.
  */
-export class LogBuffer {
+class LogBuffer {
     /** Backing store, kept in insertion order (oldest first). */
     private readonly buffer: LogEntry[] = [];
 
@@ -67,3 +67,6 @@ export class LogBuffer {
         }
     }
 }
+
+export { LogBuffer };
+export type { LogEntry, LogLevel };

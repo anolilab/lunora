@@ -12,35 +12,34 @@
  *
  * Coupling seam (load-bearing — read this before changing):
  *
- *   The §3.2 RLS agent will introduce an "RLS-aware ctx" that exposes a
- *   `baseWhere` for the table being queried plus a `restrictsCounts`
- *   predicate. To compose cleanly without a dep cycle the aggregate readers
- *   (and the typed facade emitted by codegen) accept a
- *   {@link RestrictableQueryOptions} arg whose `baseWhere` is AND-merged into
- *   the predicate before the indexed/scan decision, and whose
- *   `restrictsCounts: true` flag flips `count()` into a thrown
- *   `COUNT_RLS_UNSUPPORTED` `CirrusError`.
+ * The §3.2 RLS agent will introduce an "RLS-aware ctx" that exposes a
+ * `baseWhere` for the table being queried plus a `restrictsCounts`
+ * predicate. To compose cleanly without a dep cycle the aggregate readers
+ * (and the typed facade emitted by codegen) accept a `RestrictableQueryOptions`
+ * arg whose `baseWhere` is AND-merged into the predicate before the
+ * indexed/scan decision, and whose `restrictsCounts: true` flag flips
+ * `count()` into a thrown `COUNT_RLS_UNSUPPORTED` `CirrusError`.
  *
- *   This is a seam, not an implementation. The aggregates module owns the
- *   types and the merge/throw; the RLS module owns the policy logic.
+ * This is a seam, not an implementation. The aggregates module owns the
+ * types and the merge/throw; the RLS module owns the policy logic.
  *
  * Auto-backfill: a counter table is **lazily** populated on the first read
  * that targets an empty counter, by scanning the source table once. Cheap and
  * correct for dev/test; production backfills can also be triggered up-front
- * via {@link backfillAggregateIndexes} from a one-shot in `runShardMigrations`.
+ * via `backfillAggregateIndexes` from a one-shot in `runShardMigrations`.
  */
 
 import type { WhereInput } from "./where-clause-compiler.js";
 
 /** Reducer applied by an aggregate index. */
-export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
+type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
 
 /**
  * Structural mirror of `@cirrus/server`'s `AggregateIndexDefinition` — kept
  * local so this package doesn't depend on `@cirrus/server` (which would create
  * a cycle).
  */
-export interface AggregateIndexDefinitionLike {
+interface AggregateIndexDefinitionLike {
     readonly by?: ReadonlyArray<string>;
     readonly field?: string;
     readonly name: string;
@@ -59,36 +58,36 @@ export interface AggregateIndexDefinitionLike {
  *
  * - `where` — the user's filter predicate.
  * - `baseWhere` — a predicate injected by an RLS-aware ctx, AND-merged into
- *   `where` before index planning.
+ * `where` before index planning.
  * - `restrictsCounts` — when `true`, `count()` throws `COUNT_RLS_UNSUPPORTED`
- *   instead of returning a potentially undercounted result. `aggregate` /
- *   `groupBy` are unaffected because they are explicitly scoped to `where`.
+ * instead of returning a potentially undercounted result. `aggregate` /
+ * `groupBy` are unaffected because they are explicitly scoped to `where`.
  */
-export interface RestrictableQueryOptions {
+interface RestrictableQueryOptions {
     baseWhere?: WhereInput;
     restrictsCounts?: boolean;
     where?: WhereInput;
 }
 
-/** Args for {@link DatabaseWriterLike.aggregate}. */
-export interface AggregateOptions extends RestrictableQueryOptions {
+/** Args for `DatabaseWriterLike.aggregate`. */
+interface AggregateOptions extends RestrictableQueryOptions {
     /** The column the reducer applies to (ignored for `count`). */
     field?: string;
     op: AggregateOp;
 }
 
-/** Args for {@link DatabaseWriterLike.groupBy}. */
-export interface GroupByOptions extends RestrictableQueryOptions {
+/** Args for `DatabaseWriterLike.groupBy`. */
+interface GroupByOptions extends RestrictableQueryOptions {
     /** Reducer applied per group; defaults to `count` to mirror SQL `GROUP BY`. */
     agg?: { field?: string; op: AggregateOp };
     by: ReadonlyArray<string>;
 }
 
 /** Result of `aggregate` — the scalar reduction, or `null` when no rows matched. */
-export type AggregateResult = null | number;
+type AggregateResult = null | number;
 
 /** Result of `groupBy` — one entry per distinct group tuple. */
-export interface GroupByEntry {
+interface GroupByEntry {
     key: Record<string, unknown>;
     value: AggregateResult;
 }
@@ -98,10 +97,10 @@ export interface GroupByEntry {
  * (`name: "CirrusError"`, `code`, `status`) lets the runtime's error mapper
  * route it without an `instanceof` check, so `@cirrus/do` stays free of a
  * runtime dependency on `@cirrus/server`. Status mirrors the
- * `COUNT_RLS_UNSUPPORTED` entry in the {@link CirrusErrorCode} taxonomy (422):
+ * `COUNT_RLS_UNSUPPORTED` entry in the `CirrusErrorCode` taxonomy (422):
  * the operation is invalid in this context, not malformed.
  */
-export class CountRlsUnsupportedError extends Error {
+class CountRlsUnsupportedError extends Error {
     public readonly code: string = "COUNT_RLS_UNSUPPORTED";
 
     public override readonly name = "CirrusError";
@@ -121,7 +120,7 @@ export class CountRlsUnsupportedError extends Error {
  * AND-merge two `where` trees. Returns `undefined` when both inputs are absent
  * so the caller doesn't pay the cost of a no-op predicate.
  */
-export const mergeWhere = (left: undefined | WhereInput, right: undefined | WhereInput): undefined | WhereInput => {
+const mergeWhere = (left: undefined | WhereInput, right: undefined | WhereInput): undefined | WhereInput => {
     if (!left) {
         return right;
     }
@@ -133,6 +132,93 @@ export const mergeWhere = (left: undefined | WhereInput, right: undefined | Wher
     return { AND: [left, right] };
 };
 
+const BOOLEAN_COMBINATORS = new Set(["AND", "NOT", "OR"]);
+
+/** Sentinel: a `where` value that the indexed path can't route (range/in/non-`eq`). */
+const NOT_EQ = Symbol("not-eq");
+
+/**
+ * Reduce a single `where` value to its literal equality target, or the
+ * `NOT_EQ` sentinel when it carries a non-`eq` operator (range/`in`/etc) that
+ * the indexed path can't satisfy. A bare literal is its own equality target.
+ */
+const resolveEqValue = (value: unknown): unknown => {
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+        const operatorKeys = Object.keys(value);
+
+        if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
+            return (value as { eq: unknown }).eq;
+        }
+
+        return NOT_EQ;
+    }
+
+    return value;
+};
+
+/**
+ * Reduce a request's `where` keys to their literal equality values, keeping
+ * only keys that pass `accept`. Returns `undefined` when the request carries a
+ * boolean combinator, an unaccepted key, or a non-`eq` operator (all of which
+ * are scan-only). Each accepted key maps to its resolved literal.
+ */
+const parseRequestedEqKeys = (requested: Record<string, unknown>, accept: (key: string) => boolean): Record<string, unknown> | undefined => {
+    const resolved: Record<string, unknown> = {};
+
+    for (const [key, raw] of Object.entries(requested)) {
+        if (BOOLEAN_COMBINATORS.has(key) || !accept(key)) {
+            return undefined;
+        }
+
+        const value = resolveEqValue(raw);
+
+        if (value === NOT_EQ) {
+            return undefined;
+        }
+
+        resolved[key] = value;
+    }
+
+    return resolved;
+};
+
+/**
+ * Fold an index's static `where` into the already-resolved key map. Returns a
+ * fresh merged map, or `undefined` when a static value conflicts with one the
+ * request pinned. A static key the request never mentioned is carried forward
+ * (every counter row was inserted under that static value, so the lookup is
+ * exact). When `crossCheckRequested` is set, a static key absent from
+ * `resolved` is also reconciled against the raw request before being carried.
+ */
+const reconcileStaticWhere = (
+    staticWhere: Record<string, unknown> | undefined,
+    resolved: Record<string, unknown>,
+    requested: Record<string, unknown>,
+    crossCheckRequested: boolean,
+): Record<string, unknown> | undefined => {
+    const merged: Record<string, unknown> = { ...resolved };
+
+    if (!staticWhere) {
+        return merged;
+    }
+
+    for (const [key, value] of Object.entries(staticWhere)) {
+        if (key in merged) {
+            if (merged[key] !== value) {
+                return undefined;
+            }
+        } else if (crossCheckRequested && key in requested) {
+            if (requested[key] !== value) {
+                return undefined;
+            }
+        } else {
+            merged[key] = value;
+        }
+    }
+
+    return merged;
+};
+
 /**
  * Whether the requested `where` is answerable from `index`. The reader can
  * route to the counter only when every `where` key participates in the index's
@@ -142,134 +228,49 @@ export const mergeWhere = (left: undefined | WhereInput, right: undefined | Wher
  *
  * Returns the resolved `by`-key values when a hit is possible, else `undefined`.
  */
-export const planAggregateLookup = (
+const planAggregateLookup = (
     index: AggregateIndexDefinitionLike,
     requestedWhere: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined => {
     const by = index.by ?? [];
     const requested = requestedWhere ?? {};
 
-    // The request must not carry boolean combinators — the indexed path only
-    // handles conjunctions of equality on the by-keys.
-    for (const key of Object.keys(requested)) {
-        if (key === "AND" || key === "OR" || key === "NOT") {
-            return undefined;
-        }
+    // The indexed path only handles conjunctions of equality on the by-keys.
+    const resolved = parseRequestedEqKeys(requested, (key) => by.includes(key));
+
+    if (resolved === undefined) {
+        return undefined;
     }
 
-    // Every key in the request must participate in `by`.
-    for (const key of Object.keys(requested)) {
-        if (!by.includes(key)) {
-            return undefined;
-        }
-    }
-
-    const resolved: Record<string, unknown> = {};
-
+    // Every by-key must be pinned — the counter is partitioned by all of them.
     for (const key of by) {
-        if (!(key in requested)) {
-            // Missing by-key — the index can't answer because the counter is
-            // partitioned by it.
+        if (!(key in resolved)) {
             return undefined;
-        }
-
-        const value = requested[key];
-
-        // Only literal/`eq` comparators are routable.
-        if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-            const operatorKeys = Object.keys(value);
-
-            if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
-                resolved[key] = (value as { eq: unknown }).eq;
-
-                continue;
-            }
-
-            return undefined;
-        }
-
-        resolved[key] = value;
-    }
-
-    // Static `where` on the index must agree with the request when present.
-    if (index.where) {
-        for (const [key, value] of Object.entries(index.where)) {
-            if (key in resolved) {
-                if (resolved[key] !== value) {
-                    return undefined;
-                }
-            } else if (key in requested) {
-                if (requested[key] !== value) {
-                    return undefined;
-                }
-            } else {
-                // The request didn't mention this static key — the index still
-                // covers it implicitly because every counter row was inserted
-                // under `where`. Carry the value forward so the counter lookup
-                // is exact.
-                resolved[key] = value;
-            }
         }
     }
 
-    return resolved;
+    return reconcileStaticWhere(index.where, resolved, requested, true);
 };
 
 /**
  * Derive the constrained key fragment for a groupBy indexed path. Returns
  * `undefined` when the request is non-routable (boolean combinators,
  * extra-field where, non-`eq` operators, static-where conflict). Unlike
- * {@link planAggregateLookup}, an unfiltered request is OK — the result is
- * an empty partial that the caller turns into a "walk the whole companion"
- * scan.
+ * `planAggregateLookup`, an unfiltered request is OK — the result is an empty
+ * partial that the caller turns into a "walk the whole companion" scan.
  */
 const collectPartialKey = (
     index: AggregateIndexDefinitionLike,
     requestedWhere: Record<string, unknown> | undefined,
     byFields: ReadonlySet<string>,
 ): Record<string, unknown> | undefined => {
-    const requested = requestedWhere ?? {};
-    const partial: Record<string, unknown> = {};
+    const partial = parseRequestedEqKeys(requestedWhere ?? {}, (key) => byFields.has(key));
 
-    for (const [key, raw] of Object.entries(requested)) {
-        if (key === "AND" || key === "OR" || key === "NOT") {
-            return undefined;
-        }
-
-        if (!byFields.has(key)) {
-            return undefined;
-        }
-
-        if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
-            const operatorKeys = Object.keys(raw);
-
-            if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
-                partial[key] = (raw as { eq: unknown }).eq;
-
-                continue;
-            }
-
-            return undefined;
-        }
-
-        partial[key] = raw;
+    if (partial === undefined) {
+        return undefined;
     }
 
-    // Static where: must agree with request when both mention a key; extra
-    // static keys are carried into `partial` as implicit constraints.
-    if (index.where) {
-        for (const [key, value] of Object.entries(index.where)) {
-            if (key in partial) {
-                if (partial[key] !== value) {
-                    return undefined;
-                }
-            } else {
-                partial[key] = value;
-            }
-        }
-    }
-
-    return partial;
+    return reconcileStaticWhere(index.where, partial, {}, false);
 };
 
 /** Internal: shared by `selectIndexForCount` and `selectIndexForAggregate`. */
@@ -312,7 +313,7 @@ const selectIndexForReducer = (
  * `(userId, status)` beats equality on `(userId)` for a request that filters
  * both.
  */
-export const selectIndexForCount = (
+const selectIndexForCount = (
     indexes: ReadonlyArray<AggregateIndexDefinitionLike>,
     requestedWhere: Record<string, unknown> | undefined,
 ): undefined | { index: AggregateIndexDefinitionLike; key: Record<string, unknown> } => selectIndexForReducer(indexes, "count", undefined, requestedWhere);
@@ -323,7 +324,7 @@ export const selectIndexForCount = (
  * request — `aggregate({ op: "sum", field: "seq" })` needs an
  * `aggregateIndex({ op: "sum", field: "seq" })`. Same `by`-prefer-wider tiebreak.
  */
-export const selectIndexForAggregate = (
+const selectIndexForAggregate = (
     indexes: ReadonlyArray<AggregateIndexDefinitionLike>,
     op: AggregateOp,
     field: string,
@@ -336,15 +337,15 @@ export const selectIndexForAggregate = (
  * the whole companion table answers `groupBy()` in one pass — no SQL
  * `GROUP BY` needed. The match additionally requires:
  *
- *  - `op` (and `field`, when not `count`) agree with the request,
- *  - the requested `where` keys are a subset of `by` (we filter the
- *    companion by `__key__`); arbitrary predicates fall back to scan,
- *  - the index's static `where` (if any) is satisfied by the request.
+ * - `op` (and `field`, when not `count`) agree with the request,
+ * - the requested `where` keys are a subset of `by` (we filter the
+ * companion by `__key__`); arbitrary predicates fall back to scan,
+ * - the index's static `where` (if any) is satisfied by the request.
  *
  * Returns the index and the partial key the request constrains (may be
  * empty for an unfiltered groupBy — meaning "read every counter row").
  */
-export const selectIndexForGroupBy = (
+const selectIndexForGroupBy = (
     indexes: ReadonlyArray<AggregateIndexDefinitionLike>,
     op: AggregateOp,
     field: string | undefined,
@@ -383,3 +384,6 @@ export const selectIndexForGroupBy = (
 
     return undefined;
 };
+
+export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy };
+export type { AggregateIndexDefinitionLike, AggregateOp, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions };

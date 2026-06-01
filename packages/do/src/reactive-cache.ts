@@ -11,34 +11,34 @@
  *
  * Lifetime + storage model:
  *
- *   - In-memory `Map&lt;key, CacheEntry>`. Insertion-order is the LRU order; we
- *     delete and re-set an entry on every read so the freshest one sits at
- *     the tail of the map. No timers — eviction runs purely on the
- *     set/delete paths.
+ * - In-memory `Map&lt;key, CacheEntry>`. Insertion-order is the LRU order; we
+ * delete and re-set an entry on every read so the freshest one sits at
+ * the tail of the map. No timers — eviction runs purely on the
+ * set/delete paths.
  *
- *   - Per-shard, so a fresh DO always cold-starts on the first call. That's
- *     deliberate: the cost of recomputing a query on a fresh shard is one
- *     handler run; the cost of any persistence layer would dwarf the
- *     savings. (Durable Object hibernation drops in-memory state anyway.)
+ * - Per-shard, so a fresh DO always cold-starts on the first call. That's
+ * deliberate: the cost of recomputing a query on a fresh shard is one
+ * handler run; the cost of any persistence layer would dwarf the
+ * savings. (Durable Object hibernation drops in-memory state anyway.)
  *
- *   - Two indexes: the main `entries` map (key -> entry) and `tableIndex`
- *     (`table:id` -> Set&lt;key>) so {@link ReactiveCache.invalidate} is O(deps)
- *     instead of O(entries).
+ * - Two indexes: the main `entries` map (key -> entry) and `tableIndex`
+ * (`table:id` -> Set&lt;key>) so `ReactiveCache.invalidate` is O(deps)
+ * instead of O(entries).
  *
  * Eviction:
  *
- *   - `maxEntries` (default 1000) bounds the total slot count.
- *   - `maxBytes` (default 4 MB) bounds the cumulative `bytes` field across
- *     entries. We approximate `bytes` as `JSON.stringify(result).length` —
- *     accurate enough for sizing decisions, cheap enough to run on every
- *     insert.
+ * - `maxEntries` (default 1000) bounds the total slot count.
+ * - `maxBytes` (default 4 MB) bounds the cumulative `bytes` field across
+ * entries. We approximate `bytes` as `JSON.stringify(result).length` —
+ * accurate enough for sizing decisions, cheap enough to run on every
+ * insert.
  *
- *   When either limit is breached we evict from the head of the map (oldest
- *   `lastUsed`) until both limits hold again. A `subscribers.size > 0` entry
- *   is NEVER evicted — pulling an actively-watched key would force a re-run
- *   storm on the next mutation. If every remaining entry has subscribers we
- *   stop evicting (the cache will run over its target until a subscriber
- *   detaches; better than thrashing).
+ * When either limit is breached we evict from the head of the map (oldest
+ * `lastUsed`) until both limits hold again. A `subscribers.size > 0` entry
+ * is NEVER evicted — pulling an actively-watched key would force a re-run
+ * storm on the next mutation. If every remaining entry has subscribers we
+ * stop evicting (the cache will run over its target until a subscriber
+ * detaches; better than thrashing).
  *
  * The class is intentionally framework-agnostic — it does not know about
  * `SqlExec`, `ShardDO`, or the WS layer. Tests cover it standalone, and the
@@ -48,8 +48,17 @@
 
 import { depKey, SCAN_DEP } from "./dependency-tracker.js";
 
+/** Code-point-stable key comparator (no locale dependence) for deterministic JSON encoding. */
+const compareKeys = (a: string, b: string): number => {
+    if (a < b) {
+        return -1;
+    }
+
+    return a > b ? 1 : 0;
+};
+
 /** A single memoized result, the deps it read, and any active subscribers. */
-export interface CacheEntry {
+interface CacheEntry {
     /** Approximate serialized size of `result`, charged against `maxBytes`. */
     bytes: number;
     /** Dep keys (`table:id` / `table:*scan`) that invalidate this entry. */
@@ -62,7 +71,7 @@ export interface CacheEntry {
     subscribers: Set<string>;
 }
 
-export interface ReactiveCacheOptions {
+interface ReactiveCacheOptions {
     /**
      * Maximum cumulative `bytes` charge across entries. Default `4 * 1024 * 1024`
      * (4 MiB). Use `Number.POSITIVE_INFINITY` to disable the byte cap.
@@ -109,7 +118,7 @@ const estimateBytes = (value: unknown): number => {
     }
 };
 
-export class ReactiveCache {
+class ReactiveCache {
     /** key -> entry. Map insertion order doubles as LRU order. */
     private readonly entries = new Map<string, CacheEntry>();
 
@@ -119,10 +128,10 @@ export class ReactiveCache {
     /** Cumulative byte charge across `entries`. Tracked incrementally. */
     private totalBytes = 0;
 
-    /** Lifetime cache-hit count, surfaced via {@link stats}. */
+    /** Lifetime cache-hit count, surfaced via `stats()`. */
     private hits = 0;
 
-    /** Lifetime cache-miss count (callback ran), surfaced via {@link stats}. */
+    /** Lifetime cache-miss count (callback ran), surfaced via `stats()`. */
     private misses = 0;
 
     /** Lifetime count of entries dropped by the LRU evictor. */
@@ -156,7 +165,7 @@ export class ReactiveCache {
      * Return the cached result for `key` if present (and re-stamp it as
      * most-recently-used); otherwise run the callback, store the result with
      * `deps` as its invalidation footprint, and return it. The caller is
-     * responsible for collecting `deps` via a {@link DependencyTracker} during
+     * responsible for collecting `deps` via a `DependencyTracker` during
      * the callback and handing the same set in here — the cache stores the
      * reference verbatim, so the caller MUST stop mutating it after this
      * call returns.
@@ -300,6 +309,20 @@ export class ReactiveCache {
         return [...entry.subscribers];
     }
 
+    /**
+     * Snapshot of lifetime cache counters plus the current live size. Drives the
+     * dashboard's metrics panel; cheap, allocation-light, and side-effect-free.
+     */
+    public stats(): { bytes: number; entries: number; evictions: number; hits: number; misses: number } {
+        return {
+            bytes: this.totalBytes,
+            entries: this.entries.size,
+            evictions: this.evictions,
+            hits: this.hits,
+            misses: this.misses,
+        };
+    }
+
     /** Pull `dep`'s bucket from the index and remove every entry in it. */
     private collectAndDrop(dep: string, removed: string[]): void {
         const bucket = this.tableIndex.get(dep);
@@ -364,20 +387,6 @@ export class ReactiveCache {
             this.evictions += 1;
         }
     }
-
-    /**
-     * Snapshot of lifetime cache counters plus the current live size. Drives the
-     * dashboard's metrics panel; cheap, allocation-light, and side-effect-free.
-     */
-    public stats(): { bytes: number; entries: number; evictions: number; hits: number; misses: number } {
-        return {
-            bytes: this.totalBytes,
-            entries: this.entries.size,
-            evictions: this.evictions,
-            hits: this.hits,
-            misses: this.misses,
-        };
-    }
 }
 
 /**
@@ -389,7 +398,7 @@ export class ReactiveCache {
  * avoids spurious cache misses on optional args. Inside arrays `undefined`
  * encodes as `null` to keep positional semantics.
  */
-export const stableStringify = (value: unknown): string => {
+const stableStringify = (value: unknown): string => {
     // Top-level / inside-array encoding. `JSON.stringify(undefined)` returns
     // the literal `undefined`, so we coerce to `null` to preserve array
     // positions when callers drop us into an array context.
@@ -406,7 +415,7 @@ export const stableStringify = (value: unknown): string => {
     }
 
     const record = value as Record<string, unknown>;
-    const keys = Object.keys(record).toSorted((a, b) => a < b ? -1 : a > b ? 1 : 0);
+    const keys = Object.keys(record).toSorted(compareKeys);
     const parts: string[] = [];
 
     for (const key of keys) {
@@ -434,5 +443,8 @@ export const stableStringify = (value: unknown): string => {
  * the first caller's result under an identity-independent key and serve it to
  * everyone. Anonymous/subscription callers pass `null` (their own bucket).
  */
-export const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>, identity: null | string): string =>
+const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>, identity: null | string): string =>
     `${identity ?? " anon"} ${functionPath}:${stableStringify(args)}`;
+
+export { ReactiveCache, reactiveCacheKey, stableStringify };
+export type { CacheEntry, ReactiveCacheOptions };

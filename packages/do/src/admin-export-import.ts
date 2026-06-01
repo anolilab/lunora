@@ -2,7 +2,7 @@
  * Per-shard admin bulk export/import helpers.
  *
  * The `convex import`/`convex export` analog. The runtime fans calls out per
- * shard via {@link orchestrateExport}/{@link orchestrateImport}; each shard runs
+ * shard via `orchestrateExport`/`orchestrateImport`; each shard runs
  * the helpers below against its own SQLite handle. NDJSON is emitted as a
  * `{table,doc}` row per line — no enveloping array — so the worker can stream
  * the response without buffering the whole snapshot in memory.
@@ -14,7 +14,7 @@
 import type { DatabaseWriterLike, SchemaLike } from "./ctx-db.js";
 
 /** One NDJSON line: a row from `table` shaped per its schema. */
-export interface ExportRow {
+interface ExportRow {
     doc: Record<string, unknown>;
     table: string;
 }
@@ -24,14 +24,14 @@ export interface ExportRow {
  * 1-based and refers to the row's position in the inbound stream the shard
  * received — handy when correlating bulk-import failures with the source file.
  */
-export interface ImportError {
+interface ImportError {
     code: string;
     line: number;
     message: string;
     table: string;
 }
 
-export interface ExportShardArgs {
+interface ExportShardArgs {
     /**
      * Per-table batch size when scanning. Defaults to 200 — keeps individual
      * SQLite `SELECT`s small enough that a stream cancellation surfaces
@@ -46,14 +46,14 @@ export interface ExportShardArgs {
     tables?: ReadonlyArray<string>;
 }
 
-export interface ImportShardArgs {
+interface ImportShardArgs {
     /** Inbound NDJSON rows. Order is preserved on disk. */
     rows: ReadonlyArray<ExportRow>;
     /** Starting line number (1-based) for error attribution. Defaults to 1. */
     startLine?: number;
 }
 
-export interface ImportShardResult {
+interface ImportShardResult {
     /** Skipped rows whose `_id` conflicted with an existing document. */
     conflicts: number;
     errors: ImportError[];
@@ -68,7 +68,7 @@ const DEFAULT_BATCH_SIZE = 200;
  * should be exported. `.global()` tables are excluded; an explicit allowlist
  * narrows further. Order: schema-declaration order, then allowlist order.
  */
-export const selectExportTables = (schema: SchemaLike, requested?: ReadonlyArray<string>): string[] => {
+const selectExportTables = (schema: SchemaLike, requested?: ReadonlyArray<string>): string[] => {
     const isShardLocal = (table: string): boolean => {
         const definition = schema.tables[table];
 
@@ -107,29 +107,26 @@ export const selectExportTables = (schema: SchemaLike, requested?: ReadonlyArray
  * keyset batches of `batchSize` (default 200) so a 1M-row table doesn't
  * inflate the JS heap with a single materialized array.
  */
-export const exportShardTable = async function* (
+const exportShardTable = async function* (
     writer: DatabaseWriterLike,
     table: string,
     batchSize: number = DEFAULT_BATCH_SIZE,
 ): AsyncGenerator<ExportRow, void, undefined> {
+    // eslint-disable-next-line unicorn/no-null -- keyset cursor sentinel: null means "start of table", matching QueryArgs.cursor's wire type
     let cursor: null | string = null;
+    let done = false;
 
-    while (true) {
+    while (!done) {
+        // eslint-disable-next-line no-await-in-loop -- keyset pagination: each page's cursor depends on the previous page
         const page = await writer.findMany(table, { cursor, limit: batchSize });
 
-        for (const document_ of page.page) {
-            yield { doc: document_, table };
-        }
-
-        if (page.isDone) {
-            return;
+        for (const record of page.page) {
+            yield { doc: record, table };
         }
 
         cursor = page.continueCursor;
-
-        if (cursor === null) {
-            return;
-        }
+        // Stop when the reader says it's done or hands back no further cursor.
+        done = page.isDone || cursor === null;
     }
 };
 
@@ -137,7 +134,7 @@ export const exportShardTable = async function* (
  * Yield every {@link ExportRow} this shard owns across `tables`. Tables are
  * walked in the order returned by {@link selectExportTables}.
  */
-export const exportShardRows = async function* (
+const exportShardRows = async function* (
     writer: DatabaseWriterLike,
     schema: SchemaLike,
     args: ExportShardArgs,
@@ -150,46 +147,18 @@ export const exportShardRows = async function* (
     }
 };
 
+/** Framework-managed fields stripped before shape validation and re-applied verbatim on insert. */
+const FRAMEWORK_FIELDS = new Set(["_creationTime", "_id"]);
+
 /**
- * Validate `doc` against the table's declared `defineTable({...})` shape, the
- * same parser path `validateArgs` uses for function args. Returns `null` on
- * success or an error string. `_id` and `_creationTime` are tolerated as raw
- * fields and re-applied on the writer side — the shape parser otherwise
- * rejects unknown keys.
+ * Run each declared column's parser against `payload`. Returns an error string
+ * on the first failure, or `undefined` when every field validates.
  */
-export const validateImportRow = (schema: SchemaLike, table: string, document_: Record<string, unknown>): null | string => {
-    const definition = schema.tables[table];
-
-    if (!definition) {
-        return `unknown table: ${table}`;
-    }
-
-    // Globals live in D1, not the shard — refuse them here so a crafted row
-    // can't smuggle a `.global()` table through the shard import path. Mirror
-    // `selectExportTables`' shard-local check exactly.
-    if (definition.shardMode?.kind === "global") {
-        return `table "${table}" is a global (.global()) table and is not importable through the shard import path`;
-    }
-
-    // Strip framework-managed fields before validating against the user shape.
-    // Both are reapplied verbatim on insert so the round-trip is byte-identical.
-    const { _creationTime: _omitCreationTime, _id: _omitId, ...payload } = document_;
-
-    // Reject keys that aren't declared in the table's shape (nor the
-    // framework-managed `_id`/`_creationTime` already stripped above).
-    // Otherwise an undeclared field passes validation untouched and gets
-    // persisted verbatim by the writer.
-    for (const key of Object.keys(payload)) {
-        if (!(key in definition.shape)) {
-            return `unexpected field "${key}": not declared in table "${table}"`;
-        }
-    }
-
+const validateAgainstShape = (definition: SchemaLike["tables"][string], payload: Record<string, unknown>): string | undefined => {
     for (const [field, validator] of Object.entries(definition.shape)) {
-        const candidate = (payload as Record<string, unknown>)[field];
-        const optional = validator.kind === "optional";
+        const candidate = payload[field];
 
-        if (candidate === undefined && optional) {
+        if (candidate === undefined && validator.kind === "optional") {
             continue;
         }
 
@@ -211,7 +180,45 @@ export const validateImportRow = (schema: SchemaLike, table: string, document_: 
         }
     }
 
-    return null;
+    return undefined;
+};
+
+/**
+ * Validate `record` against the table's declared `defineTable({...})` shape, the
+ * same parser path `validateArgs` uses for function args. Returns `undefined` on
+ * success or an error string. `_id` and `_creationTime` are tolerated as raw
+ * fields and re-applied on the writer side — the shape parser otherwise
+ * rejects unknown keys.
+ */
+const validateImportRow = (schema: SchemaLike, table: string, record: Record<string, unknown>): string | undefined => {
+    const definition = schema.tables[table];
+
+    if (!definition) {
+        return `unknown table: ${table}`;
+    }
+
+    // Globals live in D1, not the shard — refuse them here so a crafted row
+    // can't smuggle a `.global()` table through the shard import path. Mirror
+    // `selectExportTables`' shard-local check exactly.
+    if (definition.shardMode?.kind === "global") {
+        return `table "${table}" is a global (.global()) table and is not importable through the shard import path`;
+    }
+
+    // Strip framework-managed fields before validating against the user shape.
+    // Both are reapplied verbatim on insert so the round-trip is byte-identical.
+    const payload = Object.fromEntries(Object.entries(record).filter(([key]) => !FRAMEWORK_FIELDS.has(key)));
+
+    // Reject keys that aren't declared in the table's shape (nor the
+    // framework-managed `_id`/`_creationTime` already stripped above).
+    // Otherwise an undeclared field passes validation untouched and gets
+    // persisted verbatim by the writer.
+    for (const key of Object.keys(payload)) {
+        if (!(key in definition.shape)) {
+            return `unexpected field "${key}": not declared in table "${table}"`;
+        }
+    }
+
+    return validateAgainstShape(definition, payload);
 };
 
 /**
@@ -224,7 +231,64 @@ export const validateImportRow = (schema: SchemaLike, table: string, document_: 
  * The writer is responsible for invoking this from within the appropriate
  * transaction; this helper takes no SQL handle of its own.
  */
-export const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportShardArgs): Promise<ImportShardResult> => {
+/** Outcome of importing one row: a recorded error, a skipped conflict, or a successful insert into `table`. */
+type RowOutcome = { error: ImportError; kind: "error" } | { kind: "conflict" } | { kind: "inserted"; table: string };
+
+/** Probe whether a row with `explicitId` already exists (append mode skips collisions). */
+const idAlreadyExists = async (writer: DatabaseWriterLike, explicitId: string): Promise<boolean> => {
+    try {
+        const existing = await writer.get(explicitId);
+
+        return existing !== null;
+    } catch {
+        // `get` probes every table; an unknown-table failure here is surfaced
+        // when the insert runs against the real schema.
+        return false;
+    }
+};
+
+/** Validate, conflict-check and insert one inbound row, returning its outcome. */
+const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ExportRow, line: number): Promise<RowOutcome> => {
+    const { doc, table } = row;
+
+    if (typeof table !== "string" || table.length === 0) {
+        return { error: { code: "BAD_ROW", line, message: "row is missing `table`", table }, kind: "error" };
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `doc` is parsed wire data; the declared type can't be trusted at runtime
+    if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+        return { error: { code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table }, kind: "error" };
+    }
+
+    const failure = validateImportRow(schema, table, doc);
+
+    if (failure !== undefined) {
+        return { error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" };
+    }
+
+    // v1 mode is `append`: when `_id` collides, skip the row and count it.
+    const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
+
+    if (explicitId !== undefined && (await idAlreadyExists(writer, explicitId))) {
+        return { kind: "conflict" };
+    }
+
+    try {
+        // Trusted import path: this is a snapshot round-trip, so a `_id`
+        // carried on the row is intentional and must be preserved (the default
+        // mutation path drops client-chosen ids).
+        await writer.insert(table, doc, { allowExplicitId: true });
+
+        return { kind: "inserted", table };
+    } catch (error: unknown) {
+        const code = (error as { code?: string }).code ?? "INSERT_FAILED";
+        const message = error instanceof Error ? error.message : String(error);
+
+        return { error: { code, line, message, table }, kind: "error" };
+    }
+};
+
+const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportShardArgs): Promise<ImportShardResult> => {
     const errors: ImportError[] = [];
     const inserted: Record<string, number> = {};
     let conflicts = 0;
@@ -233,54 +297,15 @@ export const importShardRows = async (writer: DatabaseWriterLike, schema: Schema
     for (const row of args.rows) {
         line += 1;
 
-        const { doc, table } = row;
+        // eslint-disable-next-line no-await-in-loop -- rows are inserted in stream order through one SQLite handle; line-number attribution depends on the sequence
+        const outcome = await importOneRow(writer, schema, row, line);
 
-        if (typeof table !== "string" || table.length === 0) {
-            errors.push({ code: "BAD_ROW", line, message: "row is missing `table`", table });
-            continue;
-        }
-
-        if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
-            errors.push({ code: "BAD_ROW", line, message: "row is missing or malformed `doc`", table });
-            continue;
-        }
-
-        const failure = validateImportRow(schema, table, doc);
-
-        if (failure !== null) {
-            errors.push({ code: "VALIDATION_ERROR", line, message: failure, table });
-            continue;
-        }
-
-        // v1 mode is `append`: when `_id` collides, skip the row and surface
-        // the count rather than upserting.
-        const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
-
-        if (explicitId !== undefined) {
-            try {
-                const existing = await writer.get(explicitId);
-
-                if (existing !== null) {
-                    conflicts += 1;
-                    continue;
-                }
-            } catch {
-                // `get` probes every table; an unknown-table failure here is
-                // surfaced when the insert below runs against the real schema.
-            }
-        }
-
-        try {
-            // Trusted import path: this is a snapshot round-trip, so a
-            // `_id` carried on the row is intentional and must be preserved
-            // (the default mutation path drops client-chosen ids).
-            await writer.insert(table, doc, { allowExplicitId: true });
-            inserted[table] = (inserted[table] ?? 0) + 1;
-        } catch (error: unknown) {
-            const code = (error as { code?: string }).code ?? "INSERT_FAILED";
-            const message = error instanceof Error ? error.message : String(error);
-
-            errors.push({ code, line, message, table });
+        if (outcome.kind === "error") {
+            errors.push(outcome.error);
+        } else if (outcome.kind === "conflict") {
+            conflicts += 1;
+        } else {
+            inserted[outcome.table] = (inserted[outcome.table] ?? 0) + 1;
         }
     }
 
@@ -288,13 +313,13 @@ export const importShardRows = async (writer: DatabaseWriterLike, schema: Schema
 };
 
 /** Arguments accepted by the `__cirrus_admin__:exportShard` admin RPC. */
-export interface ExportShardAdminArgs {
+interface ExportShardAdminArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
 }
 
 /** Arguments accepted by the `__cirrus_admin__:importShard` admin RPC. */
-export interface ImportShardAdminArgs {
+interface ImportShardAdminArgs {
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -304,7 +329,7 @@ export interface ImportShardAdminArgs {
  * through to defaults — the wire surface is forgiving so a stale CLI can still
  * talk to a newer worker.
  */
-export const parseExportShardArgs = (args: Record<string, unknown>): ExportShardAdminArgs => {
+const parseExportShardArgs = (args: Record<string, unknown>): ExportShardAdminArgs => {
     const tables = Array.isArray(args["tables"]) ? (args["tables"] as unknown[]).filter((entry): entry is string => typeof entry === "string") : undefined;
     const batchSize = typeof args["batchSize"] === "number" ? args["batchSize"] : undefined;
 
@@ -312,7 +337,7 @@ export const parseExportShardArgs = (args: Record<string, unknown>): ExportShard
 };
 
 /** Coerce loosely-typed admin args into the import shape. */
-export const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminArgs => {
+const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminArgs => {
     const rawRows = Array.isArray(args["rows"]) ? (args["rows"] as unknown[]) : [];
     const rows: ExportRow[] = [];
 
@@ -326,7 +351,7 @@ export const parseImportShardArgs = (args: Record<string, unknown>): ImportShard
         if (typeof candidate.table !== "string" || !candidate.doc || typeof candidate.doc !== "object" || Array.isArray(candidate.doc)) {
             // Malformed envelope rows are rejected during validation downstream
             // — but we keep the envelope so the line numbers stay aligned.
-            rows.push({ doc: (candidate.doc as Record<string, unknown>) ?? {}, table: typeof candidate.table === "string" ? candidate.table : "" });
+            rows.push({ doc: (candidate.doc as Record<string, unknown> | undefined) ?? {}, table: typeof candidate.table === "string" ? candidate.table : "" });
             continue;
         }
 
@@ -336,4 +361,15 @@ export const parseImportShardArgs = (args: Record<string, unknown>): ImportShard
     const startLine = typeof args["startLine"] === "number" ? args["startLine"] : undefined;
 
     return { rows, startLine };
+};
+
+export { exportShardRows, exportShardTable, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };
+export type {
+    ExportRow,
+    ExportShardAdminArgs,
+    ExportShardArgs,
+    ImportError,
+    ImportShardAdminArgs,
+    ImportShardArgs,
+    ImportShardResult,
 };

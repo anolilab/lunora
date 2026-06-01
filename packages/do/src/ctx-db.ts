@@ -10,15 +10,15 @@
  * Why JSON-blob storage instead of a column-per-field schema?
  *
  * - Convex's API is fundamentally untyped at runtime — `db.insert(table,
- *   doc)` accepts any record matching the validator. A column-per-field
- *   schema would force us to mirror every shape change with an
- *   `ALTER TABLE`, which SQLite-in-DO supports but turns into a 7-step
- *   ceremony for every schema migration.
+ * doc)` accepts any record matching the validator. A column-per-field
+ * schema would force us to mirror every shape change with an
+ * `ALTER TABLE`, which SQLite-in-DO supports but turns into a 7-step
+ * ceremony for every schema migration.
  * - SQLite ships JSON1, so `json_extract(__doc__, '$.field')` is a real
- *   indexable expression. Secondary indexes declared on the schema become
- *   expression indexes; range queries still run in the DB, not in JS.
+ * indexable expression. Secondary indexes declared on the schema become
+ * expression indexes; range queries still run in the DB, not in JS.
  * - Round-tripping the document as JSON preserves boolean/null/array
- *   types automatically — no affinity-mapping shim needed.
+ * types automatically — no affinity-mapping shim needed.
  *
  * The escape hatch is `runSql`, which routes through a `.call(sql, ...)`
  * indirection. That's deliberate: the project's secret-scan hook flags
@@ -27,9 +27,12 @@
  * stop typing the string at all.
  */
 
+/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @cirrus/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
+
 import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates.js";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForCount, selectIndexForGroupBy } from "./aggregates.js";
 import { SCAN_DEP } from "./dependency-tracker.js";
+import NotFoundError from "./not-found-error.js";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
 import type { RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult } from "./rank.js";
@@ -37,25 +40,23 @@ import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableNam
 import type { ReactiveCache } from "./reactive-cache.js";
 import type { RelationDefinitionLike } from "./relations.js";
 import { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
-import { ConflictError, NotFoundError } from "./transaction.js";
+import { ConflictError } from "./transaction.js";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 import { hasTrigger, runTriggers } from "./triggers.js";
 import type { MutationDelta } from "./types.js";
 import type { WhereCompilerStrategy, WhereInput } from "./where-clause-compiler.js";
 import { compileWhere } from "./where-clause-compiler.js";
 
-export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
-
 /**
  * Structural projection of `state.storage.sql` (workerd's SqlStorage). We
  * only require the `exec` overload — the cursor it returns is iterable and
  * exposes `.toArray()` / `.one()`, both of which we hit.
  */
-export interface SqlExec {
+interface SqlExec {
     exec: <Row = Record<string, unknown>>(sql: string, ...params: unknown[]) => SqlCursor<Row>;
 }
 
-export interface SqlCursor<Row> extends Iterable<Row> {
+interface SqlCursor<Row> extends Iterable<Row> {
     one: () => Row;
     toArray: () => Row[];
 }
@@ -65,11 +66,11 @@ export interface SqlCursor<Row> extends Iterable<Row> {
  * reads. Kept structural so this package doesn't pull in `@cirrus/server`
  * (which would create a dependency cycle — server consumes ShardDO types).
  */
-export interface SchemaLike {
+interface SchemaLike {
     readonly tables: Record<string, TableDefinitionLike>;
 }
 
-export interface TableDefinitionLike {
+interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
     readonly rankIndexes?: ReadonlyArray<RankIndexDefinitionLike>;
@@ -84,13 +85,13 @@ export interface TableDefinitionLike {
     readonly triggerMap?: Record<string, TriggerDefinitionLike>;
 }
 
-export interface IndexDefinitionLike {
+interface IndexDefinitionLike {
     readonly fields: ReadonlyArray<string>;
     readonly name: string;
     readonly unique?: boolean;
 }
 
-export interface SearchIndexDefinitionLike {
+interface SearchIndexDefinitionLike {
     readonly field: string;
     readonly filterFields?: ReadonlyArray<string>;
     readonly name: string;
@@ -103,7 +104,7 @@ export interface SearchIndexDefinitionLike {
  * {@link SchemaLike}). Populated on the live validator's `_meta.column` and
  * read through here when the generated `shard.ts` hands us the real schema.
  */
-export interface ColumnMetaLike {
+interface ColumnMetaLike {
     readonly defaultFn?: () => unknown;
     readonly defaultValue?: unknown;
     readonly notNull?: boolean;
@@ -111,7 +112,7 @@ export interface ColumnMetaLike {
     readonly unique?: boolean;
 }
 
-export interface ValidatorLike {
+interface ValidatorLike {
     readonly _meta?: { readonly column?: ColumnMetaLike };
     readonly kind?: string;
 
@@ -126,7 +127,7 @@ export interface ValidatorLike {
 }
 
 /** Notifies hibernated subscribers that a row in `table` changed. */
-export type BroadcastDelta = (delta: MutationDelta) => void;
+type BroadcastDelta = (delta: MutationDelta) => void;
 
 /**
  * Records that a query touched `table`. Wired during subscription re-execution
@@ -144,16 +145,16 @@ export type BroadcastDelta = (delta: MutationDelta) => void;
  * The normal mutation path leaves the hook unset (default no-op) to avoid
  * spurious reads.
  */
-export type ReadHook = (table: string, idOrScan?: string) => void;
+type ReadHook = (table: string, idOrScan?: string) => void;
 
 /** Pluggable wall clock — defaults to `Date.now`. */
-export type Clock = () => number;
+type Clock = () => number;
 
 /** Pluggable ID minter — defaults to `crypto.randomUUID()`. */
-export type IdGenerator = () => string;
+type IdGenerator = () => string;
 
 /** A single committed row mutation, surfaced to {@link CtxDbOptions.onWrite}. */
-export interface WriteEvent {
+interface WriteEvent {
     doc?: Record<string, unknown>;
     id: string;
     op: "delete" | "insert" | "update";
@@ -165,9 +166,9 @@ export interface WriteEvent {
  * Awaited within the write path so failures surface to the caller — used to
  * keep external stores (e.g. Vectorize) in sync atomically with the write.
  */
-export type WriteHook = (event: WriteEvent) => Promise<void> | void;
+type WriteHook = (event: WriteEvent) => Promise<void> | void;
 
-export interface CtxDbOptions {
+interface CtxDbOptions {
     broadcast?: BroadcastDelta;
 
     /**
@@ -220,7 +221,7 @@ const throwingScheduler: SchedulerLike = {
     },
 };
 
-export interface IndexRangeBuilderLike {
+interface IndexRangeBuilderLike {
     eq: (field: string, value: unknown) => IndexRangeBuilderLike;
     gt: (field: string, value: unknown) => IndexRangeBuilderLike;
     gte: (field: string, value: unknown) => IndexRangeBuilderLike;
@@ -228,20 +229,20 @@ export interface IndexRangeBuilderLike {
     lte: (field: string, value: unknown) => IndexRangeBuilderLike;
 }
 
-export interface SearchFilterBuilderLike {
+interface SearchFilterBuilderLike {
     eq: (field: string, value: unknown) => SearchFilterBuilderLike;
     search: (field: string, query: string) => SearchFilterBuilderLike;
 }
 
 /** Options accepted by {@link TableReaderLike.paginate} — Convex-compatible. */
-export interface PaginationOptions {
+interface PaginationOptions {
     /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
     cursor?: null | string;
     /** Maximum rows to return for this page. */
     numItems: number;
 }
 
-export interface TableReaderLike {
+interface TableReaderLike {
     collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;
@@ -258,9 +259,9 @@ export interface TableReaderLike {
  * throws `CirrusError("COUNT_RLS_UNSUPPORTED")` (422) rather than scanning,
  * matching kitcn's documented behavior for counts in an RLS-restricted context.
  */
-export type CountArgs = RestrictableQueryOptions;
+type CountArgs = RestrictableQueryOptions;
 
-export interface DatabaseWriterLike {
+interface DatabaseWriterLike {
     /**
      * Reduce rows in `tableName` matching `options.where` to a scalar
      * (`avg`/`max`/`min`/`sum` — `count` lives on its own method). Routes
@@ -353,7 +354,7 @@ const encodeRankCursor = (values: ReadonlyArray<unknown>): string => {
     let binary = "";
 
     for (const byte of bytes) {
-        binary += String.fromCharCode(byte);
+        binary += String.fromCodePoint(byte);
     }
 
     return btoa(binary);
@@ -391,7 +392,7 @@ const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record
     return true;
 };
 
-/** Marker keys distinguishing `RestrictableQueryOptions` from a bare `WhereInput` tree. */
+/** Marker keys distinguishing a restrictable-query option set from a bare `WhereInput` tree. */
 const COUNT_OPTION_KEYS = new Set(["baseWhere", "restrictsCounts", "where"]);
 
 /**
@@ -423,6 +424,15 @@ const normalizeCountArgument = (argument: RestrictableQueryOptions | undefined |
     return { where: argument as WhereInput };
 };
 
+/** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
+const compareStrings = (a: string, b: string): number => {
+    if (a < b) {
+        return -1;
+    }
+
+    return a > b ? 1 : 0;
+};
+
 /**
  * Encode a `by`-key tuple into a stable string. We use canonical-key JSON so
  * the same `{ a: 1, b: 2 }` lookup never misses for an insert that stored it
@@ -436,7 +446,8 @@ const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, un
 
     const ordered: Record<string, unknown> = {};
 
-    for (const field of [...by].toSorted((a, b) => a < b ? -1 : a > b ? 1 : 0)) {
+    for (const field of [...by].toSorted(compareStrings)) {
+        // eslint-disable-next-line unicorn/no-null -- canonical JSON aggregate key: a missing field must serialize as null (stable across runs), not be dropped by JSON.stringify
         ordered[field] = source[field] ?? null;
     }
 
@@ -454,13 +465,13 @@ const AGGREGATE_SQL_FUNCTION: Record<string, string> = { avg: "AVG", count: "COU
 
 /** Resolve a reducer `op` to its SQL function, throwing on an off-allowlist op. */
 const aggregateSqlFunction = (op: string): string => {
-    const function_ = AGGREGATE_SQL_FUNCTION[op];
+    const sqlFunction = AGGREGATE_SQL_FUNCTION[op];
 
-    if (function_ === undefined) {
+    if (sqlFunction === undefined) {
         throw new Error(`unknown aggregate op "${op}": expected one of ${Object.keys(AGGREGATE_SQL_FUNCTION).join(", ")}`);
     }
 
-    return function_;
+    return sqlFunction;
 };
 
 /** Indirection that lets us call `exec` without typing the literal. */
@@ -508,7 +519,7 @@ const tokenizeSearch = (query: string): string[] => query.toLowerCase().match(/[
  * token must be present — mirroring the fallback scorer's conjunction semantics.
  */
 const buildFtsMatch = (tokens: ReadonlyArray<string>): string =>
-    tokens.map((token, index) => index === tokens.length - 1 ? `"${token}"*` : `"${token}"`).join(" AND ");
+    tokens.map((token, index) => (index === tokens.length - 1 ? `"${token}"*` : `"${token}"`)).join(" AND ");
 
 /** Coerce a search/filter field value to the text FTS indexes and the scorer scans. */
 const stringifySearchText = (value: unknown): string => {
@@ -526,6 +537,7 @@ const stringifySearchText = (value: unknown): string => {
 
     // Objects/arrays (and any other non-primitive) are serialized as JSON so
     // they contribute real text to the scan instead of `[object Object]`.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify is typed `=> string` but returns undefined for a function/symbol value; the ?? keeps the scan text a string at runtime
     return JSON.stringify(value) ?? "";
 };
 
@@ -605,9 +617,9 @@ const isFtsAvailable = (sql: SqlExec): boolean => {
     return available;
 };
 
-const rowToDocument = (row: Record<string, unknown> | undefined): Record<string, unknown> | null => {
+const rowToDocument = (row: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
     if (!row) {
-        return null;
+        return undefined;
     }
 
     const raw = row[DOC_COLUMN];
@@ -648,7 +660,7 @@ interface SearchStage {
 interface QueryStage {
     indexFields: ReadonlyArray<string>;
     indexName: string | undefined;
-    inMemoryFilters: ((document_: Record<string, unknown>) => boolean)[];
+    inMemoryFilters: ((record: Record<string, unknown>) => boolean)[];
     search?: SearchStage;
     sqlConditions: { comparator: string; field: string; value: unknown }[];
 }
@@ -770,10 +782,10 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     const docs: Record<string, unknown>[] = [];
 
     for (const row of rows) {
-        const document_ = rowToDocument(row);
+        const record = rowToDocument(row);
 
-        if (document_) {
-            docs.push(document_);
+        if (record) {
+            docs.push(record);
         }
     }
 
@@ -783,7 +795,7 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
 /**
  * Portable fallback for engines without FTS5 (the `node:sqlite` test runner):
  * pull candidate rows (narrowed by `.eq()` filters in SQL), tokenize the indexed
- * field in JS, and rank with {@link scoreDoc}. Matches the FTS path's AND +
+ * field in JS, and rank with `scoreDoc`. Matches the FTS path's AND +
  * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
  * by creation time (newest first).
  */
@@ -812,16 +824,16 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
     const scored: { creationTime: number; doc: Record<string, unknown>; score: number }[] = [];
 
     for (const row of rows) {
-        const document_ = rowToDocument(row);
+        const record = rowToDocument(row);
 
-        if (!document_) {
+        if (!record) {
             continue;
         }
 
-        const score = scoreDocument(stringifySearchText(document_[search.field]), tokens);
+        const score = scoreDocument(stringifySearchText(record[search.field]), tokens);
 
         if (score > 0) {
-            scored.push({ creationTime: typeof document_["_creationTime"] === "number" ? document_["_creationTime"] : 0, doc: document_, score });
+            scored.push({ creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0, doc: record, score });
         }
     }
 
@@ -839,12 +851,15 @@ const doWhereStrategy: WhereCompilerStrategy = { fieldRef: jsonPath, serialize: 
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
 /** Order keys for a paginated stage: the staged index, else creation order. */
-const paginateOrderKeys = (stage: QueryStage): OrderKey[] =>
-    stage.indexFields.length > 0
-        ? stage.indexFields.map((field) => {
-              return { direction: "asc" as const, field };
-          })
-        : [{ direction: "asc" as const, field: "_creationTime" }];
+const paginateOrderKeys = (stage: QueryStage): OrderKey[] => {
+    if (stage.indexFields.length > 0) {
+        return stage.indexFields.map((field) => {
+            return { direction: "asc" as const, field };
+        });
+    }
+
+    return [{ direction: "asc" as const, field: "_creationTime" }];
+};
 
 /**
  * Re-express the staged `.withIndex()` range as a `where` tree and AND the
@@ -873,10 +888,10 @@ const scanDocs = (rows: Record<string, unknown>[], filters: QueryStage["inMemory
     const docs: Record<string, unknown>[] = [];
 
     for (const row of rows) {
-        const document_ = rowToDocument(row);
+        const record = rowToDocument(row);
 
-        if (document_ && filters.every((predicate) => predicate(document_))) {
-            docs.push(document_);
+        if (record && filters.every((predicate) => predicate(record))) {
+            docs.push(record);
 
             if (cap !== undefined && docs.length > cap) {
                 break;
@@ -921,6 +936,7 @@ const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, optio
     const last = page.at(-1);
 
     return {
+        // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
         continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
         isDone: !hasMore,
         page,
@@ -958,9 +974,9 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
 
         const result: Record<string, unknown>[] = [];
 
-        for (const document_ of docs) {
-            if (stage.inMemoryFilters.every((predicate) => predicate(document_))) {
-                result.push(document_);
+        for (const record of docs) {
+            if (stage.inMemoryFilters.every((predicate) => predicate(record))) {
+                result.push(record);
 
                 if (typeof limit === "number" && result.length >= limit) {
                     break;
@@ -1003,14 +1019,14 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         const docs: Record<string, unknown>[] = [];
 
         for (const row of rows) {
-            const document_ = rowToDocument(row);
+            const record = rowToDocument(row);
 
-            if (!document_) {
+            if (!record) {
                 continue;
             }
 
-            if (stage.inMemoryFilters.every((predicate) => predicate(document_))) {
-                docs.push(document_);
+            if (stage.inMemoryFilters.every((predicate) => predicate(record))) {
+                docs.push(record);
 
                 if (typeof limit === "number" && docs.length >= limit) {
                     break;
@@ -1022,6 +1038,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
     };
 
     const reader: TableReaderLike = {
+        // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async collect() {
             return runFetch(undefined);
         },
@@ -1030,11 +1047,14 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
 
             return reader;
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async first() {
             const rows = runFetch(stage.inMemoryFilters.length > 0 ? undefined : 1);
 
+            // eslint-disable-next-line unicorn/no-null -- documented `first()` result shape (Doc | null) returned to callers
             return rows[0] ?? null;
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async paginate(options) {
             if (stage.search) {
                 throw new Error("pagination is not supported on search queries; use .take(n) or .collect()");
@@ -1042,6 +1062,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
 
             return paginateStage(sql, tableName, stage, options);
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async take(limit) {
             return runFetch(limit);
         },
@@ -1181,7 +1202,59 @@ const runGuardedWrite = (sql: SqlExec, table: string, query: string, ...params: 
     }
 };
 
-export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
+/**
+ * Whether none of the fields a rank index reads (partition / sort / static
+ * `where`) differ between two row versions — the fast path that lets a patch of
+ * an unrelated field skip companion maintenance.
+ */
+const rankIndexFieldsUnchanged = (index: RankIndexDefinitionLike, previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
+    const fields = [...(index.partitionBy ?? []), ...index.sortBy.map((key) => key.field), ...(index.where ? Object.keys(index.where) : [])];
+
+    return fields.every((field) => previous[field] === next[field]);
+};
+
+/**
+ * Apply one rank index's `-prev + next` companion step for a single row write.
+ * DELETE-by-id is unconditional (a missing row is a no-op); INSERT only when the
+ * new row qualifies against the index's static `where`.
+ */
+const syncRankIndexEntry = (
+    sql: SqlExec,
+    tableName: string,
+    index: RankIndexDefinitionLike,
+    id: string,
+    previous: Record<string, unknown> | undefined,
+    next: Record<string, unknown> | undefined,
+): void => {
+    // Fast path: both sides exist and no field this index reads changed — the
+    // companion entry is already correct, so skip the DELETE+INSERT pair.
+    if (previous && next && rankIndexFieldsUnchanged(index, previous, next)) {
+        return;
+    }
+
+    const rankTable = rankTableName(tableName, index.name);
+
+    if (previous) {
+        runSql(sql, `DELETE FROM ${quoteIdentifier(rankTable)} WHERE "__id__" = ?`, id);
+    }
+
+    if (!next || (index.where && !matchesRankStaticWhere(next, index.where))) {
+        // Nothing to insert: either a pure delete, or `next` doesn't qualify
+        // against the index's static `where` (the prior entry, if any, is gone).
+        return;
+    }
+
+    const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+    const columnList = ["__id__", "__partition__", ...sortColumns].map((column) => quoteIdentifier(column)).join(", ");
+    const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
+    const partitionKey = encodePartitionKey(index.partitionBy ?? [], next);
+    // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
+    const sortValues = index.sortBy.map((key) => serializeSqlValue(next[key.field] ?? null));
+
+    runSql(sql, `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`, id, partitionKey, ...sortValues);
+};
+
+const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
@@ -1293,17 +1366,17 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
 
         for (const row of rows) {
-            const document_ = rowToDocument(row);
+            const record = rowToDocument(row);
 
-            if (!document_) {
+            if (!record) {
                 continue;
             }
 
-            if (index.where && !matchesStaticWhere(document_, index.where)) {
+            if (index.where && !matchesStaticWhere(record, index.where)) {
                 continue;
             }
 
-            const encoded = encodeAggregateKey(by, document_);
+            const encoded = encodeAggregateKey(by, record);
 
             tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
         }
@@ -1322,13 +1395,13 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * Inserts (`+1`), deletes (`-1`), and updates (`-1` for the previous row's
      * group, `+1` for the new) all share the same maintenance hook.
      */
-    const stepAggregate = (tableName: string, index: AggregateIndexDefinitionLike, document_: Record<string, unknown>, delta: number): void => {
-        if (index.where && !matchesStaticWhere(document_, index.where)) {
+    const stepAggregate = (tableName: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>, delta: number): void => {
+        if (index.where && !matchesStaticWhere(record, index.where)) {
             return;
         }
 
         const aggTable = aggregateTableName(tableName, index.name);
-        const encoded = encodeAggregateKey(index.by ?? [], document_);
+        const encoded = encodeAggregateKey(index.by ?? [], record);
 
         runSql(
             sql,
@@ -1409,20 +1482,21 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const insertSql = `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`;
 
         for (const row of rows) {
-            const document_ = rowToDocument(row);
+            const record = rowToDocument(row);
 
-            if (!document_) {
+            if (!record) {
                 continue;
             }
 
-            if (index.where && !matchesRankStaticWhere(document_, index.where)) {
+            if (index.where && !matchesRankStaticWhere(record, index.where)) {
                 continue;
             }
 
-            const partitionKey = encodePartitionKey(index.partitionBy ?? [], document_);
-            const sortValues = index.sortBy.map((key) => serializeSqlValue(document_[key.field] ?? null));
+            const partitionKey = encodePartitionKey(index.partitionBy ?? [], record);
+            // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
+            const sortValues = index.sortBy.map((key) => serializeSqlValue(record[key.field] ?? null));
 
-            runSql(sql, insertSql, document_["_id"] as string, partitionKey, ...sortValues);
+            runSql(sql, insertSql, record["_id"] as string, partitionKey, ...sortValues);
         }
 
         rankBackfilled.add(cacheKey);
@@ -1456,60 +1530,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         for (const index of indexes) {
-            // Fast path: if both sides exist and no field this index reads
-            // (partition / sort / static-where) actually changed, the
-            // companion entry is already correct — skip the DELETE+INSERT
-            // pair. Catches the common patch-of-unrelated-field case for
-            // rankIndex tables, which would otherwise pay full maintenance
-            // cost on every write.
-            if (previous && next) {
-                const partitionFields = index.partitionBy ?? [];
-                const sortFields = index.sortBy.map((key) => key.field);
-                const whereFields = index.where ? Object.keys(index.where) : [];
-                let unchanged = true;
-
-                for (const field of [...partitionFields, ...sortFields, ...whereFields]) {
-                    if (previous[field] !== next[field]) {
-                        unchanged = false;
-
-                        break;
-                    }
-                }
-
-                if (unchanged) {
-                    continue;
-                }
-            }
-
-            const rankTable = rankTableName(tableName, index.name);
-
-            // The previous row had a companion entry only if it matched the
-            // index's static `where` (if any) — but we DELETE unconditionally
-            // by id, since a missing row is a no-op and we avoid double-keeping
-            // the `matchesRankStaticWhere` checks in sync with the data.
-            if (previous) {
-                runSql(sql, `DELETE FROM ${quoteIdentifier(rankTable)} WHERE "__id__" = ?`, id);
-            }
-
-            if (next) {
-                if (index.where && !matchesRankStaticWhere(next, index.where)) {
-                    if (!previous) {
-                        // Nothing to delete and nothing to insert.
-                        continue;
-                    }
-
-                    // previous deleted, next doesn't qualify — done.
-                    continue;
-                }
-
-                const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-                const columnList = ["__id__", "__partition__", ...sortColumns].map((column) => quoteIdentifier(column)).join(", ");
-                const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
-                const partitionKey = encodePartitionKey(index.partitionBy ?? [], next);
-                const sortValues = index.sortBy.map((key) => serializeSqlValue(next[key.field] ?? null));
-
-                runSql(sql, `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`, id, partitionKey, ...sortValues);
-            }
+            syncRankIndexEntry(sql, tableName, index, id, previous, next);
         }
     };
 
@@ -1652,12 +1673,14 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const value = row[0]?.value;
 
             if (value === null || value === undefined) {
+                // eslint-disable-next-line unicorn/no-null -- AggregateResult is `null | number`: null is the documented "no rows matched" result returned to callers
                 return null;
             }
 
             return value;
         },
 
+        // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async count(tableName, whereOrOptions) {
             const definition = schema.tables[tableName];
 
@@ -1665,13 +1688,13 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const options_ = normalizeCountArgument(whereOrOptions);
+            const countOptions = normalizeCountArgument(whereOrOptions);
 
             // RLS-restricted contexts can't be trusted to return a correct
             // count — surface a structural CirrusError so the request fails
             // loudly rather than silently undercounting. See PLAN2 §3.1
             // "Coupling seam" and `aggregates.ts` for the seam contract.
-            if (options_.restrictsCounts) {
+            if (countOptions.restrictsCounts) {
                 throw new CountRlsUnsupportedError(tableName);
             }
 
@@ -1680,7 +1703,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // scan dependency regardless of `where`.
             onRead(tableName, SCAN_DEP);
 
-            const effective = mergeWhere(options_.baseWhere, options_.where);
+            const effective = mergeWhere(countOptions.baseWhere, countOptions.where);
 
             // Indexed path: if the user passed a plain conjunction of equality
             // filters and a declared aggregateIndex covers them, route to the
@@ -1688,8 +1711,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // left out of the indexed path because we can't trust it to be a
             // pure equality conjunction; if `baseWhere` is set we fall through
             // to the scan so SQL handles it uniformly.
-            if (definition.aggregateIndexes && !options_.baseWhere) {
-                const planned = selectIndexForCount(definition.aggregateIndexes, options_.where);
+            if (definition.aggregateIndexes && !countOptions.baseWhere) {
+                const planned = selectIndexForCount(definition.aggregateIndexes, countOptions.where);
 
                 if (planned) {
                     ensureBackfilled(tableName, planned.index);
@@ -1733,7 +1756,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // `before` fires ahead of cascade resolution so a throwing guard
             // aborts the delete before any holder rows are touched.
             if (hasMatchingTrigger(tableName, "before", "delete")) {
-                await fireTriggers("before", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+                await fireTriggers("before", "delete", { id, op: "delete", previous: existing, table: tableName });
             }
 
             // Resolve declared `onDelete` actions on holder rows *before* the
@@ -1747,7 +1770,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // commits below regardless of whether the global cascade succeeds.
             await applyOnDelete({
                 deletedId: id,
-                deletedReference: (references) => existing?.[references],
+                deletedReference: (references) => existing[references],
                 findHolders: async (holderTable, field, value) => {
                     const holders = await routeForHolder(holderTable).findMany(holderTable, { where: { [field]: value } });
 
@@ -1757,6 +1780,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 onRestrict: (message) => {
                     throw new ConflictError(message);
                 },
+                // eslint-disable-next-line unicorn/no-null -- `set null` onDelete: the FK column is set to SQL NULL, the documented semantics of the action
                 onSetNull: (holderTable, holderId, field) => routeForHolder(holderTable).patch(holderId, { [field]: null }),
                 schema,
                 tableName,
@@ -1775,15 +1799,15 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             runGuardedWrite(sql, tableName, `DELETE FROM ${quoteIdentifier(tableName)} WHERE id = ? AND ${DOC_COLUMN} = ?`, id, existingJson);
 
             syncSearch(tableName, id, undefined);
-            syncAggregates(tableName, existing ?? undefined, undefined);
-            syncRanks(tableName, id, existing ?? undefined, undefined);
+            syncAggregates(tableName, existing, undefined);
+            syncRanks(tableName, id, existing, undefined);
 
             cache?.invalidate(tableName, id);
 
             broadcast({ key: id, op: "delete", table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
-                await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
+                await fireTriggers("after", "delete", { id, op: "delete", previous: existing, table: tableName });
             }
 
             await onWrite({ id, op: "delete", table: tableName });
@@ -1792,6 +1816,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         async findFirst(tableName, args = {}) {
             const result = await writer.findMany(tableName, { ...args, limit: 1 });
 
+            // eslint-disable-next-line unicorn/no-null -- findFirst is `Promise<Record | null>`: null is the documented "no match" result
             return result.page[0] ?? null;
         },
 
@@ -1805,6 +1830,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return document;
         },
 
+        // eslint-disable-next-line sonarjs/cognitive-complexity -- reader method closed over the writer ctx (sql/schema/onRead/strategy/cache/resolveWith); splitting would thread that shared state through every helper and read worse (see data-migration.ts)
         async findMany(tableName, args = {}) {
             if (!schema.tables[tableName]) {
                 throw new Error(`unknown table: ${tableName}`);
@@ -1855,17 +1881,17 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const docs: Record<string, unknown>[] = [];
 
             for (const row of rows) {
-                const document_ = rowToDocument(row);
+                const record = rowToDocument(row);
 
-                if (document_) {
-                    docs.push(document_);
+                if (record) {
+                    docs.push(record);
 
                     // For predicated reads we know exactly which rows matched
                     // — stamp each so the cache only invalidates when one of
                     // them actually changes. Full scans already stamped
                     // `*scan` above (which subsumes per-row deps).
-                    if (!isFullScan && typeof document_["_id"] === "string") {
-                        onRead(tableName, document_["_id"]);
+                    if (!isFullScan && typeof record["_id"] === "string") {
+                        onRead(tableName, record["_id"]);
                     }
                 }
             }
@@ -1875,6 +1901,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: docs, schema, tableName, with: args.with });
                 }
 
+                // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
                 return { continueCursor: null, isDone: true, page: docs };
             }
 
@@ -1887,16 +1914,19 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             return {
+                // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
                 continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
                 isDone: !hasMore,
                 page,
             };
         },
 
+        // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async get(id) {
             const located = lookupById(id);
 
             if (!located) {
+                // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.get is `Promise<Record | null>`: null is the documented "no such row" result
                 return null;
             }
 
@@ -1905,6 +1935,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return located.row;
         },
 
+        // eslint-disable-next-line @typescript-eslint/require-await, sonarjs/cognitive-complexity -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
         async groupBy(tableName, groupOptions) {
             const definition = schema.tables[tableName];
 
@@ -1958,6 +1989,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                             indexedResult.push({
                                 key: { ...planned.partial },
+                                // eslint-disable-next-line unicorn/no-null -- GroupByEntry.value is AggregateResult (`null | number`): null is the documented "empty group" value
                                 value: value ?? null,
                             });
                         }
@@ -1977,6 +2009,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         const decoded = JSON.parse(row.key) as Record<string, unknown>;
                         const { value } = row;
 
+                        // eslint-disable-next-line unicorn/no-null -- GroupByEntry.value is AggregateResult (`null | number`): null is the documented "empty group" value
                         indexedResult.push({ key: decoded, value: value ?? null });
                     }
 
@@ -2018,11 +2051,13 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const key: Record<string, unknown> = {};
 
                 for (const field of groupOptions.by) {
+                    // eslint-disable-next-line unicorn/no-null -- GroupByEntry.key tuple: a NULL group value surfaces as null in the returned key, matching the wire shape
                     key[field] = row[field] ?? null;
                 }
 
                 const { value } = row as { value: unknown };
 
+                // eslint-disable-next-line unicorn/no-null -- GroupByEntry.value is AggregateResult (`null | number`): null is the documented "empty group" value
                 result.push({ key, value: value === null || value === undefined ? null : Number(value) });
             }
 
@@ -2176,6 +2211,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return buildReader(sql, schema, tableName);
         },
 
+        // eslint-disable-next-line @typescript-eslint/require-await, sonarjs/cognitive-complexity -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
         async rank(tableName, indexName, rankOptions) {
             const definition = schema.tables[tableName];
 
@@ -2206,6 +2242,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const rowId = typeof rankOptions.row === "string" ? rankOptions.row : (rankOptions.row["_id"] as string | undefined);
 
             if (!rowId) {
+                // eslint-disable-next-line unicorn/no-null -- rank() is `Promise<RankResult | null>`: null is the documented "row not ranked" result
                 return null;
             }
 
@@ -2219,6 +2256,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const [own] = ownRows;
 
             if (own === undefined) {
+                // eslint-disable-next-line unicorn/no-null -- rank() is `Promise<RankResult | null>`: null is the documented "row not ranked" result
                 return null;
             }
 
@@ -2234,6 +2272,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const requestedKey = encodePartitionKey(index.partitionBy ?? [], partitionFromWhere);
 
                 if (requestedKey !== partitionKey) {
+                    // eslint-disable-next-line unicorn/no-null -- rank() is `Promise<RankResult | null>`: null is the documented "row not in requested partition" result
                     return null;
                 }
 
@@ -2294,6 +2333,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return { position: beforeRow.c + 1, total: totalRow.c };
         },
 
+        // eslint-disable-next-line @typescript-eslint/require-await, sonarjs/cognitive-complexity -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
         async rankPage(tableName, indexName, rankPageOptions = {}) {
             const definition = schema.tables[tableName];
 
@@ -2395,13 +2435,14 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`,
                     rankRow[RANK_TIEBREAK] as string,
                 ).toArray();
-                const document_ = rowToDocument(documentRows[0]);
+                const record = rowToDocument(documentRows[0]);
 
-                if (document_) {
-                    docs.push(document_);
+                if (record) {
+                    docs.push(record);
                 }
             }
 
+            // eslint-disable-next-line unicorn/no-null -- RankPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
             let continueCursor: null | string = null;
 
             const last = usable.at(-1);
@@ -2506,111 +2547,158 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
  * Global tables (`.global()`) live in D1, not in the DO — they're skipped
  * here. The DO sees them via the D1 adapter exposed elsewhere.
  */
-export const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
+/** Create the secondary + `.unique()` expression indexes declared on a table. */
+const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
+    for (const index of definition.indexes) {
+        const indexName = `${tableName}_${index.name}`;
+        const expressions = index.fields.map((field) => jsonPath(field)).join(", ");
+        const uniqueClause = index.unique ? "UNIQUE" : "";
+
+        runSql(sql, `CREATE ${uniqueClause} INDEX IF NOT EXISTS ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableName)} (${expressions})`);
+    }
+
+    // `.unique()` columns synthesize a UNIQUE expression index so SQLite
+    // enforces the constraint; the write layer maps breaches to ConflictError.
+    for (const [field, column] of tableColumns(definition)) {
+        if (!column.unique) {
+            continue;
+        }
+
+        const indexName = `${tableName}_unique_${field}`;
+
+        runSql(sql, `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableName)} (${jsonPath(field)})`);
+    }
+};
+
+/**
+ * Create the FTS5 shadow tables for a table's `.searchIndex()` declarations,
+ * only on engines that ship FTS5 (Cloudflare DOs do; the `node:sqlite` test
+ * runner doesn't, where `.search()` transparently falls back to a scan).
+ * `__text__` holds the indexed field; `__id__` (UNINDEXED) joins back to the row.
+ */
+const migrateSearchIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
+    if (!definition.searchIndexes || definition.searchIndexes.length === 0 || !isFtsAvailable(sql)) {
+        return;
+    }
+
+    for (const index of definition.searchIndexes) {
+        const ftName = ftsTableName(tableName, index.name);
+
+        runSql(sql, `CREATE VIRTUAL TABLE IF NOT EXISTS ${quoteIdentifier(ftName)} USING fts5("__text__", "__id__" UNINDEXED)`);
+    }
+};
+
+/**
+ * Create the counter tables backing `aggregateIndex` declarations. One row per
+ * distinct `by`-tuple; `__key__` is a canonical-JSON encoding so lookups stay
+ * stable. Not populated here — the write path steps every counter and the
+ * reader lazily backfills empties on first use (or `backfillAggregateIndexes`).
+ */
+const migrateAggregateIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
+    if (!definition.aggregateIndexes) {
+        return;
+    }
+
+    for (const index of definition.aggregateIndexes) {
+        const aggTable = aggregateTableName(tableName, index.name);
+
+        runSql(sql, `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} ("__key__" TEXT PRIMARY KEY, "__value__" REAL NOT NULL)`);
+    }
+};
+
+/**
+ * Create the rank companion tables + their sorted btree index for a table's
+ * `rankIndex` declarations. One row per source row keyed by `__id__`; the index
+ * on `(__partition__, __sort_k0__, …, __id__)` answers `rank()` in O(log n).
+ */
+const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
+    if (!definition.rankIndexes) {
+        return;
+    }
+
+    for (const index of definition.rankIndexes) {
+        const rankTable = rankTableName(tableName, index.name);
+        const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+        const columnDdl = sortColumns.map((column) => `${quoteIdentifier(column)} BLOB`).join(", ");
+        const columnPart = sortColumns.length > 0 ? `, ${columnDdl}` : "";
+
+        runSql(sql, `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(rankTable)} ("__id__" TEXT PRIMARY KEY, "__partition__" TEXT NOT NULL${columnPart})`);
+
+        // Sorted btree: (partition, sortBy ASC/DESC..., __id__ ASC)
+        const orderedColumns = ["\"__partition__\" ASC"];
+
+        for (const [i, column] of sortColumns.entries()) {
+            const direction = index.sortBy[i]?.direction;
+
+            orderedColumns.push(`${quoteIdentifier(column)} ${direction === "desc" ? "DESC" : "ASC"}`);
+        }
+
+        orderedColumns.push("\"__id__\" ASC");
+
+        const btreeName = `${tableName}__rank_${index.name}__btree`;
+
+        runSql(sql, `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(btreeName)} ON ${quoteIdentifier(rankTable)} (${orderedColumns.join(", ")})`);
+    }
+};
+
+const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind === "global") {
             continue;
         }
 
-        const tableSql = `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(tableName)} (
-            id TEXT PRIMARY KEY,
-            _creationTime REAL NOT NULL,
-            ${DOC_COLUMN} TEXT NOT NULL
-        )`;
+        runSql(
+            sql,
+            `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(tableName)} (
+                id TEXT PRIMARY KEY,
+                _creationTime REAL NOT NULL,
+                ${DOC_COLUMN} TEXT NOT NULL
+            )`,
+        );
 
-        runSql(sql, tableSql);
+        migrateSecondaryIndexes(sql, tableName, definition);
+        migrateSearchIndexes(sql, tableName, definition);
+        migrateAggregateIndexes(sql, tableName, definition);
+        migrateRankIndexes(sql, tableName, definition);
+    }
+};
 
-        for (const index of definition.indexes) {
-            const indexName = `${tableName}_${index.name}`;
-            const expressions = index.fields.map((field) => jsonPath(field)).join(", ");
-            const uniqueClause = index.unique ? "UNIQUE" : "";
-            const indexSql = `CREATE ${uniqueClause} INDEX IF NOT EXISTS ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableName)} (${expressions})`;
+/**
+ * Backfill one aggregate counter table by scanning the source rows once and
+ * tallying per canonical `by`-key. No-op when the counter already has rows.
+ */
+const backfillAggregateIndex = (sql: SqlExec, tableName: string, index: AggregateIndexDefinitionLike): void => {
+    const aggTable = aggregateTableName(tableName, index.name);
+    const existing = runSql<{ count: number }>(sql, `SELECT COUNT(*) AS count FROM ${quoteIdentifier(aggTable)}`).one();
 
-            runSql(sql, indexSql);
+    if (existing.count > 0) {
+        return;
+    }
+
+    const by = index.by ?? [];
+    const tallies = new Map<string, number>();
+    const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
+
+    for (const row of rows) {
+        const record = rowToDocument(row);
+
+        if (!record || (index.where && !matchesStaticWhere(record, index.where))) {
+            continue;
         }
 
-        // `.unique()` columns synthesize a UNIQUE expression index so SQLite
-        // enforces the constraint; the write layer maps breaches to ConflictError.
-        for (const [field, column] of tableColumns(definition)) {
-            if (!column.unique) {
-                continue;
-            }
+        const encoded = encodeAggregateKey(by, record);
 
-            const indexName = `${tableName}_unique_${field}`;
-            const indexSql = `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableName)} (${jsonPath(field)})`;
+        tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
+    }
 
-            runSql(sql, indexSql);
-        }
-
-        // FTS5 shadow tables back `.searchIndex()` declarations. Created only on
-        // engines that ship FTS5 (Cloudflare DOs do; the `node:sqlite` test
-        // runner doesn't, where `.search()` transparently falls back to a scan).
-        // `__text__` holds the indexed field; `__id__` (UNINDEXED) joins back to
-        // the document row.
-        if (definition.searchIndexes && definition.searchIndexes.length > 0 && isFtsAvailable(sql)) {
-            for (const index of definition.searchIndexes) {
-                const ftName = ftsTableName(tableName, index.name);
-
-                runSql(sql, `CREATE VIRTUAL TABLE IF NOT EXISTS ${quoteIdentifier(ftName)} USING fts5("__text__", "__id__" UNINDEXED)`);
-            }
-        }
-
-        // Counter tables back `aggregateIndex` declarations. One row per
-        // distinct `by`-tuple; `__key__` is a canonical-JSON encoding so
-        // lookups are stable. We don't populate them here — the write path
-        // steps every counter on insert/update/delete (`syncAggregates`), and
-        // the reader lazily backfills counters that are empty on first use
-        // (added to an existing schema). Sufficient for dev; production hosts
-        // can opt into a one-shot backfill via `backfillAggregateIndexes`.
-        if (definition.aggregateIndexes) {
-            for (const index of definition.aggregateIndexes) {
-                const aggTable = aggregateTableName(tableName, index.name);
-
-                runSql(
-                    sql,
-                    `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} (
-                        "__key__" TEXT PRIMARY KEY,
-                        "__value__" REAL NOT NULL
-                    )`,
-                );
-            }
-        }
-
-        // Rank companion tables back `rankIndex` declarations. One row per
-        // source row, keyed by `__id__`; a SQLite index on
-        // `(__partition__, __sort_k0__, …, __id__)` plays the btree role so
-        // `rank()` answers position lookups in O(log n).
-        if (definition.rankIndexes) {
-            for (const index of definition.rankIndexes) {
-                const rankTable = rankTableName(tableName, index.name);
-                const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-                const columnDdl = sortColumns.map((column) => `${quoteIdentifier(column)} BLOB`).join(", ");
-                const columnPart = sortColumns.length > 0 ? `, ${columnDdl}` : "";
-
-                runSql(
-                    sql,
-                    `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(rankTable)} (
-                        "__id__" TEXT PRIMARY KEY,
-                        "__partition__" TEXT NOT NULL${columnPart}
-                    )`,
-                );
-
-                // Sorted btree: (partition, sortBy ASC/DESC..., __id__ ASC)
-                const orderedColumns = ["\"__partition__\" ASC"];
-
-                for (const [i, column] of sortColumns.entries()) {
-                    const direction = index.sortBy[i]?.direction;
-
-                    orderedColumns.push(`${quoteIdentifier(column)} ${direction === "desc" ? "DESC" : "ASC"}`);
-                }
-
-                orderedColumns.push("\"__id__\" ASC");
-
-                const btreeName = `${tableName}__rank_${index.name}__btree`;
-
-                runSql(sql, `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(btreeName)} ON ${quoteIdentifier(rankTable)} (${orderedColumns.join(", ")})`);
-            }
-        }
+    for (const [encoded, count] of tallies) {
+        runSql(
+            sql,
+            `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
+             ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__"`,
+            encoded,
+            count,
+        );
     }
 };
 
@@ -2620,59 +2708,50 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
  * read. Idempotent: counter rows that already exist are left alone, so it's
  * safe to call twice.
  *
- * The reader uses {@link ensureBackfilled} internally for the lazy path; this
+ * The reader uses `ensureBackfilled` internally for the lazy path; this
  * helper is the explicit twin so callers can opt out of the lazy cost.
  */
-export const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void => {
+const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind === "global") {
+        if (definition.shardMode?.kind === "global" || !definition.aggregateIndexes) {
             continue;
         }
 
-        const indexes = definition.aggregateIndexes;
+        for (const index of definition.aggregateIndexes) {
+            backfillAggregateIndex(sql, tableName, index);
+        }
+    }
+};
 
-        if (!indexes || indexes.length === 0) {
+/**
+ * Backfill one rank companion table by scanning the source rows once. No-op
+ * when the companion already carries rows.
+ */
+const backfillRankIndex = (sql: SqlExec, tableName: string, index: RankIndexDefinitionLike): void => {
+    const rankTable = rankTableName(tableName, index.name);
+    const existing = runSql<{ count: number }>(sql, `SELECT COUNT(*) AS count FROM ${quoteIdentifier(rankTable)}`).one();
+
+    if (existing.count > 0) {
+        return;
+    }
+
+    const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+    const columnList = ["__id__", "__partition__", ...sortColumns].map((column) => quoteIdentifier(column)).join(", ");
+    const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
+    const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
+
+    for (const row of rows) {
+        const record = rowToDocument(row);
+
+        if (!record || (index.where && !matchesRankStaticWhere(record, index.where))) {
             continue;
         }
 
-        for (const index of indexes) {
-            const aggTable = aggregateTableName(tableName, index.name);
-            const existing = runSql<{ count: number }>(sql, `SELECT COUNT(*) AS count FROM ${quoteIdentifier(aggTable)}`).one();
+        const partitionKey = encodePartitionKey(index.partitionBy ?? [], record);
+        // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
+        const sortValues = index.sortBy.map((key) => serializeSqlValue(record[key.field] ?? null));
 
-            if (existing.count > 0) {
-                continue;
-            }
-
-            const by = index.by ?? [];
-            const tallies = new Map<string, number>();
-            const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
-
-            for (const row of rows) {
-                const document_ = rowToDocument(row);
-
-                if (!document_) {
-                    continue;
-                }
-
-                if (index.where && !matchesStaticWhere(document_, index.where)) {
-                    continue;
-                }
-
-                const encoded = encodeAggregateKey(by, document_);
-
-                tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
-            }
-
-            for (const [encoded, count] of tallies) {
-                runSql(
-                    sql,
-                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
-                     ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__"`,
-                    encoded,
-                    count,
-                );
-            }
-        }
+        runSql(sql, `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`, record["_id"] as string, partitionKey, ...sortValues);
     }
 };
 
@@ -2682,53 +2761,40 @@ export const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void
  * hosts that prefer to populate companions up-front. Idempotent: skips
  * rank companions that already carry rows.
  */
-export const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
+const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind === "global") {
+        if (definition.shardMode?.kind === "global" || !definition.rankIndexes) {
             continue;
         }
 
-        const indexes = definition.rankIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            continue;
-        }
-
-        for (const index of indexes) {
-            const rankTable = rankTableName(tableName, index.name);
-            const existing = runSql<{ count: number }>(sql, `SELECT COUNT(*) AS count FROM ${quoteIdentifier(rankTable)}`).one();
-
-            if (existing.count > 0) {
-                continue;
-            }
-
-            const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-            const columnList = ["__id__", "__partition__", ...sortColumns].map((column) => quoteIdentifier(column)).join(", ");
-            const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
-            const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
-
-            for (const row of rows) {
-                const document_ = rowToDocument(row);
-
-                if (!document_) {
-                    continue;
-                }
-
-                if (index.where && !matchesRankStaticWhere(document_, index.where)) {
-                    continue;
-                }
-
-                const partitionKey = encodePartitionKey(index.partitionBy ?? [], document_);
-                const sortValues = index.sortBy.map((key) => serializeSqlValue(document_[key.field] ?? null));
-
-                runSql(
-                    sql,
-                    `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`,
-                    document_["_id"] as string,
-                    partitionKey,
-                    ...sortValues,
-                );
-            }
+        for (const index of definition.rankIndexes) {
+            backfillRankIndex(sql, tableName, index);
         }
     }
+};
+
+export { backfillAggregateIndexes, backfillRankIndexes, createShardCtxDb, runShardMigrations };
+export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
+export type {
+    BroadcastDelta,
+    Clock,
+    ColumnMetaLike,
+    CountArgs,
+    CtxDbOptions,
+    DatabaseWriterLike,
+    IdGenerator,
+    IndexDefinitionLike,
+    IndexRangeBuilderLike,
+    PaginationOptions,
+    ReadHook,
+    SchemaLike,
+    SearchFilterBuilderLike,
+    SearchIndexDefinitionLike,
+    SqlCursor,
+    SqlExec,
+    TableDefinitionLike,
+    TableReaderLike,
+    ValidatorLike,
+    WriteEvent,
+    WriteHook,
 };

@@ -10,10 +10,10 @@
  * Two properties make it safe to interrupt and re-invoke:
  *
  * - **Resumable.** Progress (cursor, counts, status) is persisted to a reserved
- *   `__cirrus_migrations` table after every batch. A run that resumes the same
- *   id+direction picks up from the stored cursor instead of rescanning.
+ * `__cirrus_migrations` table after every batch. A run that resumes the same
+ * id+direction picks up from the stored cursor instead of rescanning.
  * - **Idempotent on completion.** Re-running a migration already `completed` in
- *   the same direction is a no-op that returns the recorded counts.
+ * the same direction is a no-op that returns the recorded counts.
  *
  * Cursor stability is the linchpin: iteration uses the default
  * `_creationTime ASC, id ASC` order, and `replace` preserves both `_id` and
@@ -27,17 +27,17 @@
 import type { DatabaseWriterLike, SqlCursor, SqlExec } from "./ctx-db.js";
 
 /** Reserved table the per-shard runner tracks migration progress in. Auto-hidden from the data browser by the `__cirrus` prefix. */
-export const DATA_MIGRATION_STATE_TABLE = "__cirrus_migrations";
+const DATA_MIGRATION_STATE_TABLE = "__cirrus_migrations";
 
 /** Rows fetched and rewritten per batch when neither the migration nor the caller specifies one. */
 const DEFAULT_BATCH_SIZE = 100;
 
-export type MigrationDirection = "down" | "up";
+type MigrationDirection = "down" | "up";
 
-export type MigrationStatus = "completed" | "failed" | "in_progress";
+type MigrationStatus = "completed" | "failed" | "in_progress";
 
 /** A document handed to a transform: the stored row including `_id`/`_creationTime`. */
-export type DataMigrationDocument = Record<string, unknown>;
+type DataMigrationDocument = Record<string, unknown>;
 
 /**
  * Transform applied to one document. Return a new document to rewrite the row,
@@ -45,14 +45,14 @@ export type DataMigrationDocument = Record<string, unknown>;
  * runner always re-applies the original `_id`/`_creationTime`, so the returned
  * document neither needs to nor should change row identity.
  */
-export type DataMigrationTransform = (document: DataMigrationDocument) => DataMigrationDocument | undefined | void;
+type DataMigrationTransform = (document: DataMigrationDocument) => DataMigrationDocument | undefined;
 
 /**
  * Structural projection of `@cirrus/server`'s `RegisteredMigration` the runner
  * reads. Kept local so this package takes no dependency on `@cirrus/server`
  * (which consumes ShardDO types — depending back would cycle).
  */
-export interface DataMigrationLike {
+interface DataMigrationLike {
     readonly batchSize?: number;
     readonly down?: DataMigrationTransform;
     readonly id: string;
@@ -60,7 +60,7 @@ export interface DataMigrationLike {
     readonly up: DataMigrationTransform;
 }
 
-export interface RunDataMigrationOptions {
+interface RunDataMigrationOptions {
     /** Override the migration's own batch size (and the runner default). */
     batchSize?: number;
     /** Wall clock for `started_at`/`updated_at`; defaults to `Date.now`. */
@@ -86,7 +86,7 @@ export interface RunDataMigrationOptions {
     writer: DatabaseWriterLike;
 }
 
-export interface MigrationRunResult {
+interface MigrationRunResult {
     changed: number;
     cursor: null | string;
     direction: MigrationDirection;
@@ -160,6 +160,7 @@ const readState = (sql: SqlExec, id: string): ResumeState | undefined => {
 
     return {
         changed: row.changed,
+        // eslint-disable-next-line unicorn/no-null -- mirrors the SQLite `cursor` column: a missing cursor is NULL, not undefined
         cursor: typeof row.cursor === "string" ? row.cursor : null,
         direction: row.direction === "down" ? "down" : "up",
         processed: row.processed,
@@ -200,7 +201,7 @@ const persistState = (sql: SqlExec, state: PersistedState): void => {
 };
 
 /** One persisted run-state row, decoded for callers (admin RPC, CLI status). */
-export interface MigrationStatusRow {
+interface MigrationStatusRow {
     changed: number;
     cursor: null | string;
     direction: MigrationDirection;
@@ -230,7 +231,7 @@ interface FullStateRow {
  * doesn't exist yet (no migration has ever run in this shard) rather than
  * throwing — the data browser and CLI treat "never run" as empty status.
  */
-export const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusRow[] => {
+const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusRow[] => {
     const exists = runSql<{ name: string }>(
         sql,
         `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
@@ -246,6 +247,7 @@ export const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusR
     const rows = runSql<FullStateRow>(sql, `SELECT * FROM "${DATA_MIGRATION_STATE_TABLE}"${filter}`, ...params).toArray();
 
     return rows.map((row) => {
+        /* eslint-disable unicorn/no-null -- decoded run-state row: NULL columns surface as null over the admin/CLI wire shape (MigrationStatusRow), distinct from absent */
         return {
             changed: row.changed,
             cursor: typeof row.cursor === "string" ? row.cursor : null,
@@ -257,6 +259,7 @@ export const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusR
             status: row.status === "completed" || row.status === "failed" ? row.status : "in_progress",
             updatedAt: typeof row.updated_at === "number" ? row.updated_at : null,
         };
+        /* eslint-enable unicorn/no-null */
     });
 };
 
@@ -266,7 +269,7 @@ export const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusR
  * `maxBatches` limit cut the run short (it stays resumable).
  */
 // eslint-disable-next-line sonarjs/cognitive-complexity -- the resume/loop/persist phases read more clearly inline than split across helpers that would each need the same closured state
-export const runDataMigration = async (options: RunDataMigrationOptions): Promise<MigrationRunResult> => {
+const runDataMigration = async (options: RunDataMigrationOptions): Promise<MigrationRunResult> => {
     const { migration, sql, writer } = options;
     const direction = options.direction ?? "up";
     const dryRun = options.dryRun ?? false;
@@ -280,6 +283,7 @@ export const runDataMigration = async (options: RunDataMigrationOptions): Promis
         throw new Error(`data migration "${migration.id}" has no \`${direction}\` transform`);
     }
 
+    // eslint-disable-next-line unicorn/no-null -- keyset cursor: null is the "start of table" sentinel and the value bound to the SQLite cursor column
     let cursor: null | string = null;
     let processed = 0;
     let changed = 0;
@@ -292,6 +296,7 @@ export const runDataMigration = async (options: RunDataMigrationOptions): Promis
 
         if (existing?.direction === direction) {
             if (existing.status === "completed") {
+                // eslint-disable-next-line unicorn/no-null -- MigrationRunResult.cursor: a completed run reports null (no resume point), matching the wire shape
                 return { changed: existing.changed, cursor: null, direction, dryRun, id: migration.id, processed: existing.processed, status: "completed" };
             }
 
@@ -336,8 +341,10 @@ export const runDataMigration = async (options: RunDataMigrationOptions): Promis
             if (!dryRun) {
                 persistState(sql, {
                     changed,
+                    // eslint-disable-next-line unicorn/no-null -- bound to the SQLite cursor column: a finished run stores NULL
                     cursor: isDone ? null : cursor,
                     direction,
+                    // eslint-disable-next-line unicorn/no-null -- bound to the SQLite error column: a clean batch stores NULL
                     error: null,
                     id: migration.id,
                     processed,
@@ -376,5 +383,18 @@ export const runDataMigration = async (options: RunDataMigrationOptions): Promis
         throw error;
     }
 
+    // eslint-disable-next-line unicorn/no-null -- MigrationRunResult.cursor: null on completion (no resume point), matching the wire shape
     return { changed, cursor: isDone ? null : cursor, direction, dryRun, id: migration.id, processed, status: isDone ? "completed" : "in_progress" };
+};
+
+export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration };
+export type {
+    DataMigrationDocument,
+    DataMigrationLike,
+    DataMigrationTransform,
+    MigrationDirection,
+    MigrationRunResult,
+    MigrationStatus,
+    MigrationStatusRow,
+    RunDataMigrationOptions,
 };

@@ -90,7 +90,7 @@ describe("validateImportRow", () => {
     it("accepts a well-formed row", () => {
         expect.assertions(1);
 
-        expect(validateImportRow(usersSchema, "users", { email: "a@b.com", name: "Alice" })).toBeNull();
+        expect(validateImportRow(usersSchema, "users", { email: "a@b.com", name: "Alice" })).toBeUndefined();
     });
 
     it("rejects a row whose field fails the validator", () => {
@@ -111,7 +111,7 @@ describe("validateImportRow", () => {
                 email: "a@b.com",
                 name: "Alice",
             }),
-        ).toBeNull();
+        ).toBeUndefined();
     });
 
     it("rejects unknown tables", () => {

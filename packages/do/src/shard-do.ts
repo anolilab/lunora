@@ -28,7 +28,7 @@ import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope,
  * historically modeled them on the state — that has been corrected; the
  * production code now matches the workerd shape.
  */
-export interface ShardDOState {
+interface ShardDOState {
     acceptWebSocket: (ws: WebSocket, tags?: string[]) => void;
 
     /**
@@ -76,7 +76,7 @@ export interface ShardDOState {
  * `WebSocket`-shaped objects that may not have them. The intersection here
  * is informational; the runtime calls are guarded with optional chaining.
  */
-export interface HibernatableWebSocket {
+interface HibernatableWebSocket {
     deserializeAttachment?: () => unknown;
     serializeAttachment?: (value: unknown) => void;
 }
@@ -86,7 +86,7 @@ export interface HibernatableWebSocket {
  * the query touched (discovered at runtime via the db adapter's `onRead`
  * hook) — the shard uses it to decide which writes should trigger a re-run.
  */
-export interface SubscriptionOutcome {
+interface SubscriptionOutcome {
     result: unknown;
     tables: Set<string>;
 }
@@ -97,7 +97,7 @@ export interface SubscriptionOutcome {
  * when new knobs land. Today the only knob is the reactive cache; future
  * additions should keep the same shape (per-feature options object).
  */
-export interface ShardDOOptions {
+interface ShardDOOptions {
     /**
      * Enable the per-shard reactive query cache. When provided, the dispatch
      * path uses {@link ShardDO.runCachedQuery} to memoize query results by
@@ -113,7 +113,7 @@ export interface ShardDOOptions {
 }
 
 /** Arguments accepted by the `__cirrus_admin__:runMigration` admin RPC. */
-export interface RunShardMigrationArgs {
+interface RunShardMigrationArgs {
     batchSize?: number;
     direction?: MigrationDirection;
     dryRun?: boolean;
@@ -122,13 +122,13 @@ export interface RunShardMigrationArgs {
 }
 
 /** Arguments accepted by the `__cirrus_admin__:exportShard` admin RPC. */
-export interface RunShardExportArgs {
+interface RunShardExportArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
 }
 
 /** Arguments accepted by the `__cirrus_admin__:importShard` admin RPC. */
-export interface RunShardImportArgs {
+interface RunShardImportArgs {
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -146,7 +146,7 @@ export interface RunShardImportArgs {
  * the FTS / aggregate / rank shadow tables in sync and runs validators, exactly
  * like a user mutation would.
  */
-export interface RunShardWriteArgs {
+interface RunShardWriteArgs {
     doc?: Record<string, unknown>;
     id?: string;
     op: "delete" | "insert" | "patch" | "replace";
@@ -154,7 +154,7 @@ export interface RunShardWriteArgs {
 }
 
 /** Outcome of a {@link RunShardWriteArgs} operation. `id` is the affected row's primary key. */
-export interface RunShardWriteResult {
+interface RunShardWriteResult {
     id: null | string;
     op: "delete" | "insert" | "patch" | "replace";
 }
@@ -170,19 +170,19 @@ interface SubscriptionMemo {
  * exactly 10% of the 10 GiB per-DO SQLite ceiling, leaving plenty of runway
  * to plan a `.shardBy()` migration before the wall hits.
  */
-export const ROOT_DO_SIZE_WARN_BYTES = 1_073_741_824;
+const ROOT_DO_SIZE_WARN_BYTES = 1_073_741_824;
 
 /**
  * Reserved shard name for the fallback Durable Object that hosts every
  * table without an explicit `.shardBy()` or `.global()` modifier.
  */
-export const ROOT_SHARD_NAME = "__root__";
+const ROOT_SHARD_NAME = "__root__";
 
 /**
  * Dependency-set sentinel for admin introspection subscriptions that aren't
  * bound to a single user table (`getMetrics`, `getLogs`, `listTables`,
  * `migrationStatus`). It is `"*"` — a name no real SQLite table can take, so it
- * never collides with a tracked write — and {@link refreshSubscriptions} treats
+ * never collides with a tracked write — and `refreshSubscriptions` treats
  * a memo carrying it as "re-run on every write-flush".
  */
 const ADMIN_WILDCARD = "*";
@@ -207,6 +207,7 @@ const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
             return;
         }
 
+        // eslint-disable-next-line no-await-in-loop -- intentional backpressure poll: sleep, then re-check the drained buffer on the next iteration
         await new Promise((resolve) => {
             setTimeout(resolve, 20);
         });
@@ -267,17 +268,17 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
     }
 
     const id = typeof args["id"] === "string" ? args["id"] : undefined;
-    const document_ = typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
+    const record = typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
 
     if (op !== "insert" && (id === undefined || id === "")) {
         throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
     }
 
-    if (op !== "delete" && document_ === undefined) {
+    if (op !== "delete" && record === undefined) {
         throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
     }
 
-    return { doc: document_, id, op, table };
+    return { doc: record, id, op, table };
 };
 
 const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
@@ -340,15 +341,19 @@ const extractBearerToken = (authorization: string | null): string | undefined =>
  */
 const constantTimeEqual = (a: string, b: string): boolean => {
     const max = Math.max(a.length, b.length);
+    // eslint-disable-next-line no-bitwise -- constant-time compare folds length + every code-unit delta into one accumulator
     let diff = a.length ^ b.length;
 
     for (let index = 0; index < max; index += 1) {
         // charCodeAt returns NaN past the end of the string; coerce to 0
         // so the XOR still folds into `diff` without poisoning it.
-        const ca = index < a.length ? a.charCodeAt(index) : 0;
-        const callback = index < b.length ? b.charCodeAt(index) : 0;
+        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
+        const charA = index < a.length ? a.charCodeAt(index) : 0;
+        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
+        const charB = index < b.length ? b.charCodeAt(index) : 0;
 
-        diff |= ca ^ callback;
+        // eslint-disable-next-line no-bitwise -- accumulate per-code-unit difference without branching to keep the compare constant-time
+        diff |= charA ^ charB;
     }
 
     return diff === 0;
@@ -357,16 +362,38 @@ const constantTimeEqual = (a: string, b: string): boolean => {
 /**
  * Base class for shard Durable Objects.
  *
- * Concrete subclasses implement {@link handleRpc} and may emit deltas via
- * {@link broadcastDelta}. Subscriptions are stored on each WebSocket via
+ * Concrete subclasses implement `handleRpc` and may emit deltas via
+ * `broadcastDelta`. Subscriptions are stored on each WebSocket via
  * `serializeAttachment` so they survive hibernation.
  */
-export abstract class ShardDO {
+abstract class ShardDO {
+    /**
+     * Per-socket cap on concurrent stream iterators. Each in-flight stream
+     * pins an `AbortController` + the user's async generator + any buffered
+     * chunks on the WS — letting a client open hundreds of streams in
+     * parallel would let it pin DO memory without ever sending a message.
+     * 8 is generous for legitimate clients (the dashboard rarely opens more
+     * than 2-3 simultaneously) and small enough that the worst-case memory
+     * footprint stays bounded.
+     */
+    protected static readonly MAX_STREAMS_PER_SOCKET = 8;
+
+    /**
+     * Per-socket subscription cap. Each subscription is stored in the
+     * hibernation attachment (which is serialized JSON), and runaway
+     * subscribe loops would let a single client wedge the attachment past
+     * the runtime's size budget — keep the per-socket ceiling well below
+     * that. 32 is enough for any reasonable client (one per visible
+     * panel/query) and small enough that an attachment serialization
+     * failure stays unlikely.
+     */
+    protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
+
     /**
      * Set once the very first `__root__` warning has been emitted. Static so
      * a hot DO cannot spam the log on every write; the v0.1 lifetime of a DO
      * exceeds any reasonable cooldown so a single warning is sufficient. The
-     * test suite resets this via {@link resetRootSizeWarning} for isolation.
+     * test suite resets this via `resetRootSizeWarning` for isolation.
      */
     private static rootSizeWarned = false;
 
@@ -378,6 +405,19 @@ export abstract class ShardDO {
     protected state: ShardDOState;
 
     protected env: unknown;
+
+    /**
+     * Opt-in per-shard reactive query cache. When the subclass passes
+     * `ReactiveCacheOptions` to `super(state, env, { reactiveCache: { … } })`
+     * the cache is instantiated here and exposed to subclasses via
+     * `runCachedQuery`; when omitted (today's default) it stays
+     * undefined and the dispatch path runs with zero cache overhead.
+     *
+     * The cache is per-shard and in-memory only — it is lost on DO restart
+     * and on workerd hibernation. That's fine: a cold shard simply re-runs
+     * the query on the first call, just like it does today.
+     */
+    protected readonly reactiveCache: ReactiveCache | undefined;
 
     /**
      * Lazily-built drizzle handle over `state.storage`. Memoised so a single
@@ -397,14 +437,14 @@ export abstract class ShardDO {
     /**
      * Per-request D1 Sessions API bookmark, read from the inbound
      * `x-d1-bookmark` header at the top of `fetch` and exposed to handlers
-     * via {@link getInboundBookmark}. Cleared between requests so a stale
+     * via `getInboundBookmark`. Cleared between requests so a stale
      * bookmark from a previous client never leaks into the next session.
      */
     private currentRequestBookmark: string | undefined;
 
     /**
      * Per-request D1 bookmark to echo on the outbound response. Handlers
-     * call {@link setOutboundBookmark} after a global-table write so the
+     * call `setOutboundBookmark` after a global-table write so the
      * client can pin subsequent reads on the same replica.
      */
     private currentResponseBookmark: string | undefined;
@@ -412,7 +452,7 @@ export abstract class ShardDO {
     /**
      * Per-request userId forwarded from the runtime via the
      * `x-cirrus-userid` header. Surfaced to handlers via
-     * {@link getCurrentUserId}. Cleared in the `finally` block of `fetch`
+     * `getCurrentUserId`. Cleared in the `finally` block of `fetch`
      * so a stale identity from a previous client never leaks into the
      * next request.
      */
@@ -422,21 +462,21 @@ export abstract class ShardDO {
      * Per-request identity envelope forwarded from the runtime via the
      * `x-cirrus-identity` JSON header. Stores claims like `email`,
      * `name`, or custom roles populated by `resolveIdentity` on the
-     * worker. Surfaced to handlers via {@link getCurrentIdentity}.
+     * worker. Surfaced to handlers via `getCurrentIdentity`.
      */
     private currentRequestIdentity: Record<string, unknown> | undefined;
 
     /**
      * Tables written during the in-flight RPC, accumulated by
-     * {@link recordChangedTable}. Drained after `handleRpc` returns to drive
-     * {@link refreshSubscriptions}. `null` when no write has happened yet so
+     * `recordChangedTable`. Drained after `handleRpc` returns to drive
+     * `refreshSubscriptions`. `null` when no write has happened yet so
      * the common read-only path allocates nothing.
      */
-    private pendingChangedTables: Set<string> | null = null;
+    private pendingChangedTables: Set<string> | undefined = undefined;
 
     /**
      * Last pushed result per `(socket, subId)`, keyed by socket. Lets
-     * {@link refreshSubscriptions} skip re-running queries whose tables were
+     * `refreshSubscriptions` skip re-running queries whose tables were
      * untouched and suppress pushes when the re-run result is unchanged. Held
      * in memory only — it does not survive hibernation, which is safe: a cold
      * memo simply forces one re-run and (at most) one redundant push.
@@ -453,19 +493,6 @@ export abstract class ShardDO {
     private readonly streamCancellers = new WeakMap<WebSocket, Map<string, AbortController>>();
 
     /**
-     * Opt-in per-shard reactive query cache. When the subclass passes
-     * `ReactiveCacheOptions` to `super(state, env, { reactiveCache: { … } })`
-     * the cache is instantiated here and exposed to subclasses via
-     * {@link runCachedQuery}; when omitted (today's default) it stays
-     * undefined and the dispatch path runs with zero cache overhead.
-     *
-     * The cache is per-shard and in-memory only — it is lost on DO restart
-     * and on workerd hibernation. That's fine: a cold shard simply re-runs
-     * the query on the first call, just like it does today.
-     */
-    protected readonly reactiveCache: ReactiveCache | undefined;
-
-    /**
      * Lifetime request counters surfaced by the `__cirrus_admin__:getMetrics`
      * RPC. In-memory only — they reset when the DO hibernates or restarts, which
      * is the right granularity for a "since this instance woke" health readout
@@ -476,7 +503,7 @@ export abstract class ShardDO {
     /**
      * Recent RPC errors on this shard instance, surfaced by the
      * `__cirrus_admin__:getLogs` RPC. In-memory only and bounded — like
-     * {@link metrics}, it resets on hibernation/restart. We only capture RPC
+     * `metrics`, it resets on hibernation/restart. We only capture RPC
      * dispatch failures here (path + error message), not user `console.*` output:
      * intercepting the console cheaply isn't possible, so this is honestly a
      * "recent RPC errors on this instance" feed, not a general application log.
@@ -485,7 +512,7 @@ export abstract class ShardDO {
 
     /**
      * In-flight dependency tracker for the currently-executing query. Set by
-     * {@link runCachedQuery} so the ctx-db hooks (wired via `onRead`) can
+     * `runCachedQuery` so the ctx-db hooks (wired via `onRead`) can
      * stamp deps without threading the tracker explicitly through every
      * generated handler signature. Cleared in the `finally` of the same
      * call so a leaked tracker can never bleed into a sibling RPC.
@@ -502,6 +529,229 @@ export abstract class ShardDO {
     }
 
     /** SQLite handle scoped to this Durable Object. */
+
+    /**
+     * Worker-side fetch entry point. Handles WebSocket upgrades and the
+     * shard-local RPC endpoint forwarded by `@cirrus/runtime`.
+     */
+    public async fetch(request: Request): Promise<Response> {
+        const url = new URL(request.url);
+
+        if (request.headers.get("Upgrade") === "websocket") {
+            return this.handleWebSocketUpgrade(request);
+        }
+
+        if (url.pathname === "/rpc" && request.method === "POST") {
+            let payload: RpcRequest;
+
+            try {
+                payload = await request.json();
+            } catch {
+                return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+            }
+
+            // Reserved admin-introspection RPCs are intercepted before user
+            // dispatch — they read raw SQLite directly rather than running a
+            // registered function, and carry their own bearer-token gate.
+            if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+                return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
+            }
+
+            // Stash the inbound D1 bookmark and identity headers for the
+            // duration of the handler call so getters return the right
+            // values. Cleared on exit so the next request starts fresh.
+            this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
+            this.currentResponseBookmark = undefined;
+            this.currentRequestUserId = request.headers.get("x-cirrus-userid") ?? undefined;
+            this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-cirrus-identity"));
+
+            this.metrics.requests += 1;
+
+            try {
+                const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
+
+                // Inspect the post-write size before responding. SQLite-in-DO
+                // exposes `databaseSize` as a real getter; reading it is a
+                // cheap stat call, not a full table scan.
+                this.maybeWarnRootSize();
+
+                // Snapshot the response before re-running subscriptions so the
+                // bookmark captured by the handler is preserved verbatim.
+                const response = jsonResponse({ result }, 200, this.currentResponseBookmark);
+
+                await this.flushChangedTables();
+
+                return response;
+            } catch (error: unknown) {
+                this.metrics.errors += 1;
+                this.logs.push({
+                    functionPath: payload.functionPath,
+                    level: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                });
+
+                return this.errorToResponse(error);
+            } finally {
+                this.currentRequestBookmark = undefined;
+                this.currentResponseBookmark = undefined;
+                this.currentRequestUserId = undefined;
+                this.currentRequestIdentity = undefined;
+            }
+        }
+
+        return new Response("Not found", { status: 404 });
+    }
+
+    /**
+     * Hibernation API: invoked by the runtime when a message arrives on a
+     * hibernated socket. Subclasses can override this to intercept; the
+     * default decodes a {@link SubscriptionEnvelope} and updates the registry.
+     */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
+    public async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+        const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+        let envelope: SubscriptionEnvelope;
+
+        try {
+            envelope = JSON.parse(text) as SubscriptionEnvelope;
+        } catch {
+            ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
+
+            return;
+        }
+
+        if (envelope.type === "subscribe" && envelope.query) {
+            const { functionPath } = envelope.query;
+            const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
+
+            // Admin introspection subscriptions read shard internals (raw rows,
+            // metrics, logs), so they are gated by the same `CIRRUS_ADMIN_TOKEN`
+            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
+            // socket that only cleared the user-subscription gate must never be
+            // able to read admin data by naming a reserved functionPath.
+            if (isAdmin && this.readAttachment(ws).admin !== true) {
+                ws.send(JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
+
+                return;
+            }
+
+            const status = this.subscribe(ws, envelope.id, envelope.query);
+
+            if (status !== "ok") {
+                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
+                const errorMessage
+                    = status === "too_many"
+                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
+                        : "failed to persist subscription attachment";
+
+                try {
+                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
+                } catch {
+                    // Socket may already be closed; nothing else we can do —
+                    // never let the webSocketMessage handler throw.
+                }
+
+                return;
+            }
+
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+
+            // Seed the subscriber with the query's current result so the first
+            // value arrives over the same channel as later updates. When the
+            // subclass doesn't support re-execution (base default), this is a
+            // no-op and the subscriber relies on its initial HTTP query.
+            if (functionPath) {
+                const seedArgs = envelope.query.args ?? {};
+                const outcome = isAdmin
+                    ? this.executeAdminSubscription(functionPath, seedArgs)
+                    : await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, seedArgs));
+
+                if (outcome) {
+                    this.pushSubscriptionData(ws, envelope.id, outcome);
+                }
+            }
+
+            return;
+        }
+
+        if (envelope.type === "stream" && envelope.query?.functionPath) {
+            // Streams are public-only: there is no admin-streaming surface, so
+            // anything matching the admin prefix is rejected up front rather
+            // than allowed to slip through executeStream().
+            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+                ws.send(JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
+
+                return;
+            }
+
+            // Fire-and-forget: handleStream owns its own error reporting (it
+            // sends `type:"error"` frames to the socket). The trailing no-op
+            // catch only guards the rare pre-try throw path (e.g. ws.send on a
+            // socket the runtime already tore down) so a dead socket can't
+            // surface as an unhandled rejection.
+            this.handleStream(ws, envelope.id, envelope.query.functionPath, envelope.query.args ?? {}).catch(() => {
+                /* socket already gone; nothing to report */
+            });
+
+            return;
+        }
+
+        if (envelope.type === "unsubscribe") {
+            // Stream cancel: abort the in-flight iterator (if any) before
+            // touching the subscription registry. unsubscribe() on a non-sub
+            // id is a no-op, so this stays safe even when id namespaces overlap.
+            const cancellers = this.streamCancellers.get(ws);
+            const controller = cancellers?.get(envelope.id);
+
+            if (controller) {
+                controller.abort();
+                cancellers?.delete(envelope.id);
+            }
+
+            this.unsubscribe(ws, envelope.id);
+            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
+        }
+    }
+
+    /**
+     * Hibernation API: invoked on socket close. The runtime has already
+     * closed the socket by the time we're called — calling `ws.close()`
+     * again would throw "WebSocket has been closed" in the Workers runtime.
+     */
+    // eslint-disable-next-line @typescript-eslint/require-await -- Workers hibernation handler: the platform invokes/awaits it; the signature must stay async even though this body is synchronous
+    public async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+        // Abort in-flight stream iterators bound to this socket so user
+        // handlers stop pumping into a closed channel rather than discovering
+        // it on the next yield.
+        const cancellers = this.streamCancellers.get(ws);
+
+        if (cancellers) {
+            for (const controller of cancellers.values()) {
+                controller.abort();
+            }
+
+            this.streamCancellers.delete(ws);
+        }
+
+        // Drop the per-socket subscription memo too — leaving it would pin
+        // the socket in the WeakMap until GC and (more importantly) keep the
+        // stale memo set around if the same socket id is reused after a
+        // bounce. Cheap to recompute on the next subscribe.
+        this.subMemos.delete(ws);
+
+        // Clear the attachment so a future reconnection starts clean.
+        (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+    }
+
+    /** Hibernation API: invoked on socket error. */
+    // eslint-disable-next-line class-methods-use-this -- Workers hibernation handler: the platform invokes it on the instance; the signature must stay an instance method
+    public webSocketError(_ws: WebSocket, _error: unknown): void {
+        // Subclasses can override with proper logging. Avoid throwing.
+    }
+
+    /** Subclasses implement function dispatch. */
+    public abstract handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown>;
     protected get sql(): unknown {
         return this.state.storage.sql;
     }
@@ -509,7 +759,7 @@ export abstract class ShardDO {
     /**
      * Drizzle handle scoped to this Durable Object's SQLite storage. Use this
      * for typed queries against generated `sqliteTable` schemas. The handle
-     * participates in {@link runInTransaction} via drizzle's own `transaction`
+     * participates in `runInTransaction` via drizzle's own `transaction`
      * helper — there is no need to call `db.transaction(...)` directly from
      * subclasses; wrap your work in `runInTransaction` and use `this.db`
      * inside the handler instead.
@@ -535,7 +785,7 @@ export abstract class ShardDO {
      * in Durable Objects does not support nested transactions, so we fail
      * loudly rather than silently flattening them.
      *
-     * Drizzle queries issued via {@link db} inside the handler participate
+     * Drizzle queries issued via `db` inside the handler participate
      * in this transaction implicitly — drizzle and the BEGIN/COMMIT below
      * both write through the same `state.storage.sql` handle, so the tx
      * boundary is shared. Do **not** call `this.db.transaction(...)` from
@@ -545,19 +795,19 @@ export abstract class ShardDO {
      * Two reasons, both verified against drizzle-orm 0.45.2's
      * `durable-sqlite/session.js`:
      *
-     *   1. The DO driver does NOT issue BEGIN/COMMIT/ROLLBACK SQL — it
-     *      delegates to `state.storage.transactionSync(callback)`, the
-     *      DO platform's native transaction primitive. Swapping in
-     *      `db.transaction()` would silently change the wire-level
-     *      contract observed by tests and any tooling that intercepts
-     *      `storage.sql`.
+     * 1. The DO driver does NOT issue BEGIN/COMMIT/ROLLBACK SQL — it
+     * delegates to `state.storage.transactionSync(callback)`, the
+     * DO platform's native transaction primitive. Swapping in
+     * `db.transaction()` would silently change the wire-level
+     * contract observed by tests and any tooling that intercepts
+     * `storage.sql`.
      *
-     *   2. `transactionSync` invokes the callback synchronously and does
-     *      not await its return value. Drizzle's `transaction()` matches
-     *      that — it passes the tx handle through and then returns.
-     *      Handing it an async handler would let the transaction commit
-     *      before the handler resolves, breaking the `() => Promise&lt;T> | T`
-     *      contract.
+     * 2. `transactionSync` invokes the callback synchronously and does
+     * not await its return value. Drizzle's `transaction()` matches
+     * that — it passes the tx handle through and then returns.
+     * Handing it an async handler would let the transaction commit
+     * before the handler resolves, breaking the `() => Promise&lt;T> | T`
+     * contract.
      *
      * The raw-SQL approach below is async-safe and gives the
      * connection-scoped semantics SQLite-in-DO is designed for.
@@ -636,79 +886,6 @@ export abstract class ShardDO {
     }
 
     /**
-     * Worker-side fetch entry point. Handles WebSocket upgrades and the
-     * shard-local RPC endpoint forwarded by `@cirrus/runtime`.
-     */
-    public async fetch(request: Request): Promise<Response> {
-        const url = new URL(request.url);
-
-        if (request.headers.get("Upgrade") === "websocket") {
-            return this.handleWebSocketUpgrade(request);
-        }
-
-        if (url.pathname === "/rpc" && request.method === "POST") {
-            let payload: RpcRequest;
-
-            try {
-                payload = await request.json();
-            } catch {
-                return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
-            }
-
-            // Reserved admin-introspection RPCs are intercepted before user
-            // dispatch — they read raw SQLite directly rather than running a
-            // registered function, and carry their own bearer-token gate.
-            if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
-            }
-
-            // Stash the inbound D1 bookmark and identity headers for the
-            // duration of the handler call so getters return the right
-            // values. Cleared on exit so the next request starts fresh.
-            this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
-            this.currentResponseBookmark = undefined;
-            this.currentRequestUserId = request.headers.get("x-cirrus-userid") ?? undefined;
-            this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-cirrus-identity"));
-
-            this.metrics.requests += 1;
-
-            try {
-                const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
-
-                // Inspect the post-write size before responding. SQLite-in-DO
-                // exposes `databaseSize` as a real getter; reading it is a
-                // cheap stat call, not a full table scan.
-                this.maybeWarnRootSize();
-
-                // Snapshot the response before re-running subscriptions so the
-                // bookmark captured by the handler is preserved verbatim.
-                const response = jsonResponse({ result }, 200, this.currentResponseBookmark);
-
-                await this.flushChangedTables();
-
-                return response;
-            } catch (error: unknown) {
-                this.metrics.errors += 1;
-                this.logs.push({
-                    functionPath: payload.functionPath,
-                    level: "error",
-                    message: error instanceof Error ? error.message : String(error),
-                    timestamp: Date.now(),
-                });
-
-                return this.errorToResponse(error);
-            } finally {
-                this.currentRequestBookmark = undefined;
-                this.currentResponseBookmark = undefined;
-                this.currentRequestUserId = undefined;
-                this.currentRequestIdentity = undefined;
-            }
-        }
-
-        return new Response("Not found", { status: 404 });
-    }
-
-    /**
      * Returns the D1 Sessions API bookmark forwarded by the client on this
      * request, or `undefined` when none was supplied. Handlers pass this
      * into `db.withSession(bookmark)` to opt into read-your-writes
@@ -748,6 +925,292 @@ export abstract class ShardDO {
     }
 
     /**
+     * Run a data migration by id against this shard, returning the runner's
+     * result. The base class can't reach the project's generated
+     * `CIRRUS_MIGRATIONS` registry or build a schema-aware writer, so it reports
+     * the migration as unknown; the codegen-generated subclass overrides this to
+     * look the migration up and invoke `runDataMigration`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated migration registry
+    protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
+        return Promise.reject(
+            Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "CirrusError", status: 404 }),
+        );
+    }
+
+    /**
+     * Foreign-key map for `table`: doc field → target table, for every field
+     * declared `v.id("target")` in the schema, so the data browser can render
+     * those cells as links. The base class can't see the user's `schema.ts`, so
+     * it returns `undefined` (no links); the codegen subclass overrides this with
+     * the schema-derived map.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to read the generated schema's foreign keys
+    protected tableRefs(_table: string): Record<string, string> | undefined {
+        return undefined;
+    }
+
+    /**
+     * Export every row this shard owns across the requested tables (or every
+     * shard-local user table when none are specified) as `{table, doc}` records.
+     * Globals are not the DO's concern; the worker reads those from D1.
+     *
+     * The base class can't build a schema-aware writer without seeing the user's
+     * `schema.ts`, so it returns an empty list; the codegen-generated subclass
+     * overrides this with `exportShardRows(...)` against the live writer.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]> {
+        return Promise.resolve([]);
+    }
+
+    /**
+     * Re-insert a batch of `{table, doc}` rows on this shard, returning the
+     * per-table insert counts and a per-row error array. Schema-failed rows do
+     * not abort the batch — they're surfaced in `errors` and the rest land.
+     *
+     * The base class can't build a writer; the codegen subclass overrides this
+     * to call `importShardRows(...)` inside one transaction per batch.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult> {
+        return Promise.resolve({ conflicts: 0, errors: [], inserted: {} });
+    }
+
+    /**
+     * Apply a single-row insert/patch/replace/delete through the schema-aware
+     * writer. The base class can't build a writer without the user's `schema.ts`,
+     * so it reports the table as unknown; the codegen-generated subclass overrides
+     * this to run the op against a live `createShardCtxDb(...)` writer (which
+     * maintains the FTS/aggregate/rank shadow tables and runs validators).
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 }));
+    }
+
+    /**
+     * Register a subscription on the given socket. Stored via
+     * `ws.serializeAttachment` so it survives hibernation.
+     *
+     * Returns a status so the caller can surface a structured error frame
+     * when the cap is hit or the attachment fails to serialize. We never
+     * throw out of this path — the WS hibernation API treats a thrown
+     * `webSocketMessage` as a fatal-channel error.
+     */
+    protected subscribe(ws: WebSocket, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
+        const attachment = this.readAttachment(ws);
+
+        if (Object.keys(attachment.subs).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
+            return "too_many";
+        }
+
+        attachment.subs[subId] = query;
+
+        try {
+            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+        } catch {
+            // The attachment can fail to serialize if the JSON body grows
+            // past the runtime's per-socket limit. Roll back the in-memory
+            // mutation so a retry has a chance to land and surface a
+            // structured error to the caller.
+            delete attachment.subs[subId];
+
+            return "serialize_failed";
+        }
+
+        return "ok";
+    }
+
+    protected unsubscribe(ws: WebSocket, subId: string): void {
+        const attachment = this.readAttachment(ws);
+
+        delete attachment.subs[subId];
+        (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+        this.subMemos.get(ws)?.delete(subId);
+    }
+
+    /**
+     * Decide whether a single subscription is interested in a mutation
+     * delta. The default implementation checks the table name, then runs a
+     * shallow-equality predicate over `query.args` against `delta.row`. A
+     * subscription with no `args` matches every row in the table.
+     *
+     * Subclasses can override this to implement range queries, joins, or
+     * full-text matching — anything more elaborate than equality. When
+     * `delta.row` is undefined (delete events without row data) we fall back
+     * to a broadcast so subscribers know to refetch; trying to filter
+     * against missing data would silently drop legitimate notifications.
+     */
+    // eslint-disable-next-line class-methods-use-this -- protected matching hook kept non-static so subclasses can refine subscription/delta matching
+    protected matchesSubscription(query: SubscriptionQuery, delta: MutationDelta): boolean {
+        if (query.table !== delta.table) {
+            return false;
+        }
+
+        const { args } = query;
+
+        if (!args) {
+            return true;
+        }
+
+        const { row } = delta;
+
+        if (!row) {
+            return true;
+        }
+
+        for (const [key, expected] of Object.entries(args)) {
+            if (row[key] !== expected) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Broadcast a mutation delta to every subscriber whose registered query
+     * targets the affected table _and_ matches its args. The wire payload
+     * includes the per-socket subscription id, so we serialise once per
+     * `(socket, sub)` pair — but the structural delta body itself is
+     * identical, so we build a payload keyed by `subId` lazily.
+     */
+    protected broadcastDelta(delta: MutationDelta): void {
+        const sockets = this.state.getWebSockets();
+        // Pre-stringify the immutable portion. The only per-message variation
+        // is `id`, which we splice in below — cheaper than calling
+        // JSON.stringify(...) for every (socket, sub) pair.
+        const deltaJson = JSON.stringify(delta);
+
+        for (const ws of sockets) {
+            const attachment = this.readAttachment(ws);
+
+            for (const [subId, query] of Object.entries(attachment.subs)) {
+                if (!this.matchesSubscription(query, delta)) {
+                    continue;
+                }
+
+                try {
+                    ws.send(`{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
+                } catch {
+                    /* socket may have been closed mid-broadcast */
+                }
+            }
+        }
+    }
+
+    /**
+     * Re-run a subscription's query and return its current result alongside
+     * the set of tables it read. The base class can't dispatch user functions,
+     * so it returns `null` — the codegen-generated subclass overrides this to
+     * run the handler from the project's function registry. Returning `null`
+     * disables server re-execution and leaves the legacy `broadcastDelta`
+     * path as the only live-update mechanism.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
+    protected executeSubscription(_functionPath: string, _args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+        // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such subscription"; the codegen subclass overrides and also returns null
+        return Promise.resolve(null);
+    }
+
+    /**
+     * Look up a streaming-query function and return a thunk that produces the
+     * `AsyncIterable&lt;unknown>` when handed an {@link AbortSignal}. The codegen
+     * subclass overrides this to dispatch via `CIRRUS_FUNCTIONS`; the base
+     * default returns `null`, which surfaces as `{type:"error", code:"NOT_FOUND"}`
+     * to the client.
+     *
+     * The deferred-iterator shape (`(signal) => AsyncIterable&lt;unknown>`) keeps
+     * the cancel signal pluggable per-call without coupling this signature to
+     * the wire-frame loop in `handleStream`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
+    protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such streaming function"; the codegen subclass overrides and also returns null
+        return null;
+    }
+
+    /**
+     * Wrap a query handler in the reactive cache. The subclass passes the
+     * function path, parsed args, and a `run` callback that resolves to the
+     * handler's return value. When the cache is configured we key by
+     * `(functionPath, stable-stringified args)`, allocate a fresh dep
+     * tracker, store it on `this.currentTracker` so `getCtxDbReadHook` reads
+     * stamp into it, and restore the prior tracker in `finally`. When the
+     * cache is absent we just call `run()` — same shape, zero overhead.
+     *
+     * Subclasses should ALSO pass `getCtxDbReadHook()` as the `onRead`
+     * option on their `createShardCtxDb(...)` call so the tracker actually
+     * collects deps. Without that wiring the cache will memoize results
+     * with empty dep sets, so writes never invalidate them and stale
+     * results stick around — the {@link ReactiveCache} class is contract-
+     * neutral about who fills `deps`.
+     */
+    protected async runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R> {
+        if (!this.reactiveCache) {
+            return run();
+        }
+
+        // Snapshot the in-flight tracker BEFORE allocating a fresh one, so
+        // the `finally` restores it correctly. The previous implementation
+        // allocated inside `reactiveCache.run(...)` before capturing
+        // `previous` in a separate `withTracker` helper, so `previous`
+        // captured the just-allocated tracker and the leftover never got
+        // cleared — a stray read between requests would land in the wrong
+        // dep set and corrupt the next cache miss.
+        const previous = this.currentTracker;
+        const tracker = createDependencyTracker();
+
+        this.currentTracker = tracker;
+
+        try {
+            // Scope the cache entry to the caller's identity so a per-user /
+            // RLS-filtered result is never served across users on a shared DO.
+            // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator
+            return await this.reactiveCache.run(reactiveCacheKey(functionPath, args, this.getCurrentUserId() ?? null), tracker.collect(), run);
+        } finally {
+            this.currentTracker = previous;
+        }
+    }
+
+    /**
+     * Returns an `onRead` callback suitable to hand to `createShardCtxDb`'s
+     * `onRead` option. The returned function stamps the in-flight tracker (set
+     * by `runCachedQuery`) when one exists and is a no-op otherwise — so
+     * subclasses can wire this hook unconditionally without checking whether
+     * the cache is enabled.
+     */
+    protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void {
+        return (table, idOrScan) => {
+            this.currentTracker?.recordRead(table, idOrScan ?? "*scan");
+        };
+    }
+
+    /**
+     * Record that `table` was written during the current RPC. Wired into the
+     * db adapter's `broadcast` callback by the generated subclass so that
+     * `flushChangedTables` can re-run only the affected subscriptions.
+     */
+    protected recordChangedTable(table: string): void {
+        this.pendingChangedTables ??= new Set<string>();
+        this.pendingChangedTables.add(table);
+    }
+
+    /**
+     * Per-batch progress hook for the codegen subclass's data-migration runner
+     * (wired via `runDataMigration`'s `onBatch`). The runner persists progress to
+     * the reserved {@link DATA_MIGRATION_STATE_TABLE} through raw SQL the
+     * change-tracker can't observe, so record that table here and flush — that's
+     * what re-runs live `migrationStatus` subscribers mid-run. Centralised in the
+     * base class so subclasses don't have to remember the record-then-flush dance.
+     */
+    protected async flushMigrationProgress(): Promise<void> {
+        this.recordChangedTable(DATA_MIGRATION_STATE_TABLE);
+        await this.flushChangedTables();
+    }
+
+    /**
      * Run a subscription query body with the per-request identity forced to
      * anonymous, then restore the prior values.
      *
@@ -758,7 +1221,7 @@ export abstract class ShardDO {
      * deferred/cross-request context (subscribe SEED + write-driven REFRESH)
      * would otherwise leak one user's identity-scoped view to every
      * subscriber. The generated `buildCtx` reads identity via
-     * {@link getCurrentUserId}, so we pin it to anonymous around the call
+     * `getCurrentUserId`, so we pin it to anonymous around the call
      * rather than threading it through the generated signature.
      */
     private async withAnonymousIdentity<R>(run: () => Promise<R> | R): Promise<R> {
@@ -798,10 +1261,13 @@ export abstract class ShardDO {
         sinceMs: number;
         uptimeMs: number;
     } {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- structural state: a test double may omit `storage.sql` even though the type marks it required
         const size = this.state.storage.sql?.databaseSize;
 
         return {
+            // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `cache` is `null | {...}`, null reported when the reactive cache is disabled
             cache: this.reactiveCache ? this.reactiveCache.stats() : null,
+            // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `databaseSize` is `null | number`, null when the runtime doesn't expose a size
             databaseSize: typeof size === "number" ? size : null,
             errors: this.metrics.errors,
             requests: this.metrics.requests,
@@ -822,6 +1288,7 @@ export abstract class ShardDO {
             return;
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- structural state: a test double may omit `storage.sql` even though the type marks it required
         const size = this.state.storage.sql?.databaseSize;
 
         if (typeof size !== "number" || size < ROOT_DO_SIZE_WARN_BYTES) {
@@ -840,6 +1307,7 @@ export abstract class ShardDO {
      * `CirrusError` keeps its declared status/code. Everything else becomes
      * a 500 with code `RPC_FAILED`.
      */
+    // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method (groups with the request handlers); kept non-static so subclasses can override the error mapping
     private errorToResponse(error: unknown): Response {
         // Structural duck-typing so this package does not need a runtime
         // dependency on `@cirrus/values` or `@cirrus/runtime`. The shapes
@@ -945,15 +1413,15 @@ export abstract class ShardDO {
      * Run a single read-only admin introspection op, returning its result plus
      * the table-dependency set the subscription bridge uses to decide when to
      * re-run it. Write/migration/export ops are NOT handled here — they stay in
-     * {@link handleAdminRpc} because they mutate state and can't be safely
+     * `handleAdminRpc` because they mutate state and can't be safely
      * re-executed on every write-flush. Returns `null` for any non-read op.
      *
      * `readTablePage` depends on exactly the table it reads, so a write to an
      * unrelated table never re-runs it. The counter/log ops (`getMetrics`,
      * `getLogs`, `listTables`, `migrationStatus`) aren't bound to a single
      * table; they carry the {@link ADMIN_WILDCARD} sentinel so
-     * {@link refreshSubscriptions} re-runs them on every write-flush. The
-     * per-socket JSON memo in {@link pushSubscriptionData} still suppresses
+     * `refreshSubscriptions` re-runs them on every write-flush. The
+     * per-socket JSON memo in `pushSubscriptionData` still suppresses
      * pushes when the recomputed value is byte-identical.
      */
     private readAdminOp(functionPath: string, args: Record<string, unknown>): { result: unknown; tables: Set<string> } | null {
@@ -972,18 +1440,7 @@ export abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
-            const table = typeof args["table"] === "string" ? args["table"] : "";
-            const page = readTablePage(sql, {
-                limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-                offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
-                refs: this.tableRefs(table),
-                search: typeof args["search"] === "string" ? args["search"] : undefined,
-                table,
-            });
-
-            // An empty table name can't bind to a real dependency, so fall back
-            // to the wildcard rather than a set that never intersects a write.
-            return { result: page, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
+            return this.readAdminTablePage(sql, args);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
@@ -992,79 +1449,37 @@ export abstract class ShardDO {
             return { result: { migrations: readMigrationStatus(sql, id) }, tables: new Set([ADMIN_WILDCARD]) };
         }
 
+        // eslint-disable-next-line unicorn/no-null -- `null` signals "not a recognized admin read", matching the subscription-outcome contract codegen subclasses implement
         return null;
+    }
+
+    /** Resolve a `readTablePage` admin read, parsing the loosely-typed args into the reader's options. */
+    private readAdminTablePage(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        const table = typeof args["table"] === "string" ? args["table"] : "";
+        const page = readTablePage(sql, {
+            limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+            offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
+            refs: this.tableRefs(table),
+            search: typeof args["search"] === "string" ? args["search"] : undefined,
+            table,
+        });
+
+        // An empty table name can't bind to a real dependency, so fall back
+        // to the wildcard rather than a set that never intersects a write.
+        return { result: page, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
     }
 
     /**
      * Seed/refresh hook for `__cirrus_admin__:*` subscriptions, mirroring
-     * {@link executeSubscription} for user functions. Returns `null` for any
+     * `executeSubscription` for user functions. Returns `null` for any
      * path that isn't a read-only admin op so the caller can fall through.
      * Synchronous — admin reads hit raw SQLite directly, no async dispatch.
      */
     private executeAdminSubscription(functionPath: string, args: Record<string, unknown>): SubscriptionOutcome | null {
         const read = this.readAdminOp(functionPath, args);
 
+        // eslint-disable-next-line unicorn/no-null -- mirrors the SubscriptionOutcome contract (`| null`) codegen subclasses override against
         return read ? { result: read.result, tables: read.tables } : null;
-    }
-
-    /**
-     * Run a data migration by id against this shard, returning the runner's
-     * result. The base class can't reach the project's generated
-     * `CIRRUS_MIGRATIONS` registry or build a schema-aware writer, so it reports
-     * the migration as unknown; the codegen-generated subclass overrides this to
-     * look the migration up and invoke `runDataMigration`.
-     */
-    protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
-        return Promise.reject(
-            Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "CirrusError", status: 404 }),
-        );
-    }
-
-    /**
-     * Foreign-key map for `table`: doc field → target table, for every field
-     * declared `v.id("target")` in the schema, so the data browser can render
-     * those cells as links. The base class can't see the user's `schema.ts`, so
-     * it returns `undefined` (no links); the codegen subclass overrides this with
-     * the schema-derived map.
-     */
-    protected tableRefs(_table: string): Record<string, string> | undefined {
-        return undefined;
-    }
-
-    /**
-     * Export every row this shard owns across the requested tables (or every
-     * shard-local user table when none are specified) as `{table, doc}` records.
-     * Globals are not the DO's concern; the worker reads those from D1.
-     *
-     * The base class can't build a schema-aware writer without seeing the user's
-     * `schema.ts`, so it returns an empty list; the codegen-generated subclass
-     * overrides this with `exportShardRows(...)` against the live writer.
-     */
-    protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]> {
-        return Promise.resolve([]);
-    }
-
-    /**
-     * Re-insert a batch of `{table, doc}` rows on this shard, returning the
-     * per-table insert counts and a per-row error array. Schema-failed rows do
-     * not abort the batch — they're surfaced in `errors` and the rest land.
-     *
-     * The base class can't build a writer; the codegen subclass overrides this
-     * to call `importShardRows(...)` inside one transaction per batch.
-     */
-    protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult> {
-        return Promise.resolve({ conflicts: 0, errors: [], inserted: {} });
-    }
-
-    /**
-     * Apply a single-row insert/patch/replace/delete through the schema-aware
-     * writer. The base class can't build a writer without the user's `schema.ts`,
-     * so it reports the table as unknown; the codegen-generated subclass overrides
-     * this to run the op against a live `createShardCtxDb(...)` writer (which
-     * maintains the FTS/aggregate/rank shadow tables and runs validators).
-     */
-    protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 }));
     }
 
     /**
@@ -1086,136 +1501,15 @@ export abstract class ShardDO {
     }
 
     /**
-     * Hibernation API: invoked by the runtime when a message arrives on a
-     * hibernated socket. Subclasses can override this to intercept; the
-     * default decodes a {@link SubscriptionEnvelope} and updates the registry.
-     */
-    public async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-        const text = typeof message === "string" ? message : new TextDecoder().decode(message);
-        let envelope: SubscriptionEnvelope;
-
-        try {
-            envelope = JSON.parse(text) as SubscriptionEnvelope;
-        } catch {
-            ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
-
-            return;
-        }
-
-        if (envelope.type === "subscribe" && envelope.query) {
-            const { functionPath } = envelope.query;
-            const isAdmin = functionPath !== undefined && functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
-
-            // Admin introspection subscriptions read shard internals (raw rows,
-            // metrics, logs), so they are gated by the same `CIRRUS_ADMIN_TOKEN`
-            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
-            // socket that only cleared the user-subscription gate must never be
-            // able to read admin data by naming a reserved functionPath.
-            if (isAdmin && this.readAttachment(ws).admin !== true) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
-
-                return;
-            }
-
-            const status = this.subscribe(ws, envelope.id, envelope.query);
-
-            if (status !== "ok") {
-                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-                const errorMessage
-                    = status === "too_many"
-                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
-                        : "failed to persist subscription attachment";
-
-                try {
-                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
-                } catch {
-                    // Socket may already be closed; nothing else we can do —
-                    // never let the webSocketMessage handler throw.
-                }
-
-                return;
-            }
-
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-
-            // Seed the subscriber with the query's current result so the first
-            // value arrives over the same channel as later updates. When the
-            // subclass doesn't support re-execution (base default), this is a
-            // no-op and the subscriber relies on its initial HTTP query.
-            if (functionPath) {
-                const seedArgs = envelope.query.args ?? {};
-                const outcome = isAdmin
-                    ? this.executeAdminSubscription(functionPath, seedArgs)
-                    : await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, seedArgs));
-
-                if (outcome) {
-                    this.pushSubscriptionData(ws, envelope.id, outcome);
-                }
-            }
-
-            return;
-        }
-
-        if (envelope.type === "stream" && envelope.query?.functionPath) {
-            // Streams are public-only: there is no admin-streaming surface, so
-            // anything matching the admin prefix is rejected up front rather
-            // than allowed to slip through executeStream().
-            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
-
-                return;
-            }
-
-            // Fire-and-forget: handleStream owns its own error reporting (it
-            // sends `type:"error"` frames to the socket). The trailing no-op
-            // catch only guards the rare pre-try throw path (e.g. ws.send on a
-            // socket the runtime already tore down) so a dead socket can't
-            // surface as an unhandled rejection.
-            this.handleStream(ws, envelope.id, envelope.query.functionPath, envelope.query.args ?? {}).catch(() => {
-                /* socket already gone; nothing to report */
-            });
-
-            return;
-        }
-
-        if (envelope.type === "unsubscribe") {
-            // Stream cancel: abort the in-flight iterator (if any) before
-            // touching the subscription registry. unsubscribe() on a non-sub
-            // id is a no-op, so this stays safe even when id namespaces overlap.
-            const cancellers = this.streamCancellers.get(ws);
-            const controller = cancellers?.get(envelope.id);
-
-            if (controller) {
-                controller.abort();
-                cancellers?.delete(envelope.id);
-            }
-
-            this.unsubscribe(ws, envelope.id);
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-        }
-    }
-
-    /**
      * Drive a streaming-query iterator end-to-end:
-     *   1. Allocate a per-id {@link AbortController} so a later `unsubscribe`
-     *      (or socket close) tears the user iterator down.
-     *   2. Send a `{type:"ack"}` so the client knows the stream started before
-     *      any chunks land.
-     *   3. Pump every yielded chunk through a `{type:"chunk"}` frame.
-     *   4. On normal completion send `{type:"complete"}`; on throw send
-     *      `{type:"error"}`. Either way drop the controller.
+     * 1. Allocate a per-id {@link AbortController} so a later `unsubscribe`
+     * (or socket close) tears the user iterator down.
+     * 2. Send a `{type:"ack"}` so the client knows the stream started before
+     * any chunks land.
+     * 3. Pump every yielded chunk through a `{type:"chunk"}` frame.
+     * 4. On normal completion send `{type:"complete"}`; on throw send
+     * `{type:"error"}`. Either way drop the controller.
      */
-
-    /**
-     * Per-socket cap on concurrent stream iterators. Each in-flight stream
-     * pins an `AbortController` + the user's async generator + any buffered
-     * chunks on the WS — letting a client open hundreds of streams in
-     * parallel would let it pin DO memory without ever sending a message.
-     * 8 is generous for legitimate clients (the dashboard rarely opens more
-     * than 2-3 simultaneously) and small enough that the worst-case memory
-     * footprint stays bounded.
-     */
-    protected static readonly MAX_STREAMS_PER_SOCKET = 8;
 
     private async handleStream(ws: WebSocket, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
         const iterable = this.executeStream(functionPath, args);
@@ -1294,273 +1588,10 @@ export abstract class ShardDO {
     }
 
     /**
-     * Hibernation API: invoked on socket close. The runtime has already
-     * closed the socket by the time we're called — calling `ws.close()`
-     * again would throw "WebSocket has been closed" in the Workers runtime.
-     */
-    public async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
-        // Abort in-flight stream iterators bound to this socket so user
-        // handlers stop pumping into a closed channel rather than discovering
-        // it on the next yield.
-        const cancellers = this.streamCancellers.get(ws);
-
-        if (cancellers) {
-            for (const controller of cancellers.values()) {
-                controller.abort();
-            }
-
-            this.streamCancellers.delete(ws);
-        }
-
-        // Drop the per-socket subscription memo too — leaving it would pin
-        // the socket in the WeakMap until GC and (more importantly) keep the
-        // stale memo set around if the same socket id is reused after a
-        // bounce. Cheap to recompute on the next subscribe.
-        this.subMemos.delete(ws);
-
-        // Clear the attachment so a future reconnection starts clean.
-        (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
-    }
-
-    /** Hibernation API: invoked on socket error. */
-    public webSocketError(_ws: WebSocket, _error: unknown): void {
-        // Subclasses can override with proper logging. Avoid throwing.
-    }
-
-    /** Subclasses implement function dispatch. */
-    public abstract handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown>;
-
-    /**
-     * Per-socket subscription cap. Each subscription is stored in the
-     * hibernation attachment (which is serialized JSON), and runaway
-     * subscribe loops would let a single client wedge the attachment past
-     * the runtime's size budget — keep the per-socket ceiling well below
-     * that. 32 is enough for any reasonable client (one per visible
-     * panel/query) and small enough that an attachment serialization
-     * failure stays unlikely.
-     */
-    protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
-
-    /**
-     * Register a subscription on the given socket. Stored via
-     * `ws.serializeAttachment` so it survives hibernation.
-     *
-     * Returns a status so the caller can surface a structured error frame
-     * when the cap is hit or the attachment fails to serialize. We never
-     * throw out of this path — the WS hibernation API treats a thrown
-     * `webSocketMessage` as a fatal-channel error.
-     */
-    protected subscribe(ws: WebSocket, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
-        const attachment = this.readAttachment(ws);
-
-        if (Object.keys(attachment.subs).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
-            return "too_many";
-        }
-
-        attachment.subs[subId] = query;
-
-        try {
-            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
-        } catch {
-            // The attachment can fail to serialize if the JSON body grows
-            // past the runtime's per-socket limit. Roll back the in-memory
-            // mutation so a retry has a chance to land and surface a
-            // structured error to the caller.
-            delete attachment.subs[subId];
-
-            return "serialize_failed";
-        }
-
-        return "ok";
-    }
-
-    protected unsubscribe(ws: WebSocket, subId: string): void {
-        const attachment = this.readAttachment(ws);
-
-        delete attachment.subs[subId];
-        (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
-        this.subMemos.get(ws)?.delete(subId);
-    }
-
-    /**
-     * Decide whether a single subscription is interested in a mutation
-     * delta. The default implementation checks the table name, then runs a
-     * shallow-equality predicate over `query.args` against `delta.row`. A
-     * subscription with no `args` matches every row in the table.
-     *
-     * Subclasses can override this to implement range queries, joins, or
-     * full-text matching — anything more elaborate than equality. When
-     * `delta.row` is undefined (delete events without row data) we fall back
-     * to a broadcast so subscribers know to refetch; trying to filter
-     * against missing data would silently drop legitimate notifications.
-     */
-    protected matchesSubscription(query: SubscriptionQuery, delta: MutationDelta): boolean {
-        if (query.table !== delta.table) {
-            return false;
-        }
-
-        const { args } = query;
-
-        if (!args) {
-            return true;
-        }
-
-        const { row } = delta;
-
-        if (!row) {
-            return true;
-        }
-
-        for (const [key, expected] of Object.entries(args)) {
-            if (row[key] !== expected) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Broadcast a mutation delta to every subscriber whose registered query
-     * targets the affected table _and_ matches its args. The wire payload
-     * includes the per-socket subscription id, so we serialise once per
-     * `(socket, sub)` pair — but the structural delta body itself is
-     * identical, so we build a payload keyed by `subId` lazily.
-     */
-    protected broadcastDelta(delta: MutationDelta): void {
-        const sockets = this.state.getWebSockets();
-        // Pre-stringify the immutable portion. The only per-message variation
-        // is `id`, which we splice in below — cheaper than calling
-        // JSON.stringify(...) for every (socket, sub) pair.
-        const deltaJson = JSON.stringify(delta);
-
-        for (const ws of sockets) {
-            const attachment = this.readAttachment(ws);
-
-            for (const [subId, query] of Object.entries(attachment.subs)) {
-                if (!this.matchesSubscription(query, delta)) {
-                    continue;
-                }
-
-                try {
-                    ws.send(`{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
-                } catch {
-                    /* socket may have been closed mid-broadcast */
-                }
-            }
-        }
-    }
-
-    /**
-     * Re-run a subscription's query and return its current result alongside
-     * the set of tables it read. The base class can't dispatch user functions,
-     * so it returns `null` — the codegen-generated subclass overrides this to
-     * run the handler from the project's function registry. Returning `null`
-     * disables server re-execution and leaves the legacy {@link broadcastDelta}
-     * path as the only live-update mechanism.
-     */
-    protected executeSubscription(_functionPath: string, _args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
-        return Promise.resolve(null);
-    }
-
-    /**
-     * Look up a streaming-query function and return a thunk that produces the
-     * `AsyncIterable&lt;unknown>` when handed an {@link AbortSignal}. The codegen
-     * subclass overrides this to dispatch via `CIRRUS_FUNCTIONS`; the base
-     * default returns `null`, which surfaces as `{type:"error", code:"NOT_FOUND"}`
-     * to the client.
-     *
-     * The deferred-iterator shape (`(signal) => AsyncIterable&lt;unknown>`) keeps
-     * the cancel signal pluggable per-call without coupling this signature to
-     * the wire-frame loop in {@link handleStream}.
-     */
-    protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
-        return null;
-    }
-
-    /**
-     * Wrap a query handler in the reactive cache. The subclass passes the
-     * function path, parsed args, and a `run` callback that resolves to the
-     * handler's return value. When the cache is configured we key by
-     * `(functionPath, stable-stringified args)`, allocate a fresh dep
-     * tracker, store it on `this.currentTracker` so `getCtxDbReadHook` reads
-     * stamp into it, and restore the prior tracker in `finally`. When the
-     * cache is absent we just call `run()` — same shape, zero overhead.
-     *
-     * Subclasses should ALSO pass `getCtxDbReadHook()` as the `onRead`
-     * option on their `createShardCtxDb(...)` call so the tracker actually
-     * collects deps. Without that wiring the cache will memoize results
-     * with empty dep sets, so writes never invalidate them and stale
-     * results stick around — the {@link ReactiveCache} class is contract-
-     * neutral about who fills `deps`.
-     */
-    protected async runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R> {
-        if (!this.reactiveCache) {
-            return run();
-        }
-
-        // Snapshot the in-flight tracker BEFORE allocating a fresh one, so
-        // the `finally` restores it correctly. The previous implementation
-        // allocated inside `reactiveCache.run(...)` before capturing
-        // `previous` in a separate `withTracker` helper, so `previous`
-        // captured the just-allocated tracker and the leftover never got
-        // cleared — a stray read between requests would land in the wrong
-        // dep set and corrupt the next cache miss.
-        const previous = this.currentTracker;
-        const tracker = createDependencyTracker();
-
-        this.currentTracker = tracker;
-
-        try {
-            // Scope the cache entry to the caller's identity so a per-user /
-            // RLS-filtered result is never served across users on a shared DO.
-            return await this.reactiveCache.run(reactiveCacheKey(functionPath, args, this.getCurrentUserId() ?? null), tracker.collect(), run);
-        } finally {
-            this.currentTracker = previous;
-        }
-    }
-
-    /**
-     * Returns an `onRead` callback suitable to hand to `createShardCtxDb`'s
-     * `onRead` option. The returned function stamps the in-flight tracker (set
-     * by {@link runCachedQuery}) when one exists and is a no-op otherwise — so
-     * subclasses can wire this hook unconditionally without checking whether
-     * the cache is enabled.
-     */
-    protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void {
-        return (table, idOrScan) => {
-            this.currentTracker?.recordRead(table, idOrScan ?? "*scan");
-        };
-    }
-
-    /**
-     * Record that `table` was written during the current RPC. Wired into the
-     * db adapter's `broadcast` callback by the generated subclass so that
-     * {@link flushChangedTables} can re-run only the affected subscriptions.
-     */
-    protected recordChangedTable(table: string): void {
-        this.pendingChangedTables ??= new Set<string>();
-        this.pendingChangedTables.add(table);
-    }
-
-    /**
-     * Per-batch progress hook for the codegen subclass's data-migration runner
-     * (wired via `runDataMigration`'s `onBatch`). The runner persists progress to
-     * the reserved {@link DATA_MIGRATION_STATE_TABLE} through raw SQL the
-     * change-tracker can't observe, so record that table here and flush — that's
-     * what re-runs live `migrationStatus` subscribers mid-run. Centralised in the
-     * base class so subclasses don't have to remember the record-then-flush dance.
-     */
-    protected async flushMigrationProgress(): Promise<void> {
-        this.recordChangedTable(DATA_MIGRATION_STATE_TABLE);
-        await this.flushChangedTables();
-    }
-
-    /**
      * Drain the tables written during the in-flight RPC and re-run every
      * subscription that depends on one of them. Called after `handleRpc`
      * resolves, and per-batch during a data migration via
-     * {@link flushMigrationProgress}. No-op when nothing was written.
+     * `flushMigrationProgress`. No-op when nothing was written.
      *
      * When the DO state exposes `waitUntil`, the refresh runs off the
      * response path so the client doesn't block on subscription fan-out —
@@ -1572,14 +1603,14 @@ export abstract class ShardDO {
     private async flushChangedTables(): Promise<void> {
         const changed = this.pendingChangedTables;
 
-        this.pendingChangedTables = null;
+        this.pendingChangedTables = undefined;
 
         if (!changed || changed.size === 0) {
             return;
         }
 
         // Subscription re-execution runs anonymously (see
-        // {@link withAnonymousIdentity}, applied around every executeSubscription
+        // `withAnonymousIdentity`, applied around every executeSubscription
         // call below). The shared identity field is no longer cleared here —
         // clobbering it without restore could disturb an interleaved fetch RPC;
         // the per-call wrapper pins anonymous identity for exactly the
@@ -1598,7 +1629,7 @@ export abstract class ShardDO {
      * For every live subscription whose query reads one of `changed`, re-run
      * the query and push a fresh `{ type: "data" }` frame when the result
      * differs from the last one sent. Subscriptions with no `functionPath`
-     * (legacy delta-only) are left to {@link broadcastDelta}.
+     * (legacy delta-only) are left to `broadcastDelta`.
      *
      * The per-socket loop runs in parallel across sockets, bounded so a
      * shard with thousands of live subscribers doesn't spin up thousands
@@ -1632,7 +1663,8 @@ export abstract class ShardDO {
 
                 const outcome = isAdmin
                     ? this.executeAdminSubscription(functionPath, query.args ?? {})
-                    : await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, query.args ?? {}));
+                    : // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
+                      await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, query.args ?? {}));
 
                 if (!outcome) {
                     continue;
@@ -1649,18 +1681,15 @@ export abstract class ShardDO {
         const concurrency = 8;
         let cursor = 0;
         const worker = async (): Promise<void> => {
-            while (true) {
-                const index = cursor;
+            let socket = sockets[cursor];
 
-                cursor += 1;
+            cursor += 1;
 
-                const socket = sockets[index];
-
-                if (socket === undefined) {
-                    return;
-                }
-
+            while (socket !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- each worker drains the shared cursor sequentially; parallelism comes from running `concurrency` workers
                 await refreshOne(socket);
+                socket = sockets[cursor];
+                cursor += 1;
             }
         };
 
@@ -1680,6 +1709,7 @@ export abstract class ShardDO {
             this.subMemos.set(ws, memos);
         }
 
+        // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
         const json = JSON.stringify(outcome.result ?? null);
         const existing = memos.get(subId);
 
@@ -1701,16 +1731,16 @@ export abstract class ShardDO {
     /**
      * Gate the upgrade request against two complementary controls:
      *
-     *   1. Origin allowlist via `env.CIRRUS_ALLOWED_ORIGINS` (comma-separated).
-     *      When unset, any origin is accepted — convenient for local dev,
-     *      not suitable for production.
-     *   2. Bearer token via `env.CIRRUS_WS_BEARER`. When set, the upgrade
-     *      must present a matching token. We accept either an
-     *      `Authorization: Bearer &lt;token>` header (preferred) or a
-     *      `?token=&lt;token>` query parameter (the only escape hatch for
-     *      browsers, which can't customise headers on the WebSocket
-     *      constructor). The match runs in constant time to avoid leaking
-     *      the token via response-timing differences.
+     * 1. Origin allowlist via `env.CIRRUS_ALLOWED_ORIGINS` (comma-separated).
+     * When unset, any origin is accepted — convenient for local dev,
+     * not suitable for production.
+     * 2. Bearer token via `env.CIRRUS_WS_BEARER`. When set, the upgrade
+     * must present a matching token. We accept either an
+     * `Authorization: Bearer &lt;token>` header (preferred) or a
+     * `?token=&lt;token>` query parameter (the only escape hatch for
+     * browsers, which can't customise headers on the WebSocket
+     * constructor). The match runs in constant time to avoid leaking
+     * the token via response-timing differences.
      *
      * The `?token=` path is a real risk surface: the token ends up in
      * server logs, browser history, and `Referer` headers on any
@@ -1747,7 +1777,7 @@ export abstract class ShardDO {
             // The admin token is accepted as an alternate credential so a
             // dashboard can open its socket even when `CIRRUS_WS_BEARER` gates
             // ordinary subscribers. The socket is flagged admin separately (see
-            // {@link isAdminSocket}); matching the bearer alone never grants it.
+            // `isAdminSocket`); matching the bearer alone never grants it.
             if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !this.isAdminSocket(request))) {
                 return false;
             }
@@ -1761,6 +1791,7 @@ export abstract class ShardDO {
      * present, else the `?token=` query parameter (the only channel a browser
      * `WebSocket` constructor can use). Returns `undefined` when neither is set.
      */
+    // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the upgrade-auth helpers; reads only the request
     private suppliedWsToken(request: Request): string | undefined {
         const fromHeader = extractBearerToken(request.headers.get("authorization"));
 
@@ -1774,7 +1805,7 @@ export abstract class ShardDO {
     /**
      * Whether the upgrade presented a token matching `CIRRUS_ADMIN_TOKEN`,
      * constant-time compared. Closed (returns `false`) when the admin token is
-     * unset, mirroring {@link isAdminAuthorized} for the HTTP path so admin
+     * unset, mirroring `isAdminAuthorized` for the HTTP path so admin
      * streaming is opt-in rather than exposed by default.
      */
     private isAdminSocket(request: Request): boolean {
@@ -1805,16 +1836,31 @@ export abstract class ShardDO {
         // their own) can be gated without re-checking a token per message.
         (server as HibernatableWebSocket).serializeAttachment?.({ admin: this.isAdminSocket(request), subs: {} } satisfies SocketAttachment);
 
+        // eslint-disable-next-line unicorn/no-null -- Web Response body for a 101 upgrade is `BodyInit | null`; null is the standard "no body" value
         return new Response(null, { status: 101, webSocket: client });
     }
 
+    // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket
     private readAttachment(ws: WebSocket): SocketAttachment {
         const raw = (ws as HibernatableWebSocket).deserializeAttachment?.();
 
-        if (raw && typeof raw === "object" && "subs" in raw && (raw as SocketAttachment).subs) {
+        if (raw && typeof raw === "object" && "subs" in raw && (raw as { subs?: unknown }).subs) {
             return raw as SocketAttachment;
         }
 
         return { subs: {} };
     }
 }
+
+export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
+export type {
+    HibernatableWebSocket,
+    RunShardExportArgs,
+    RunShardImportArgs,
+    RunShardMigrationArgs,
+    RunShardWriteArgs,
+    RunShardWriteResult,
+    ShardDOOptions,
+    ShardDOState,
+    SubscriptionOutcome,
+};

@@ -19,24 +19,6 @@ export class ConflictError extends Error {
 }
 
 /**
- * Thrown by `findFirstOrThrow` when no document matches the query.
- *
- * Like {@link ConflictError}, `code` / `status` are declared as own properties
- * so the cross-package structural error mapper maps it to a 404 without an
- * `instanceof` check against `@cirrus/do`.
- */
-export class NotFoundError extends Error {
-    public readonly code: string = "NOT_FOUND";
-
-    public readonly status: number = 404;
-
-    public constructor(message: string = "Document not found") {
-        super(message);
-        this.name = "NotFoundError";
-    }
-}
-
-/**
  * Minimal projection of the SQLite handle that the transaction helper needs.
  * `state.storage.sql` in the Workers runtime exposes a query runner for
  * BEGIN / COMMIT / ROLLBACK; declared structurally so unit tests can pass a

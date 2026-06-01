@@ -23,14 +23,14 @@ import type { OrderByInput, QueryArgs, QueryPage } from "./query-args.js";
 import type { WhereInput } from "./where-clause-compiler.js";
 
 /** FK behaviour when a referenced parent row is deleted (mirrors SQL `ON DELETE`). */
-export type OnDeleteActionLike = "cascade" | "restrict" | "set null";
+type OnDeleteActionLike = "cascade" | "restrict" | "set null";
 
 /**
  * Structural mirror of `@cirrus/server`'s `RelationDefinition` (kept local so
  * this package takes no runtime dependency on the server package — same
  * reasoning as {@link TableDefinitionLike}).
  */
-export interface RelationDefinitionLike {
+interface RelationDefinitionLike {
     readonly field: string;
     readonly kind: "many" | "one";
     readonly onDelete?: OnDeleteActionLike;
@@ -39,7 +39,7 @@ export interface RelationDefinitionLike {
 }
 
 /** Per-relation refinements: filter / order / cap / recurse into the children. */
-export interface NestedWith {
+interface NestedWith {
     limit?: number;
     orderBy?: OrderByInput[];
     where?: WhereInput;
@@ -51,12 +51,12 @@ export interface NestedWith {
  * (load with no refinements) or a {@link NestedWith}. The reserved `_count`
  * key requests per-parent aggregate counts instead of loaded rows.
  */
-export interface WithInput {
+interface WithInput {
     [relationName: string]: NestedWith | Record<string, true> | boolean | undefined;
     _count?: Record<string, true>;
 }
 
-export interface ResolveWithOptions {
+interface ResolveWithOptions {
     counter: (tableName: string, where?: WhereInput) => Promise<number>;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     parents: Record<string, unknown>[];
@@ -87,7 +87,7 @@ const distinctValues = (rows: Record<string, unknown>[], field: string): unknown
  * page), mutating each parent in place: `one` → `Doc | null`, `many` →
  * `Doc[]`, `_count` → merged into `parent._count`.
  */
-export const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
+const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
     const { counter, fetcher, parents, schema, tableName, with: withInput } = options;
 
     if (parents.length === 0) {
@@ -121,6 +121,7 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
 
         if (fkValues.length === 0) {
             for (const parent of parents) {
+                // eslint-disable-next-line unicorn/no-null -- documented `one`-relation result shape (Doc | null) sent to the client
                 parent[name] = null;
             }
 
@@ -135,6 +136,7 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
         }
 
         for (const parent of parents) {
+            // eslint-disable-next-line unicorn/no-null -- documented `one`-relation result shape (Doc | null) sent to the client
             parent[name] = byReference.get(parent[relation.field]) ?? null;
         }
     };
@@ -188,6 +190,7 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
             const countByValue = new Map<unknown, number>();
 
             for (const value of distinctValues(parents, parentField)) {
+                // eslint-disable-next-line no-await-in-loop -- one aggregate query per distinct FK value; sequential keeps the count fan-out bounded
                 countByValue.set(value, await counter(relation.table, { [whereField]: value }));
             }
 
@@ -207,6 +210,7 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
         }
 
         if (name === "_count") {
+            // eslint-disable-next-line no-await-in-loop -- relations resolved sequentially; each batched fetch mutates the shared parent page in place
             await resolveCounts(value as Record<string, true>);
 
             continue;
@@ -215,6 +219,7 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
         const relation = requireRelation(name);
         const nested: NestedWith = value === true ? {} : value;
 
+        // eslint-disable-next-line no-await-in-loop -- relations resolved sequentially; each batched fetch mutates the shared parent page in place
         await (relation.kind === "one" ? loadOne(name, relation, nested) : loadMany(name, relation, nested));
     }
 };
@@ -229,7 +234,7 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
  * `cascade` → recursive `writer.delete` (chains), `set null` → `writer.patch`
  * the FK to null, `restrict` → throw via `onRestrict` when any holder exists.
  */
-export interface ApplyOnDeleteOptions {
+interface ApplyOnDeleteOptions {
     deletedId: string;
     deletedReference: (references: string) => unknown;
 
@@ -243,7 +248,7 @@ export interface ApplyOnDeleteOptions {
     /**
      * Delete a holder row. `holderTable` is the row's table so the caller can
      * route the delete to the matching backend's writer — same shape as
-     * {@link findHolders}.
+     * `findHolders`.
      */
     onCascade: (holderTable: string, id: string) => Promise<void>;
     onRestrict: (message: string) => never;
@@ -257,11 +262,57 @@ export interface ApplyOnDeleteOptions {
     tableName: string;
 }
 
-export const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
-    const { deletedId, deletedReference, findHolders, onCascade, onRestrict, onSetNull, schema, tableName } = options;
-    const parentDefinition = schema.tables[tableName];
+/**
+ * Apply the `onDelete` action for a single holder relation pointing at the
+ * deleted parent. Resolves the referenced value, finds holder rows and either
+ * aborts (`restrict`), cascades the delete, or nulls the FK.
+ *
+ * Cross-backend cascade is not rejected here: backend-aware callbacks (each
+ * receives `holderTable`) route to the right writer. The supported direction
+ * (DO → D1) routes through the global writer the codegen passes into
+ * `createShardCtxDb`; the unsupported direction (D1 → many shards) throws via
+ * the D1 caller's `findHolders`, so this helper stays backend-agnostic.
+ *
+ * **Atomicity caveat.** A cross-backend cascade is not transactional: the
+ * global cascade fires *before* the local DELETE commits. If the cascade
+ * succeeds and the local DELETE then fails, the parent row stays but its
+ * global holders are gone. Callers that care should add their own
+ * compensation (a periodic reconciliation job, or a Cloudflare Queue retry).
+ */
+const applyRelationOnDelete = async (options: ApplyOnDeleteOptions, holderTable: string, relation: RelationDefinitionLike): Promise<void> => {
+    const { deletedId, deletedReference, findHolders, onCascade, onRestrict, onSetNull, tableName } = options;
+    const referencedValue = relation.references === "_id" ? deletedId : deletedReference(relation.references);
 
-    if (!parentDefinition) {
+    if (referencedValue === null || referencedValue === undefined) {
+        return;
+    }
+
+    const holders = await findHolders(holderTable, relation.field, referencedValue);
+
+    if (holders.length === 0) {
+        return;
+    }
+
+    if (relation.onDelete === "restrict") {
+        onRestrict(`cannot delete "${tableName}" row: "${holderTable}.${relation.field}" still references it`);
+    }
+
+    for (const holder of holders) {
+        const holderId = holder["_id"];
+
+        if (typeof holderId !== "string") {
+            continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- holders are cascaded/nulled one at a time so a thrown restrict/cascade aborts deterministically
+        await (relation.onDelete === "cascade" ? onCascade(holderTable, holderId) : onSetNull(holderTable, holderId, relation.field));
+    }
+};
+
+const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
+    const { schema, tableName } = options;
+
+    if (!schema.tables[tableName]) {
         throw new Error(`unknown table: ${tableName}`);
     }
 
@@ -277,46 +328,8 @@ export const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void
                 continue;
             }
 
-            // Cross-backend cascade is no longer rejected here. With
-            // backend-aware callbacks (each receives `holderTable` so the
-            // caller can route to the right writer), the supported direction
-            // (DO → D1) routes through the global writer the codegen passes
-            // into `createShardCtxDb`; the unsupported direction (D1 → many
-            // shards) throws via the D1 caller's findHolders. Either way
-            // applyOnDelete itself stays backend-agnostic.
-            //
-            // **Atomicity caveat.** A cross-backend cascade is not
-            // transactional: the global cascade fires *before* the local
-            // DELETE commits. If the cascade succeeds and the local DELETE
-            // then fails, the parent row stays but its global holders are
-            // gone — leaving orphan-on-the-other-side. Callers that care
-            // should add their own compensation (a periodic reconciliation
-            // job, or wrap the cascade in a Cloudflare Queue with retries).
-            const referencedValue = relation.references === "_id" ? deletedId : deletedReference(relation.references);
-
-            if (referencedValue === null || referencedValue === undefined) {
-                continue;
-            }
-
-            const holders = await findHolders(holderTable, relation.field, referencedValue);
-
-            if (holders.length === 0) {
-                continue;
-            }
-
-            if (relation.onDelete === "restrict") {
-                onRestrict(`cannot delete "${tableName}" row: "${holderTable}.${relation.field}" still references it`);
-            }
-
-            for (const holder of holders) {
-                const holderId = holder["_id"];
-
-                if (typeof holderId !== "string") {
-                    continue;
-                }
-
-                await (relation.onDelete === "cascade" ? onCascade(holderTable, holderId) : onSetNull(holderTable, holderId, relation.field));
-            }
+            // eslint-disable-next-line no-await-in-loop -- relations applied sequentially so a `restrict` abort/cascade fires in declared order before the parent delete
+            await applyRelationOnDelete(options, holderTable, relation);
         }
     }
 };
@@ -338,13 +351,13 @@ export const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void
  * copies. The signature is intentionally `validator.parse?` so the unit-test
  * fakes (which never carry a runtime parser) keep working.
  */
-export const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>): void => {
+const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>): void => {
     for (const [field, validator] of Object.entries(definition.shape)) {
         if (!(field in document)) {
             continue;
         }
 
-        if (typeof validator?.parse !== "function") {
+        if (typeof validator.parse !== "function") {
             continue;
         }
 
@@ -353,3 +366,6 @@ export const runRowValidators = (definition: TableDefinitionLike, document: Reco
         validator.parse(document[field]);
     }
 };
+
+export { applyOnDelete, resolveWith, runRowValidators };
+export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput };

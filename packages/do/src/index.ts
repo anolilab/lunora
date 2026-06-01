@@ -72,6 +72,7 @@ export type { ReadTablePageOptions, TableInfo, TablePage } from "./introspect.js
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 export type { LogEntry, LogLevel } from "./log-buffer.js";
 export { LogBuffer } from "./log-buffer.js";
+export { default as NotFoundError } from "./not-found-error.js";
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args.js";
 export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
 export type { RankDirection, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult, RankSortKeyLike } from "./rank.js";
@@ -96,7 +97,7 @@ export type {
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "./shard-do.js";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do.js";
 export type { TransactionSqlLike } from "./transaction.js";
-export { ConflictError, NotFoundError } from "./transaction.js";
+export { ConflictError } from "./transaction.js";
 export type {
     RunTriggersOptions,
     SchedulerLike,

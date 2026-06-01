@@ -30,7 +30,7 @@ export type TriggerOpLike = "delete" | "insert" | "update";
 /**
  * Structural mirror of `@cirrus/server`'s `Scheduler` (kept local so this
  * package takes no runtime dependency on the server package — same reasoning
- * as {@link RelationDefinitionLike}).
+ * as `RelationDefinitionLike`).
  */
 export interface SchedulerLike {
     runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
@@ -56,7 +56,7 @@ export interface TriggerContextLike {
 
 /**
  * Structural mirror of `@cirrus/server`'s `TriggerDefinition` (kept local —
- * same reasoning as {@link RelationDefinitionLike}). Stored on the table's
+ * same reasoning as `RelationDefinitionLike`). Stored on the table's
  * `triggerMap` keyed by accessor name.
  */
 export interface TriggerDefinitionLike {
@@ -88,6 +88,7 @@ export const runTriggers = async (options: RunTriggersOptions): Promise<void> =>
 
     for (const definition of Object.values(definitions)) {
         if (definition.timing === options.timing && definition.op === options.op) {
+            // eslint-disable-next-line no-await-in-loop -- triggers fire in declaration order; each must settle before the next
             await definition.handler(options.ctx, options.event);
         }
     }

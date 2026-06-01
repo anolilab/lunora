@@ -6,28 +6,28 @@
  * {@link WhereCompilerStrategy}. The strategy supplies the two
  * dialect-specific decisions:
  *
- *  - `fieldRef(field)` — how a field name becomes a SQL reference. The DO
- *    dialect maps it to `json_extract(__doc__, '$.field')`; the D1 dialect
- *    maps it to a quoted real column.
- *  - `serialize(value)` — how a JS value becomes a bound parameter
- *    (e.g. boolean → 1/0). Mirrors `ctx-db.ts`'s `serializeSqlValue`.
+ * - `fieldRef(field)` — how a field name becomes a SQL reference. The DO
+ * dialect maps it to `json_extract(__doc__, '$.field')`; the D1 dialect
+ * maps it to a quoted real column.
+ * - `serialize(value)` — how a JS value becomes a bound parameter
+ * (e.g. boolean → 1/0). Mirrors `ctx-db.ts`'s `serializeSqlValue`.
  *
  * Being pure (no I/O) keeps it unit-testable in isolation and lets RLS
  * (3.2) AND-merge an injected base predicate before compilation later.
  */
 
 /** Maps a logical field name to its dialect-specific SQL reference. */
-export type FieldRef = (field: string) => string;
+type FieldRef = (field: string) => string;
 
 /** Maps a JS value to a bound SQL parameter. */
-export type SerializeValue = (value: unknown) => unknown;
+type SerializeValue = (value: unknown) => unknown;
 
-export interface WhereCompilerStrategy {
+interface WhereCompilerStrategy {
     fieldRef: FieldRef;
     serialize: SerializeValue;
 }
 
-export interface CompiledWhere {
+interface CompiledWhere {
     params: unknown[];
     sql: string;
 }
@@ -37,7 +37,7 @@ export interface CompiledWhere {
  * skipped; present keys are emitted in {@link OPERATOR_KEYS} order so the
  * generated SQL is deterministic regardless of authoring order.
  */
-export interface FieldOperators {
+interface FieldOperators {
     contains?: string;
     eq?: unknown;
     gt?: unknown;
@@ -56,7 +56,7 @@ export interface FieldOperators {
  * compiler walks. A non-structural key is a field whose value is either a
  * literal (equality shorthand) or a {@link FieldOperators} object.
  */
-export interface WhereInput {
+interface WhereInput {
     [field: string]: unknown;
     AND?: WhereInput[];
     NOT?: WhereInput;
@@ -212,7 +212,7 @@ const compileNode = (where: WhereInput, strategy: WhereCompilerStrategy, params:
  * leading `WHERE`). An absent or empty input yields `{ sql: "", params: [] }`,
  * leaving it to the caller to decide whether to append a `WHERE` at all.
  */
-export const compileWhere = (where: WhereInput | undefined, strategy: WhereCompilerStrategy): CompiledWhere => {
+const compileWhere = (where: WhereInput | undefined, strategy: WhereCompilerStrategy): CompiledWhere => {
     const params: unknown[] = [];
 
     if (!where) {
@@ -221,3 +221,6 @@ export const compileWhere = (where: WhereInput | undefined, strategy: WhereCompi
 
     return { params, sql: compileNode(where, strategy, params) };
 };
+
+export { compileWhere };
+export type { CompiledWhere, FieldOperators, FieldRef, SerializeValue, WhereCompilerStrategy, WhereInput };

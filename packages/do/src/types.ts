@@ -5,14 +5,14 @@ export interface SubscriptionQuery {
      * `&lt;file>:&lt;function>` identifier of the query to re-run server-side when
      * a write touches a table it reads. Present on subscriptions that opt into
      * server re-execution; absent on legacy delta-only subscriptions, which
-     * are matched by {@link table} alone.
+     * are matched by `table` alone.
      */
     functionPath?: string;
 
     /**
      * Table name the legacy raw-delta fan-out path matches against. Kept for
      * `broadcastDelta`; the server re-execution path keys off
-     * {@link functionPath} instead.
+     * `functionPath` instead.
      */
     table?: string;
 }
@@ -23,7 +23,7 @@ export interface SubscriptionEnvelope {
 
     /**
      * `subscribe`/`unsubscribe`/`ack` drive live queries; `stream` opens a
-     * streaming-query iterator that yields {@link ServerChunkMessage} frames
+     * streaming-query iterator that yields `ServerChunkMessage` frames
      * until the server emits `complete` (or the client cancels with
      * `unsubscribe` on the same id).
      */

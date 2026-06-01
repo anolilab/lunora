@@ -11,16 +11,16 @@
  *
  * Why ctx-threaded instead of `AsyncLocalStorage`? Two reasons:
  *
- *   1. `workerd` only enables ALS under the `nodejs_compat` flag, and Cirrus
- *      shard DOs run under the slimmer `sqlite_compat` profile. Threading the
- *      tracker explicitly avoids dragging in `nodejs_compat` just for the
- *      reactive-cache wiring.
+ * 1. `workerd` only enables ALS under the `nodejs_compat` flag, and Cirrus
+ * shard DOs run under the slimmer `sqlite_compat` profile. Threading the
+ * tracker explicitly avoids dragging in `nodejs_compat` just for the
+ * reactive-cache wiring.
  *
- *   2. The tracker has one well-defined entry point — `cache.run(...)` calls
- *      its callback synchronously after creating the tracker, and reads
- *      either happen on the same microtask chain or they do not happen at
- *      all (returning the awaited result closes the dep set). Explicit ctx
- *      passing makes that lifetime visible at every call-site.
+ * 2. The tracker has one well-defined entry point — `cache.run(...)` calls
+ * its callback synchronously after creating the tracker, and reads
+ * either happen on the same microtask chain or they do not happen at
+ * all (returning the awaited result closes the dep set). Explicit ctx
+ * passing makes that lifetime visible at every call-site.
  */
 
 /**
