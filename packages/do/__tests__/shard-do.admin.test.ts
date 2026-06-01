@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, expectTypeOf, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -440,7 +440,7 @@ describe("shardDO admin row writes", () => {
 
         expect(body.result.op).toBe("insert");
 
-        expectTypeOf(body.result.id).toBeString();
+        expect(typeof body.result.id).toBe("string");
 
         expect(rowCount()).toBe(1);
     });

@@ -1,5 +1,5 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { createAuth } from "../src/create-auth.js";
 import { withAuthPlugins } from "../src/middleware.js";
@@ -103,7 +103,7 @@ describe("withAuthPlugins", () => {
         expect(ctx.authApi).toBeDefined();
         expect(ctx.authApi).toBe(auth.api);
 
-        expectTypeOf(ctx.authApi?.createOrganization).toBeFunction();
+        expect(typeof ctx.authApi?.createOrganization).toBe("function");
     });
 
     test("ctx.authApi.createOrganization writes to the underlying store", async () => {
@@ -159,6 +159,6 @@ describe("withAuthPlugins", () => {
         expect(ctxOut).toMatchObject({ userId: "u_42" });
         expect(ctxOut.authApi).toBeDefined();
 
-        expectTypeOf((ctxOut.authApi as { createOrganization?: unknown }).createOrganization).toBeFunction();
+        expect(typeof (ctxOut.authApi as { createOrganization?: unknown }).createOrganization).toBe("function");
     });
 });

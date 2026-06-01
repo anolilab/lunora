@@ -1,7 +1,7 @@
 import type { ServerResponse } from "node:http";
 
 import type { ViteDevServer } from "vite";
-import { describe, expect, expectTypeOf, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin } from "../src/dashboard-plugin.js";
 
@@ -53,7 +53,7 @@ describe("dashboardPlugin", () => {
         expect(plugin.name).toBe("cirrus:dashboard");
         expect(plugin.apply).toBe("serve");
 
-        expectTypeOf(plugin.configureServer).toBeFunction();
+        expect(typeof plugin.configureServer).toBe("function");
     });
 
     test("serves the dashboard HTML at /__cirrus and passes other paths through", async () => {

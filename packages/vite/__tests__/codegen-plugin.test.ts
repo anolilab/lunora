@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, expectTypeOf, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { codegenPlugin } from "../src/codegen-plugin.js";
 import type { ResolvedCirrusPluginOptions } from "../src/types.js";
@@ -79,7 +79,7 @@ describe("codegen-plugin", () => {
             const plugin = codegenPlugin(makeOptions(workdir));
             const hook = plugin.buildStart;
 
-            expectTypeOf(hook).toBeFunction();
+            expect(typeof hook).toBe("function");
 
             // Vite's buildStart is invoked with a rollup-style context. We pass `undefined`
             // because our implementation doesn't touch it.
@@ -139,7 +139,7 @@ describe("codegen-plugin", () => {
 
             expect(plugin.name).toBe("cirrus:codegen");
 
-            expectTypeOf(plugin.configureServer).toBeFunction();
+            expect(typeof plugin.configureServer).toBe("function");
         });
     });
 });
