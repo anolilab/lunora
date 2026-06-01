@@ -1,6 +1,6 @@
 import type { Logger } from "../util/logger.js";
 
-export type FetchLike = (
+type FetchLike = (
     input: string,
     init?: { body?: string; headers?: Record<string, string>; method?: string },
 ) => Promise<{
@@ -10,7 +10,7 @@ export type FetchLike = (
     text: () => Promise<string>;
 }>;
 
-export interface RunCommandOptions {
+interface RunCommandOptions {
     args?: string;
     cwd?: string;
     fetchImpl?: FetchLike;
@@ -20,7 +20,7 @@ export interface RunCommandOptions {
     url?: string;
 }
 
-export interface RunCommandResult {
+interface RunCommandResult {
     body: unknown;
     code: number;
     requestUrl: string;
@@ -42,7 +42,7 @@ const parseArgsJson = (raw: string | undefined): unknown => {
 
 const TRAILING_SLASH = /\/$/u;
 
-export const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResult> => {
+const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResult> => {
     const baseUrl = (options.url ?? "http://localhost:8787").replace(TRAILING_SLASH, "");
     const requestUrl = `${baseUrl}/_cirrus/rpc`;
 
@@ -97,3 +97,6 @@ export const runRpcCommand = async (options: RunCommandOptions): Promise<RunComm
         requestUrl,
     };
 };
+
+export type { FetchLike, RunCommandOptions, RunCommandResult };
+export { runRpcCommand };

@@ -8,10 +8,10 @@ const TRAILING_SLASH = /\/$/u;
 /**
  * Normalize a `--url` value to a base URL and refuse to send the full-access
  * admin bearer in cleartext to a non-loopback host (a network MITM would gain
- * full admin access). Returns `null` (after logging) when the URL is unusable
- * so the caller can exit non-zero.
+ * full admin access). Returns `undefined` (after logging) when the URL is
+ * unusable so the caller can exit non-zero.
  */
-export const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger): string | null => {
+const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger): string | undefined => {
     const candidate = rawUrl ?? "http://localhost:8787";
 
     let parsed: URL;
@@ -21,14 +21,16 @@ export const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger):
     } catch {
         logger.error(`invalid --url: ${candidate}`);
 
-        return null;
+        return undefined;
     }
 
     if (!LOOPBACK_HOSTS.has(parsed.hostname) && parsed.protocol !== "https:") {
         logger.error(`refusing to send the admin bearer over ${parsed.protocol}// to ${parsed.hostname} — use https for non-localhost targets`);
 
-        return null;
+        return undefined;
     }
 
     return candidate.replace(TRAILING_SLASH, "");
 };
+
+export default resolveAdminBaseUrl;

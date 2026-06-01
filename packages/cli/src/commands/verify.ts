@@ -16,11 +16,10 @@ export interface VerifyCommandResult {
 }
 
 /**
- * Validate a Cirrus project without mutating any file:
- *   1. Wrangler config (bindings, compat date, schema-driven D1/Vectorize).
- *   2. Codegen dry-run — surfaces schema/function parse errors without
- *      touching `cirrus/_generated/`.
- * Exits non-zero if either step reports an error.
+ * Validate a Cirrus project without mutating any file. First the wrangler
+ * config (bindings, compat date, schema-driven D1/Vectorize), then a codegen
+ * dry-run that surfaces schema/function parse errors without touching
+ * `cirrus/_generated/`. Exits non-zero if either step reports an error.
  */
 export const runVerifyCommand = (options: VerifyCommandOptions): VerifyCommandResult => {
     const cwd = options.cwd ?? process.cwd();

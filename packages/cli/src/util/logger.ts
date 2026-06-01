@@ -3,9 +3,8 @@
  * us level-aware output, structured `success`/`warn`/`error` channels and
  * (importantly) the same Spinner / Reporter primitives we use elsewhere.
  *
- * Two reporters are wired:
- *  - `PrettyReporter` for interactive terminals
- *  - `JsonReporter` when `CIRRUS_LOG_JSON=1` (CI / machine-readable mode)
+ * Two reporters are wired: `PrettyReporter` for interactive terminals and
+ * `JsonReporter` when `CIRRUS_LOG_JSON=1` (CI / machine-readable mode).
  *
  * The public surface stays the same `Logger` shape the existing commands
  * already program against so we don't have to touch every command.
@@ -14,7 +13,7 @@ import { JsonReporter } from "@visulima/pail/reporter/json";
 import { PrettyReporter } from "@visulima/pail/reporter/pretty";
 import { createPail } from "@visulima/pail/server";
 
-export interface Logger {
+interface Logger {
     debug?: (message: string) => void;
     error: (message: string) => void;
     info: (message: string) => void;
@@ -70,7 +69,7 @@ const sharedPail: PailLogger = createPail({
     stdout: process.stdout,
 }) as PailLogger;
 
-export const createLogger = (): Logger => {
+const createLogger = (): Logger => {
     return {
         debug: (message) => {
             sharedPail.debug(message);
@@ -91,4 +90,7 @@ export const createLogger = (): Logger => {
 };
 
 /** Direct access to the underlying pail instance for advanced use-cases. */
-export const pail: PailLogger = sharedPail;
+const pail: PailLogger = sharedPail;
+
+export type { Logger };
+export { createLogger, pail };

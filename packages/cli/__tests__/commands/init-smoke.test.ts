@@ -1,11 +1,9 @@
 /**
  * Phase 5 verification gate: a scaffolded project is loadable by the rest of
  * the toolchain. Rather than booting Vite (slow + flaky) we compose-test the
- * pieces a real `cirrus dev` would invoke:
- *
- *   1. `cirrus init -t vite`     → scaffolds the project (offline, via --from)
- *   2. `runCodegen`              → parses schema + function files
- *   3. `validateWranglerProject` → asserts bindings line up with the schema
+ * pieces a real `cirrus dev` would invoke: `cirrus init -t vite` scaffolds the
+ * project (offline, via --from), `runCodegen` parses schema + function files,
+ * and `validateWranglerProject` asserts bindings line up with the schema.
  *
  * If any step throws, the scaffold is broken — exactly the failure a fresh
  * `cirrus init &amp;& cirrus dev` would hit on a clean machine.

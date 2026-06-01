@@ -9,7 +9,7 @@ import type { Logger } from "../util/logger.js";
 import type { SpawnDescriptor, Spawner } from "../util/spawn.js";
 import { defaultSpawner } from "../util/spawn.js";
 
-export interface DevCommandOptions {
+interface DevCommandOptions {
     cwd?: string;
     logger: Logger;
     noVite?: boolean;
@@ -17,9 +17,9 @@ export interface DevCommandOptions {
     spawner?: Spawner;
 }
 
-export type DevMode = "concurrent" | "standalone" | "vite";
+type DevMode = "concurrent" | "standalone" | "vite";
 
-export interface DevCommandPlan {
+interface DevCommandPlan {
     descriptors: ReadonlyArray<SpawnDescriptor & { tag?: string }>;
     mode: DevMode;
 }
@@ -81,7 +81,7 @@ const buildPlan = (cwd: string, options: DevCommandOptions): DevCommandPlan => {
     };
 };
 
-export const planDevCommand = (options: DevCommandOptions): DevCommandPlan => buildPlan(options.cwd ?? process.cwd(), options);
+const planDevCommand = (options: DevCommandOptions): DevCommandPlan => buildPlan(options.cwd ?? process.cwd(), options);
 
 /** Grace period after the first SIGINT before we force-kill children. */
 const SIGINT_GRACE_MS = 5000;
@@ -120,7 +120,7 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
                 logger.warn(`children did not exit within ${String(SIGINT_GRACE_MS)}ms — sending SIGKILL`);
                 cleanup("SIGKILL");
             }, SIGINT_GRACE_MS);
-            escalationTimer.unref?.();
+            escalationTimer.unref();
         } else {
             logger.warn("received second SIGINT — sending SIGKILL");
 
@@ -169,10 +169,10 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
                     }
                 };
 
-                child.stdout?.on("data", (chunk: Buffer) => {
+                child.stdout.on("data", (chunk: Buffer) => {
                     onLine(chunk, "stdout");
                 });
-                child.stderr?.on("data", (chunk: Buffer) => {
+                child.stderr.on("data", (chunk: Buffer) => {
                     onLine(chunk, "stderr");
                 });
 
@@ -209,7 +209,7 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
     }
 };
 
-export const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
+const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
     const plan = planDevCommand(options);
     const spawner = options.spawner ?? defaultSpawner;
 
@@ -250,3 +250,6 @@ export const runDevCommand = async (options: DevCommandOptions): Promise<{ code:
 
     return { code: lastCode, plan };
 };
+
+export type { DevCommandOptions, DevCommandPlan, DevMode };
+export { planDevCommand, runDevCommand };

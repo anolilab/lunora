@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
 
-export interface OpenUrlOptions {
+interface OpenUrlOptions {
     /** Inject a custom opener (tests, alternate platforms, headless CI). */
     opener?: (url: string) => Promise<void>;
 }
@@ -44,19 +44,19 @@ const escapeForCmd = (url: string): string =>
         .replaceAll("!", "%21");
 
 const platformOpener = (url: string): Promise<void> =>
-    new Promise<void>((resolveOpen, rejectOpen) => {
+    new Promise<void>((resolve, reject) => {
         const { args, command } = platformCommand();
         const safeUrl = platform() === "win32" ? escapeForCmd(url) : url;
         const child = spawn(command, [...args, safeUrl], { detached: true, stdio: "ignore" });
 
         child.once("error", (error) => {
-            rejectOpen(error);
+            reject(error);
         });
 
         child.once("spawn", () => {
             // Detach so the parent CLI doesn't wait on the launched browser.
             child.unref();
-            resolveOpen();
+            resolve();
         });
     });
 
@@ -71,7 +71,7 @@ const platformOpener = (url: string): Promise<void> =>
  * handed to the platform opener. On Windows the URL is additionally
  * percent-escaped before reaching `cmd /c start` (see {@link escapeForCmd}).
  */
-export const openUrl = async (url: string, options: OpenUrlOptions = {}): Promise<void> => {
+const openUrl = async (url: string, options: OpenUrlOptions = {}): Promise<void> => {
     let parsed: URL;
 
     try {
@@ -88,3 +88,6 @@ export const openUrl = async (url: string, options: OpenUrlOptions = {}): Promis
 
     await opener(url);
 };
+
+export type { OpenUrlOptions };
+export { openUrl };

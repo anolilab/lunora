@@ -63,10 +63,10 @@ export interface RecordedSpawn {
 export const createRecordingSpawner = (exitCode = 0): { calls: RecordedSpawn[]; spawner: Spawner } => {
     const calls: RecordedSpawn[] = [];
 
-    const spawner: Spawner = async (descriptor) => {
+    const spawner: Spawner = (descriptor) => {
         calls.push({ descriptor });
 
-        return { code: exitCode };
+        return Promise.resolve({ code: exitCode });
     };
 
     return { calls, spawner };

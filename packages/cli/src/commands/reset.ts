@@ -5,7 +5,7 @@ import { join } from "@visulima/path";
 
 import type { Logger } from "../util/logger.js";
 
-export interface ResetCommandOptions {
+interface ResetCommandOptions {
     all?: boolean;
     /** Inject a custom confirmer (tests, non-TTY callers). Returns `true` on confirmation. */
     confirm?: (prompt: string) => Promise<boolean>;
@@ -15,7 +15,7 @@ export interface ResetCommandOptions {
     yes?: boolean;
 }
 
-export interface ResetCommandResult {
+interface ResetCommandResult {
     code: number;
     removed: ReadonlyArray<string>;
 }
@@ -24,9 +24,9 @@ const promptYesNo = async (prompt: string): Promise<boolean> => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
 
     try {
-        const answer = await new Promise<string>((resolveAnswer) => {
+        const answer = await new Promise<string>((resolve) => {
             rl.question(prompt, (input) => {
-                resolveAnswer(input);
+                resolve(input);
             });
         });
 
@@ -38,7 +38,7 @@ const promptYesNo = async (prompt: string): Promise<boolean> => {
     }
 };
 
-export const runResetCommand = async (options: ResetCommandOptions): Promise<ResetCommandResult> => {
+const runResetCommand = async (options: ResetCommandOptions): Promise<ResetCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const targets: string[] = [join(cwd, ".wrangler", "state")];
 
@@ -79,3 +79,6 @@ export const runResetCommand = async (options: ResetCommandOptions): Promise<Res
 
     return { code: 0, removed };
 };
+
+export type { ResetCommandOptions, ResetCommandResult };
+export { runResetCommand };

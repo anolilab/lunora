@@ -8,7 +8,7 @@ import { Project } from "ts-morph";
 
 import type { Logger } from "../util/logger.js";
 
-export interface InfoCommandOptions {
+interface InfoCommandOptions {
     cwd?: string;
     json?: boolean;
     logger: Logger;
@@ -40,7 +40,7 @@ interface SchemaSummary {
     vectorIndexes: number;
 }
 
-export interface InfoSnapshot {
+interface InfoSnapshot {
     cirrusPackages: ReadonlyArray<CirrusPackageInfo>;
     projectRoot: string;
     schema: SchemaSummary | undefined;
@@ -167,7 +167,7 @@ const collectCirrusPackages = (projectRoot: string): ReadonlyArray<CirrusPackage
         });
 };
 
-export const collectInfo = (projectRoot: string): InfoSnapshot => {
+const collectInfo = (projectRoot: string): InfoSnapshot => {
     const cirrusPackages = collectCirrusPackages(projectRoot);
     const wranglerPath = findWranglerFile(projectRoot);
     let wrangler: WranglerSummary | undefined;
@@ -248,12 +248,12 @@ const renderText = (snapshot: InfoSnapshot, logger: Logger): void => {
     }
 };
 
-export interface InfoCommandResult {
+interface InfoCommandResult {
     code: number;
     snapshot: InfoSnapshot;
 }
 
-export const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
+const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
     const cwd = options.cwd ?? process.cwd();
     const snapshot = collectInfo(cwd);
 
@@ -267,3 +267,6 @@ export const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult =
 
     return { code: 0, snapshot };
 };
+
+export type { InfoCommandOptions, InfoCommandResult, InfoSnapshot };
+export { collectInfo, runInfoCommand };

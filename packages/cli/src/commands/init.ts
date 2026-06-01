@@ -8,9 +8,9 @@ import { downloadTemplate } from "giget";
 
 import type { Logger } from "../util/logger.js";
 
-export type Template = "next" | "standalone" | "tanstack-start" | "vite";
+type Template = "next" | "standalone" | "tanstack-start" | "vite";
 
-export interface InitCommandOptions {
+interface InitCommandOptions {
     /**
      * When true, accept `--source` values that don't start with `gh:` /
      * `github:` / `https://` or that contain `..`. Defaults to false; the CLI
@@ -38,7 +38,7 @@ export interface InitCommandOptions {
     templateType?: Template;
 }
 
-export interface InitCommandResult {
+interface InitCommandResult {
     code: number;
     files: ReadonlyArray<string>;
     target: string;
@@ -105,23 +105,23 @@ const isTextFile = (filePath: string): boolean => {
 
 const substitute = (content: string, name: string): string => content.replaceAll("{{name}}", name);
 
-const collectFiles = (dir: string): ReadonlyArray<string> => {
+const collectFiles = (directory: string): ReadonlyArray<string> => {
     const out: string[] = [];
 
-    for (const entry of walkSync(dir, { includeDirs: false, includeFiles: true })) {
+    for (const entry of walkSync(directory, { includeDirs: false, includeFiles: true })) {
         out.push(entry.path);
     }
 
     return out;
 };
 
-const copyTemplate = (sourceDir: string, target: string, name: string): ReadonlyArray<string> => {
-    const files = collectFiles(sourceDir);
+const copyTemplate = (sourceDirectory: string, target: string, name: string): ReadonlyArray<string> => {
+    const files = collectFiles(sourceDirectory);
     const written: string[] = [];
 
     for (const source of files) {
-        const rel = relative(sourceDir, source);
-        const destination = join(target, rel);
+        const relativePath = relative(sourceDirectory, source);
+        const destination = join(target, relativePath);
 
         mkdirSync(dirname(destination), { recursive: true });
 
@@ -171,15 +171,15 @@ const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, targ
 };
 
 const scaffoldFromLocal = (fromRoot: string, templateType: Template, target: string, name: string, logger: Logger): InitCommandResult => {
-    const templateDir = join(fromRoot, templateType);
+    const templateDirectory = join(fromRoot, templateType);
 
-    if (!existsSync(templateDir)) {
-        logger.error(`template not found in local source: ${templateDir}`);
+    if (!existsSync(templateDirectory)) {
+        logger.error(`template not found in local source: ${templateDirectory}`);
 
         return { code: 1, files: [], target };
     }
 
-    const written = copyTemplate(templateDir, target, name);
+    const written = copyTemplate(templateDirectory, target, name);
 
     logScaffoldSuccess(logger, written, target, name);
 
@@ -201,7 +201,7 @@ const scaffoldFromRemote = async (
     logger: Logger,
 ): Promise<InitCommandResult> => {
     const stagingRoot = mkdtempSync(join(tmpdir(), "cirrus-init-fetch-"));
-    const stagingDir = join(stagingRoot, "template");
+    const stagingDirectory = join(stagingRoot, "template");
 
     try {
         const remote = resolveTemplateSource(templateType, source);
@@ -210,7 +210,7 @@ const scaffoldFromRemote = async (
 
         const downloaded = (await downloadTemplate(remote, {
             cwd: stagingRoot,
-            dir: stagingDir,
+            dir: stagingDirectory,
             force: true,
             install: false,
             silent: true,
@@ -218,7 +218,7 @@ const scaffoldFromRemote = async (
 
         // Surface the resolved provenance so the user can audit what was
         // fetched before any files are copied into the project tree.
-        const staged = collectFiles(stagingDir);
+        const staged = collectFiles(stagingDirectory);
 
         if (downloaded.commit) {
             logger.info(`resolved ${downloaded.source} @ ${downloaded.commit} (${String(staged.length)} file(s))`);
@@ -226,7 +226,7 @@ const scaffoldFromRemote = async (
             logger.info(`resolved ${downloaded.source} (${String(staged.length)} file(s))`);
         }
 
-        const written = copyTemplate(stagingDir, target, name);
+        const written = copyTemplate(stagingDirectory, target, name);
 
         logScaffoldSuccess(logger, written, target, name);
 
@@ -242,7 +242,7 @@ const scaffoldFromRemote = async (
     }
 };
 
-export const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandResult> => {
+const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const name = options.name ?? "cirrus-app";
     const templateType: Template = options.templateType ?? "vite";
@@ -284,3 +284,6 @@ export const runInitCommand = async (options: InitCommandOptions): Promise<InitC
 
     return scaffoldFromRemote(options.source, templateType, target, name, options.logger);
 };
+
+export type { InitCommandOptions, InitCommandResult, Template };
+export { runInitCommand };

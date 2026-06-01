@@ -6,7 +6,7 @@ import type { Logger } from "../util/logger.js";
 import type { SpawnDescriptor, Spawner } from "../util/spawn.js";
 import { defaultSpawner } from "../util/spawn.js";
 
-export interface AnalyzeCommandOptions {
+interface AnalyzeCommandOptions {
     cwd?: string;
     /** Skip the wrangler dry-run (tests inject a pre-built outdir). */
     inspectOnly?: string;
@@ -15,13 +15,13 @@ export interface AnalyzeCommandOptions {
     spawner?: Spawner;
 }
 
-export interface AnalyzeFileEntry {
+interface AnalyzeFileEntry {
     /** Path relative to the outdir. */
     path: string;
     sizeBytes: number;
 }
 
-export interface AnalyzeReport {
+interface AnalyzeReport {
     /** Files under cirrus/_generated, when present. */
     generatedFiles: ReadonlyArray<AnalyzeFileEntry>;
     outdir: string;
@@ -31,7 +31,7 @@ export interface AnalyzeReport {
     totalFiles: number;
 }
 
-export interface AnalyzeCommandResult {
+interface AnalyzeCommandResult {
     code: number;
     descriptor: SpawnDescriptor | undefined;
     report: AnalyzeReport | undefined;
@@ -115,7 +115,7 @@ const renderText = (report: AnalyzeReport, logger: Logger): void => {
  * Tests inject `inspectOnly: &lt;path>` to skip the wrangler invocation and
  * walk a pre-built directory directly.
  */
-export const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<AnalyzeCommandResult> => {
+const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<AnalyzeCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const { logger } = options;
 
@@ -142,9 +142,8 @@ export const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise
         if (spawned.code !== 0) {
             logger.error(`analyze: wrangler dry-run failed (exit ${String(spawned.code)})`);
 
-            if (temporary) {
-                rmSync(outdir, { force: true, recursive: true });
-            }
+            // `temporary` is always true on this branch (we created the outdir above).
+            rmSync(outdir, { force: true, recursive: true });
 
             return { code: spawned.code, descriptor, report: undefined };
         }
@@ -178,3 +177,6 @@ export const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise
         }
     }
 };
+
+export type { AnalyzeCommandOptions, AnalyzeCommandResult, AnalyzeFileEntry, AnalyzeReport };
+export { runAnalyzeCommand };

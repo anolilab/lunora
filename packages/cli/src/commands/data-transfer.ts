@@ -13,7 +13,7 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
-import { resolveAdminBaseUrl } from "../util/admin-url.js";
+import resolveAdminBaseUrl from "../util/admin-url.js";
 import type { Logger } from "../util/logger.js";
 import type { FetchLike } from "./run.js";
 
@@ -21,14 +21,14 @@ const EXPORT_ENDPOINT_PATH = "/_cirrus/admin/export";
 const IMPORT_ENDPOINT_PATH = "/_cirrus/admin/import";
 
 /** Rows per HTTP request when importing. Convex uses ~500; same here. */
-export const DEFAULT_IMPORT_BATCH_SIZE = 500;
+const DEFAULT_IMPORT_BATCH_SIZE = 500;
 
 /**
  * Minimal projection of `globalThis.fetch` for the export path — we need
  * `body` as a stream-iterable, which the shared {@link FetchLike} type
  * intentionally hides for the JSON-only commands.
  */
-export type StreamingFetchLike = (
+type StreamingFetchLike = (
     input: string,
     init?: { body?: string; headers?: Record<string, string>; method?: string },
 ) => Promise<{
@@ -39,7 +39,7 @@ export type StreamingFetchLike = (
     text: () => Promise<string>;
 }>;
 
-export interface ExportCommandOptions {
+interface ExportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
     logger: Logger;
@@ -55,7 +55,7 @@ export interface ExportCommandOptions {
     url?: string;
 }
 
-export interface ExportCommandResult {
+interface ExportCommandResult {
     bytes: number;
     code: number;
     /** Number of NDJSON lines streamed (0 on error). */
@@ -76,11 +76,74 @@ const resolveTables = (raw: string | undefined): string[] | undefined => {
 };
 
 /**
+ * Honour backpressure: if the sink can't keep up (slow filesystem, piped
+ * stdout consumer), `sink.write` returns false — wait for `drain` before
+ * resuming. Otherwise Node buffers writes in the heap and a 10M-row export
+ * materialises in memory, defeating the streaming goal.
+ */
+const writeWithBackpressure = async (sink: NodeJS.WritableStream, line: string): Promise<void> => {
+    if (!sink.write(line)) {
+        await new Promise<void>((resolve) => {
+            sink.once("drain", resolve);
+        });
+    }
+};
+
+/**
+ * Drain the worker's NDJSON response into the sink, counting bytes and rows.
+ * Pipes straight through so a 10M-row export never materialises in memory.
+ */
+const streamNdjsonToSink = async (
+    body: ReadableStream<Uint8Array>,
+    sink: NodeJS.WritableStream,
+): Promise<{ bytes: number; rows: number }> => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let rows = 0;
+    let leftover = "";
+    let done = false;
+
+    while (!done) {
+        // eslint-disable-next-line no-await-in-loop -- stream chunks must be read sequentially
+        const read = await reader.read();
+
+        done = read.done;
+
+        if (read.value === undefined) {
+            continue;
+        }
+
+        bytes += read.value.length;
+        leftover += decoder.decode(read.value, { stream: true });
+
+        let newlineIndex = leftover.indexOf("\n");
+
+        while (newlineIndex !== -1) {
+            rows += 1;
+            const line = `${leftover.slice(0, newlineIndex)}\n`;
+
+            // eslint-disable-next-line no-await-in-loop -- backpressure is intentionally sequential
+            await writeWithBackpressure(sink, line);
+            leftover = leftover.slice(newlineIndex + 1);
+            newlineIndex = leftover.indexOf("\n");
+        }
+    }
+
+    if (leftover.length > 0) {
+        rows += 1;
+        await writeWithBackpressure(sink, `${leftover}\n`);
+    }
+
+    return { bytes, rows };
+};
+
+/**
  * Stream an export. The worker emits NDJSON; we count newlines as we go and
  * pipe straight to the output sink, so a 10M-row export doesn't materialise
  * the body in memory.
  */
-export const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCommandResult> => {
+const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCommandResult> => {
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to export from the implicit localhost worker)");
 
@@ -97,7 +160,7 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
 
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
 
-    if (baseUrl === null) {
+    if (baseUrl === undefined) {
         return { bytes: 0, code: 1, rows: 0 };
     }
 
@@ -137,58 +200,16 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
     const outPath = options.out === undefined || options.out === "-" ? undefined : options.out;
     const sink = outPath === undefined ? process.stdout : createWriteStream(outPath, { encoding: "utf8" });
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let bytes = 0;
-    let rows = 0;
-    let leftover = "";
-
-    // Honour backpressure: if the sink can't keep up (slow filesystem, piped
-    // stdout consumer), `sink.write` returns false — wait for `drain` before
-    // resuming. Otherwise Node buffers writes in the heap and a 10M-row
-    // export materialises in memory, defeating the streaming goal.
-    const writeWithBackpressure = async (line: string): Promise<void> => {
-        if (!sink.write(line)) {
-            await new Promise<void>((resolve) => {
-                sink.once("drain", resolve);
-            });
-        }
-    };
-
-    while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-            break;
-        }
-
-        const chunk = decoder.decode(value, { stream: true });
-
-        bytes += value.length;
-        leftover += chunk;
-
-        let newlineIndex = leftover.indexOf("\n");
-
-        while (newlineIndex !== -1) {
-            rows += 1;
-            const line = `${leftover.slice(0, newlineIndex)}\n`;
-
-            // eslint-disable-next-line no-await-in-loop -- backpressure is intentionally sequential
-            await writeWithBackpressure(line);
-            leftover = leftover.slice(newlineIndex + 1);
-            newlineIndex = leftover.indexOf("\n");
-        }
-    }
-
-    if (leftover.length > 0) {
-        rows += 1;
-        await writeWithBackpressure(`${leftover}\n`);
-    }
+    const { bytes, rows } = await streamNdjsonToSink(response.body, sink);
 
     if (outPath !== undefined) {
         await new Promise<void>((resolve, reject) => {
             (sink as ReturnType<typeof createWriteStream>).end((error?: Error) => {
-                error ? reject(error) : resolve();
+                if (error) {
+                    reject(error);
+                } else {
+                    resolve();
+                }
             });
         });
 
@@ -198,7 +219,7 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
     return { bytes, code: 0, rows };
 };
 
-export interface ImportCommandOptions {
+interface ImportCommandOptions {
     /** Rows per HTTP request. Defaults to {@link DEFAULT_IMPORT_BATCH_SIZE}. */
     batchSize?: number;
     cwd?: string;
@@ -218,23 +239,29 @@ export interface ImportCommandOptions {
     url?: string;
 }
 
-export interface ImportCommandResult {
+interface ImportCommandResult {
     body: unknown;
     code: number;
     /** Total inserted rows across batches. */
     inserted: number;
 }
 
+interface ImportRequest {
+    fetchImpl: StreamingFetchLike;
+    requestUrl: string;
+    token: string;
+}
+
 /**
- * Stream an NDJSON file in chunks, POSTing each batch to
- * `/_cirrus/admin/import`. We keep the line buffer bounded by `batchSize` so a
- * multi-GiB file imports without buffering everything in memory.
+ * Validate `import` preconditions (guardrails, token, source file, fetch) and
+ * resolve the request context. Returns `undefined` after logging when any
+ * precondition fails, so the caller can exit non-zero.
  */
-export const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
+const resolveImportRequest = async (options: ImportCommandOptions): Promise<ImportRequest | undefined> => {
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to import to the implicit localhost worker)");
 
-        return { body: undefined, code: 1, inserted: 0 };
+        return undefined;
     }
 
     const token = options.token ?? process.env["CIRRUS_ADMIN_TOKEN"];
@@ -242,7 +269,7 @@ export const runImportCommand = async (options: ImportCommandOptions): Promise<I
     if (!token) {
         options.logger.error("admin token required — pass --token or set CIRRUS_ADMIN_TOKEN");
 
-        return { body: undefined, code: 1, inserted: 0 };
+        return undefined;
     }
 
     try {
@@ -251,30 +278,45 @@ export const runImportCommand = async (options: ImportCommandOptions): Promise<I
         if (!stats.isFile()) {
             options.logger.error(`not a file: ${options.file}`);
 
-            return { body: undefined, code: 1, inserted: 0 };
+            return undefined;
         }
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
         options.logger.error(`failed to stat ${options.file}: ${message}`);
 
-        return { body: undefined, code: 1, inserted: 0 };
+        return undefined;
     }
 
     const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
 
-    if (baseUrl === null) {
-        return { body: undefined, code: 1, inserted: 0 };
+    if (baseUrl === undefined) {
+        return undefined;
     }
-
-    const requestUrl = `${baseUrl}${IMPORT_ENDPOINT_PATH}`;
-    const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
 
     const fetchImpl = (options.fetchImpl ?? (globalThis as unknown as { fetch: StreamingFetchLike }).fetch) as StreamingFetchLike | undefined;
 
     if (typeof fetchImpl !== "function") {
         throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
     }
+
+    return { fetchImpl, requestUrl: `${baseUrl}${IMPORT_ENDPOINT_PATH}`, token };
+};
+
+/**
+ * Stream an NDJSON file in chunks, POSTing each batch to
+ * `/_cirrus/admin/import`. We keep the line buffer bounded by `batchSize` so a
+ * multi-GiB file imports without buffering everything in memory.
+ */
+const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
+    const request = await resolveImportRequest(options);
+
+    if (request === undefined) {
+        return { body: undefined, code: 1, inserted: 0 };
+    }
+
+    const { fetchImpl, requestUrl, token } = request;
+    const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
 
     options.logger.info(`POST ${requestUrl} -> import ${options.file}`);
 
@@ -353,17 +395,17 @@ export const runImportCommand = async (options: ImportCommandOptions): Promise<I
         // `--table` wraps each bare doc — the source is `{...}\n{...}\n`,
         // not `{table,doc}` envelopes. Guard the parse so a malformed line
         // surfaces a row-scoped error instead of an unhandled rejection.
-        let document_: unknown;
+        let parsedDocument: unknown;
 
         try {
-            document_ = JSON.parse(trimmed);
+            parsedDocument = JSON.parse(trimmed);
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
 
             throw new Error(`invalid JSON on line ${String(lineNumber)}: ${message}`, { cause: error });
         }
 
-        batch.push(JSON.stringify({ doc: document_, table: options.table }));
+        batch.push(JSON.stringify({ doc: parsedDocument, table: options.table }));
     };
 
     // `for await ... of` natively awaits each chunk + propagates errors
@@ -404,3 +446,6 @@ export const runImportCommand = async (options: ImportCommandOptions): Promise<I
 
     return { body, code: errors.length > 0 ? 1 : 0, inserted: insertedTotal };
 };
+
+export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, ImportCommandResult, StreamingFetchLike };
+export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand };

@@ -6,7 +6,7 @@ import type { SpawnDescriptor, Spawner } from "../util/spawn.js";
 import { defaultSpawner } from "../util/spawn.js";
 import { validateWrangler } from "../util/wrangler-validator.js";
 
-export interface DeployCommandOptions {
+interface DeployCommandOptions {
     cwd?: string;
     env?: string;
     /** Set to `false` to disable interactive spinners (test injection). */
@@ -16,7 +16,7 @@ export interface DeployCommandOptions {
     spawner?: Spawner;
 }
 
-export interface DeployCommandResult {
+interface DeployCommandResult {
     code: number;
     descriptor: SpawnDescriptor | undefined;
     /** Set when the run aborted before reaching the wrangler invocation. */
@@ -35,7 +35,7 @@ const isInteractive = (options: DeployCommandOptions): boolean => {
     return process.stdout.isTTY && !process.env.CI;
 };
 
-export const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
+const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
 
@@ -112,3 +112,6 @@ export const runDeployCommand = async (options: DeployCommandOptions): Promise<D
         validation,
     };
 };
+
+export type { DeployCommandOptions, DeployCommandResult };
+export { runDeployCommand };

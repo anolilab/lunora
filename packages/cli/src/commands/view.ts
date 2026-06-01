@@ -7,7 +7,7 @@ import type { Logger } from "../util/logger.js";
 import type { OpenUrlOptions } from "../util/open-url.js";
 import { openUrl } from "../util/open-url.js";
 
-export interface ViewCommandOptions {
+interface ViewCommandOptions {
     cwd?: string;
     logger: Logger;
     /** Inject the opener so tests don't spawn a browser. */
@@ -16,7 +16,7 @@ export interface ViewCommandOptions {
     remote?: boolean;
 }
 
-export interface ViewCommandResult {
+interface ViewCommandResult {
     code: number;
     url: string | undefined;
 }
@@ -104,7 +104,7 @@ const resolveRemoteUrl = (wrangler: Record<string, unknown> | undefined): string
     return undefined;
 };
 
-export const runViewCommand = async (options: ViewCommandOptions): Promise<ViewCommandResult> => {
+const runViewCommand = async (options: ViewCommandOptions): Promise<ViewCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const wrangler = readWrangler(cwd);
     const { logger } = options;
@@ -137,3 +137,6 @@ export const runViewCommand = async (options: ViewCommandOptions): Promise<ViewC
 
     return { code: 0, url };
 };
+
+export type { ViewCommandOptions, ViewCommandResult };
+export { runViewCommand };

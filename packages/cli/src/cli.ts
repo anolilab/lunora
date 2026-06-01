@@ -9,6 +9,7 @@ import { runCodegenCommand } from "./commands/codegen.js";
 import { runExportCommand, runImportCommand } from "./commands/data-transfer.js";
 import { runDeployCommand } from "./commands/deploy.js";
 import { runDevCommand } from "./commands/dev.js";
+// eslint-disable-next-line unicorn/prevent-abbreviations -- "docs" is the user-facing CLI command name (cirrus docs); the handler matches it
 import { runDocsCommand } from "./commands/docs.js";
 import type { EnvSubcommand } from "./commands/env.js";
 import { runEnvCommand } from "./commands/env.js";
@@ -22,7 +23,7 @@ import { runVerifyCommand } from "./commands/verify.js";
 import { runViewCommand } from "./commands/view.js";
 import { createLogger } from "./util/logger.js";
 
-export const COMMANDS = [
+const COMMANDS = [
     "init",
     "dev",
     "codegen",
@@ -40,11 +41,11 @@ export const COMMANDS = [
     "docs",
 ] as const;
 
-export type CommandName = (typeof COMMANDS)[number];
+type CommandName = (typeof COMMANDS)[number];
 
-export const VERSION = "0.0.0";
+const VERSION = "0.0.0";
 
-export interface RunCliOptions {
+interface RunCliOptions {
     argv?: ReadonlyArray<string>;
     cwd?: string;
 }
@@ -117,19 +118,44 @@ const optionTakesValue = (token: string): boolean => {
  * are tracked in {@link BOOLEAN_OPTIONS} so they don't grab the following
  * positional as their value.
  *
- * Examples:
- *   ["init", "my-app", "-t", "vite"]   -> ["init", "-t", "vite", "my-app"]
- *   ["init", "my-app", "--template=v"] -> ["init", "--template=v", "my-app"]
- *   ["dev", "--no-vite", "--port", "1"] unchanged.
+ * For example `["init", "my-app", "-t", "vite"]` becomes
+ * `["init", "-t", "vite", "my-app"]`, while `["dev", "--no-vite", "--port", "1"]`
+ * is unchanged.
  */
+interface ArgvBuckets {
+    options: string[];
+    positionals: string[];
+}
+
+/**
+ * Classify one argv token into `buckets`. Returns how many entries it consumed
+ * (1, or 2 when an option grabbed its value).
+ */
+const classifyArgvToken = (token: string, next: string | undefined, buckets: ArgvBuckets): number => {
+    if (!isOptionToken(token)) {
+        buckets.positionals.push(token);
+
+        return 1;
+    }
+
+    buckets.options.push(token);
+
+    if (optionTakesValue(token) && next !== undefined && !isOptionToken(next)) {
+        buckets.options.push(next);
+
+        return 2;
+    }
+
+    return 1;
+};
+
 const reorderArgvOptionsFirst = (argv: ReadonlyArray<string>): string[] => {
     if (argv.length <= 1) {
         return [...argv];
     }
 
     const [head, ...rest] = argv;
-    const options: string[] = [];
-    const positionals: string[] = [];
+    const buckets: ArgvBuckets = { options: [], positionals: [] };
 
     for (let index = 0; index < rest.length; index += 1) {
         const token = rest[index];
@@ -140,27 +166,14 @@ const reorderArgvOptionsFirst = (argv: ReadonlyArray<string>): string[] => {
 
         if (token === "--") {
             // Everything after `--` is verbatim positional.
-            positionals.push(...rest.slice(index));
+            buckets.positionals.push(...rest.slice(index));
             break;
         }
 
-        if (isOptionToken(token)) {
-            options.push(token);
-
-            if (optionTakesValue(token)) {
-                const next = rest[index + 1];
-
-                if (next !== undefined && !isOptionToken(next)) {
-                    options.push(next);
-                    index += 1;
-                }
-            }
-        } else {
-            positionals.push(token);
-        }
+        index += classifyArgvToken(token, rest[index + 1], buckets) - 1;
     }
 
-    return [head as string, ...options, ...positionals];
+    return [head as string, ...buckets.options, ...buckets.positionals];
 };
 
 const buildCli = (options: RunCliOptions): BuildCliResult => {
@@ -285,9 +298,9 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         argument: { description: "Function path (e.g. messages:send)", name: "functionPath", type: String },
         description: "Send a single RPC to a running Cirrus Worker",
         execute: async ({ argument, options: parsed }) => {
-            const function_ = argument[0];
+            const functionPathArgument = argument[0];
 
-            if (!function_) {
+            if (!functionPathArgument) {
                 logger.error("missing function path. Usage: cirrus run <functionPath> [--args <json>]");
                 exitCode.value = 1;
 
@@ -298,7 +311,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 const result = await runRpcCommand({
                     args: toStringOrUndefined(parsed.args),
                     cwd,
-                    functionPath: function_,
+                    functionPath: functionPathArgument,
                     logger,
                     shard: toStringOrUndefined(parsed.shard),
                     url: toStringOrUndefined(parsed.url),
@@ -641,7 +654,7 @@ const printHelp = (): void => {
     process.stdout.write(HELP);
 };
 
-export const runCli = async (options: RunCliOptions = {}): Promise<number> => {
+const runCli = async (options: RunCliOptions = {}): Promise<number> => {
     const argv = options.argv ?? process.argv.slice(2);
 
     // Cerebro owns help/version rendering at runtime, but the unit tests
@@ -709,9 +722,14 @@ if (isMain()) {
     try {
         const code = await runCli();
 
+        // eslint-disable-next-line unicorn/no-process-exit -- CLI entrypoint: propagate the resolved exit code to the shell
         process.exit(code);
     } catch (error: unknown) {
         process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        // eslint-disable-next-line unicorn/no-process-exit -- CLI entrypoint: a top-level failure must exit non-zero
         process.exit(1);
     }
 }
+
+export type { CommandName, RunCliOptions };
+export { COMMANDS, runCli, VERSION };

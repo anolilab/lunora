@@ -9,51 +9,46 @@
  * Only **global** tables go through here — sharded / root tables live in
  * per-DO SQLite and don't need a migration runner.
  *
- * Supported diffs in v0.1:
- *   - CREATE TABLE (new table appears)
- *   - DROP TABLE (table removed)
- *   - ALTER TABLE … ADD COLUMN (column added)
- *   - CREATE INDEX (index added)
- *   - DROP INDEX (index removed)
+ * Supported diffs in v0.1: CREATE TABLE (new table appears), DROP TABLE (table
+ * removed), ALTER TABLE … ADD COLUMN (column added), CREATE INDEX (index added),
+ * and DROP INDEX (index removed).
  *
- * Explicitly unsupported in v0.1 (documented as v0.2):
- *   - column rename
- *   - column type change
- *   - column removal (SQLite has no DROP COLUMN before 3.35; even with it, we'd
- *     rather make the user opt in explicitly because it's destructive)
- *   - index rename
+ * Explicitly unsupported in v0.1 (documented as v0.2): column rename, column
+ * type change, column removal (SQLite has no DROP COLUMN before 3.35; even with
+ * it, we'd rather make the user opt in explicitly because it's destructive),
+ * and index rename.
  *
  * Any unsupported delta is surfaced via {@link SchemaDiff.unsupported} so the
  * caller can write a comment block into the migration file.
  */
 
 /** Compact snapshot of a single global table — what we persist + diff. */
-export interface TableSnapshot {
+interface TableSnapshot {
     columns: Record<string, ColumnSnapshot>;
     indexes: Record<string, IndexSnapshot>;
     /** Table name (also the JSON key — duplicated for ease of iteration). */
     name: string;
 }
 
-export interface ColumnSnapshot {
+interface ColumnSnapshot {
     /** True when the column accepts NULL (validator wrapped in v.optional). */
     nullable: boolean;
     /** SQLite type affinity, derived from the validator. */
     sqlType: "BLOB" | "INTEGER" | "REAL" | "TEXT";
 }
 
-export interface IndexSnapshot {
+interface IndexSnapshot {
     fields: ReadonlyArray<string>;
     name: string;
     unique: boolean;
 }
 
-export interface SchemaSnapshot {
+interface SchemaSnapshot {
     tables: Record<string, TableSnapshot>;
     version: 1;
 }
 
-export interface DiffEntry {
+interface DiffEntry {
     kind: "addColumn" | "createIndex" | "createTable" | "dropIndex" | "dropTable";
     /** Generated SQL for this delta (already terminated with `;`). */
     sql: string;
@@ -61,13 +56,13 @@ export interface DiffEntry {
     summary: string;
 }
 
-export interface UnsupportedEntry {
+interface UnsupportedEntry {
     kind: "columnTypeChange" | "dropColumn" | "indexRename" | "renameColumn";
     /** Human-readable description, embedded as SQL comments. */
     summary: string;
 }
 
-export interface SchemaDiff {
+interface SchemaDiff {
     /** No-op marker — true when there is genuinely nothing to apply. */
     empty: boolean;
     entries: ReadonlyArray<DiffEntry>;
@@ -75,7 +70,7 @@ export interface SchemaDiff {
 }
 
 /** Map a Cirrus validator kind to a SQLite type affinity. */
-export const validatorKindToSqlType = (kind: string): ColumnSnapshot["sqlType"] => {
+const validatorKindToSqlType = (kind: string): ColumnSnapshot["sqlType"] => {
     switch (kind) {
         case "bigint":
         case "boolean":
@@ -111,7 +106,7 @@ const renderColumnDefinition = (name: string, column: ColumnSnapshot): string =>
 };
 
 /** Emit `CREATE TABLE` SQL for a new global table. */
-export const renderCreateTable = (table: TableSnapshot): string => {
+const renderCreateTable = (table: TableSnapshot): string => {
     const id = `${escapeIdentifier("_id")} TEXT PRIMARY KEY`;
     const columns = Object.entries(table.columns)
         .map(([columnName, column]) => `    ${renderColumnDefinition(columnName, column)}`)
@@ -120,19 +115,44 @@ export const renderCreateTable = (table: TableSnapshot): string => {
     return `CREATE TABLE IF NOT EXISTS ${escapeIdentifier(table.name)} (\n    ${id}${columns.length > 0 ? `,\n${columns}` : ""}\n);`;
 };
 
-export const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${escapeIdentifier(tableName)};`;
+const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${escapeIdentifier(tableName)};`;
 
-export const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string =>
+const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string =>
     `ALTER TABLE ${escapeIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, column)};`;
 
-export const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
+const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
     const fields = index.fields.map((field) => escapeIdentifier(field)).join(", ");
     const uniqueClause = index.unique ? "UNIQUE " : "";
 
     return `CREATE ${uniqueClause}INDEX IF NOT EXISTS ${escapeIdentifier(index.name)} ON ${escapeIdentifier(tableName)} (${fields});`;
 };
 
-export const renderDropIndex = (indexName: string): string => `DROP INDEX IF EXISTS ${escapeIdentifier(indexName)};`;
+const renderDropIndex = (indexName: string): string => `DROP INDEX IF EXISTS ${escapeIdentifier(indexName)};`;
+
+/** Surface type/nullability changes on an existing column as unsupported deltas. */
+const diffExistingColumn = (
+    tableName: string,
+    columnName: string,
+    old: ColumnSnapshot,
+    column: ColumnSnapshot,
+    unsupported: UnsupportedEntry[],
+): void => {
+    if (old.sqlType !== column.sqlType) {
+        unsupported.push({
+            kind: "columnTypeChange",
+            summary: `column type change on ${tableName}.${columnName}: ${old.sqlType} → ${column.sqlType} (write SQL manually)`,
+        });
+    }
+
+    if (old.nullable !== column.nullable) {
+        unsupported.push({
+            kind: "columnTypeChange",
+            summary: `nullability change on ${tableName}.${columnName}: ${
+                old.nullable ? "NULL" : "NOT NULL"
+            } → ${column.nullable ? "NULL" : "NOT NULL"} (write SQL manually)`,
+        });
+    }
+};
 
 const diffColumns = (
     tableName: string,
@@ -154,21 +174,7 @@ const diffColumns = (
             continue;
         }
 
-        if (old.sqlType !== column.sqlType) {
-            unsupported.push({
-                kind: "columnTypeChange",
-                summary: `column type change on ${tableName}.${columnName}: ${old.sqlType} → ${column.sqlType} (write SQL manually)`,
-            });
-        }
-
-        if (old.nullable !== column.nullable) {
-            unsupported.push({
-                kind: "columnTypeChange",
-                summary: `nullability change on ${tableName}.${columnName}: ${
-                    old.nullable ? "NULL" : "NOT NULL"
-                } → ${column.nullable ? "NULL" : "NOT NULL"} (write SQL manually)`,
-            });
-        }
+        diffExistingColumn(tableName, columnName, old, column, unsupported);
     }
 
     for (const columnName of Object.keys(previous)) {
@@ -228,11 +234,28 @@ const diffIndexes = (
     }
 };
 
+/** Emit CREATE TABLE + CREATE INDEX entries for a brand-new global table. */
+const diffNewTable = (tableName: string, table: TableSnapshot, entries: DiffEntry[]): void => {
+    entries.push({
+        kind: "createTable",
+        sql: renderCreateTable(table),
+        summary: `CREATE TABLE ${tableName}`,
+    });
+
+    for (const index of Object.values(table.indexes)) {
+        entries.push({
+            kind: "createIndex",
+            sql: renderCreateIndex(tableName, index),
+            summary: `CREATE INDEX ${index.name} ON ${tableName}`,
+        });
+    }
+};
+
 /**
  * Compute a {@link SchemaDiff} from two snapshots. Pure function — no I/O.
  */
 
-export const diffSnapshots = (previous: SchemaSnapshot | undefined, next: SchemaSnapshot): SchemaDiff => {
+const diffSnapshots = (previous: SchemaSnapshot | undefined, next: SchemaSnapshot): SchemaDiff => {
     const previousTables = previous?.tables ?? {};
     const entries: DiffEntry[] = [];
     const unsupported: UnsupportedEntry[] = [];
@@ -242,19 +265,7 @@ export const diffSnapshots = (previous: SchemaSnapshot | undefined, next: Schema
         const old = previousTables[tableName];
 
         if (old === undefined) {
-            entries.push({
-                kind: "createTable",
-                sql: renderCreateTable(table),
-                summary: `CREATE TABLE ${tableName}`,
-            });
-
-            for (const index of Object.values(table.indexes)) {
-                entries.push({
-                    kind: "createIndex",
-                    sql: renderCreateIndex(tableName, index),
-                    summary: `CREATE INDEX ${index.name} ON ${tableName}`,
-                });
-            }
+            diffNewTable(tableName, table, entries);
 
             continue;
         }
@@ -286,7 +297,7 @@ export const diffSnapshots = (previous: SchemaSnapshot | undefined, next: Schema
  * each SQL statement, and (if any) a trailing comment block describing the
  * manual SQL the user needs to fill in for unsupported deltas.
  */
-export const renderMigrationFile = (name: string, diff: SchemaDiff, generatedAt: string): string => {
+const renderMigrationFile = (name: string, diff: SchemaDiff, generatedAt: string): string => {
     const lines: string[] = [
         `-- Cirrus migration: ${name}`,
         `-- Generated at ${generatedAt}`,
@@ -318,4 +329,16 @@ export const renderMigrationFile = (name: string, diff: SchemaDiff, generatedAt:
     }
 
     return lines.join("\n");
+};
+
+export type { ColumnSnapshot, DiffEntry, IndexSnapshot, SchemaDiff, SchemaSnapshot, TableSnapshot, UnsupportedEntry };
+export {
+    diffSnapshots,
+    renderAddColumn,
+    renderCreateIndex,
+    renderCreateTable,
+    renderDropIndex,
+    renderDropTable,
+    renderMigrationFile,
+    validatorKindToSqlType,
 };

@@ -15,7 +15,7 @@ export type { ResetCommandOptions, ResetCommandResult } from "./commands/reset.j
 export { runResetCommand } from "./commands/reset.js";
 export type { FetchLike, RunCommandOptions, RunCommandResult } from "./commands/run.js";
 export { runRpcCommand } from "./commands/run.js";
-export { parseArgs } from "./util/args.js";
+export { default as parseArgs } from "./util/args.js";
 export type { Logger } from "./util/logger.js";
 export { createLogger, pail } from "./util/logger.js";
 export type { ColumnSnapshot, DiffEntry, IndexSnapshot, SchemaDiff, SchemaSnapshot, TableSnapshot, UnsupportedEntry } from "./util/migration-diff.js";
@@ -29,7 +29,7 @@ export {
     renderMigrationFile,
     validatorKindToSqlType,
 } from "./util/migration-diff.js";
-export { schemaIrToSnapshot } from "./util/schema-snapshot.js";
+export { default as schemaIrToSnapshot } from "./util/schema-snapshot.js";
 export type { RecordedSpawn, SpawnDescriptor, Spawner, SpawnResult } from "./util/spawn.js";
 export { createRecordingSpawner, defaultSpawner } from "./util/spawn.js";
 export type { WranglerValidationOptions, WranglerValidationReport, WranglerValidationResult } from "./util/wrangler-validator.js";

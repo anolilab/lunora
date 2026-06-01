@@ -26,7 +26,7 @@ const validatorToColumn = (validator: ValidatorIR): ColumnSnapshot => {
 
 const isGlobal = (mode: SchemaIR["tables"][number]["shardMode"]): boolean => mode === "global";
 
-export const schemaIrToSnapshot = (ir: SchemaIR): SchemaSnapshot => {
+const schemaIrToSnapshot = (ir: SchemaIR): SchemaSnapshot => {
     const tables: Record<string, TableSnapshot> = {};
 
     for (const table of ir.tables) {
@@ -59,3 +59,5 @@ export const schemaIrToSnapshot = (ir: SchemaIR): SchemaSnapshot => {
 
     return { tables, version: 1 };
 };
+
+export default schemaIrToSnapshot;
