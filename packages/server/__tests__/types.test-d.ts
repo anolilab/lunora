@@ -6,6 +6,7 @@ import type { CirrusRouteHandler, EmptyArgs, Id, Infer, RegisteredQuery } from "
 import { defineSchema, defineTable, httpRoute, initCirrus, mutation, query, v } from "../src/index.js";
 
 type Assert<T extends true> = T;
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- canonical type-equality idiom; each fresh `T` in the two function signatures is structurally load-bearing (relaxing it breaks the invariance check).
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 
 const schema = defineSchema({
@@ -45,14 +46,16 @@ export type _Check5 = Assert<Equal<BuilderArgs["channelId"], Id<"channels">>>;
 
 // `.use()` returning `next({ ctx })` widens the context the handler sees — if
 // the extension weren't threaded through, `ctx.userId` wouldn't type-check.
-const builderCtx = c.query.use(async ({ next }) => next({ ctx: { userId: "u" as string } })).query(({ ctx }) => ctx.userId);
+const builderCtx = c.query.use(async ({ next }) => next({ ctx: { userId: "u" } })).query(({ ctx }) => ctx.userId);
 
 export type _Check6 = Assert<Equal<Awaited<ReturnType<typeof builderCtx.handler>>, string>>;
 
 // `.output(validator)` narrows the registered return type to the validator's
 // inferred type, regardless of what the handler body would infer on its own.
 const outputValidator = v.object({ count: v.number() });
-const builderOutput = c.query.output(outputValidator).query(() => ({ count: 1 }));
+const builderOutput = c.query.output(outputValidator).query(() => {
+    return { count: 1 };
+});
 
 export type _Check7 = Assert<Equal<typeof builderOutput, RegisteredQuery<EmptyArgs, Infer<typeof outputValidator>>>>;
 
@@ -82,7 +85,9 @@ export type _Check11 = Assert<Equal<ItemsOptions["body"]["text"], string>>;
 export type _Check11b = Assert<Equal<ItemsOptions["params"]["id"], string>>;
 
 // The terminal `.handler()` yields a `CirrusRouteHandler`, mountable on `httpRouter`.
-const pingRoute = httpRoute.get("/api/ping").handler(() => ({ ok: true }));
+const pingRoute = httpRoute.get("/api/ping").handler(() => {
+    return { ok: true };
+});
 
 export type _Check12 = Assert<Equal<typeof pingRoute, CirrusRouteHandler>>;
 

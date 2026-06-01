@@ -1,10 +1,11 @@
 import type { GlobalTableInfo, GlobalTablePage } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
-import { type ReactElement, useCallback, useEffect, useState } from "react";
+import type { ReactElement } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { errorMessage } from "./internal.js";
 
-export interface GlobalDataBrowserProps {
+interface GlobalDataBrowserProps {
     /** Rows requested per page. Clamped server-side to `[1, 500]`. */
     readonly pageSize?: number;
 }
@@ -42,12 +43,12 @@ const formatCell = (value: unknown): string => {
 const rowKey = (row: Record<string, unknown>, index: number): string => {
     const id = row["_id"];
 
-    return typeof id === "string" || typeof id === "number" ? String(id) : `row-${index}`;
+    return typeof id === "string" || typeof id === "number" ? String(id) : `row-${index.toString()}`;
 };
 
 /**
  * Read-only browser for `.global()` (D1-backed) tables. Twin of
- * {@link DataBrowser}, but the global counterpart isn't shard-scoped: it lists
+ * `DataBrowser`, but the global counterpart isn't shard-scoped: it lists
  * tables via the client's `listGlobalTables()` (the `/_cirrus/admin/global/tables`
  * endpoint) and pages rows via `readGlobalTablePage()`. Gated by the server's
  * `CIRRUS_ADMIN_TOKEN`, and only surfaces tables declared `.global()`.
@@ -216,3 +217,5 @@ export function GlobalDataBrowser({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
         </div>
     );
 }
+
+export type { GlobalDataBrowserProps };

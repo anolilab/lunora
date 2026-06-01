@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
@@ -15,7 +15,8 @@ interface ShardSpy {
 }
 
 const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSpy => {
-    const stubFor = () => ({
+    const stubFor = () => {
+ return {
         fetch: async () => {
             if (spy.throwOnFetch) {
                 throw spy.throwOnFetch;
@@ -23,10 +24,11 @@ const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSp
 
             return spy.response;
         },
-    });
+    };
+};
 
     const namespace: ShardNamespaceLike = {
-        idFromName: (name) => ({ __name: name }),
+        idFromName: (name) => { return { __name: name }; },
         get: () => stubFor(),
     };
 
@@ -55,7 +57,7 @@ const collectEvents = (): { events: ObservabilityEvent[]; sink: ObservabilitySin
 
 describe("observabilitySink", () => {
     describe("emitRpcEvent", () => {
-        test("no-ops when sink is undefined", () => {
+        it("no-ops when sink is undefined", () => {
             expect.assertions(1);
 
             expect(() => {
@@ -63,7 +65,7 @@ describe("observabilitySink", () => {
             }).not.toThrow();
         });
 
-        test("no-ops when onRpc is unset", () => {
+        it("no-ops when onRpc is unset", () => {
             expect.assertions(1);
 
             expect(() => {
@@ -71,7 +73,7 @@ describe("observabilitySink", () => {
             }).not.toThrow();
         });
 
-        test("swallows sink callback errors", () => {
+        it("swallows sink callback errors", () => {
             expect.assertions(1);
 
             const sink: ObservabilitySink = {
@@ -85,7 +87,7 @@ describe("observabilitySink", () => {
             }).not.toThrow();
         });
 
-        test("forwards the event when onRpc is set", () => {
+        it("forwards the event when onRpc is set", () => {
             expect.assertions(1);
 
             const { events, sink } = collectEvents();
@@ -103,7 +105,7 @@ describe("observabilitySink", () => {
             shard = createShardSpy();
         });
 
-        test("emits one onRpc event per single-shard dispatch", async () => {
+        it("emits one onRpc event per single-shard dispatch", async () => {
             expect.assertions(8);
 
             const { events, sink } = collectEvents();
@@ -128,7 +130,7 @@ describe("observabilitySink", () => {
             expect(events[0]!.error).toBeUndefined();
         });
 
-        test("includes envelope shardKey in event", async () => {
+        it("includes envelope shardKey in event", async () => {
             expect.assertions(1);
 
             const { events, sink } = collectEvents();
@@ -146,7 +148,7 @@ describe("observabilitySink", () => {
             expect(events[0]!.shardKey).toBe("tenant-7");
         });
 
-        test("reports ok=false when the shard returns a non-2xx", async () => {
+        it("reports ok=false when the shard returns a non-2xx", async () => {
             expect.assertions(3);
 
             const { events, sink } = collectEvents();
@@ -168,7 +170,7 @@ describe("observabilitySink", () => {
             expect(events[0]!.error?.code).toBe("SHARD_ERROR");
         });
 
-        test("reports ok=false with the thrown error when the fetch throws", async () => {
+        it("reports ok=false with the thrown error when the fetch throws", async () => {
             expect.assertions(6);
 
             const { events, sink } = collectEvents();
@@ -196,14 +198,14 @@ describe("observabilitySink", () => {
             expect(events[0]!.shardKey).toBe("__root__");
         });
 
-        test("emits a fanOut event for cross-shard dispatch", async () => {
+        it("emits a fanOut event for cross-shard dispatch", async () => {
             expect.assertions(5);
 
             const { events, sink } = collectEvents();
             // Use a permissive cast — observability events read only
             // `result.ok` and `result.failed`, so a partial stub is fine.
             const coordinator = {
-                fanOut: async () => ({ data: 42, errors: [], failed: 0, ok: 3 }),
+                fanOut: async () => { return { data: 42, errors: [], failed: 0, ok: 3 }; },
             } as unknown as QueryCoordinator;
             const worker = createWorker({ observability: sink, queryCoordinator: coordinator, shardDO: shard.namespace });
 
@@ -227,7 +229,7 @@ describe("observabilitySink", () => {
             expect(events[0]!.shardKey).toBeUndefined();
         });
 
-        test("does not fail user dispatch when the sink throws", async () => {
+        it("does not fail user dispatch when the sink throws", async () => {
             expect.assertions(1);
 
             const sink: ObservabilitySink = {

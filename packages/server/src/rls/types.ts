@@ -29,19 +29,17 @@ export type PolicyOperation = "delete" | "insert" | "read" | "update";
 /**
  * A policy's `when` decision:
  *
- * - `WhereInput`: a row-shape predicate.
- *   - On reads: AND-merged into every query against the table — the row is
- *     invisible unless it matches.
- *   - On writes: evaluated against the candidate document (`insert`) or the
- *     pre-write row (`update`/`delete`); a mismatch denies the write with
- *     `CirrusError("FORBIDDEN")`. Same operator set as the SQL compiler
- *     (`eq`/`ne`/`in`/`notIn`/`lt`/`lte`/`gt`/`gte`/`isNull`/`contains` +
- *     `AND`/`OR`/`NOT`).
- * - `true`: unrestricted. On reads no predicate is merged; on writes the row
- *   is allowed.
- * - `false`: deny. On reads the table is forced to match zero rows (a
- *   sentinel predicate); on writes the operation throws
- *   `CirrusError("FORBIDDEN")`.
+ * - `WhereInput`: a row-shape predicate. On reads it is AND-merged into every
+ * query against the table — the row is invisible unless it matches. On writes
+ * it is evaluated against the candidate document (`insert`) or the pre-write
+ * row (`update`/`delete`); a mismatch denies the write with
+ * `CirrusError("FORBIDDEN")`. Same operator set as the SQL compiler
+ * (`eq`/`ne`/`in`/`notIn`/`lt`/`lte`/`gt`/`gte`/`isNull`/`contains` +
+ * `AND`/`OR`/`NOT`).
+ * - `true`: unrestricted. On reads no predicate is merged; on writes the row is
+ * allowed.
+ * - `false`: deny. On reads the table is forced to match zero rows (a sentinel
+ * predicate); on writes the operation throws `CirrusError("FORBIDDEN")`.
  *
  * Returning `undefined` opts this specific policy out (rare; useful when
  * branching on `ctx.auth.roles`).
@@ -73,7 +71,7 @@ export interface Policy<Ctx = unknown> {
 }
 
 /**
- * Input accepted by {@link definePolicy}. The branded result is the same
+ * Input accepted by `definePolicy`. The branded result is the same
  * shape; we keep the input/output split so callers can read JSDoc on the
  * constructor without the type re-exposing `Policy` internals.
  */
@@ -81,6 +79,7 @@ export interface DefinePolicyInput<Ctx = unknown> {
     on: PolicyOperation;
     /** Logical table name the policy applies to. */
     table: string;
+
     /**
      * Decision function. Returning a `WhereInput` (read only) AND-merges the
      * predicate; `true` allows; `false` denies; `undefined` skips this policy.

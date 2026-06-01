@@ -1,8 +1,11 @@
 import { useCirrus } from "@cirrus/react";
-import { observeElementRect, type Rect, useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
-import { type ChangeEvent, type CSSProperties, type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Rect, Virtualizer } from "@tanstack/react-virtual";
+import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
+import type { ChangeEvent, CSSProperties, ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ADMIN_FUNCTIONS, type LogEntry, type LogLevel, type LogsResult } from "./admin.js";
+import type { LogEntry, LogLevel, LogsResult } from "./admin.js";
+import { ADMIN_FUNCTIONS } from "./admin.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
@@ -58,7 +61,7 @@ interface LogRowProps {
  * fresh inline objects.
  */
 function LogRow({ entry, index, measureRef, start }: LogRowProps): ReactElement {
-    const style = useMemo<CSSProperties>(() => ({ ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` }), [start]);
+    const style = useMemo<CSSProperties>(() => { return { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` }; }, [start]);
 
     return (
         <div data-index={index} data-testid="lg-row" ref={measureRef} role="row" style={style}>
@@ -70,7 +73,7 @@ function LogRow({ entry, index, measureRef, start }: LogRowProps): ReactElement 
     );
 }
 
-export interface LogsPanelProps {
+interface LogsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
@@ -180,7 +183,7 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
 
     const virtualRows = virtualizer.getVirtualItems();
     const totalSize = virtualizer.getTotalSize();
-    const gridStyle = useMemo<CSSProperties>(() => ({ height: totalSize, position: "relative", width: "100%" }), [totalSize]);
+    const gridStyle = useMemo<CSSProperties>(() => { return { height: totalSize, position: "relative", width: "100%" }; }, [totalSize]);
 
     return (
         <div data-testid="cirrus-logs">
@@ -248,3 +251,5 @@ export function LogsPanel({ initialShardKey }: LogsPanelProps): ReactElement {
         </div>
     );
 }
+
+export type { LogsPanelProps };

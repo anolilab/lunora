@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { ShardRegistryDO } from "../src/shard-registry-do.js";
 
@@ -27,7 +27,7 @@ const post = (path: string, body: unknown): Request =>
 const get = (path: string): Request => new Request(`https://shard-registry.internal${path}`, { method: "GET" });
 
 describe("shardRegistryDO", () => {
-    test("starts empty — /list returns an empty shardKeys array", async () => {
+    it("starts empty — /list returns an empty shardKeys array", async () => {
         expect.assertions(2);
 
         const state = createFakeState();
@@ -41,7 +41,7 @@ describe("shardRegistryDO", () => {
         await expect(response.json()).resolves.toEqual({ shardKeys: [] });
     });
 
-    test("/register adds a shard key and reports changed=true on first add", async () => {
+    it("/register adds a shard key and reports changed=true on first add", async () => {
         expect.assertions(4);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -60,7 +60,7 @@ describe("shardRegistryDO", () => {
         await expect(list.json()).resolves.toEqual({ shardKeys: ["channel-1"] });
     });
 
-    test("/register accumulates multiple shard keys per table", async () => {
+    it("/register accumulates multiple shard keys per table", async () => {
         expect.assertions(1);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -75,7 +75,7 @@ describe("shardRegistryDO", () => {
         expect(body.shardKeys.toSorted()).toEqual(["channel-1", "channel-2", "channel-3"]);
     });
 
-    test("tables are isolated — registering one table doesn't leak into another", async () => {
+    it("tables are isolated — registering one table doesn't leak into another", async () => {
         expect.assertions(2);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -90,7 +90,7 @@ describe("shardRegistryDO", () => {
         expect(t).toEqual({ shardKeys: ["b"] });
     });
 
-    test("/unregister removes a key and reports changed=true once, changed=false on repeat", async () => {
+    it("/unregister removes a key and reports changed=true once, changed=false on repeat", async () => {
         expect.assertions(2);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -106,7 +106,7 @@ describe("shardRegistryDO", () => {
         await expect(second.json()).resolves.toEqual({ changed: false, ok: true });
     });
 
-    test("/unregister on an unknown table is a quiet no-op", async () => {
+    it("/unregister on an unknown table is a quiet no-op", async () => {
         expect.assertions(2);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -117,7 +117,7 @@ describe("shardRegistryDO", () => {
         await expect(response.json()).resolves.toEqual({ changed: false, ok: true });
     });
 
-    test("/list rejects requests without a table parameter", async () => {
+    it("/list rejects requests without a table parameter", async () => {
         expect.assertions(2);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -131,7 +131,7 @@ describe("shardRegistryDO", () => {
         expect(body.error.code).toBe("BAD_REQUEST");
     });
 
-    test("/register rejects missing fields", async () => {
+    it("/register rejects missing fields", async () => {
         expect.assertions(2);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -145,7 +145,7 @@ describe("shardRegistryDO", () => {
         expect(noShardKey.status).toBe(400);
     });
 
-    test("/register rejects malformed JSON", async () => {
+    it("/register rejects malformed JSON", async () => {
         expect.assertions(1);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -161,7 +161,7 @@ describe("shardRegistryDO", () => {
         expect(response.status).toBe(400);
     });
 
-    test("unknown route returns 404", async () => {
+    it("unknown route returns 404", async () => {
         expect.assertions(1);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -171,7 +171,7 @@ describe("shardRegistryDO", () => {
         expect(response.status).toBe(404);
     });
 
-    test("/snapshot returns the full table → keys map", async () => {
+    it("/snapshot returns the full table → keys map", async () => {
         expect.assertions(2);
 
         const registry = new ShardRegistryDO(createFakeState(), {});
@@ -187,7 +187,7 @@ describe("shardRegistryDO", () => {
         expect(body.tables["tasks"]).toEqual(["c"]);
     });
 
-    test("state survives a fresh DO instance — load from storage", async () => {
+    it("state survives a fresh DO instance — load from storage", async () => {
         expect.assertions(1);
 
         const state = createFakeState();

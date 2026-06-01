@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -65,7 +65,7 @@ describe("ctx-db search", () => {
     });
 
     describe("ctx-db search — LIKE-scan fallback", () => {
-        test("matches documents containing every query token (AND semantics)", async () => {
+        it("matches documents containing every query token (AND semantics)", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -82,7 +82,7 @@ describe("ctx-db search", () => {
             expect(results.map((document) => document["title"])).toStrictEqual(["a"]);
         });
 
-        test("prefix-matches the final token", async () => {
+        it("prefix-matches the final token", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -99,7 +99,7 @@ describe("ctx-db search", () => {
             expect(results.map((document) => document["title"]).sort()).toStrictEqual(["a", "b"]);
         });
 
-        test("narrows by an .eq() filter field", async () => {
+        it("narrows by an .eq() filter field", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -115,7 +115,7 @@ describe("ctx-db search", () => {
             expect(results.map((document) => document["title"])).toStrictEqual(["a"]);
         });
 
-        test("ranks higher term frequency first", async () => {
+        it("ranks higher term frequency first", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -131,7 +131,7 @@ describe("ctx-db search", () => {
             expect(results.map((document) => document["title"])).toStrictEqual(["high", "low"]);
         });
 
-        test("breaks ranking ties by creation time, newest first", async () => {
+        it("breaks ranking ties by creation time, newest first", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -147,7 +147,7 @@ describe("ctx-db search", () => {
             expect(results.map((document) => document["title"])).toStrictEqual(["newer", "older"]);
         });
 
-        test("take(n) caps the number of ranked results", async () => {
+        it("take(n) caps the number of ranked results", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -164,7 +164,7 @@ describe("ctx-db search", () => {
             expect(results).toHaveLength(2);
         });
 
-        test("returns nothing for an empty query", async () => {
+        it("returns nothing for an empty query", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -179,7 +179,7 @@ describe("ctx-db search", () => {
             expect(results).toStrictEqual([]);
         });
 
-        test("reflects updates and deletes against the live table", async () => {
+        it("reflects updates and deletes against the live table", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -199,7 +199,7 @@ describe("ctx-db search", () => {
             expect(new Set(results.map((document) => document["_id"]))).toStrictEqual(new Set([matchId, morphId]));
         });
 
-        test("first() returns the top-ranked match", async () => {
+        it("first() returns the top-ranked match", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -217,7 +217,7 @@ describe("ctx-db search", () => {
     });
 
     describe("ctx-db search — builder guards", () => {
-        test("throws on an unknown search index", () => {
+        it("throws on an unknown search index", () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -225,7 +225,7 @@ describe("ctx-db search", () => {
             expect(() => writer.query("docs").withSearchIndex("nope", (q) => q.search("body", "x"))).toThrow(/unknown search index/u);
         });
 
-        test("throws when .search targets a field the index does not index", () => {
+        it("throws when .search targets a field the index does not index", () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -233,7 +233,7 @@ describe("ctx-db search", () => {
             expect(() => writer.query("docs").withSearchIndex("by_body", (q) => q.search("title", "x"))).toThrow(/indexes "body"/u);
         });
 
-        test("throws when .eq targets a non-filter field", () => {
+        it("throws when .eq targets a non-filter field", () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -241,7 +241,7 @@ describe("ctx-db search", () => {
             expect(() => writer.query("docs").withSearchIndex("by_body", (q) => q.search("body", "x").eq("title", "y"))).toThrow(/not a filter field/u);
         });
 
-        test("throws when no .search() call is made", () => {
+        it("throws when no .search() call is made", () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -249,7 +249,7 @@ describe("ctx-db search", () => {
             expect(() => writer.query("docs").withSearchIndex("by_body", (q) => q)).toThrow(/requires a \.search/u);
         });
 
-        test("throws when paginate() is called on a search query", async () => {
+        it("throws when paginate() is called on a search query", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();

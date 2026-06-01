@@ -10,6 +10,12 @@ import { sanitizeNamespace } from "./paths.js";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
+/** Detects a standalone `any` token in a rendered type (degraded type-checker mode). */
+const ANY_TOKEN_RE = /\bany\b/u;
+
+/** Strips a trailing `.ts` extension from a relative source path. */
+const TS_EXTENSION_RE = /\.ts$/u;
+
 /**
  * Internal factory names exported from `@cirrus/server`, mapped to the kind
  * they register. A call to one of these marks the function `internal`: callable
@@ -73,38 +79,6 @@ const resolveCalleeKind = (identifier: Identifier): string | null => {
     return null;
 };
 
-/**
- * Recursively collect `.ts` files under a cirrus source directory, skipping
- * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
- * migration discovery so both walk the same file set.
- */
-export const listCirrusSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
-    let entries: string[] = [];
-
-    try {
-        entries = readdirSync(directory);
-    } catch {
-        return accumulator;
-    }
-
-    for (const entry of entries) {
-        const full = join(directory, entry);
-        const info = statSync(full);
-
-        if (info.isDirectory()) {
-            if (entry === "_generated" || entry === "node_modules") {
-                continue;
-            }
-
-            listCirrusSourceFiles(full, accumulator);
-        } else if (info.isFile() && extname(entry) === ".ts" && entry !== "schema.ts") {
-            accumulator.push(full);
-        }
-    }
-
-    return accumulator;
-};
-
 /** Inspect a `query({ args, handler })` call and pull out the args validator map. */
 const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
     const first = call.getArguments()[0];
@@ -133,7 +107,7 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
  * in the handler's own source file but isn't exported (so it cannot be
  * referenced by name from anywhere outside that file).
  */
-function referencesUnreachableLocalType(type: Type, handlerFilePath: string, seen = new Set<Type>()): boolean {
+const referencesUnreachableLocalType = (type: Type, handlerFilePath: string, seen = new Set<Type>()): boolean => {
     if (seen.has(type)) {
         return false;
     }
@@ -185,11 +159,11 @@ function referencesUnreachableLocalType(type: Type, handlerFilePath: string, see
     }
 
     return false;
-}
+};
 
 /**
  * Render a handler's resolved return type via ts-morph's type checker. Unwraps
- * the outer `Promise<…>` so the emitted `FunctionReference<Kind, Args, Return>`
+ * the outer `Promise&lt;…>` so the emitted `FunctionReference&lt;Kind, Args, Return>`
  * matches what callers see post-await. Shared by the object-literal `query(...)`
  * path and the builder terminal (`c.query(...)`) path.
  *
@@ -231,7 +205,7 @@ const unwrapHandlerReturn = (handler: Node): string => {
     // mode — typically because the consuming project lacks the tsconfig
     // wiring to resolve `@cirrus/server`/`@cirrus/values`. Surfacing such
     // partial types would mislead users; fall back to `unknown` instead.
-    if (/\bany\b/u.test(rendered)) {
+    if (ANY_TOKEN_RE.test(rendered)) {
         return "unknown";
     }
 
@@ -354,6 +328,38 @@ const discoverBuilderProcedure = (call: CallExpression, callee: PropertyAccessEx
 };
 
 /**
+ * Recursively collect `.ts` files under a cirrus source directory, skipping
+ * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
+ * migration discovery so both walk the same file set.
+ */
+export const listCirrusSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
+    let entries: string[] = [];
+
+    try {
+        entries = readdirSync(directory);
+    } catch {
+        return accumulator;
+    }
+
+    for (const entry of entries) {
+        const full = join(directory, entry);
+        const info = statSync(full);
+
+        if (info.isDirectory()) {
+            if (entry === "_generated" || entry === "node_modules") {
+                continue;
+            }
+
+            listCirrusSourceFiles(full, accumulator);
+        } else if (info.isFile() && extname(entry) === ".ts" && entry !== "schema.ts") {
+            accumulator.push(full);
+        }
+    }
+
+    return accumulator;
+};
+
+/**
  * Scan all .ts files under `cirrusDir` (skipping `_generated/` and `schema.ts`)
  * for top-level `export const x = query/mutation/action({...})` registrations.
  */
@@ -363,7 +369,7 @@ export const discoverFunctions = (project: Project, cirrusDirectory: string): Fu
 
     for (const filePath of filePaths) {
         const source: SourceFile = project.addSourceFileAtPath(filePath);
-        const relativePath = relative(cirrusDirectory, filePath).split(sep).join("/").replace(/\.ts$/u, "");
+        const relativePath = relative(cirrusDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
 
         for (const statement of source.getVariableStatements()) {
             if (!statement.isExported()) {

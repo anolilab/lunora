@@ -13,7 +13,7 @@
  *  - SQLite-in-DO storage handed out by the runtime as `state.storage.sql`.
  */
 import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { TestShardDO } from "./test-worker.js";
 
@@ -26,7 +26,7 @@ const newStub = (name: string): DurableObjectStub<TestShardDO> => {
 };
 
 describe("shardDO (workerd)", () => {
-    test("instantiates against a real DurableObjectState and serves /rpc", async () => {
+    it("instantiates against a real DurableObjectState and serves /rpc", async () => {
         expect.assertions(3);
 
         const stub = newStub("shard-rpc");
@@ -49,7 +49,7 @@ describe("shardDO (workerd)", () => {
         });
     });
 
-    test("webSocket upgrade is accepted by the real Hibernation API and subscriptions round-trip via serializeAttachment", async () => {
+    it("webSocket upgrade is accepted by the real Hibernation API and subscriptions round-trip via serializeAttachment", async () => {
         expect.assertions(6);
 
         const stub = newStub("shard-ws");
@@ -100,7 +100,7 @@ describe("shardDO (workerd)", () => {
         client.close(1000, "bye");
     });
 
-    test("broadcastDelta only reaches matching-table subscribers", async () => {
+    it("broadcastDelta only reaches matching-table subscribers", async () => {
         expect.assertions(3);
 
         const stub = newStub("shard-broadcast");
@@ -125,7 +125,7 @@ describe("shardDO (workerd)", () => {
         subs[1].client.close(1000, "done");
     });
 
-    test("broadcasts are scoped per shard — a delta emitted on shard A does not reach a subscriber on shard B", async () => {
+    it("broadcasts are scoped per shard — a delta emitted on shard A does not reach a subscriber on shard B", async () => {
         expect.assertions(2);
 
         // The Phase 1 verification gate per the plan: exercise two DOs from

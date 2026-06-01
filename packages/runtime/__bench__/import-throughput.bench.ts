@@ -37,21 +37,25 @@ const makeShardStub = (): ShardStub => {
         namespace: {
             get: () => stub,
             getByName: () => stub,
-            idFromName: (name) => ({ __name: name }),
+            idFromName: (name) => { return { __name: name }; },
         },
     };
 };
 
-const buildBatches = (shardCount: number): Array<{ rows: Array<{ doc: Record<string, unknown>; table: string }>; shardKey: string }> => {
+const buildBatches = (shardCount: number): { rows: { doc: Record<string, unknown>; table: string }[]; shardKey: string }[] => {
     const perShard = Math.ceil(TOTAL_ROWS / shardCount);
 
-    return Array.from({ length: shardCount }, (_outer, shard) => ({
-        rows: Array.from({ length: perShard }, (_inner, index) => ({
+    return Array.from({ length: shardCount }, (_outer, shard) => {
+ return {
+        rows: Array.from({ length: perShard }, (_inner, index) => {
+ return {
             doc: { _id: `t-s${String(shard)}-${String(index)}`, projectId: `p${String(shard)}`, seq: index },
             table: "todos",
-        })),
+        };
+}),
         shardKey: `s${String(shard)}`,
-    }));
+    };
+});
 };
 
 interface ImportSetup {

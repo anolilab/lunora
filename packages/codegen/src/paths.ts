@@ -1,9 +1,9 @@
 /**
  * Sanitize a file path (relative to the cirrus dir, no extension) into a
  * JS-identifier-safe namespace. Used in three places that MUST agree:
- *  - `emitApi` — namespace key inside `ApiTypes`.
- *  - `emitServer` — module-import alias and dispatch-table key prefix.
- *  - `anyApi` Proxy in `@cirrus/server` — emits `__cirrusRef = "${ns}:${fn}"`.
+ * `emitApi` (namespace key inside `ApiTypes`), `emitServer` (module-import
+ * alias and dispatch-table key prefix), and the `anyApi` Proxy in
+ * `@cirrus/server` (emits `__cirrusRef = "${ns}:${fn}"`).
  *
  * If these ever disagree, runtime dispatch silently misses functions.
  */

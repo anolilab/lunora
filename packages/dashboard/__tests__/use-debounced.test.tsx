@@ -1,5 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useDebounced } from "../src/use-debounced.js";
 
@@ -18,7 +18,7 @@ describe("useDebounced", () => {
         vi.useRealTimers();
     });
 
-    test("returns the initial value immediately", () => {
+    it("returns the initial value immediately", () => {
         expect.assertions(1);
 
         render(<Probe delayMs={300} value="a" />);
@@ -26,7 +26,7 @@ describe("useDebounced", () => {
         expect(screen.getByTestId("out").textContent).toBe("a");
     });
 
-    test("updates only after the value has been stable for the delay", () => {
+    it("updates only after the value has been stable for the delay", () => {
         expect.assertions(2);
 
         const { rerender } = render(<Probe delayMs={300} value="a" />);
@@ -43,7 +43,7 @@ describe("useDebounced", () => {
         expect(screen.getByTestId("out").textContent).toBe("ab");
     });
 
-    test("a burst of changes only settles on the last value", () => {
+    it("a burst of changes only settles on the last value", () => {
         expect.assertions(1);
 
         const { rerender } = render(<Probe delayMs={300} value="a" />);

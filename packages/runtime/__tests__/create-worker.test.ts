@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
@@ -16,16 +16,18 @@ interface ShardSpy {
 const createShardSpy = (response = new Response("ok", { status: 200 })): ShardSpy => {
     const calls: { request: Request; shardKey: string }[] = [];
 
-    const stubFor = (shardKey: string) => ({
+    const stubFor = (shardKey: string) => {
+ return {
         fetch: async (request: Request) => {
             calls.push({ shardKey, request });
 
             return spy.response;
         },
-    });
+    };
+};
 
     const namespace: ShardNamespaceLike = {
-        idFromName: (name) => ({ __name: name }),
+        idFromName: (name) => { return { __name: name }; },
         get: (id) => stubFor((id as { __name: string }).__name),
     };
 
@@ -46,7 +48,7 @@ describe("createWorker", () => {
         shard = createShardSpy();
     });
 
-    test("returns 404 for unknown paths", async () => {
+    it("returns 404 for unknown paths", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ shardDO: shard.namespace });
@@ -56,7 +58,7 @@ describe("createWorker", () => {
         expect(res.status).toBe(404);
     });
 
-    test("forwards POST /_cirrus/rpc to the default __root__ shard", async () => {
+    it("forwards POST /_cirrus/rpc to the default __root__ shard", async () => {
         expect.assertions(4);
 
         const worker = createWorker({ shardDO: shard.namespace });
@@ -79,7 +81,7 @@ describe("createWorker", () => {
         expect(body).toEqual({ functionPath: "messages:list", args: { limit: 5 } });
     });
 
-    test("uses the envelope shardKey when provided", async () => {
+    it("uses the envelope shardKey when provided", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ shardDO: shard.namespace });
@@ -96,7 +98,7 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("channel-42");
     });
 
-    test("honors defaultShardKey override", async () => {
+    it("honors defaultShardKey override", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ shardDO: shard.namespace, defaultShardKey: "tenant-1" });
@@ -113,7 +115,7 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("tenant-1");
     });
 
-    test("rejects non-POST RPC requests with 405", async () => {
+    it("rejects non-POST RPC requests with 405", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ shardDO: shard.namespace });
@@ -124,7 +126,7 @@ describe("createWorker", () => {
         await expect(res.json()).resolves.toMatchObject({ error: { code: "METHOD_NOT_ALLOWED" } });
     });
 
-    test("maps malformed RPC JSON to 400", async () => {
+    it("maps malformed RPC JSON to 400", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ shardDO: shard.namespace });
@@ -135,7 +137,7 @@ describe("createWorker", () => {
         await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
     });
 
-    test("rejects missing functionPath", async () => {
+    it("rejects missing functionPath", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ shardDO: shard.namespace });
@@ -145,7 +147,7 @@ describe("createWorker", () => {
         expect(res.status).toBe(400);
     });
 
-    test("forwards /_cirrus/ws upgrades to the correct shard", async () => {
+    it("forwards /_cirrus/ws upgrades to the correct shard", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ shardDO: shard.namespace });
@@ -160,7 +162,7 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("channel-7");
     });
 
-    test("rejects /_cirrus/ws without upgrade header", async () => {
+    it("rejects /_cirrus/ws without upgrade header", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ shardDO: shard.namespace });
@@ -170,7 +172,7 @@ describe("createWorker", () => {
         expect(res.status).toBe(426);
     });
 
-    test("invokes custom routes before default handlers", async () => {
+    it("invokes custom routes before default handlers", async () => {
         expect.assertions(3);
 
         const route = vi.fn<Route>(async () => new Response("hi", { status: 200 }));
@@ -183,7 +185,7 @@ describe("createWorker", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
-    test("prefers getByName when the namespace exposes it", async () => {
+    it("prefers getByName when the namespace exposes it", async () => {
         expect.assertions(3);
 
         const stub = { fetch: vi.fn<(request: Request) => Promise<Response>>(async () => new Response("via-getByName")) };
@@ -211,12 +213,12 @@ describe("createWorker", () => {
         expect(stub.fetch).toHaveBeenCalledWith(expect.any(Request));
     });
 
-    test("forwards resolveIdentity userId on the x-cirrus-userid header", async () => {
+    it("forwards resolveIdentity userId on the x-cirrus-userid header", async () => {
         expect.assertions(2);
 
         const worker = createWorker({
             shardDO: shard.namespace,
-            resolveIdentity: () => ({ userId: "user_42" }),
+            resolveIdentity: () => { return { userId: "user_42" }; },
         });
 
         await worker.fetch(
@@ -232,7 +234,7 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.request.headers.get("x-cirrus-identity")).toBeNull();
     });
 
-    test("omits identity headers when resolveIdentity returns null", async () => {
+    it("omits identity headers when resolveIdentity returns null", async () => {
         expect.assertions(2);
 
         const worker = createWorker({
@@ -253,12 +255,12 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.request.headers.get("x-cirrus-identity")).toBeNull();
     });
 
-    test("serialises extra identity claims as JSON on x-cirrus-identity", async () => {
+    it("serialises extra identity claims as JSON on x-cirrus-identity", async () => {
         expect.assertions(3);
 
         const worker = createWorker({
             shardDO: shard.namespace,
-            resolveIdentity: () => ({ userId: "user_42", email: "u@example.com", roles: ["admin"] }),
+            resolveIdentity: () => { return { userId: "user_42", email: "u@example.com", roles: ["admin"] }; },
         });
 
         await worker.fetch(
@@ -278,10 +280,10 @@ describe("createWorker", () => {
         expect(JSON.parse(identityHeader!)).toEqual({ email: "u@example.com", roles: ["admin"] });
     });
 
-    test("does not invoke resolveIdentity when fanOut request would 400 (no coordinator)", async () => {
+    it("does not invoke resolveIdentity when fanOut request would 400 (no coordinator)", async () => {
         expect.assertions(2);
 
-        const resolveIdentity = vi.fn<() => { userId: string }>(() => ({ userId: "user_42" }));
+        const resolveIdentity = vi.fn<() => { userId: string }>(() => { return { userId: "user_42" }; });
         const worker = createWorker({
             shardDO: shard.namespace,
             resolveIdentity,
@@ -300,12 +302,14 @@ describe("createWorker", () => {
         expect(resolveIdentity).not.toHaveBeenCalled();
     });
 
-    test("propagates resolved identity headers through the fan-out coordinator", async () => {
+    it("propagates resolved identity headers through the fan-out coordinator", async () => {
         expect.assertions(3);
 
-        const fanOut = vi.fn<(namespace: unknown, args: { headers: Record<string, string> }) => Promise<unknown>>(async (_namespace, args) => ({
+        const fanOut = vi.fn<(namespace: unknown, args: { headers: Record<string, string> }) => Promise<unknown>>(async (_namespace, args) => {
+ return {
             received: args.headers,
-        }));
+        };
+});
 
         const worker = createWorker({
             shardDO: shard.namespace,
@@ -316,7 +320,7 @@ describe("createWorker", () => {
                 orchestrateImport: vi.fn<() => never>(),
                 registry: {} as never,
             },
-            resolveIdentity: () => ({ userId: "user_42", email: "u@example.com" }),
+            resolveIdentity: () => { return { userId: "user_42", email: "u@example.com" }; },
         });
 
         await worker.fetch(
@@ -336,7 +340,7 @@ describe("createWorker", () => {
         expect(JSON.parse(headers["x-cirrus-identity"]!)).toEqual({ email: "u@example.com" });
     });
 
-    test("denies fan-out by default when authorizeShard is set without authorizeFanOut", async () => {
+    it("denies fan-out by default when authorizeShard is set without authorizeFanOut", async () => {
         expect.assertions(3);
 
         const fanOut = vi.fn<() => never>();
@@ -366,10 +370,10 @@ describe("createWorker", () => {
         expect(fanOut).not.toHaveBeenCalled();
     });
 
-    test("invokes authorizeFanOut with identity, table, and functionPath", async () => {
+    it("invokes authorizeFanOut with identity, table, and functionPath", async () => {
         expect.assertions(3);
 
-        const fanOut = vi.fn<() => Promise<unknown>>(async () => ({ data: [], errors: [], failed: 0, ok: 0 }));
+        const fanOut = vi.fn<() => Promise<unknown>>(async () => { return { data: [], errors: [], failed: 0, ok: 0 }; });
         const authorizeFanOut = vi.fn<() => boolean>(() => true);
         const worker = createWorker({
             shardDO: shard.namespace,
@@ -381,7 +385,7 @@ describe("createWorker", () => {
                 registry: {} as never,
             },
             authorizeFanOut,
-            resolveIdentity: () => ({ userId: "user_42" }),
+            resolveIdentity: () => { return { userId: "user_42" }; },
         });
 
         await worker.fetch(
@@ -398,7 +402,7 @@ describe("createWorker", () => {
         expect(fanOut).toHaveBeenCalledTimes(1);
     });
 
-    test("rejects fan-out when authorizeFanOut returns false", async () => {
+    it("rejects fan-out when authorizeFanOut returns false", async () => {
         expect.assertions(3);
 
         const fanOut = vi.fn<() => never>();
@@ -439,7 +443,7 @@ describe("createWorker — migration endpoint", () => {
     const migrateRequest = (body: unknown, headers: Record<string, string> = {}): Request =>
         new Request("https://app.example/_cirrus/migrate", { body: JSON.stringify(body), headers, method: "POST" });
 
-    test("drives orchestrateMigration with the table, args and forwarded bearer", async () => {
+    it("drives orchestrateMigration with the table, args and forwarded bearer", async () => {
         expect.assertions(5);
 
         const orchestrateMigration = vi.fn<
@@ -447,14 +451,16 @@ describe("createWorker — migration endpoint", () => {
                 namespace: unknown,
                 request: { args: Record<string, unknown>; functionPath: string; headers: Record<string, string>; table: string },
             ) => Promise<unknown>
-        >(async (_namespace, _request) => ({
+        >(async (_namespace, _request) => {
+ return {
             changed: 3,
             failed: 0,
             ok: 2,
             processed: 3,
             shards: [],
             status: "completed",
-        }));
+        };
+});
 
         const worker = createWorker({
             adminToken: "s3cret",
@@ -487,7 +493,7 @@ describe("createWorker — migration endpoint", () => {
         expect(request.headers.authorization).toBe("Bearer s3cret");
     });
 
-    test("400s when no queryCoordinator is configured", async () => {
+    it("400s when no queryCoordinator is configured", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ adminToken: "s3cret", shardDO: shard.namespace });
@@ -501,7 +507,7 @@ describe("createWorker — migration endpoint", () => {
         expect(res.status).toBe(400);
     });
 
-    test("rejects a non-migration functionPath with 400", async () => {
+    it("rejects a non-migration functionPath with 400", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
@@ -521,7 +527,7 @@ describe("createWorker — migration endpoint", () => {
         expect(res.status).toBe(400);
     });
 
-    test("rejects a missing table with 400", async () => {
+    it("rejects a missing table with 400", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
@@ -541,7 +547,7 @@ describe("createWorker — migration endpoint", () => {
         expect(res.status).toBe(400);
     });
 
-    test("rejects non-POST with 405", async () => {
+    it("rejects non-POST with 405", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
@@ -601,7 +607,7 @@ describe("createWorker — HTTP actions", () => {
         shard = createShardSpy();
     });
 
-    test("dispatches a matched request to the action handler and returns its Response", async () => {
+    it("dispatches a matched request to the action handler and returns its Response", async () => {
         expect.assertions(3);
 
         const worker = createWorker({
@@ -616,7 +622,7 @@ describe("createWorker — HTTP actions", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
-    test("c.var.cirrus.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
+    it("c.var.cirrus.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
         expect.assertions(6);
 
         shard.response = Response.json({ result: { id: "m1" } });
@@ -646,14 +652,14 @@ describe("createWorker — HTTP actions", () => {
         expect(forwarded.args).toEqual({ body: { text: "hi" } });
     });
 
-    test("exposes resolveIdentity on c.var.cirrus.auth", async () => {
+    it("exposes resolveIdentity on c.var.cirrus.auth", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
             httpRouter: honoApp((app) =>
                 app.get("/me", async (c) => Response.json({ claims: await c.var.cirrus.auth.getIdentity(), userId: c.var.cirrus.auth.userId })),
             ),
-            resolveIdentity: () => ({ email: "u@example.com", userId: "user_7" }),
+            resolveIdentity: () => { return { email: "u@example.com", userId: "user_7" }; },
             shardDO: shard.namespace,
         });
 
@@ -662,7 +668,7 @@ describe("createWorker — HTTP actions", () => {
         await expect(res.json()).resolves.toEqual({ claims: { email: "u@example.com" }, userId: "user_7" });
     });
 
-    test("a path-match with the wrong verb yields hono's 404", async () => {
+    it("a path-match with the wrong verb yields hono's 404", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
@@ -675,7 +681,7 @@ describe("createWorker — HTTP actions", () => {
         expect(res.status).toBe(404);
     });
 
-    test("falls through to hono's 404 when no route matches", async () => {
+    it("falls through to hono's 404 when no route matches", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
@@ -688,7 +694,7 @@ describe("createWorker — HTTP actions", () => {
         expect(res.status).toBe(404);
     });
 
-    test("explicit routes win over the HTTP router", async () => {
+    it("explicit routes win over the HTTP router", async () => {
         expect.assertions(2);
 
         const route = vi.fn<Route>(async () => new Response("explicit", { status: 200 }));
@@ -706,7 +712,7 @@ describe("createWorker — HTTP actions", () => {
         expect(action).not.toHaveBeenCalled();
     });
 
-    test("the internal RPC path is never shadowed by a catch-all router", async () => {
+    it("the internal RPC path is never shadowed by a catch-all router", async () => {
         expect.assertions(3);
 
         const action = vi.fn<() => Response>(() => new Response("action"));

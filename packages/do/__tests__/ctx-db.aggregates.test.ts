@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
@@ -41,7 +41,8 @@ const activeByProject: AggregateIndexDefinitionLike = {
     where: { archived: false },
 };
 
-const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => ({
+const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
+ return {
     tables: {
         todos: {
             aggregateIndexes: indexes,
@@ -53,7 +54,8 @@ const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => (
             },
         },
     },
-});
+};
+};
 
 let harness: ReturnType<typeof createSqliteExec>;
 
@@ -81,7 +83,7 @@ describe("ctx-db aggregates", () => {
     });
 
     describe("aggregateIndex trigger maintenance", () => {
-        test("insert/update/delete keep the counter in step with row writes", async () => {
+        it("insert/update/delete keep the counter in step with row writes", async () => {
             expect.assertions(5);
 
             const writer = setupWriter(makeSchema(byProject));
@@ -102,7 +104,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
         });
 
-        test("replace updates the counter when the `by`-key changes", async () => {
+        it("replace updates the counter when the `by`-key changes", async () => {
             expect.assertions(2);
 
             const writer = setupWriter(makeSchema(byProject));
@@ -115,7 +117,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.count("todos", { projectId: "p3" })).resolves.toBe(1);
         });
 
-        test("filtered aggregateIndex (.where) only counts matching rows", async () => {
+        it("filtered aggregateIndex (.where) only counts matching rows", async () => {
             expect.assertions(3);
 
             const writer = setupWriter(makeSchema(activeByProject));
@@ -135,7 +137,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.count("todos", { archived: false, projectId: "p1" })).resolves.toBe(2);
         });
 
-        test("whole-table aggregate (empty `by`) keys on the empty tuple", async () => {
+        it("whole-table aggregate (empty `by`) keys on the empty tuple", async () => {
             expect.assertions(2);
 
             const writer = setupWriter(makeSchema(totalTodos));
@@ -151,7 +153,7 @@ describe("ctx-db aggregates", () => {
     });
 
     describe("aggregateIndex planning", () => {
-        test("matching by-key request hits the counter (no scan)", async () => {
+        it("matching by-key request hits the counter (no scan)", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byProjectArchived));
@@ -165,7 +167,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.count("todos", { archived: false, projectId: "p1" })).resolves.toBe(3);
         });
 
-        test("non-equality filter falls back to a scan", async () => {
+        it("non-equality filter falls back to a scan", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byProject));
@@ -177,7 +179,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.count("todos", { seq: { gt: 1 } })).resolves.toBe(3);
         });
 
-        test("partial by-key falls back when more-specific index is missing", async () => {
+        it("partial by-key falls back when more-specific index is missing", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byProjectArchived));
@@ -189,7 +191,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
         });
 
-        test("prefers narrower aggregateIndex when multiple match", async () => {
+        it("prefers narrower aggregateIndex when multiple match", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byProject, byProjectArchived));
@@ -204,7 +206,7 @@ describe("ctx-db aggregates", () => {
     });
 
     describe("rLS coupling seam", () => {
-        test("aND-merges baseWhere into the scan predicate", async () => {
+        it("aND-merges baseWhere into the scan predicate", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema());
@@ -214,7 +216,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.count("todos", { baseWhere: { archived: false }, where: { projectId: "p1" } })).resolves.toBe(3);
         });
 
-        test("restrictsCounts throws COUNT_RLS_UNSUPPORTED", async () => {
+        it("restrictsCounts throws COUNT_RLS_UNSUPPORTED", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byProject));
@@ -227,7 +229,7 @@ describe("ctx-db aggregates", () => {
             });
         });
 
-        test("legacy bare where keeps working (no breakage)", async () => {
+        it("legacy bare where keeps working (no breakage)", async () => {
             expect.assertions(2);
 
             const writer = setupWriter(makeSchema(byProject));
@@ -240,7 +242,7 @@ describe("ctx-db aggregates", () => {
     });
 
     describe("aggregate + groupBy", () => {
-        test("aggregate(sum, field) reduces matching rows", async () => {
+        it("aggregate(sum, field) reduces matching rows", async () => {
             expect.assertions(2);
 
             const writer = setupWriter(makeSchema());
@@ -251,7 +253,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.aggregate("todos", { field: "seq", op: "max" })).resolves.toBe(4);
         });
 
-        test("aggregate({ op: count }) defers to count() and uses the index", async () => {
+        it("aggregate({ op: count }) defers to count() and uses the index", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byProject));
@@ -263,7 +265,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.aggregate("todos", { op: "count", where: { projectId: "p1" } })).resolves.toBe(4);
         });
 
-        test("groupBy(by, agg=count) tallies per group", async () => {
+        it("groupBy(by, agg=count) tallies per group", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema());
@@ -276,7 +278,7 @@ describe("ctx-db aggregates", () => {
             expect(tally).toEqual({ p1: 4, p2: 1 });
         });
 
-        test("groupBy(by, agg=sum) reduces per group with a where", async () => {
+        it("groupBy(by, agg=sum) reduces per group with a where", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema());
@@ -295,7 +297,7 @@ describe("ctx-db aggregates", () => {
     });
 
     describe("auto-backfill", () => {
-        test("lazily backfills the counter on first read when the table already has rows", async () => {
+        it("lazily backfills the counter on first read when the table already has rows", async () => {
             expect.assertions(2);
 
             // Phase 1: a writer with no aggregateIndex declarations. The counter
@@ -320,7 +322,7 @@ describe("ctx-db aggregates", () => {
             await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
         });
 
-        test("backfillAggregateIndexes() populates counters up-front", async () => {
+        it("backfillAggregateIndexes() populates counters up-front", async () => {
             expect.assertions(2);
 
             let writer = setupWriter(makeSchema());

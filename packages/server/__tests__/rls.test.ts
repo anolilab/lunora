@@ -7,7 +7,7 @@
  * passed; assertions read those back to verify the `baseWhere` /
  * `restrictsCounts` merge and the write-path policy denial.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { Middleware, Policy } from "../src/index.js";
 import { CirrusError, definePolicies, definePolicy, defineRole, initCirrus, rls } from "../src/index.js";
@@ -18,7 +18,7 @@ import { CirrusError, definePolicies, definePolicy, defineRole, initCirrus, rls 
  * shape is a superset (it also accepts the new `baseWhere` /
  * `restrictsCounts` count signature) so TS rejects the direct widening.
  * Pin a permissive cast once here so each test reads cleanly without
- * scattering `as unknown as Middleware<…>` at every call site.
+ * scattering `as unknown as Middleware&lt;…>` at every call site.
  */
 const rlsForTest = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Middleware<any, any> =>
     (rls as unknown as (p: ReadonlyArray<Policy<Ctx>>) => Middleware<any, any>)(policies);
@@ -40,7 +40,7 @@ interface FakeDb {
         delete: (id: string) => Promise<void>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
-        findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Array<Record<string, unknown>> }>;
+        findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         get: (id: string) => Promise<Record<string, unknown> | null>;
         insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
@@ -49,7 +49,7 @@ interface FakeDb {
     };
 }
 
-const createFakeDb = (rows: Array<Record<string, unknown> & { _id: string; table: string }>): FakeDb => {
+const createFakeDb = (rows: (Record<string, unknown> & { _id: string; table: string })[]): FakeDb => {
     const calls: CapturedCall[] = [];
 
     const byId = new Map<string, Record<string, unknown> & { _id: string; table: string }>();
@@ -58,7 +58,7 @@ const createFakeDb = (rows: Array<Record<string, unknown> & { _id: string; table
         byId.set(row._id, row);
     }
 
-    const rowsOfTable = (tableName: string): Array<Record<string, unknown>> => rows.filter((row) => row.table === tableName);
+    const rowsOfTable = (tableName: string): Record<string, unknown>[] => rows.filter((row) => row.table === tableName);
 
     return {
         calls,
@@ -126,10 +126,12 @@ interface TestCtx {
     db: FakeDb["writer"];
 }
 
-const makeCtx = (db: FakeDb, userId: null | string, roles: string[] = []): TestCtx => ({
-    auth: { roles, userId },
-    db: db.writer,
-});
+const makeCtx = (db: FakeDb, userId: null | string, roles: string[] = []): TestCtx => {
+    return {
+        auth: { roles, userId },
+        db: db.writer,
+    };
+};
 
 /** Build a one-off insert handler running through an `rls()` chain over a single policy. */
 const insertWithPolicy = (policy: Policy<TestCtx>) => (document: Record<string, unknown>) =>
@@ -140,13 +142,15 @@ const insertWithPolicy = (policy: Policy<TestCtx>) => (document: Record<string, 
  * ---------------------------------------------------------------------- */
 
 describe("rls — read path", () => {
-    test("and-merges a policy WhereInput into findMany via baseWhere", async () => {
+    it("and-merges a policy WhereInput into findMany via baseWhere", async () => {
         expect.assertions(1);
 
         const policy = definePolicy<TestCtx>({
             on: "read",
             table: "documents",
-            when: ({ auth }) => ({ ownerId: auth.userId }),
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
         });
         const policies = definePolicies([policy]);
         const db = createFakeDb([
@@ -168,7 +172,7 @@ describe("rls — read path", () => {
         });
     });
 
-    test("policy returning true skips the merge (unrestricted)", async () => {
+    it("policy returning true skips the merge (unrestricted)", async () => {
         expect.assertions(1);
 
         const policy = definePolicy<TestCtx>({
@@ -188,7 +192,7 @@ describe("rls — read path", () => {
         expect((findManyCall?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
     });
 
-    test("policy returning false denies — empty result via OR-of-nothing predicate", async () => {
+    it("policy returning false denies — empty result via OR-of-nothing predicate", async () => {
         expect.assertions(1);
 
         const policy = definePolicy<TestCtx>({
@@ -209,7 +213,7 @@ describe("rls — read path", () => {
         expect((findManyCall?.args as { baseWhere?: unknown }).baseWhere).toEqual({ OR: [] });
     });
 
-    test("role-branched policy reads ctx.auth.roles", async () => {
+    it("role-branched policy reads ctx.auth.roles", async () => {
         expect.assertions(2);
 
         const policy = definePolicy<TestCtx>({
@@ -232,7 +236,7 @@ describe("rls — read path", () => {
         expect((userCall?.args as { baseWhere?: unknown }).baseWhere).toEqual({ ownerId: "u1" });
     });
 
-    test("count() throws COUNT_RLS_UNSUPPORTED when a policy applies", async () => {
+    it("count() throws COUNT_RLS_UNSUPPORTED when a policy applies", async () => {
         expect.hasAssertions();
 
         // We can't observe the underlying CirrusError here without wiring the
@@ -256,7 +260,7 @@ describe("rls — read path", () => {
         expect((countCall?.args as { restrictsCounts?: boolean }).restrictsCounts).toBe(true);
     });
 
-    test("get() does NOT leak a row that the read policy denied (regression)", async () => {
+    it("get() does NOT leak a row that the read policy denied (regression)", async () => {
         expect.assertions(1);
 
         // Policy applies to "documents" and would AND-merge `{ ownerId: "u1" }`.
@@ -264,7 +268,9 @@ describe("rls — read path", () => {
         const policy = definePolicy<TestCtx>({
             on: "read",
             table: "documents",
-            when: ({ auth }) => ({ ownerId: auth.userId }),
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
         });
 
         // Honest fake: when `baseWhere` is set the membership check returns
@@ -291,7 +297,7 @@ describe("rls — read path", () => {
         await expect(handler.handler(makeCtx(fake, "u1"), {})).resolves.toBeNull();
     });
 
-    test("get() on a row outside every policy-gated table returns the row unrestricted", async () => {
+    it("get() on a row outside every policy-gated table returns the row unrestricted", async () => {
         expect.assertions(2);
 
         // Policy applies to "documents"; the requested row lives in "audit",
@@ -300,7 +306,9 @@ describe("rls — read path", () => {
         const policy = definePolicy<TestCtx>({
             on: "read",
             table: "documents",
-            when: () => ({ ownerId: "anyone" }),
+            when: () => {
+                return { ownerId: "anyone" };
+            },
         });
 
         const fake = createFakeDb([{ _id: "a1", table: "audit", event: "login" }]);
@@ -313,7 +321,7 @@ describe("rls — read path", () => {
         expect(result?.["event"]).toBe("login");
     });
 
-    test("count() on a non-policy table does NOT mark restrictsCounts", async () => {
+    it("count() on a non-policy table does NOT mark restrictsCounts", async () => {
         expect.assertions(1);
 
         const policy = definePolicy<TestCtx>({
@@ -334,7 +342,7 @@ describe("rls — read path", () => {
 });
 
 describe("rls — write path", () => {
-    test("update policy denies patch with FORBIDDEN", async () => {
+    it("update policy denies patch with FORBIDDEN", async () => {
         expect.assertions(2);
 
         const policy = definePolicy<TestCtx>({
@@ -354,7 +362,7 @@ describe("rls — write path", () => {
         expect(db.calls.some((call) => call.method === "patch")).toBe(false);
     });
 
-    test("update policy allows patch when the row matches", async () => {
+    it("update policy allows patch when the row matches", async () => {
         expect.assertions(1);
 
         const policy = definePolicy<TestCtx>({
@@ -373,7 +381,7 @@ describe("rls — write path", () => {
         expect(patchCall).toBeDefined();
     });
 
-    test("delete policy denies with FORBIDDEN", async () => {
+    it("delete policy denies with FORBIDDEN", async () => {
         expect.assertions(2);
 
         const policy = definePolicy<TestCtx>({
@@ -393,7 +401,7 @@ describe("rls — write path", () => {
         expect(db.calls.some((call) => call.method === "delete")).toBe(false);
     });
 
-    test("insert policy denies a forbidden document", async () => {
+    it("insert policy denies a forbidden document", async () => {
         expect.assertions(1);
 
         const policy = definePolicy<TestCtx>({
@@ -415,13 +423,15 @@ describe("rls — write path", () => {
 });
 
 describe("rls — write policies returning a WhereInput predicate", () => {
-    test("insert: predicate matches the candidate document → allow", async () => {
+    it("insert: predicate matches the candidate document → allow", async () => {
         expect.assertions(1);
 
         const policy = definePolicy<TestCtx>({
             on: "insert",
             table: "documents",
-            when: ({ auth }) => ({ ownerId: { eq: auth.userId } }),
+            when: ({ auth }) => {
+                return { ownerId: { eq: auth.userId } };
+            },
         });
         const db = createFakeDb([]);
 
@@ -434,13 +444,15 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         expect(db.calls.some((call) => call.method === "insert")).toBe(true);
     });
 
-    test("insert: predicate mismatch denies with FORBIDDEN", async () => {
+    it("insert: predicate mismatch denies with FORBIDDEN", async () => {
         expect.assertions(2);
 
         const policy = definePolicy<TestCtx>({
             on: "insert",
             table: "documents",
-            when: ({ auth }) => ({ ownerId: { eq: auth.userId } }),
+            when: ({ auth }) => {
+                return { ownerId: { eq: auth.userId } };
+            },
         });
         const db = createFakeDb([]);
 
@@ -455,13 +467,15 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         expect(db.calls.some((call) => call.method === "insert")).toBe(false);
     });
 
-    test("update: predicate evaluates against the pre-write row", async () => {
+    it("update: predicate evaluates against the pre-write row", async () => {
         expect.assertions(3);
 
         const policy = definePolicy<TestCtx>({
             on: "update",
             table: "documents",
-            when: () => ({ archived: { eq: false } }),
+            when: () => {
+                return { archived: { eq: false } };
+            },
         });
         const allowed = createFakeDb([{ _id: "d1", archived: false, table: "documents" }]);
         const denied = createFakeDb([{ _id: "d2", archived: true, table: "documents" }]);
@@ -479,13 +493,15 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         expect(denied.calls.some((call) => call.method === "patch")).toBe(false);
     });
 
-    test("delete: predicate evaluates against the pre-write row", async () => {
+    it("delete: predicate evaluates against the pre-write row", async () => {
         expect.assertions(2);
 
         const policy = definePolicy<TestCtx>({
             on: "delete",
             table: "documents",
-            when: ({ auth }) => ({ ownerId: { eq: auth.userId } }),
+            when: ({ auth }) => {
+                return { ownerId: { eq: auth.userId } };
+            },
         });
         const db = createFakeDb([
             { _id: "mine", ownerId: "u1", table: "documents" },
@@ -504,15 +520,17 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         });
     });
 
-    test("operator coverage: lt / in / contains / AND honored on writes", async () => {
+    it("operator coverage: lt / in / contains / AND honored on writes", async () => {
         expect.assertions(5);
 
         const policy = definePolicy<TestCtx>({
             on: "insert",
             table: "documents",
-            when: () => ({
-                AND: [{ priority: { lt: 5 } }, { status: { in: ["draft", "review"] } }, { title: { contains: "urgent" } }],
-            }),
+            when: () => {
+                return {
+                    AND: [{ priority: { lt: 5 } }, { status: { in: ["draft", "review"] } }, { title: { contains: "urgent" } }],
+                };
+            },
         });
         const db = createFakeDb([]);
 
@@ -545,15 +563,17 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         });
     });
 
-    test("oR branch: any matching sub-predicate allows the write", async () => {
+    it("oR branch: any matching sub-predicate allows the write", async () => {
         expect.assertions(1);
 
         const policy = definePolicy<TestCtx>({
             on: "insert",
             table: "documents",
-            when: ({ auth }) => ({
-                OR: [{ ownerId: { eq: auth.userId } }, { visibility: { eq: "public" } }],
-            }),
+            when: ({ auth }) => {
+                return {
+                    OR: [{ ownerId: { eq: auth.userId } }, { visibility: { eq: "public" } }],
+                };
+            },
         });
         const db = createFakeDb([]);
 
@@ -573,7 +593,7 @@ describe("rls — write policies returning a WhereInput predicate", () => {
 });
 
 describe("rls — opt-in scope", () => {
-    test("policies do NOT apply to procedures whose chain omits rls()", async () => {
+    it("policies do NOT apply to procedures whose chain omits rls()", async () => {
         expect.hasAssertions();
 
         // A policy is declared but the procedure deliberately skips
@@ -600,7 +620,7 @@ describe("rls — opt-in scope", () => {
         expect((findManyCall?.args as { baseWhere?: unknown } | undefined)?.baseWhere).toBeUndefined();
     });
 
-    test("a CirrusError thrown from a policy denial carries status 403", async () => {
+    it("a CirrusError thrown from a policy denial carries status 403", async () => {
         expect.assertions(3);
 
         const policy = definePolicy<TestCtx>({
@@ -624,7 +644,7 @@ describe("rls — opt-in scope", () => {
 });
 
 describe("rls — role registry", () => {
-    test("defineRole returns the declared name + optional description", () => {
+    it("defineRole returns the declared name + optional description", () => {
         expect.assertions(2);
 
         expect(defineRole("admin")).toEqual({ name: "admin" });

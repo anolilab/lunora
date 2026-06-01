@@ -1,12 +1,15 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { DashboardApp } from "../src/app.js";
 import { DashboardStyles } from "../src/theme.js";
 import { DASHBOARD_ROOT_CLASS } from "../src/theme-constants.js";
 
+const DECLARATION_BLOCK = /\{[^{}]*\}/g;
+const RULE_DELIMITER = /[|{}]/u;
+
 describe("dashboard theme", () => {
-    test("dashboardApp applies the scoped root class and injects the stylesheet", () => {
+    it("dashboardApp applies the scoped root class and injects the stylesheet", () => {
         expect.assertions(2);
 
         render(<DashboardApp baseUrl="https://app.example" />);
@@ -15,7 +18,7 @@ describe("dashboard theme", () => {
         expect(screen.getByTestId("dash-styles")).toBeDefined();
     });
 
-    test("every CSS selector is scoped under the root class", () => {
+    it("every CSS selector is scoped under the root class", () => {
         expect.assertions(2);
 
         render(<DashboardStyles />);
@@ -29,8 +32,8 @@ describe("dashboard theme", () => {
         // must carry the root class, so nothing leaks into a host page.
         const leaked = css
             .replaceAll(/\/\*[\s\S]*?\*\//g, "")
-            .replaceAll(/\{[^{}]*\}/g, "|") // collapse declaration blocks to a delimiter
-            .split(/[|{}]/u)
+            .replaceAll(DECLARATION_BLOCK, "|") // collapse declaration blocks to a delimiter
+            .split(RULE_DELIMITER)
             .flatMap((group) => group.split(","))
             .map((selector) => selector.trim())
             .filter((selector) => selector !== "" && !selector.startsWith("@"))

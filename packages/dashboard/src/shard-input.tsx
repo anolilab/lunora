@@ -1,4 +1,5 @@
-import { type ChangeEvent, type ReactElement, useId, useMemo } from "react";
+import type { ChangeEvent, ReactElement } from "react";
+import { useId, useMemo } from "react";
 
 import { loadRecentShards } from "./shard-history.js";
 
@@ -11,7 +12,7 @@ export interface ShardInputProps {
 
 /**
  * Shard-key text field shared by every shard-scoped panel. Backed by a
- * `<datalist>` of recently-used shard keys (see {@link loadRecentShards}) so an
+ * `&lt;datalist>` of recently-used shard keys (see {@link loadRecentShards}) so an
  * operator can pick a shard they've visited instead of retyping it — the closest
  * to a shard picker possible without server-side shard enumeration, which
  * Durable Objects don't support. Panels remain responsible for recording a shard
@@ -38,7 +39,7 @@ export function ShardInput({ onChange, testId, value }: ShardInputProps): ReactE
             {recents.length > 0 && (
                 <datalist data-testid={`${testId}-recents`} id={listId}>
                     {recents.map((shard) => (
-                        <option key={shard} aria-label={shard} value={shard} />
+                        <option aria-label={shard} key={shard} value={shard} />
                     ))}
                 </datalist>
             )}

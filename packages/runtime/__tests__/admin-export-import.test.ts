@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
@@ -10,14 +10,14 @@ const fakeCtx: ExecutionContextLike = {
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => ({ fetch: async () => new Response("not used", { status: 200 }) }),
-    idFromName: (name) => ({ __name: name }),
+    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
+    idFromName: (name) => { return { __name: name }; },
 };
 
 const ADMIN_TOKEN = "admin-bear";
 
 describe("createWorker — admin export endpoint", () => {
-    test("rejects without a configured admin token (403)", async () => {
+    it("rejects without a configured admin token (403)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
@@ -44,7 +44,7 @@ describe("createWorker — admin export endpoint", () => {
         expect(response.status).toBe(403);
     });
 
-    test("rejects without an authorization header (403)", async () => {
+    it("rejects without an authorization header (403)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
@@ -64,7 +64,7 @@ describe("createWorker — admin export endpoint", () => {
         expect(response.status).toBe(403);
     });
 
-    test("rejects non-POST (405)", async () => {
+    it("rejects non-POST (405)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
@@ -84,10 +84,11 @@ describe("createWorker — admin export endpoint", () => {
         expect(response.status).toBe(405);
     });
 
-    test("streams NDJSON from orchestrateExport", async () => {
+    it("streams NDJSON from orchestrateExport", async () => {
         expect.assertions(4);
 
-        const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => ({
+        const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
+ return {
             failed: 0,
             ok: 1,
             shards: [
@@ -99,7 +100,8 @@ describe("createWorker — admin export endpoint", () => {
                     shardKey: "__root__",
                 },
             ],
-        }));
+        };
+});
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
@@ -133,14 +135,16 @@ describe("createWorker — admin export endpoint", () => {
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
     });
 
-    test("streams D1 globals when exportGlobals is configured", async () => {
+    it("streams D1 globals when exportGlobals is configured", async () => {
         expect.assertions(2);
 
-        const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => ({
+        const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
+ return {
             failed: 0,
             ok: 0,
             shards: [],
-        }));
+        };
+});
 
         const exportGlobals = vi.fn<() => AsyncGenerator<{ doc: Record<string, unknown>; table: string }>>(async function* globalsIter() {
             yield { doc: { _id: "g1" }, table: "settings" };
@@ -158,7 +162,7 @@ describe("createWorker — admin export endpoint", () => {
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+                (table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } }),
             shardDO: noopNamespace,
         });
 
@@ -204,13 +208,13 @@ describe("createWorker — admin import endpoint", () => {
                     failed: 0,
                     inserted,
                     ok: request.batches.length,
-                    shards: request.batches.map((batch) => ({ result: { conflicts: 0, errors: [], inserted: {} }, shardKey: batch.shardKey })),
+                    shards: request.batches.map((batch) => { return { result: { conflicts: 0, errors: [], inserted: {} }, shardKey: batch.shardKey }; }),
                 };
             },
         );
     });
 
-    test("rejects without an admin bearer (403)", async () => {
+    it("rejects without an admin bearer (403)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
@@ -230,7 +234,7 @@ describe("createWorker — admin import endpoint", () => {
         expect(response.status).toBe(403);
     });
 
-    test("buckets rows by shard and forwards via orchestrateImport", async () => {
+    it("buckets rows by shard and forwards via orchestrateImport", async () => {
         expect.assertions(5);
 
         const worker = createWorker({
@@ -243,7 +247,7 @@ describe("createWorker — admin import endpoint", () => {
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : { mode: { kind: "root" } },
+                (table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : { mode: { kind: "root" } }),
             shardDO: noopNamespace,
         });
 
@@ -279,7 +283,7 @@ describe("createWorker — admin import endpoint", () => {
         expect(shardKeys).toEqual(["__root__", "c1", "c2"]);
     });
 
-    test("reports malformed JSON rows in `errors` but continues", async () => {
+    it("reports malformed JSON rows in `errors` but continues", async () => {
         expect.assertions(3);
 
         const worker = createWorker({
@@ -317,14 +321,16 @@ describe("createWorker — admin import endpoint", () => {
         expect(body.errors[0]).toMatchObject({ code: "BAD_ROW", line: 2 });
     });
 
-    test("routes global-table rows through importGlobals", async () => {
+    it("routes global-table rows through importGlobals", async () => {
         expect.assertions(3);
 
-        const importGlobals = vi.fn<(request: { rows: { doc: Record<string, unknown>; table: string }[] }) => Promise<unknown>>(async (request) => ({
+        const importGlobals = vi.fn<(request: { rows: { doc: Record<string, unknown>; table: string }[] }) => Promise<unknown>>(async (request) => {
+ return {
             conflicts: 0,
             errors: [],
             inserted: { settings: request.rows.length },
-        }));
+        };
+});
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
@@ -337,7 +343,7 @@ describe("createWorker — admin import endpoint", () => {
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+                (table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } }),
             shardDO: noopNamespace,
         });
 
@@ -363,7 +369,7 @@ describe("createWorker — admin import endpoint", () => {
         expect(orchestrateImport).not.toHaveBeenCalled();
     });
 
-    test("reports global rows as errors when importGlobals is not configured", async () => {
+    it("reports global rows as errors when importGlobals is not configured", async () => {
         expect.assertions(2);
 
         const worker = createWorker({
@@ -376,7 +382,7 @@ describe("createWorker — admin import endpoint", () => {
                 registry: {} as never,
             },
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+                (table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } }),
             shardDO: noopNamespace,
         });
 
@@ -400,7 +406,7 @@ describe("createWorker — admin import endpoint", () => {
 });
 
 describe("import streaming — large body", () => {
-    test("handles a 10k-row NDJSON body without crashing", async () => {
+    it("handles a 10k-row NDJSON body without crashing", async () => {
         expect.hasAssertions();
 
         const orchestrateImport = vi.fn<(namespace: unknown, request: { batches: { rows: { table: string }[]; shardKey: string }[] }) => Promise<unknown>>(
@@ -457,7 +463,7 @@ describe("import streaming — large body", () => {
         expect(body.inserted).toEqual({ users: 10_000 });
     });
 
-    test("export response body is consumable as a stream", async () => {
+    it("export response body is consumable as a stream", async () => {
         expect.hasAssertions();
 
         const rows: { doc: Record<string, unknown>; table: string }[] = [];
@@ -466,11 +472,13 @@ describe("import streaming — large body", () => {
             rows.push({ doc: { _id: `u${index}`, email: `u${index}@x.io` }, table: "users" });
         }
 
-        const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => ({
+        const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
+ return {
             failed: 0,
             ok: 1,
             shards: [{ rows, shardKey: "__root__" }],
-        }));
+        };
+});
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,

@@ -19,7 +19,8 @@ import type { SqlCursor, SqlExec } from "../../src/ctx-db.js";
 export const createSqliteExec = (): { close: () => void; raw: (query: string, ...params: unknown[]) => Record<string, unknown>[]; sql: SqlExec } => {
     const db = new DatabaseSync(":memory:");
 
-    const cursor = <Row>(rows: Row[]): SqlCursor<Row> => ({
+    const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
+ return {
         [Symbol.iterator]() {
             return rows[Symbol.iterator]();
         },
@@ -33,7 +34,8 @@ export const createSqliteExec = (): { close: () => void; raw: (query: string, ..
         toArray() {
             return rows;
         },
-    });
+    };
+};
 
     const run = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<Row> => {
         const statement = db.prepare(query);

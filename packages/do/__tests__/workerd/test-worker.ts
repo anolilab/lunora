@@ -32,7 +32,7 @@ export class TestShardDO extends DurableObject<Env> {
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
 
-    constructor(ctx: DurableObjectState, env: Env) {
+    public constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
         this.shard = new ConcreteShard(ctx as unknown as ShardDOState, env, this);
     }
@@ -55,7 +55,7 @@ export class TestShardDO extends DurableObject<Env> {
 }
 
 class ConcreteShard extends ShardDO {
-    constructor(
+    public constructor(
         state: ShardDOState,
         env: unknown,
         private readonly outer: TestShardDO,
@@ -77,7 +77,7 @@ class ConcreteShard extends ShardDO {
 export class TestSessionDO extends DurableObject<Env> {
     private readonly session: SessionDO;
 
-    constructor(ctx: DurableObjectState, env: Env) {
+    public constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
         this.session = new SessionDO(ctx, env);
     }

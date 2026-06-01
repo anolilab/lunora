@@ -18,10 +18,10 @@ import type { D1Exec } from "../../src/d1-ctx-db.js";
 export const createD1Exec = (): { close: () => void; ddl: (query: string) => void; exec: D1Exec } => {
     const database = new DatabaseSync(":memory:");
 
-    const all = (query: string, parameters: readonly unknown[]): Array<Record<string, unknown>> => {
+    const all = (query: string, parameters: ReadonlyArray<unknown>): Record<string, unknown>[] => {
         const statement = database.prepare(query);
 
-        return statement.all(...(parameters as never[])) as Array<Record<string, unknown>>;
+        return statement.all(...(parameters as never[]));
     };
 
     return {

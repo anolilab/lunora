@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import type { D1DatabaseLike } from "./d1-client.js";
 import { D1Client } from "./d1-client.js";
 
-export interface Migration {
+interface Migration {
     /** Human-readable name, e.g. `001_init` (used in logs). */
     name: string;
     /** Raw SQL to apply. Should be idempotent where possible. */
@@ -23,7 +23,14 @@ export interface Migration {
 const TRACKING_TABLE_NAME = "__drizzle_migrations";
 const TRACKING_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${TRACKING_TABLE_NAME} (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at NUMERIC)`;
 
-export interface MigrationRunnerResult {
+/** Single whitespace char — used by the trailing-token scan. Hoisted to avoid per-call recompilation. */
+const WHITESPACE_RE = /\s/u;
+/** Trailing `;` (plus whitespace) trimmer applied before submitting SQL to D1. Hoisted to avoid per-call recompilation. */
+const TRAILING_SEMICOLON_RE = /;\s*$/u;
+/** Lowercase hex SHA-256 shape guard before inlining the hash into SQL. Hoisted to avoid per-call recompilation. */
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
+
+interface MigrationRunnerResult {
     applied: { name: string; version: number }[];
     skipped: { name: string; version: number }[];
 }
@@ -152,9 +159,9 @@ const assertSingleStatement = (migration: Migration): void => {
 
                 // Any whitespace is fine; anything else means a second
                 // statement starts after the `;`.
-                if (tail !== undefined && !/\s/u.test(tail)) {
+                if (tail !== undefined && !WHITESPACE_RE.test(tail)) {
                     throw new Error(
-                        `Migration "${migration.name}" (v${migration.version}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
+                        `Migration "${migration.name}" (v${String(migration.version)}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
                     );
                 }
             }
@@ -182,7 +189,7 @@ const hashMigration = async (text: string): Promise<string> => {
  * same SQL under a different `version` is rejected and identical migrations
  * are skipped idempotently.
  */
-export class MigrationRunner {
+class MigrationRunner {
     private readonly client: D1Client;
 
     private readonly migrations: Migration[];
@@ -192,9 +199,9 @@ export class MigrationRunner {
      * drizzle handle for free) or a raw `D1DatabaseLike` binding (wrapped on
      * the caller's behalf so existing `@cirrus/cli` callers keep working).
      */
-    constructor(db: D1Client | D1DatabaseLike, migrations: Migration[]) {
+    public constructor(db: D1Client | D1DatabaseLike, migrations: Migration[]) {
         this.client = db instanceof D1Client ? db : new D1Client(db);
-        this.migrations = [...migrations].sort((a, b) => a.version - b.version);
+        this.migrations = [...migrations].toSorted((a, b) => a.version - b.version);
         this.assertUniqueVersions();
         this.assertUniqueSql();
     }
@@ -212,13 +219,13 @@ export class MigrationRunner {
             const hash = await hashMigration(migration.sql);
 
             if (appliedHashes.has(hash)) {
-                skipped.push({ version: migration.version, name: migration.name });
+                skipped.push({ name: migration.name, version: migration.version });
 
                 continue;
             }
 
             await this.applyOne(migration, hash);
-            applied.push({ version: migration.version, name: migration.name });
+            applied.push({ name: migration.name, version: migration.version });
         }
 
         return { applied, skipped };
@@ -232,7 +239,7 @@ export class MigrationRunner {
         // multiple statements per file should split them across migrations.
         assertSingleStatement(migration);
 
-        const statementText = migration.sql.replace(/;\s*$/u, "").trim();
+        const statementText = migration.sql.replace(TRAILING_SEMICOLON_RE, "").trim();
 
         // Apply the migration body AND write the tracking row in a single
         // atomic `client.batch(...)` so they commit (or roll back) together —
@@ -248,11 +255,11 @@ export class MigrationRunner {
         // engine-controlled, not user-supplied: `hash` is a 64-char SHA-256
         // hex string (asserted below) and `created_at` is a numeric clock
         // reading. The hash assertion guarantees no quote/escape can slip in.
-        if (!/^[0-9a-f]{64}$/u.test(hash)) {
+        if (!SHA256_HEX_RE.test(hash)) {
             throw new Error(`migration "${migration.name}" produced a non-hex hash; refusing to inline into SQL`);
         }
 
-        const trackingInsertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at) VALUES ('${hash}', ${Date.now()})`;
+        const trackingInsertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at) VALUES ('${hash}', ${String(Date.now())})`;
 
         const items = [this.client.drizzle.run(sql.raw(statementText)), this.client.drizzle.run(sql.raw(trackingInsertSql))];
 
@@ -264,7 +271,7 @@ export class MigrationRunner {
 
         for (const m of this.migrations) {
             if (seen.has(m.version)) {
-                throw new Error(`Duplicate migration version ${m.version}`);
+                throw new Error(`Duplicate migration version ${String(m.version)}`);
             }
 
             seen.add(m.version);
@@ -282,10 +289,13 @@ export class MigrationRunner {
             const previousVersion = seen.get(m.sql);
 
             if (previousVersion !== undefined) {
-                throw new Error(`Migrations ${previousVersion} and ${m.version} have identical SQL — bump the content, not just the version.`);
+                throw new Error(`Migrations ${String(previousVersion)} and ${String(m.version)} have identical SQL — bump the content, not just the version.`);
             }
 
             seen.set(m.sql, m.version);
         }
     }
 }
+
+export { MigrationRunner };
+export type { Migration, MigrationRunnerResult };

@@ -3,9 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Project } from "ts-morph";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { discoverFunctions } from "../src/discover-functions.js";
+
+const NAMESPACE_COLLISION_RE = /Namespace collision/u;
+const CURSOR_DOC_ARRAY_RE = /CursorDoc\[\]/u;
 
 let workdir: string;
 
@@ -31,7 +34,7 @@ describe("discoverFunctions", () => {
 `;
 
     describe("discoverFunctions namespace collision", () => {
-        test("throws CirrusError when two distinct paths sanitize to the same namespace", () => {
+        it("throws CirrusError when two distinct paths sanitize to the same namespace", () => {
             expect.assertions(3);
 
             // `foo/bar.ts` and `foo-bar.ts` both → `foo_bar`. Without the guard
@@ -41,7 +44,7 @@ describe("discoverFunctions", () => {
 
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
-            expect(() => discoverFunctions(project, workdir)).toThrow(/Namespace collision/u);
+            expect(() => discoverFunctions(project, workdir)).toThrow(NAMESPACE_COLLISION_RE);
 
             try {
                 discoverFunctions(project, workdir);
@@ -51,7 +54,7 @@ describe("discoverFunctions", () => {
             }
         });
 
-        test("distinct sanitized namespaces do not trip the collision guard", () => {
+        it("distinct sanitized namespaces do not trip the collision guard", () => {
             expect.hasAssertions();
 
             writeFunction("foo.ts", tinyQuery);
@@ -62,10 +65,10 @@ describe("discoverFunctions", () => {
             const result = discoverFunctions(project, workdir);
 
             expect(result).toHaveLength(2);
-            expect(result.map((f) => f.filePath).sort()).toEqual(["bar", "foo"]);
+            expect(result.map((f) => f.filePath).toSorted((a, b) => a.localeCompare(b))).toEqual(["bar", "foo"]);
         });
 
-        test("detects aliased imports — `import { query as q }` is treated as a query", () => {
+        it("detects aliased imports — `import { query as q }` is treated as a query", () => {
             expect.hasAssertions();
 
             writeFunction(
@@ -86,7 +89,7 @@ describe("discoverFunctions", () => {
             expect(byName.get("send")?.kind).toBe("mutation");
         });
 
-        test("ignores a local `const query` shadowing the @cirrus/server import", () => {
+        it("ignores a local `const query` shadowing the @cirrus/server import", () => {
             expect.assertions(1);
 
             // A local `query` is NOT the framework helper, even if the name matches.
@@ -104,7 +107,7 @@ describe("discoverFunctions", () => {
             expect(result).toHaveLength(0);
         });
 
-        test("infers handler return types when the type checker can resolve them", () => {
+        it("infers handler return types when the type checker can resolve them", () => {
             expect.hasAssertions();
 
             // Handler returns a literal object whose type is inferrable from the
@@ -134,7 +137,7 @@ describe("discoverFunctions", () => {
             expect(byName.get("tick")?.returnType).toBe("number");
         });
 
-        test("falls back to `unknown` when the checker can't resolve enough to be useful", () => {
+        it("falls back to `unknown` when the checker can't resolve enough to be useful", () => {
             expect.assertions(1);
 
             // Without annotations and without args/context wired to real types,
@@ -157,7 +160,7 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe("unknown");
         });
 
-        test("falls back to `unknown` when the return type references a non-exported local type", () => {
+        it("falls back to `unknown` when the return type references a non-exported local type", () => {
             expect.assertions(1);
 
             // A handler whose return type names a `interface` declared in the
@@ -190,7 +193,7 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe("unknown");
         });
 
-        test("preserves return types that reference exported local types", () => {
+        it("preserves return types that reference exported local types", () => {
             expect.assertions(1);
 
             // The mirror case: when the same interface IS exported, downstream
@@ -216,10 +219,10 @@ describe("discoverFunctions", () => {
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
             const result = discoverFunctions(project, workdir);
 
-            expect(result[0]?.returnType).toMatch(/CursorDoc\[\]/u);
+            expect(result[0]?.returnType).toMatch(CURSOR_DOC_ARRAY_RE);
         });
 
-        test("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
+        it("marks internalQuery/internalMutation/internalAction registrations as internal, mapping each to its kind", () => {
             expect.hasAssertions();
 
             writeFunction(
@@ -244,7 +247,7 @@ describe("discoverFunctions", () => {
             expect(byName.get("list")).toMatchObject({ kind: "query", visibility: "public" });
         });
 
-        test("same file producing two registrations does not trip the guard", () => {
+        it("same file producing two registrations does not trip the guard", () => {
             expect.hasAssertions();
 
             // Two functions exported from the same file share a sanitized namespace
@@ -262,7 +265,7 @@ describe("discoverFunctions", () => {
             const result = discoverFunctions(project, workdir);
 
             expect(result).toHaveLength(2);
-            expect(result.map((f) => f.exportName).sort()).toEqual(["list", "send"]);
+            expect(result.map((f) => f.exportName).toSorted((a, b) => a.localeCompare(b))).toEqual(["list", "send"]);
         });
     });
 
@@ -331,7 +334,7 @@ describe("discoverFunctions", () => {
 `;
 
     describe("discoverFunctions builder procedures", () => {
-        test("discovers a builder terminal, reading the kind from the terminal method name", () => {
+        it("discovers a builder terminal, reading the kind from the terminal method name", () => {
             expect.assertions(5);
 
             writeFunction(
@@ -353,7 +356,7 @@ describe("discoverFunctions", () => {
             expect(result[0]?.args.limit).toEqual({ kind: "number" });
         });
 
-        test("merges .input() args across the chain — a later .input() wins on collision", () => {
+        it("merges .input() args across the chain — a later .input() wins on collision", () => {
             expect.assertions(1);
 
             writeFunction(
@@ -372,7 +375,7 @@ describe("discoverFunctions", () => {
             expect(result[0]?.args.value).toEqual({ kind: "string" });
         });
 
-        test("intervening .use() links don't disturb detection or arg collection", () => {
+        it("intervening .use() links don't disturb detection or arg collection", () => {
             expect.assertions(2);
 
             writeFunction(
@@ -392,7 +395,7 @@ describe("discoverFunctions", () => {
             expect(Object.keys(result[0]?.args ?? {})).toEqual(["a"]);
         });
 
-        test("detects a mutation builder terminal with its own kind", () => {
+        it("detects a mutation builder terminal with its own kind", () => {
             expect.assertions(1);
 
             writeFunction(
@@ -408,7 +411,7 @@ describe("discoverFunctions", () => {
             expect(result[0]?.kind).toBe("mutation");
         });
 
-        test("ignores a `.query()` method on an object lacking the __cirrusProcedure brand", () => {
+        it("ignores a `.query()` method on an object lacking the __cirrusProcedure brand", () => {
             expect.assertions(1);
 
             writeFunction(
@@ -425,7 +428,7 @@ describe("discoverFunctions", () => {
             expect(result).toHaveLength(0);
         });
 
-        test("marks a builder carrying the __cirrusVisibility brand as internal, across a chain", () => {
+        it("marks a builder carrying the __cirrusVisibility brand as internal, across a chain", () => {
             expect.assertions(3);
 
             writeFunction(
@@ -445,7 +448,7 @@ describe("discoverFunctions", () => {
             expect(result[0]?.args.channelId).toEqual({ kind: "id", tableName: "channels" });
         });
 
-        test("a public builder terminal stays visibility: public", () => {
+        it("a public builder terminal stays visibility: public", () => {
             expect.assertions(1);
 
             writeFunction(
@@ -461,7 +464,7 @@ describe("discoverFunctions", () => {
             expect(result[0]?.visibility).toBe("public");
         });
 
-        test("does not register an intermediate .input() assignment that lacks a terminal", () => {
+        it("does not register an intermediate .input() assignment that lacks a terminal", () => {
             expect.assertions(1);
 
             writeFunction(
@@ -477,7 +480,7 @@ describe("discoverFunctions", () => {
             expect(result).toHaveLength(0);
         });
 
-        test("derives the return type from .output() — the declared validator shape wins over the handler body", () => {
+        it("derives the return type from .output() — the declared validator shape wins over the handler body", () => {
             expect.assertions(3);
 
             writeFunction(
@@ -497,7 +500,7 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe("{ count: number; }");
         });
 
-        test(".output() interleaved with .input() leaves arg collection and detection intact", () => {
+        it(".output() interleaved with .input() leaves arg collection and detection intact", () => {
             expect.assertions(3);
 
             writeFunction(

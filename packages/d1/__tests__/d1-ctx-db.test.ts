@@ -1,6 +1,6 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchedulerLike, SchemaLike, TriggerEventLike, ValidatorLike } from "@cirrus/do";
 import { ConflictError } from "@cirrus/do";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createD1CtxDb } from "../src/d1-ctx-db.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
@@ -14,10 +14,17 @@ import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
  */
 const FIXED_CLOCK = 1_700_000_000_000;
 
-const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({
+// Error-message matchers hoisted to module scope (avoids per-call regex recompilation).
+const FIND_FIRST_OR_THROW_RE = /findFirstOrThrow/;
+const CROSS_BACKEND_CASCADE_RE = /cross-backend cascade.*shardBy/u;
+const NO_SCHEDULER_RE = /no scheduler configured/;
+
+const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+ return {
     _meta: { column: { notNull: true, ...column } },
     kind,
-});
+};
+};
 
 const todosSchema: SchemaLike = {
     tables: {
@@ -59,7 +66,7 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     await writer.insert("todos", { _id: "t5", archived: false, priority: "high", projectId: "p1", seq: 0 }, { allowExplicitId: true });
 };
 
-const ids = (docs: Array<Record<string, unknown>>): unknown[] => docs.map((doc) => doc["_id"]);
+const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((doc) => doc["_id"]);
 
 describe("d1 ctx-db", () => {
     beforeEach(() => {
@@ -71,7 +78,7 @@ describe("d1 ctx-db", () => {
     });
 
     describe("findMany — where filtering", () => {
-        test("filters by an equality field, defaulting to creation+id order", async () => {
+        it("filters by an equality field, defaulting to creation+id order", async () => {
             expect.assertions(3);
 
             const writer = setupTodos();
@@ -86,7 +93,7 @@ describe("d1 ctx-db", () => {
             expect(result.continueCursor).toBeNull();
         });
 
-        test("combines equality, boolean and `in` operators", async () => {
+        it("combines equality, boolean and `in` operators", async () => {
             expect.assertions(1);
 
             const writer = setupTodos();
@@ -100,7 +107,7 @@ describe("d1 ctx-db", () => {
             expect(ids(result.page)).toEqual(["t1", "t2", "t5"]);
         });
 
-        test("decodes a stored 1/0 column back into a boolean", async () => {
+        it("decodes a stored 1/0 column back into a boolean", async () => {
             expect.assertions(2);
 
             const writer = setupTodos();
@@ -114,7 +121,7 @@ describe("d1 ctx-db", () => {
             expect(active?.["archived"]).toBe(false);
         });
 
-        test("returns an empty, done page when nothing matches", async () => {
+        it("returns an empty, done page when nothing matches", async () => {
             expect.assertions(3);
 
             const writer = setupTodos();
@@ -130,7 +137,7 @@ describe("d1 ctx-db", () => {
     });
 
     describe("findMany — orderBy", () => {
-        test("orders by a numeric field ascending and descending", async () => {
+        it("orders by a numeric field ascending and descending", async () => {
             expect.assertions(2);
 
             const writer = setupTodos();
@@ -144,7 +151,7 @@ describe("d1 ctx-db", () => {
             expect(ids(desc.page)).toEqual(["t3", "t2", "t1", "t5"]);
         });
 
-        test("applies a secondary sort key when the first ties", async () => {
+        it("applies a secondary sort key when the first ties", async () => {
             expect.assertions(1);
 
             const writer = setupTodos();
@@ -161,7 +168,7 @@ describe("d1 ctx-db", () => {
     });
 
     describe("findMany — keyset cursor pagination", () => {
-        test("walks pages via continueCursor, covering every row exactly once", async () => {
+        it("walks pages via continueCursor, covering every row exactly once", async () => {
             expect.assertions(6);
 
             const writer = setupTodos();
@@ -186,7 +193,7 @@ describe("d1 ctx-db", () => {
             expect(second.continueCursor).toBeNull();
         });
 
-        test("is stable when a row is inserted before the cursor between pages", async () => {
+        it("is stable when a row is inserted before the cursor between pages", async () => {
             expect.assertions(1);
 
             const writer = setupTodos();
@@ -207,7 +214,7 @@ describe("d1 ctx-db", () => {
             expect(ids(second.page)).toEqual(["t2", "t3"]);
         });
 
-        test("a final page that exactly fills the limit reports isDone with no cursor", async () => {
+        it("a final page that exactly fills the limit reports isDone with no cursor", async () => {
             expect.assertions(3);
 
             const writer = setupTodos();
@@ -224,7 +231,7 @@ describe("d1 ctx-db", () => {
     });
 
     describe("findFirst", () => {
-        test("returns the first row under the order, or null when none match", async () => {
+        it("returns the first row under the order, or null when none match", async () => {
             expect.assertions(2);
 
             const writer = setupTodos();
@@ -240,7 +247,7 @@ describe("d1 ctx-db", () => {
     });
 
     describe("findFirstOrThrow", () => {
-        test("returns the matched row, mirroring findFirst on a hit", async () => {
+        it("returns the matched row, mirroring findFirst on a hit", async () => {
             expect.assertions(1);
 
             const writer = setupTodos();
@@ -252,19 +259,19 @@ describe("d1 ctx-db", () => {
             expect(top["_id"]).toBe("t3");
         });
 
-        test("throws NotFoundError when no row matches", async () => {
+        it("throws NotFoundError when no row matches", async () => {
             expect.assertions(1);
 
             const writer = setupTodos();
 
             await seed(writer);
 
-            await expect(writer.findFirstOrThrow("todos", { where: { projectId: "nope" } })).rejects.toThrow(/findFirstOrThrow/);
+            await expect(writer.findFirstOrThrow("todos", { where: { projectId: "nope" } })).rejects.toThrow(FIND_FIRST_OR_THROW_RE);
         });
     });
 
     describe("count", () => {
-        test("counts rows matching the where filter", async () => {
+        it("counts rows matching the where filter", async () => {
             expect.assertions(3);
 
             const writer = setupTodos();
@@ -276,7 +283,7 @@ describe("d1 ctx-db", () => {
             await expect(writer.count("todos")).resolves.toBe(5);
         });
 
-        test("aND-merges baseWhere into the count predicate", async () => {
+        it("aND-merges baseWhere into the count predicate", async () => {
             expect.assertions(2);
 
             const writer = setupTodos();
@@ -287,7 +294,7 @@ describe("d1 ctx-db", () => {
             await expect(writer.count("todos", { baseWhere: { projectId: "p1" }, where: { archived: true } })).resolves.toBe(1);
         });
 
-        test("count() throws COUNT_RLS_UNSUPPORTED when restrictsCounts is true", async () => {
+        it("count() throws COUNT_RLS_UNSUPPORTED when restrictsCounts is true", async () => {
             expect.assertions(1);
 
             const writer = setupTodos();
@@ -306,7 +313,7 @@ describe("d1 ctx-db", () => {
     });
 
     describe("baseWhere seam (RLS / aggregates)", () => {
-        test("findMany AND-merges baseWhere before compilation", async () => {
+        it("findMany AND-merges baseWhere before compilation", async () => {
             expect.assertions(1);
 
             const writer = setupTodos();
@@ -318,12 +325,12 @@ describe("d1 ctx-db", () => {
                 where: { archived: false },
             });
 
-            const matchedIds = result.page.map((row) => row["_id"]).sort();
+            const matchedIds = result.page.map((row) => row["_id"]).toSorted((a, b) => String(a).localeCompare(String(b)));
 
             expect(matchedIds).toEqual(["t1", "t2", "t5"]);
         });
 
-        test("baseWhere alone narrows the result", async () => {
+        it("baseWhere alone narrows the result", async () => {
             expect.assertions(1);
 
             const writer = setupTodos();
@@ -337,14 +344,16 @@ describe("d1 ctx-db", () => {
     });
 
     describe("get / patch / replace / delete round-trips", () => {
-        test("inserts, reads back, patches a field, and deletes by id", async () => {
+        it("inserts, reads back, patches a field, and deletes by id", async () => {
             expect.assertions(4);
 
             const writer = setupTodos();
 
             const id = await writer.insert("todos", { _id: "r1", archived: false, priority: "high", projectId: "p1", seq: 1 }, { allowExplicitId: true });
 
-            expect((await writer.get(id))?.["priority"]).toBe("high");
+            const inserted = await writer.get(id);
+
+            expect(inserted?.["priority"]).toBe("high");
 
             await writer.patch(id, { priority: "low" });
 
@@ -358,7 +367,7 @@ describe("d1 ctx-db", () => {
             await expect(writer.get(id)).resolves.toBeNull();
         });
 
-        test("replace overwrites unspecified fields with null", async () => {
+        it("replace overwrites unspecified fields with null", async () => {
             expect.assertions(2);
 
             const writer = setupTodos();
@@ -421,7 +430,7 @@ describe("d1 ctx-db", () => {
     };
 
     describe("insert defaults", () => {
-        test("fills a `.default()` literal and a `.$defaultFn()` factory when absent", async () => {
+        it("fills a `.default()` literal and a `.$defaultFn()` factory when absent", async () => {
             expect.assertions(2);
 
             const { writer } = setupItems();
@@ -433,7 +442,7 @@ describe("d1 ctx-db", () => {
             expect(doc?.["seq"]).toBe(7);
         });
 
-        test("a provided value overrides the default", async () => {
+        it("a provided value overrides the default", async () => {
             expect.assertions(2);
 
             const { writer } = setupItems();
@@ -445,7 +454,7 @@ describe("d1 ctx-db", () => {
             expect(doc?.["seq"]).toBe(99);
         });
 
-        test("does not run `$onUpdateFn` on insert", async () => {
+        it("does not run `$onUpdateFn` on insert", async () => {
             expect.assertions(2);
 
             const { revCalls, writer } = setupItems();
@@ -459,7 +468,7 @@ describe("d1 ctx-db", () => {
     });
 
     describe("$onUpdateFn", () => {
-        test("recomputes on each patch that omits the field", async () => {
+        it("recomputes on each patch that omits the field", async () => {
             expect.assertions(3);
 
             const { revCalls, writer } = setupItems();
@@ -468,15 +477,19 @@ describe("d1 ctx-db", () => {
 
             await writer.patch("i1", { title: "second" });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(1);
+            const afterFirstPatch = await writer.get("i1");
+
+            expect(afterFirstPatch?.["rev"]).toBe(1);
 
             await writer.patch("i1", { title: "third" });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(2);
+            const afterSecondPatch = await writer.get("i1");
+
+            expect(afterSecondPatch?.["rev"]).toBe(2);
             expect(revCalls()).toBe(2);
         });
 
-        test("is skipped when the patch sets the field explicitly", async () => {
+        it("is skipped when the patch sets the field explicitly", async () => {
             expect.assertions(2);
 
             const { revCalls, writer } = setupItems();
@@ -485,11 +498,13 @@ describe("d1 ctx-db", () => {
 
             await writer.patch("i1", { rev: 99 });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(99);
+            const afterExplicitPatch = await writer.get("i1");
+
+            expect(afterExplicitPatch?.["rev"]).toBe(99);
             expect(revCalls()).toBe(0);
         });
 
-        test("recomputes on replace that omits the field, but honors an explicit value", async () => {
+        it("recomputes on replace that omits the field, but honors an explicit value", async () => {
             expect.assertions(2);
 
             const { writer } = setupItems();
@@ -498,16 +513,20 @@ describe("d1 ctx-db", () => {
 
             await writer.replace("i1", { slug: "a", title: "auto" });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(1);
+            const afterAutoReplace = await writer.get("i1");
+
+            expect(afterAutoReplace?.["rev"]).toBe(1);
 
             await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
 
-            expect((await writer.get("i1"))?.["rev"]).toBe(42);
+            const afterManualReplace = await writer.get("i1");
+
+            expect(afterManualReplace?.["rev"]).toBe(42);
         });
     });
 
     describe(".unique() constraint", () => {
-        test("a duplicate insert throws a ConflictError (code CONFLICT, status 409)", async () => {
+        it("a duplicate insert throws a ConflictError (code CONFLICT, status 409)", async () => {
             expect.assertions(2);
 
             const { writer } = setupItems();
@@ -520,7 +539,7 @@ describe("d1 ctx-db", () => {
             await expect(conflict).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
         });
 
-        test("a patch that collides with another row's unique value conflicts", async () => {
+        it("a patch that collides with another row's unique value conflicts", async () => {
             expect.assertions(1);
 
             const { writer } = setupItems();
@@ -531,7 +550,7 @@ describe("d1 ctx-db", () => {
             await expect(writer.patch("i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
         });
 
-        test("distinct unique values insert cleanly", async () => {
+        it("distinct unique values insert cleanly", async () => {
             expect.assertions(1);
 
             const { writer } = setupItems();
@@ -544,7 +563,8 @@ describe("d1 ctx-db", () => {
     });
 
     describe("relations", () => {
-        const buildRelSchema = (action?: "cascade" | "restrict" | "set null"): SchemaLike => ({
+        const buildRelSchema = (action?: "cascade" | "restrict" | "set null"): SchemaLike => {
+ return {
             tables: {
                 messages: {
                     indexes: [],
@@ -565,7 +585,8 @@ describe("d1 ctx-db", () => {
                     shape: { name: col("string") },
                 },
             },
-        });
+        };
+};
 
         const setupRelations = (action?: "cascade" | "restrict" | "set null"): DatabaseWriterLike => {
             // FK columns stay nullable so `set null` can clear them.
@@ -587,7 +608,7 @@ describe("d1 ctx-db", () => {
             await writer.insert("reactions", { _id: "r3", emoji: "fire", messageId: "m2" }, { allowExplicitId: true });
         };
 
-        test("loads a one relation as Doc | null", async () => {
+        it("loads a one relation as Doc | null", async () => {
             expect.assertions(1);
 
             const writer = setupRelations();
@@ -599,7 +620,7 @@ describe("d1 ctx-db", () => {
             expect((page[0]!["author"] as Record<string, unknown>)["name"]).toBe("Ada");
         });
 
-        test("loads a many relation grouped per parent", async () => {
+        it("loads a many relation grouped per parent", async () => {
             expect.assertions(1);
 
             const writer = setupRelations();
@@ -609,10 +630,10 @@ describe("d1 ctx-db", () => {
             const { page } = await writer.findMany("users", { with: { messages: true } });
             const ada = page.find((row) => row["_id"] === "u1")!;
 
-            expect(ids(ada["messages"] as Array<Record<string, unknown>>)).toEqual(["m1", "m2"]);
+            expect(ids(ada["messages"] as Record<string, unknown>[])).toEqual(["m1", "m2"]);
         });
 
-        test("nested with recurses (users → messages → reactions)", async () => {
+        it("nested with recurses (users → messages → reactions)", async () => {
             expect.assertions(1);
 
             const writer = setupRelations();
@@ -620,13 +641,13 @@ describe("d1 ctx-db", () => {
             await seedRelations(writer);
 
             const { page } = await writer.findMany("users", { where: { _id: "u1" }, with: { messages: { with: { reactions: true } } } });
-            const messages = page[0]!["messages"] as Array<Record<string, unknown>>;
+            const messages = page[0]!["messages"] as Record<string, unknown>[];
             const m1 = messages.find((row) => row["_id"] === "m1")!;
 
-            expect(ids(m1["reactions"] as Array<Record<string, unknown>>)).toEqual(["r1", "r2"]);
+            expect(ids(m1["reactions"] as Record<string, unknown>[])).toEqual(["r1", "r2"]);
         });
 
-        test("per-group limit caps a many relation in memory", async () => {
+        it("per-group limit caps a many relation in memory", async () => {
             expect.assertions(1);
 
             const writer = setupRelations();
@@ -638,7 +659,7 @@ describe("d1 ctx-db", () => {
             expect(page[0]!["messages"]).toHaveLength(1);
         });
 
-        test("_count attaches per-parent aggregate", async () => {
+        it("_count attaches per-parent aggregate", async () => {
             expect.assertions(2);
 
             const writer = setupRelations();
@@ -651,7 +672,7 @@ describe("d1 ctx-db", () => {
             expect((page[2]!["_count"] as Record<string, number>)["reactions"]).toBe(0);
         });
 
-        test("onDelete cascade removes holder rows and chains", async () => {
+        it("onDelete cascade removes holder rows and chains", async () => {
             expect.assertions(2);
 
             const writer = setupRelations("cascade");
@@ -666,7 +687,7 @@ describe("d1 ctx-db", () => {
             await expect(writer.get("r1")).resolves.toBeNull();
         });
 
-        test("onDelete set null clears the FK", async () => {
+        it("onDelete set null clears the FK", async () => {
             expect.assertions(2);
 
             const writer = setupRelations("set null");
@@ -682,7 +703,7 @@ describe("d1 ctx-db", () => {
             expect(message!["authorId"]).toBeNull();
         });
 
-        test("onDelete restrict aborts when a holder remains", async () => {
+        it("onDelete restrict aborts when a holder remains", async () => {
             expect.assertions(2);
 
             const writer = setupRelations("restrict");
@@ -694,7 +715,7 @@ describe("d1 ctx-db", () => {
             await expect(writer.get("u1")).resolves.not.toBeNull();
         });
 
-        test("cross-backend (global → shardBy) cascade is refused with a clear message", async () => {
+        it("cross-backend (global → shardBy) cascade is refused with a clear message", async () => {
             expect.assertions(1);
 
             // `messages` is declared shardBy here — that's the unsupported
@@ -722,7 +743,7 @@ describe("d1 ctx-db", () => {
 
             await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
 
-            await expect(writer.delete("u1")).rejects.toThrow(/cross-backend cascade.*shardBy/u);
+            await expect(writer.delete("u1")).rejects.toThrow(CROSS_BACKEND_CASCADE_RE);
         });
     });
 
@@ -731,18 +752,30 @@ describe("d1 ctx-db", () => {
             harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "body" TEXT, "locked" INTEGER)`);
         };
 
-        test("before/after insert fire in order with the new doc", async () => {
+        it("before/after insert fire in order with the new doc", async () => {
             expect.assertions(2);
 
-            const events: Array<{ doc?: unknown; phase: string }> = [];
+            const events: { doc?: unknown; phase: string }[] = [];
             const schema: SchemaLike = {
                 tables: {
                     messages: {
                         indexes: [],
                         shape: { body: col("string"), locked: col("boolean") },
                         triggerMap: {
-                            a: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "after" }), op: "insert", timing: "after" },
-                            b: { handler: (_ctx, event) => void events.push({ doc: event.doc, phase: "before" }), op: "insert", timing: "before" },
+                            a: {
+                                handler: (_ctx, event) => {
+                                    events.push({ doc: event.doc, phase: "after" });
+                                },
+                                op: "insert",
+                                timing: "after",
+                            },
+                            b: {
+                                handler: (_ctx, event) => {
+                                    events.push({ doc: event.doc, phase: "before" });
+                                },
+                                op: "insert",
+                                timing: "before",
+                            },
                         },
                     },
                 },
@@ -758,7 +791,7 @@ describe("d1 ctx-db", () => {
             expect((events[1]!.doc as Record<string, unknown>)["_id"]).toBe("m1");
         });
 
-        test("update triggers see merged doc and previous on patch", async () => {
+        it("update triggers see merged doc and previous on patch", async () => {
             expect.assertions(2);
 
             let captured: TriggerEventLike | undefined;
@@ -791,7 +824,7 @@ describe("d1 ctx-db", () => {
             expect((captured!.previous as Record<string, unknown>)["body"]).toBe("hi");
         });
 
-        test("a throwing beforeDelete aborts the delete — the row survives", async () => {
+        it("a throwing beforeDelete aborts the delete — the row survives", async () => {
             expect.assertions(2);
 
             const schema: SchemaLike = {
@@ -824,7 +857,7 @@ describe("d1 ctx-db", () => {
             await expect(writer.get("m1")).resolves.not.toBeNull();
         });
 
-        test("an afterInsert handler writing another table via ctx.db persists", async () => {
+        it("an afterInsert handler writing another table via ctx.db persists", async () => {
             expect.assertions(2);
 
             const schema: SchemaLike = {
@@ -859,7 +892,7 @@ describe("d1 ctx-db", () => {
             expect(page[0]!["row"]).toBe("m1");
         });
 
-        test("ctx.scheduler reaches the scheduler passed to createD1CtxDb", async () => {
+        it("ctx.scheduler reaches the scheduler passed to createD1CtxDb", async () => {
             expect.assertions(1);
 
             const runAfter = vi.fn<SchedulerLike["runAfter"]>(async () => "job-1");
@@ -891,7 +924,7 @@ describe("d1 ctx-db", () => {
             expect(runAfter).toHaveBeenCalledWith(0, "counters:recount", { id: "m1" });
         });
 
-        test("the default scheduler throws when a trigger uses it unconfigured", async () => {
+        it("the default scheduler throws when a trigger uses it unconfigured", async () => {
             expect.assertions(1);
 
             const schema: SchemaLike = {
@@ -916,14 +949,12 @@ describe("d1 ctx-db", () => {
 
             const writer = createD1CtxDb({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 
-            await expect(writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true })).rejects.toThrow(
-                /no scheduler configured/,
-            );
+            await expect(writer.insert("messages", { _id: "m1", body: "hi", locked: false }, { allowExplicitId: true })).rejects.toThrow(NO_SCHEDULER_RE);
         });
     });
 
     describe("optimistic concurrency (OCC)", () => {
-        test("a concurrent modification during the write window raises ConflictError", async () => {
+        it("a concurrent modification during the write window raises ConflictError", async () => {
             expect.assertions(3);
 
             let raced = false;
@@ -986,7 +1017,7 @@ describe("d1 ctx-db", () => {
             expect(reloaded["priority"]).toBe("high");
         });
 
-        test("single-writer patch / delete / replace succeed without false conflicts", async () => {
+        it("single-writer patch / delete / replace succeed without false conflicts", async () => {
             expect.assertions(6);
 
             const writer = setupTodos();

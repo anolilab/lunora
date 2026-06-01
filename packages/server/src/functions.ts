@@ -72,18 +72,20 @@ const wrap = <A extends ArgsValidator, R, Kind extends "action" | "mutation" | "
     kind: Kind,
     definition: { args: A; handler: (context: never, args: InferArgs<A>) => Promise<R> | R },
     visibility?: FunctionVisibility,
-): { args: A; handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R; kind: Kind; visibility?: FunctionVisibility } => ({
-    args: definition.args,
-    handler: (context: unknown, args: InferArgs<A>) => {
-        const parsed = validateArgs(definition.args, args as Record<string, unknown>);
+): { args: A; handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R; kind: Kind; visibility?: FunctionVisibility } => {
+    return {
+        args: definition.args,
+        handler: (context: unknown, args: InferArgs<A>) => {
+            const parsed = validateArgs(definition.args, args as Record<string, unknown>);
 
-        return definition.handler(context as never, parsed);
-    },
-    kind,
-    // Only attach the key when internal so public registrations keep emitting
-    // the bare `{ args, handler, kind }` shape (absence === public).
-    ...(visibility ? { visibility } : {}),
-});
+            return definition.handler(context as never, parsed);
+        },
+        kind,
+        // Only attach the key when internal so public registrations keep emitting
+        // the bare `{ args, handler, kind }` shape (absence === public).
+        ...(visibility ? { visibility } : {}),
+    };
+};
 
 /** Register a query function reachable from clients via the generated `api`. */
 export const query = <A extends ArgsValidator, R>(definition: QueryDefinition<A, R>): RegisteredQuery<A, R> => wrap("query", definition);

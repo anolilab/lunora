@@ -1,11 +1,13 @@
 import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { DataBrowser, type DataBrowserProps } from "../src/data-browser.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { DataBrowserProps } from "../src/data-browser.js";
+import { DataBrowser } from "../src/data-browser.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
 
 const TABLES = [
     { name: "messages", rowCount: 3 },
@@ -42,7 +44,7 @@ const createBrowserClient = (): MockClientHooks =>
             // Mirror the server's whole-table substring filter across all cells.
             const needle = search.trim().toLowerCase();
             const matched =
-                needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle)));
+                needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
 
             return { columns: ["__id__", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
         },
@@ -55,7 +57,7 @@ const renderBrowser = (mock: MockClientHooks, props: DataBrowserProps = {}): Rea
 );
 
 describe("dataBrowser", () => {
-    test("lists tables with row counts on mount", async () => {
+    it("lists tables with row counts on mount", async () => {
         expect.assertions(2);
 
         const mock = createBrowserClient();
@@ -68,7 +70,7 @@ describe("dataBrowser", () => {
         expect(screen.getByTestId("db-table-users").textContent).toBe("users (1)");
     });
 
-    test("loads the first page of a table when selected", async () => {
+    it("loads the first page of a table when selected", async () => {
         expect.assertions(4);
 
         const mock = createBrowserClient();
@@ -81,11 +83,11 @@ describe("dataBrowser", () => {
 
         expect(screen.getAllByTestId("db-row")).toHaveLength(2);
         expect(screen.getByTestId("db-page-info").textContent).toBe("1-2 of 3");
-        expect((screen.getByTestId("db-prev") as HTMLButtonElement).disabled).toBe(true);
-        expect((screen.getByTestId("db-next") as HTMLButtonElement).disabled).toBe(false);
+        expect(screen.getByTestId<HTMLButtonElement>("db-prev").disabled).toBe(true);
+        expect(screen.getByTestId<HTMLButtonElement>("db-next").disabled).toBe(false);
     });
 
-    test("pages forward and back through a table", async () => {
+    it("pages forward and back through a table", async () => {
         expect.assertions(3);
 
         const mock = createBrowserClient();
@@ -101,15 +103,15 @@ describe("dataBrowser", () => {
         await screen.findByText("3-3 of 3");
 
         expect(screen.getAllByTestId("db-row")).toHaveLength(1);
-        expect((screen.getByTestId("db-next") as HTMLButtonElement).disabled).toBe(true);
-        expect((screen.getByTestId("db-prev") as HTMLButtonElement).disabled).toBe(false);
+        expect(screen.getByTestId<HTMLButtonElement>("db-next").disabled).toBe(true);
+        expect(screen.getByTestId<HTMLButtonElement>("db-prev").disabled).toBe(false);
 
         fireEvent.click(screen.getByTestId("db-prev"));
 
         await screen.findByText("1-2 of 3");
     });
 
-    test("forwards the shard key when reloading tables", async () => {
+    it("forwards the shard key when reloading tables", async () => {
         expect.assertions(1);
 
         const mock = createBrowserClient();
@@ -133,7 +135,7 @@ describe("dataBrowser", () => {
         expect(lastListCall[2]).toEqual({ shardKey: "room-9" });
     });
 
-    test("surfaces a table-listing error", async () => {
+    it("surfaces a table-listing error", async () => {
         expect.assertions(2);
 
         const mock = createMockClient({
@@ -150,7 +152,7 @@ describe("dataBrowser", () => {
         expect(screen.queryByTestId("db-table-list")).toBeNull();
     });
 
-    test("surfaces a page-read error without dropping the table list", async () => {
+    it("surfaces a page-read error without dropping the table list", async () => {
         expect.assertions(3);
 
         const mock = createMockClient({
@@ -174,7 +176,7 @@ describe("dataBrowser", () => {
         expect(screen.getByTestId("db-table-list")).toBeDefined();
     });
 
-    test("toggles between the table and JSON views", async () => {
+    it("toggles between the table and JSON views", async () => {
         expect.assertions(3);
 
         const mock = createBrowserClient();
@@ -199,7 +201,7 @@ describe("dataBrowser", () => {
     /** The first cell of every `db-row` in document order. */
     const rowTexts = (): string[] => screen.getAllByTestId("db-row").map((row) => within(row).getAllByRole("cell")[1]?.textContent ?? "");
 
-    test("sorts a column ascending then descending on repeated clicks", async () => {
+    it("sorts a column ascending then descending on repeated clicks", async () => {
         expect.assertions(3);
 
         const mock = createBrowserClient();
@@ -224,7 +226,7 @@ describe("dataBrowser", () => {
         expect(rowTexts()).toEqual(["world", "hello", "again"]);
     });
 
-    test("clears the sort on the third click", async () => {
+    it("clears the sort on the third click", async () => {
         expect.assertions(2);
 
         const mock = createBrowserClient();
@@ -246,7 +248,7 @@ describe("dataBrowser", () => {
         expect(rowTexts()).toEqual(["hello", "world", "again"]);
     });
 
-    test("searches the whole table server-side, case-insensitively", async () => {
+    it("searches the whole table server-side, case-insensitively", async () => {
         expect.assertions(3);
 
         const mock = createBrowserClient();
@@ -279,7 +281,7 @@ describe("dataBrowser", () => {
         expect(searchCall[1].offset).toBe(0);
     });
 
-    test("composes server search with page-local sort", async () => {
+    it("composes server search with page-local sort", async () => {
         expect.assertions(1);
 
         const mock = createBrowserClient();
@@ -304,7 +306,7 @@ describe("dataBrowser", () => {
         expect(rowTexts()).toEqual(["hello", "world"]);
     });
 
-    test("re-fetches from the server when searching, but not when sorting", async () => {
+    it("re-fetches from the server when searching, but not when sorting", async () => {
         expect.assertions(2);
 
         const mock = createBrowserClient();
@@ -337,14 +339,14 @@ describe("dataBrowser", () => {
         expect(pageCalls()).toBeGreaterThan(beforeSort);
     });
 
-    test("virtualizes a large page so the DOM row count stays bounded", async () => {
+    it("virtualizes a large page so the DOM row count stays bounded", async () => {
         expect.assertions(3);
 
         // A 250-row page far exceeds the ~400px viewport (rows are ~36px), so the
         // virtualizer must mount only the visible window plus overscan — never all
         // 250 rows. The fixed viewport height is reported to the virtualizer via a
         // custom `observeElementRect`, so this is deterministic under jsdom.
-        const bigRows = Array.from({ length: 250 }, (_, index) => ({ __id__: `m${index}`, text: `row-${index}` }));
+        const bigRows = Array.from({ length: 250 }, (_, index) => { return { __id__: `m${index.toString()}`, text: `row-${index.toString()}` }; });
 
         const mock = createMockClient({
             query: (reference, args): unknown => {
@@ -397,7 +399,7 @@ describe("dataBrowser — editable", () => {
                 const matched =
                     needle === ""
                         ? MESSAGE_ROWS
-                        : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle)));
+                        : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
 
                 return { columns: ["__id__", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
             },
@@ -415,7 +417,7 @@ describe("dataBrowser — editable", () => {
         await screen.findByTestId("db-page");
     };
 
-    test("hides edit controls unless `editable` is set", async () => {
+    it("hides edit controls unless `editable` is set", async () => {
         expect.assertions(2);
 
         const mock = createBrowserClient();
@@ -434,7 +436,7 @@ describe("dataBrowser — editable", () => {
         expect(screen.queryByTestId("db-edit-m1")).toBeNull();
     });
 
-    test("deletes a row via the writeRow op", async () => {
+    it("deletes a row via the writeRow op", async () => {
         expect.assertions(1);
 
         const mock = createEditableClient();
@@ -455,7 +457,7 @@ describe("dataBrowser — editable", () => {
         expect(call[1]).toMatchObject({ id: "m1", op: "delete", table: "messages" });
     });
 
-    test("inserts a new row from the editor", async () => {
+    it("inserts a new row from the editor", async () => {
         expect.assertions(1);
 
         const mock = createEditableClient();
@@ -477,7 +479,7 @@ describe("dataBrowser — editable", () => {
         expect(call[1]).toMatchObject({ doc: { text: "fresh" }, op: "insert", table: "messages" });
     });
 
-    test("reports invalid JSON without calling the server", async () => {
+    it("reports invalid JSON without calling the server", async () => {
         expect.assertions(2);
 
         const mock = createEditableClient();
@@ -494,7 +496,7 @@ describe("dataBrowser — editable", () => {
         expect(mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
     });
 
-    test("edits an existing row (patch) prefilled from its doc", async () => {
+    it("edits an existing row (patch) prefilled from its doc", async () => {
         expect.assertions(2);
 
         const mock = createEditableClient();
@@ -504,7 +506,7 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-edit-m1"));
 
         // The editor prefills the row's editable fields (id/meta stripped).
-        const editor = screen.getByTestId("db-editor-doc") as HTMLTextAreaElement;
+        const editor = screen.getByTestId<HTMLTextAreaElement>("db-editor-doc");
 
         expect(JSON.parse(editor.value)).toEqual({ text: "hello" });
 
@@ -522,7 +524,7 @@ describe("dataBrowser — editable", () => {
         expect(call[1]).toMatchObject({ doc: { text: "edited" }, id: "m1", op: "patch", table: "messages" });
     });
 
-    test("edits the right row while a filter and sort are active", async () => {
+    it("edits the right row while a filter and sort are active", async () => {
         expect.assertions(2);
 
         const mock = createEditableClient();
@@ -552,7 +554,7 @@ describe("dataBrowser — editable", () => {
         // The editor prefills from the ORIGINAL row, not a sorted/filtered copy.
         fireEvent.click(screen.getByTestId("db-edit-m2"));
 
-        const editor = screen.getByTestId("db-editor-doc") as HTMLTextAreaElement;
+        const editor = screen.getByTestId<HTMLTextAreaElement>("db-editor-doc");
 
         expect(JSON.parse(editor.value)).toEqual({ text: "world" });
 
@@ -570,7 +572,7 @@ describe("dataBrowser — editable", () => {
         expect(call[1]).toMatchObject({ doc: { text: "patched" }, id: "m2", op: "patch", table: "messages" });
     });
 
-    test("toggling Live subscribes to readTablePage and renders pushed rows", async () => {
+    it("toggling Live subscribes to readTablePage and renders pushed rows", async () => {
         expect.assertions(2);
 
         const mock = createBrowserClient();
@@ -595,7 +597,7 @@ describe("dataBrowser — editable", () => {
         expect(screen.getByTestId("db-page").textContent).toContain("LIVE ROW");
     });
 
-    test("keeps the live subscription bound to the loaded page, ignoring shard-input keystrokes", async () => {
+    it("keeps the live subscription bound to the loaded page, ignoring shard-input keystrokes", async () => {
         expect.assertions(1);
 
         const mock = createBrowserClient();
@@ -616,7 +618,7 @@ describe("dataBrowser — editable", () => {
         expect(mock.subscribe).toHaveBeenCalledTimes(callsAfterToggle);
     });
 
-    test("live pushes a refreshed table list (new tables appear without a reload)", async () => {
+    it("live pushes a refreshed table list (new tables appear without a reload)", async () => {
         expect.assertions(2);
 
         const mock = createBrowserClient();
@@ -663,7 +665,7 @@ describe("dataBrowser — editable", () => {
                 const { search = "", table } = args as { search?: string; table: string };
                 const needle = search.trim().toLowerCase();
                 const match = <T extends Record<string, unknown>>(source: T[]): T[] =>
-                    needle === "" ? source : source.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle)));
+                    (needle === "" ? source : source.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(needle))));
 
                 if (table === "posts") {
                     return { columns: ["id", "title", "authorId"], refs: { authorId: "users" }, rows: match(POSTS), total: match(POSTS).length };
@@ -674,7 +676,7 @@ describe("dataBrowser — editable", () => {
         });
     };
 
-    test("renders a foreign-key cell as a link and clicking it navigates to the target row", async () => {
+    it("renders a foreign-key cell as a link and clicking it navigates to the target row", async () => {
         expect.assertions(3);
 
         const mock = createRelationalClient();
@@ -705,7 +707,7 @@ describe("dataBrowser — editable", () => {
         expect(rowText).toContain("Ada");
     });
 
-    test("non-foreign-key columns render plain text, not links", async () => {
+    it("non-foreign-key columns render plain text, not links", async () => {
         expect.assertions(2);
 
         const mock = createRelationalClient();

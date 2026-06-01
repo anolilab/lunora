@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BroadcastDelta, DatabaseWriterLike, WriteHook } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -37,7 +37,7 @@ const setupWriter = (
 };
 
 describe("runShardMigrations", () => {
-    test("creates a SQLite table per non-global schema table", () => {
+    it("creates a SQLite table per non-global schema table", () => {
         expect.assertions(2);
 
         const { sql, state } = createFakeSql();
@@ -48,7 +48,7 @@ describe("runShardMigrations", () => {
         expect(state.tables.has("roomMembers")).toBe(true);
     });
 
-    test("skips tables declared as .global()", () => {
+    it("skips tables declared as .global()", () => {
         expect.assertions(1);
 
         const { sql, state } = createFakeSql();
@@ -58,7 +58,7 @@ describe("runShardMigrations", () => {
         expect(state.tables.has("profiles")).toBe(false);
     });
 
-    test("creates indexes prefixed with the table name", () => {
+    it("creates indexes prefixed with the table name", () => {
         expect.assertions(3);
 
         const { sql, state } = createFakeSql();
@@ -70,7 +70,7 @@ describe("runShardMigrations", () => {
         expect(state.indexes.has("messages_by_text")).toBe(true);
     });
 
-    test("marks unique indexes with UNIQUE", () => {
+    it("marks unique indexes with UNIQUE", () => {
         expect.assertions(2);
 
         const { sql, state } = createFakeSql();
@@ -89,7 +89,7 @@ describe("createShardCtxDb — insert/get", () => {
         context = setupWriter({ idGenerator: () => "m_1" });
     });
 
-    test("returns the generated id when no _id is supplied", async () => {
+    it("returns the generated id when no _id is supplied", async () => {
         expect.assertions(1);
 
         const id = await context.writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
@@ -97,7 +97,7 @@ describe("createShardCtxDb — insert/get", () => {
         expect(id).toBe("m_1");
     });
 
-    test("honors a caller-supplied _id", async () => {
+    it("honors a caller-supplied _id", async () => {
         expect.assertions(2);
 
         const id = await context.writer.insert("messages", { _id: "fixed", channelId: "c1", text: "hi", authorId: "u1" }, { allowExplicitId: true });
@@ -109,7 +109,7 @@ describe("createShardCtxDb — insert/get", () => {
         expect(fetched).toMatchObject({ _id: "fixed", text: "hi" });
     });
 
-    test("stamps _creationTime via the injected clock", async () => {
+    it("stamps _creationTime via the injected clock", async () => {
         expect.assertions(1);
 
         const id = await context.writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
@@ -118,7 +118,7 @@ describe("createShardCtxDb — insert/get", () => {
         expect(fetched).toMatchObject({ _creationTime: fixedTime });
     });
 
-    test("emits a broadcast delta on insert", async () => {
+    it("emits a broadcast delta on insert", async () => {
         expect.assertions(2);
 
         await context.writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
@@ -127,13 +127,13 @@ describe("createShardCtxDb — insert/get", () => {
         expect(context.deltas[0]).toMatchObject({ table: "messages", op: "insert", key: "m_1" });
     });
 
-    test("rejects inserts into unknown tables", async () => {
+    it("rejects inserts into unknown tables", async () => {
         expect.assertions(1);
 
         await expect(context.writer.insert("unknown", { foo: 1 })).rejects.toThrow(/unknown table/u);
     });
 
-    test("get() returns null when no row matches", async () => {
+    it("get() returns null when no row matches", async () => {
         expect.assertions(1);
 
         await expect(context.writer.get("missing")).resolves.toBeNull();
@@ -141,7 +141,7 @@ describe("createShardCtxDb — insert/get", () => {
 });
 
 describe("createShardCtxDb — patch/replace/delete", () => {
-    test("patch merges new fields into the existing document", async () => {
+    it("patch merges new fields into the existing document", async () => {
         expect.assertions(1);
 
         const { writer } = setupWriter({ idGenerator: () => "m_1" });
@@ -154,7 +154,7 @@ describe("createShardCtxDb — patch/replace/delete", () => {
         expect(fetched).toMatchObject({ text: "edited", channelId: "c1" });
     });
 
-    test("patch throws when the document does not exist", async () => {
+    it("patch throws when the document does not exist", async () => {
         expect.assertions(1);
 
         const { writer } = setupWriter();
@@ -162,7 +162,7 @@ describe("createShardCtxDb — patch/replace/delete", () => {
         await expect(writer.patch("missing", { text: "x" })).rejects.toThrow(/document not found/u);
     });
 
-    test("replace overwrites the whole document but keeps the id", async () => {
+    it("replace overwrites the whole document but keeps the id", async () => {
         expect.assertions(1);
 
         const { writer } = setupWriter({ idGenerator: () => "m_1" });
@@ -175,7 +175,7 @@ describe("createShardCtxDb — patch/replace/delete", () => {
         expect(fetched).toMatchObject({ _id: "m_1", channelId: "c2", text: "fresh", authorId: "u2" });
     });
 
-    test("delete is a no-op when the id is unknown", async () => {
+    it("delete is a no-op when the id is unknown", async () => {
         expect.assertions(1);
 
         const { writer, deltas } = setupWriter();
@@ -185,7 +185,7 @@ describe("createShardCtxDb — patch/replace/delete", () => {
         expect(deltas).toHaveLength(0);
     });
 
-    test("delete removes the row and broadcasts a delta", async () => {
+    it("delete removes the row and broadcasts a delta", async () => {
         expect.assertions(3);
 
         const { writer, deltas } = setupWriter({ idGenerator: () => "m_1" });
@@ -202,7 +202,7 @@ describe("createShardCtxDb — patch/replace/delete", () => {
 });
 
 describe("createShardCtxDb — query()", () => {
-    test("collect() returns every row ordered by _creationTime", async () => {
+    it("collect() returns every row ordered by _creationTime", async () => {
         expect.assertions(1);
 
         let now = 1;
@@ -224,7 +224,7 @@ describe("createShardCtxDb — query()", () => {
         expect(rows.map((row) => row["_id"])).toEqual(["a", "b"]);
     });
 
-    test("take(n) limits the result size", async () => {
+    it("take(n) limits the result size", async () => {
         expect.assertions(1);
 
         let now = 1;
@@ -247,7 +247,7 @@ describe("createShardCtxDb — query()", () => {
         expect(rows.map((row) => row["_id"])).toEqual(["a", "b"]);
     });
 
-    test("first() returns the earliest row, or null when empty", async () => {
+    it("first() returns the earliest row, or null when empty", async () => {
         expect.assertions(2);
 
         let now = 1;
@@ -271,7 +271,7 @@ describe("createShardCtxDb — query()", () => {
         expect(row).toMatchObject({ _id: "a" });
     });
 
-    test("filter() runs in JS against the decoded document", async () => {
+    it("filter() runs in JS against the decoded document", async () => {
         expect.assertions(2);
 
         const { writer } = setupWriter();
@@ -288,7 +288,7 @@ describe("createShardCtxDb — query()", () => {
         expect(rows[0]).toMatchObject({ _id: "b" });
     });
 
-    test("withIndex().eq() pushes the predicate into SQL", async () => {
+    it("withIndex().eq() pushes the predicate into SQL", async () => {
         expect.assertions(2);
 
         const { writer } = setupWriter();
@@ -305,7 +305,7 @@ describe("createShardCtxDb — query()", () => {
         expect(rows[0]).toMatchObject({ _id: "b" });
     });
 
-    test("withIndex().gte() handles range filtering", async () => {
+    it("withIndex().gte() handles range filtering", async () => {
         expect.assertions(1);
 
         let now = 1;
@@ -331,7 +331,7 @@ describe("createShardCtxDb — query()", () => {
         expect(rows.map((row) => row["_id"])).toEqual(["b", "c"]);
     });
 
-    test("withIndex() throws on unknown indexes", () => {
+    it("withIndex() throws on unknown indexes", () => {
         expect.assertions(1);
 
         const { writer } = setupWriter();
@@ -339,7 +339,7 @@ describe("createShardCtxDb — query()", () => {
         expect(() => writer.query("messages").withIndex("missing")).toThrow(/unknown index/u);
     });
 
-    test("query() throws on unknown tables", () => {
+    it("query() throws on unknown tables", () => {
         expect.assertions(1);
 
         const { writer } = setupWriter();
@@ -347,7 +347,7 @@ describe("createShardCtxDb — query()", () => {
         expect(() => writer.query("missing")).toThrow(/unknown table/u);
     });
 
-    test("take() with both filter and index runs the filter in JS", async () => {
+    it("take() with both filter and index runs the filter in JS", async () => {
         expect.assertions(1);
 
         let now = 1;
@@ -376,10 +376,10 @@ describe("createShardCtxDb — query()", () => {
 });
 
 describe("createShardCtxDb — onWrite", () => {
-    test("fires after each write with op/table/id/doc", async () => {
+    it("fires after each write with op/table/id/doc", async () => {
         expect.assertions(5);
 
-        const events: Array<Parameters<WriteHook>[0]> = [];
+        const events: Parameters<WriteHook>[0][] = [];
         const { writer } = setupWriter({ idGenerator: () => "m_1", onWrite: (event) => void events.push(event) });
 
         await writer.insert("messages", { channelId: "c1", text: "hi", authorId: "u1" });
@@ -394,7 +394,7 @@ describe("createShardCtxDb — onWrite", () => {
         expect(events[3]?.doc).toBeUndefined();
     });
 
-    test("is awaited so async hooks settle before the write resolves", async () => {
+    it("is awaited so async hooks settle before the write resolves", async () => {
         expect.assertions(1);
 
         const order: string[] = [];
@@ -412,7 +412,7 @@ describe("createShardCtxDb — onWrite", () => {
         expect(order).toEqual(["hook", "after"]);
     });
 
-    test("does not fire when delete targets an unknown id", async () => {
+    it("does not fire when delete targets an unknown id", async () => {
         expect.assertions(1);
 
         const onWrite = vi.fn<WriteHook>();
@@ -423,7 +423,7 @@ describe("createShardCtxDb — onWrite", () => {
         expect(onWrite).not.toHaveBeenCalled();
     });
 
-    test("a thrown hook propagates to the caller", async () => {
+    it("a thrown hook propagates to the caller", async () => {
         expect.assertions(1);
 
         const { writer } = setupWriter({
@@ -438,7 +438,7 @@ describe("createShardCtxDb — onWrite", () => {
 });
 
 describe("createShardCtxDb — broadcast", () => {
-    test("broadcast callback receives the latest mutation", async () => {
+    it("broadcast callback receives the latest mutation", async () => {
         expect.assertions(4);
 
         const broadcast = vi.fn<BroadcastDelta>();

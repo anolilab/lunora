@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { Doc_attachments, Doc_users, LoadWith } from "./fixtures/simple/expected/_generated/dataModel.js";
 
@@ -9,7 +9,7 @@ import type { Doc_attachments, Doc_users, LoadWith } from "./fixtures/simple/exp
  * The runtime bodies operate on `{}` casts and merely keep vitest happy.
  */
 describe("loadWith narrowing", () => {
-    test("a requested `one` relation surfaces as `Doc | null`", () => {
+    it("a requested `one` relation surfaces as `Doc | null`", () => {
         expect.assertions(1);
 
         const loaded = {} as LoadWith<"attachments", { owner: true }>;
@@ -19,10 +19,10 @@ describe("loadWith narrowing", () => {
         expect(owner).toBeUndefined();
     });
 
-    test("an unrequested relation is absent — the result narrows to the bare Doc", () => {
+    it("an unrequested relation is absent — the result narrows to the bare Doc", () => {
         expect.assertions(1);
 
-        const bare = {} as LoadWith<"attachments", {}>;
+        const bare = {} as LoadWith<"attachments", Record<string, never>>;
 
         // @ts-expect-error `owner` only exists when requested via `with`.
         bare.owner;
@@ -30,7 +30,7 @@ describe("loadWith narrowing", () => {
         expect(bare).toEqual({});
     });
 
-    test("a requested `many` relation surfaces as `Doc[]`", () => {
+    it("a requested `many` relation surfaces as `Doc[]`", () => {
         expect.assertions(1);
 
         const loaded = {} as LoadWith<"users", { attachments: true }>;
@@ -40,7 +40,7 @@ describe("loadWith narrowing", () => {
         expect(attachments).toBeUndefined();
     });
 
-    test("a nested `with` recurses, narrowing the related Doc too", () => {
+    it("a nested `with` recurses, narrowing the related Doc too", () => {
         expect.assertions(1);
 
         const loaded = { attachments: [{ owner: null }] } as unknown as LoadWith<"users", { attachments: { with: { owner: true } } }>;
@@ -49,7 +49,7 @@ describe("loadWith narrowing", () => {
         expect(nestedOwner).toBeNull();
     });
 
-    test("`_count` projects each requested relation to a number", () => {
+    it("`_count` projects each requested relation to a number", () => {
         expect.assertions(1);
 
         const loaded = { _count: { attachments: 0 } } as unknown as LoadWith<"users", { _count: { attachments: true } }>;

@@ -1,6 +1,8 @@
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
+import { createRoot } from "react-dom/client";
 
-import { DashboardApp, type DashboardAppProps } from "./app.js";
+import type { DashboardAppProps } from "./app.js";
+import { DashboardApp } from "./app.js";
 
 export interface MountDashboardOptions extends DashboardAppProps {
     /**
@@ -15,7 +17,7 @@ export interface MountDashboardOptions extends DashboardAppProps {
  * Mount the batteries-included {@link DashboardApp} into the DOM and return the
  * React root (call `.unmount()` to tear it down). This is the entry the
  * standalone app's `main.tsx` and the `@cirrus/vite` dev route both call — it
- * keeps the host HTML to a single `<div id="root">` plus one script.
+ * keeps the host HTML to a single `&lt;div id="root">` plus one script.
  */
 export const mountDashboard = (options: MountDashboardOptions = {}): Root => {
     const { container = "#root", ...appProps } = options;

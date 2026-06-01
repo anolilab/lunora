@@ -1,10 +1,11 @@
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { ADMIN_FUNCTIONS } from "../src/admin.js";
 import { SchemaViewer } from "../src/schema-viewer.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
 
 const TABLES = [
     { name: "messages", rowCount: 3 },
@@ -35,7 +36,7 @@ const renderViewer = (mock: MockClientHooks) => (
 );
 
 describe("schemaViewer", () => {
-    test("lists tables with counts on mount", async () => {
+    it("lists tables with counts on mount", async () => {
         expect.assertions(1);
 
         render(renderViewer(createClient()));
@@ -45,7 +46,7 @@ describe("schemaViewer", () => {
         expect(screen.getByTestId("sc-toggle-messages").textContent).toBe("messages (3)");
     });
 
-    test("lazily loads columns when a table is expanded", async () => {
+    it("lazily loads columns when a table is expanded", async () => {
         expect.assertions(2);
 
         const mock = createClient();

@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, test } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { CirrusRouteHandler, HttpActionCtx } from "../src/index.js";
 import { httpRoute, httpRouter, v } from "../src/index.js";
@@ -15,10 +15,12 @@ const dispatch = async (route: CirrusRouteHandler, method: string, path: string,
 };
 
 describe("httpRoute terminal shape", () => {
-    test("yields a hono handler mountable on httpRouter", async () => {
+    it("yields a hono handler mountable on httpRouter", async () => {
         expect.assertions(2);
 
-        const route = httpRoute.get("/api/ping").handler(() => ({ ok: true }));
+        const route = httpRoute.get("/api/ping").handler(() => {
+            return { ok: true };
+        });
 
         expectTypeOf(route).toBeFunction();
 
@@ -30,7 +32,7 @@ describe("httpRoute terminal shape", () => {
 });
 
 describe("httpRoute searchParams", () => {
-    test("coerces query strings to the declared scalar types and hands the handler a typed object", async () => {
+    it("coerces query strings to the declared scalar types and hands the handler a typed object", async () => {
         expect.assertions(2);
 
         const route = httpRoute
@@ -44,13 +46,15 @@ describe("httpRoute searchParams", () => {
         await expect(response.json()).resolves.toEqual({ active: true, limit: 5 });
     });
 
-    test("an absent optional param is omitted; a present one is decoded", async () => {
+    it("an absent optional param is omitted; a present one is decoded", async () => {
         expect.assertions(2);
 
         const route = httpRoute
             .get("/api/items")
             .searchParams({ q: v.optional(v.string()) })
-            .handler(({ searchParams }) => ({ keys: Object.keys(searchParams), value: searchParams.q ?? null }));
+            .handler(({ searchParams }) => {
+                return { keys: Object.keys(searchParams), value: searchParams.q ?? null };
+            });
 
         await expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items"))).json()).resolves.toEqual({ keys: [], value: null });
         await expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?q=hi"))).json()).resolves.toEqual({
@@ -59,7 +63,7 @@ describe("httpRoute searchParams", () => {
         });
     });
 
-    test("collects repeated params into an array validator", async () => {
+    it("collects repeated params into an array validator", async () => {
         expect.assertions(1);
 
         const route = httpRoute
@@ -70,7 +74,7 @@ describe("httpRoute searchParams", () => {
         await expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?tag=a&tag=b"))).json()).resolves.toEqual(["a", "b"]);
     });
 
-    test("a malformed scalar fails with a 400 naming the field", async () => {
+    it("a malformed scalar fails with a 400 naming the field", async () => {
         expect.assertions(2);
 
         const route = httpRoute
@@ -84,7 +88,7 @@ describe("httpRoute searchParams", () => {
         await expect(response.json()).resolves.toMatchObject({ code: "BAD_REQUEST", error: expect.stringContaining("searchParams.limit") });
     });
 
-    test("a missing required param fails with a 400", async () => {
+    it("a missing required param fails with a 400", async () => {
         expect.assertions(1);
 
         const route = httpRoute
@@ -97,13 +101,15 @@ describe("httpRoute searchParams", () => {
 });
 
 describe("httpRoute params", () => {
-    test("coerces and validates a typed path param", async () => {
+    it("coerces and validates a typed path param", async () => {
         expect.assertions(2);
 
         const route = httpRoute
             .get("/api/users/:id")
             .params({ id: v.number() })
-            .handler(({ params }) => ({ id: params.id }));
+            .handler(({ params }) => {
+                return { id: params.id };
+            });
 
         const response = await dispatch(route, "GET", "/api/users/:id", new Request("https://x/api/users/42"));
 
@@ -111,7 +117,7 @@ describe("httpRoute params", () => {
         await expect(response.json()).resolves.toEqual({ id: 42 });
     });
 
-    test("a malformed path param fails with a 400 naming the field", async () => {
+    it("a malformed path param fails with a 400 naming the field", async () => {
         expect.assertions(2);
 
         const route = httpRoute
@@ -127,13 +133,15 @@ describe("httpRoute params", () => {
 });
 
 describe("httpRoute body", () => {
-    test("validates the JSON body and exposes it typed to the handler", async () => {
+    it("validates the JSON body and exposes it typed to the handler", async () => {
         expect.assertions(2);
 
         const route = httpRoute
             .post("/api/todos")
             .body({ text: v.string() })
-            .handler(({ body }) => ({ created: body.text }));
+            .handler(({ body }) => {
+                return { created: body.text };
+            });
 
         const response = await dispatch(
             route,
@@ -146,7 +154,7 @@ describe("httpRoute body", () => {
         await expect(response.json()).resolves.toEqual({ created: "buy milk" });
     });
 
-    test("rejects a non-JSON body with a 400", async () => {
+    it("rejects a non-JSON body with a 400", async () => {
         expect.assertions(2);
 
         const route = httpRoute
@@ -160,7 +168,7 @@ describe("httpRoute body", () => {
         await expect(response.json()).resolves.toMatchObject({ error: "Invalid JSON body" });
     });
 
-    test("a body field that violates its validator fails with a 400 naming the field", async () => {
+    it("a body field that violates its validator fails with a 400 naming the field", async () => {
         expect.assertions(2);
 
         const route = httpRoute
@@ -181,7 +189,7 @@ describe("httpRoute body", () => {
 });
 
 describe("httpRoute output", () => {
-    test("parses the result through .output(), stripping undeclared keys before serialization", async () => {
+    it("parses the result through .output(), stripping undeclared keys before serialization", async () => {
         expect.assertions(1);
 
         const route = httpRoute
@@ -192,7 +200,7 @@ describe("httpRoute output", () => {
         await expect((await dispatch(route, "GET", "/api/me", new Request("https://x/api/me"))).json()).resolves.toEqual({ id: "u1" });
     });
 
-    test("a result that violates .output() surfaces as a 500, not a 400", async () => {
+    it("a result that violates .output() surfaces as a 500, not a 400", async () => {
         expect.assertions(2);
 
         const route = httpRoute
@@ -208,7 +216,7 @@ describe("httpRoute output", () => {
 });
 
 describe("httpRoute composition", () => {
-    test("searchParams, body, and output compose regardless of declaration order", async () => {
+    it("searchParams, body, and output compose regardless of declaration order", async () => {
         expect.assertions(2);
 
         const route = httpRoute
@@ -216,7 +224,9 @@ describe("httpRoute composition", () => {
             .output(v.object({ echo: v.string(), page: v.number() }))
             .searchParams({ page: v.number() })
             .body({ query: v.string() })
-            .handler(({ body, searchParams }) => ({ echo: body.query, page: searchParams.page }));
+            .handler(({ body, searchParams }) => {
+                return { echo: body.query, page: searchParams.page };
+            });
 
         const response = await dispatch(
             route,
@@ -229,7 +239,7 @@ describe("httpRoute composition", () => {
         await expect(response.json()).resolves.toEqual({ echo: "cats", page: 2 });
     });
 
-    test("a handler returning undefined with no .output() yields 204 No Content", async () => {
+    it("a handler returning undefined with no .output() yields 204 No Content", async () => {
         expect.assertions(2);
 
         const route = httpRoute.post("/api/noop").handler(() => undefined);
@@ -240,7 +250,7 @@ describe("httpRoute composition", () => {
         await expect(response.text()).resolves.toBe("");
     });
 
-    test("passes the action ctx through to the handler", async () => {
+    it("passes the action ctx through to the handler", async () => {
         expect.assertions(1);
 
         const seen: HttpActionCtx[] = [];

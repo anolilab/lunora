@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
 import type { ShardDOState } from "../src/shard-do.js";
@@ -21,7 +21,8 @@ interface FakeWebSocket {
     serializeAttachment: (value: unknown) => void;
 }
 
-const createFakeWebSocket = (): FakeWebSocket => ({
+const createFakeWebSocket = (): FakeWebSocket => {
+ return {
     attachment: undefined,
     sent: [],
     send(data: string) {
@@ -33,7 +34,8 @@ const createFakeWebSocket = (): FakeWebSocket => ({
     deserializeAttachment() {
         return this.attachment;
     },
-});
+};
+};
 
 /** Parse every `{type:"data"}` envelope the socket received, newest last. */
 const dataEnvelopes = (ws: FakeWebSocket): { data: unknown; id: string }[] =>
@@ -109,13 +111,15 @@ describe("shardDO admin subscriptions", () => {
         db.close();
     });
 
-    const adminSub = (id: string, functionPath: string, args: Record<string, unknown> = {}): SubscriptionEnvelope => ({
+    const adminSub = (id: string, functionPath: string, args: Record<string, unknown> = {}): SubscriptionEnvelope => {
+ return {
         id,
         query: { args, functionPath },
         type: "subscribe",
-    });
+    };
+};
 
-    test("rejects an admin subscription on a non-admin socket without registering it", async () => {
+    it("rejects an admin subscription on a non-admin socket without registering it", async () => {
         expect.assertions(3);
 
         const shard = new AdminSubShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -130,7 +134,7 @@ describe("shardDO admin subscriptions", () => {
         expect(ws.attachment).toEqual({ admin: false, subs: {} });
     });
 
-    test("seeds an admin subscription with the current value on an admin socket", async () => {
+    it("seeds an admin subscription with the current value on an admin socket", async () => {
         expect.assertions(2);
 
         const shard = new AdminSubShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -143,7 +147,7 @@ describe("shardDO admin subscriptions", () => {
         expect(dataEnvelopes(ws).at(-1)?.data).toMatchObject({ requests: 0, shard: "shard-a" });
     });
 
-    test("re-runs a readTablePage subscription only when its own table is written", async () => {
+    it("re-runs a readTablePage subscription only when its own table is written", async () => {
         expect.assertions(3);
 
         const shard = new AdminSubShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -172,7 +176,7 @@ describe("shardDO admin subscriptions", () => {
         expect((dataEnvelopes(ws).at(-1)?.data as { total: number }).total).toBe(2);
     });
 
-    test("re-runs a wildcard admin subscription (getMetrics) on any write-flush", async () => {
+    it("re-runs a wildcard admin subscription (getMetrics) on any write-flush", async () => {
         expect.assertions(1);
 
         const shard = new AdminSubShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -201,13 +205,15 @@ describe("shardDO admin-socket upgrade flagging", () => {
     // A single in-memory db is fine — these tests never write, only upgrade.
     const sql = createSqliteExec();
 
-    const baseState = (): ShardDOState => ({
+    const baseState = (): ShardDOState => {
+ return {
         storage: { sql: sql.sql as unknown as ShardDOState["storage"]["sql"] },
         acceptWebSocket() {},
         getWebSockets() {
             return [];
         },
-    });
+    };
+};
 
     /** Capture the attachment the upgrade stamps onto the accepted socket. */
     const upgradeAndCaptureAttachment = async (
@@ -247,7 +253,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
         return captured;
     };
 
-    test("stamps admin:true when the upgrade presents the admin token via ?token", async () => {
+    it("stamps admin:true when the upgrade presents the admin token via ?token", async () => {
         expect.assertions(1);
 
         const attachment = await upgradeAndCaptureAttachment({ CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN }, `https://shard.internal/?token=${ADMIN_TOKEN}`);
@@ -255,7 +261,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
         expect(attachment).toEqual({ admin: true, subs: {} });
     });
 
-    test("stamps admin:false when no token is presented", async () => {
+    it("stamps admin:false when no token is presented", async () => {
         expect.assertions(1);
 
         const attachment = await upgradeAndCaptureAttachment({ CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN }, "https://shard.internal/");
@@ -263,7 +269,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
         expect(attachment).toEqual({ admin: false, subs: {} });
     });
 
-    test("accepts the admin token as an alternate credential when CIRRUS_WS_BEARER gates the socket", async () => {
+    it("accepts the admin token as an alternate credential when CIRRUS_WS_BEARER gates the socket", async () => {
         expect.assertions(1);
 
         const attachment = await upgradeAndCaptureAttachment({ CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, CIRRUS_WS_BEARER: "user-bearer" }, "https://shard.internal/", {

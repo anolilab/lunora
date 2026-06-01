@@ -1,21 +1,24 @@
 import { CirrusClient } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
-import { type ReactElement, useEffect, useMemo, useState } from "react";
+import type { ReactElement } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ConnectionBadge } from "./connection-badge.js";
-import { Dashboard, type DashboardProps } from "./dashboard.js";
+import type { DashboardProps } from "./dashboard.js";
+import { Dashboard } from "./dashboard.js";
 import { ErrorBoundary } from "./error-boundary.js";
 import { DashboardStyles } from "./theme.js";
 import { DASHBOARD_ROOT_CLASS } from "./theme-constants.js";
 import { loadToken, saveToken } from "./token-storage.js";
 
-export interface DashboardAppProps {
+interface DashboardAppProps {
     /**
      * Admin bearer token to send with every admin request. When omitted the app
      * renders a small prompt so an operator can paste it at runtime — handy in
      * dev where you don't want to bake the token into a bundle.
      */
     readonly adminToken?: string;
+
     /**
      * Base URL of the Cirrus worker the dashboard talks to. Defaults to the
      * current origin, which is correct when the dashboard is served from the
@@ -48,13 +51,13 @@ const resolveBaseUrl = (explicit: string | undefined): string => {
 
 /**
  * A fully self-contained dashboard page: it constructs a {@link CirrusClient}
- * pointed at the worker, wires it through a `<CirrusProvider>`, manages the
+ * pointed at the worker, wires it through a `&lt;CirrusProvider>`, manages the
  * admin token, and renders the composed {@link Dashboard}.
  *
  * Mount this directly (the standalone app and the `@cirrus/vite` dev route both
  * do) when you want the batteries-included page rather than composing panels
  * yourself. For embedding into an existing admin UI, use the individual panels
- * or `<Dashboard>` under your own provider instead.
+ * or `&lt;Dashboard>` under your own provider instead.
  */
 export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppProps = {}): ReactElement {
     // Seed from the prop, else a token persisted in a prior session (so a reload
@@ -82,11 +85,9 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
     // Close the previous client when `token`/`baseUrl` changes (and on unmount)
     // so we don't leak sockets, in-flight streams, or reconnect timers each
     // time the admin pastes a new token.
-    useEffect(() => {
-        return (): void => {
+    useEffect(() => (): void => {
             client.close();
-        };
-    }, [client]);
+        }, [client]);
 
     return (
         <div className={DASHBOARD_ROOT_CLASS} data-testid="cirrus-dashboard-app">
@@ -131,3 +132,5 @@ export function DashboardApp({ adminToken, baseUrl, dashboard }: DashboardAppPro
         </div>
     );
 }
+
+export type { DashboardAppProps };

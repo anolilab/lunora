@@ -17,7 +17,7 @@ const ROWS_PER_CHANNEL = 1000;
 const CHANNEL_COUNT = 10;
 const CLOCK = 1_700_000_000_000;
 
-const col = (kind: string): ValidatorLike => ({ _meta: { column: { notNull: true } }, kind });
+const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
 
 const byChannel: RankIndexDefinitionLike = {
     name: "byChannel",

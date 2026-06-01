@@ -37,6 +37,7 @@ export interface QueryArgs {
     cursor?: null | string;
     limit?: number;
     orderBy?: OrderByInput[];
+
     /**
      * When `true`, `count()` invocations on the same table are rejected with
      * `CirrusError("COUNT_RLS_UNSUPPORTED")`. Set alongside `baseWhere` by RLS
@@ -52,7 +53,7 @@ export interface QueryArgs {
 export interface QueryPage {
     continueCursor: null | string;
     isDone: boolean;
-    page: Array<Record<string, unknown>>;
+    page: Record<string, unknown>[];
 }
 
 export interface OrderKey {

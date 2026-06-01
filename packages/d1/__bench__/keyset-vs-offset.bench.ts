@@ -16,7 +16,7 @@ const PAGE_SIZE = 50;
 const PAGE_OFFSET = 5000;
 const CLOCK = 1_700_000_000_000;
 
-const col = (kind: string): ValidatorLike => ({ _meta: { column: { notNull: true } }, kind });
+const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
 
 const schema: SchemaLike = {
     tables: {

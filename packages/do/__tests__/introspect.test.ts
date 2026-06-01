@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { listTables, readTablePage } from "../src/introspect.js";
 import { createSqliteExec } from "./_helpers/node-sqlite.js";
@@ -29,7 +29,7 @@ describe("introspect", () => {
     });
 
     describe("listTables", () => {
-        test("returns user tables with row counts, sorted, excluding internal and FTS tables", () => {
+        it("returns user tables with row counts, sorted, excluding internal and FTS tables", () => {
             expect.assertions(1);
 
             expect(listTables(db.sql)).toEqual([
@@ -38,7 +38,7 @@ describe("introspect", () => {
             ]);
         });
 
-        test("reports an empty table as rowCount 0", () => {
+        it("reports an empty table as rowCount 0", () => {
             expect.assertions(1);
 
             db.raw(`CREATE TABLE "empty" ("__id__" TEXT PRIMARY KEY)`);
@@ -50,7 +50,7 @@ describe("introspect", () => {
     });
 
     describe("readTablePage", () => {
-        test("returns rows, the column list, and the total row count", () => {
+        it("returns rows, the column list, and the total row count", () => {
             expect.assertions(4);
 
             const page = readTablePage(db.sql, { table: "messages" });
@@ -61,7 +61,7 @@ describe("introspect", () => {
             expect(page.rows[0]).toEqual({ __id__: "m1", text: "hello", votes: 3 });
         });
 
-        test("honours limit and offset while keeping the full total", () => {
+        it("honours limit and offset while keeping the full total", () => {
             expect.assertions(2);
 
             const page = readTablePage(db.sql, { table: "messages", limit: 1, offset: 1 });
@@ -70,7 +70,7 @@ describe("introspect", () => {
             expect(page.rows).toEqual([{ __id__: "m2", text: "world", votes: 1 }]);
         });
 
-        test("clamps an oversized limit to the 500 ceiling and floors a negative offset", () => {
+        it("clamps an oversized limit to the 500 ceiling and floors a negative offset", () => {
             expect.assertions(1);
 
             const page = readTablePage(db.sql, { table: "messages", limit: 10_000, offset: -5 });
@@ -78,25 +78,25 @@ describe("introspect", () => {
             expect(page.rows).toHaveLength(3);
         });
 
-        test("rejects an unknown table", () => {
+        it("rejects an unknown table", () => {
             expect.assertions(1);
 
             expect(() => readTablePage(db.sql, { table: "nope" })).toThrow(/unknown table/u);
         });
 
-        test("refuses to read an internal table even though it exists", () => {
+        it("refuses to read an internal table even though it exists", () => {
             expect.assertions(1);
 
             expect(() => readTablePage(db.sql, { table: "_cf_KV" })).toThrow(/unknown table/u);
         });
 
-        test("refuses to read an FTS shadow table", () => {
+        it("refuses to read an FTS shadow table", () => {
             expect.assertions(1);
 
             expect(() => readTablePage(db.sql, { table: "messages__fts_body" })).toThrow(/unknown table/u);
         });
 
-        test("search filters across every column, with total reflecting the matched set", () => {
+        it("search filters across every column, with total reflecting the matched set", () => {
             expect.assertions(2);
 
             const page = readTablePage(db.sql, { search: "hello", table: "messages" });
@@ -105,7 +105,7 @@ describe("introspect", () => {
             expect(page.rows).toEqual([{ __id__: "m1", text: "hello", votes: 3 }]);
         });
 
-        test("search matches non-text columns via CAST (numeric votes)", () => {
+        it("search matches non-text columns via CAST (numeric votes)", () => {
             expect.assertions(1);
 
             db.raw(`INSERT INTO "messages" VALUES ('z', 'zeta', 42)`);
@@ -116,13 +116,13 @@ describe("introspect", () => {
             expect(page.rows).toEqual([{ __id__: "z", text: "zeta", votes: 42 }]);
         });
 
-        test("search is case-insensitive", () => {
+        it("search is case-insensitive", () => {
             expect.assertions(1);
 
             expect(readTablePage(db.sql, { search: "WORLD", table: "messages" }).total).toBe(1);
         });
 
-        test("search paginates over the filtered set", () => {
+        it("search paginates over the filtered set", () => {
             expect.assertions(3);
 
             // All three messages contain the letter that appears in their text;
@@ -135,7 +135,7 @@ describe("introspect", () => {
             expect(first.rows[0]).not.toEqual(second.rows[0]);
         });
 
-        test("a LIKE wildcard in the search is matched literally, not as a pattern", () => {
+        it("a LIKE wildcard in the search is matched literally, not as a pattern", () => {
             expect.assertions(1);
 
             db.raw(`INSERT INTO "messages" VALUES ('m4', '100%', 0)`);
@@ -146,7 +146,7 @@ describe("introspect", () => {
             expect(page.rows).toEqual([{ __id__: "m4", text: "100%", votes: 0 }]);
         });
 
-        test("blank search is treated as no filter", () => {
+        it("blank search is treated as no filter", () => {
             expect.assertions(1);
 
             expect(readTablePage(db.sql, { search: "   ", table: "messages" }).total).toBe(3);
@@ -160,7 +160,7 @@ describe("introspect", () => {
             db.raw(`INSERT INTO "posts" VALUES ('p1', 1, '{"title":"Hi","authorId":"u1"}'), ('p2', 2, '{"title":"Yo","authorId":"u2"}')`);
         });
 
-        test("expands __doc__ into per-field columns, dropping the blob column", () => {
+        it("expands __doc__ into per-field columns, dropping the blob column", () => {
             expect.assertions(3);
 
             const page = readTablePage(db.sql, { table: "posts" });
@@ -170,7 +170,7 @@ describe("introspect", () => {
             expect(page.total).toBe(2);
         });
 
-        test("server search matches values inside the doc blob", () => {
+        it("server search matches values inside the doc blob", () => {
             expect.assertions(2);
 
             const page = readTablePage(db.sql, { search: "u2", table: "posts" });
@@ -179,7 +179,7 @@ describe("introspect", () => {
             expect(page.rows).toEqual([{ _creationTime: 2, authorId: "u2", id: "p2", title: "Yo" }]);
         });
 
-        test("echoes only the refs whose column surfaces in the page", () => {
+        it("echoes only the refs whose column surfaces in the page", () => {
             expect.assertions(1);
 
             const page = readTablePage(db.sql, { refs: { authorId: "users", missing: "nope" }, table: "posts" });
@@ -187,13 +187,13 @@ describe("introspect", () => {
             expect(page.refs).toEqual({ authorId: "users" });
         });
 
-        test("omits refs entirely when none are supplied", () => {
+        it("omits refs entirely when none are supplied", () => {
             expect.assertions(1);
 
             expect(readTablePage(db.sql, { table: "posts" }).refs).toBeUndefined();
         });
 
-        test("leaves a non-doc (column-per-field) table untouched", () => {
+        it("leaves a non-doc (column-per-field) table untouched", () => {
             expect.assertions(1);
 
             // The `messages` fixture has no __doc__; expansion must be a no-op.

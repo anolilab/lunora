@@ -11,7 +11,7 @@
  * deliberately skips them — the worker reads them through `@cirrus/d1`'s
  * sibling helpers and concatenates the two streams.
  */
-import type { DatabaseWriterLike, SchemaLike, SqlExec } from "./ctx-db.js";
+import type { DatabaseWriterLike, SchemaLike } from "./ctx-db.js";
 
 /** One NDJSON line: a row from `table` shaped per its schema. */
 export interface ExportRow {
@@ -38,6 +38,7 @@ export interface ExportShardArgs {
      * promptly instead of waiting on a huge page to finish materializing.
      */
     batchSize?: number;
+
     /**
      * Tables to export. When omitted, every shard-local user table in the
      * schema is exported. Globals are always skipped — the worker handles those.
@@ -172,10 +173,7 @@ export const validateImportRow = (schema: SchemaLike, table: string, doc: Record
 
     // Strip framework-managed fields before validating against the user shape.
     // Both are reapplied verbatim on insert so the round-trip is byte-identical.
-    const { _creationTime, _id, ...payload } = doc;
-
-    void _creationTime;
-    void _id;
+    const { _creationTime: _omitCreationTime, _id: _omitId, ...payload } = doc;
 
     // Reject keys that aren't declared in the table's shape (nor the
     // framework-managed `_id`/`_creationTime` already stripped above).
@@ -339,6 +337,3 @@ export const parseImportShardArgs = (args: Record<string, unknown>): ImportShard
 
     return { rows, startLine };
 };
-
-/** Reserved sql handle threading for callers that need it (no-op default). */
-void (null as unknown as SqlExec);

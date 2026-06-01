@@ -36,7 +36,7 @@ export interface MiddlewareNext<CtxIn> {
  */
 export type Middleware<CtxIn, CtxOut> = (options: { ctx: CtxIn; next: MiddlewareNext<CtxIn> }) => CtxOut | Promise<CtxOut>;
 
-/** Options accepted by `initCirrus.dataModel<DM>().create(...)`. Reserved for transformer/error-formatter wiring. */
+/** Options accepted by `initCirrus.dataModel&lt;DM>().create(...)`. Reserved for transformer/error-formatter wiring. */
 export type CreateOptions = Record<never, never>;
 
 /**
@@ -55,9 +55,10 @@ export interface QueryBuilder<Ctx, Args extends ArgsValidator, Output = undefine
     query: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Ctx }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
+
     /**
      * Terminal: declare this procedure as a streaming query. The handler is an
-     * async generator (or any function returning an `AsyncIterable<R>`) that
+     * async generator (or any function returning an `AsyncIterable&lt;R>`) that
      * yields one chunk per server-pushed frame. The third `signal` argument is
      * tripped when the client cancels — break out of the loop or check
      * `signal.aborted` between yields. `.output()` does not apply: per-chunk

@@ -72,6 +72,7 @@ export interface RunDataMigrationOptions {
     /** Stop after this many batches, leaving the run resumable; defaults to no limit. */
     maxBatches?: number;
     migration: DataMigrationLike;
+
     /**
      * Called after each non-dry-run batch persists its progress, so a caller
      * (the Durable Object) can flush and let live `migrationStatus` subscribers
@@ -244,7 +245,8 @@ export const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusR
     const params = id === undefined ? [] : [id];
     const rows = runSql<FullStateRow>(sql, `SELECT * FROM "${DATA_MIGRATION_STATE_TABLE}"${filter}`, ...params).toArray();
 
-    return rows.map((row) => ({
+    return rows.map((row) => {
+ return {
         changed: row.changed,
         cursor: typeof row.cursor === "string" ? row.cursor : null,
         direction: row.direction === "down" ? "down" : "up",
@@ -254,7 +256,8 @@ export const readMigrationStatus = (sql: SqlExec, id?: string): MigrationStatusR
         startedAt: typeof row.started_at === "number" ? row.started_at : null,
         status: row.status === "completed" || row.status === "failed" ? row.status : "in_progress",
         updatedAt: typeof row.updated_at === "number" ? row.updated_at : null,
-    }));
+    };
+});
 };
 
 /**

@@ -9,12 +9,11 @@ import { definePolicy, initCirrus, rls } from "../src/index.js";
  * leaves writes / reads gated. The wrap itself runs even when no policy
  * matches the read; the AND-merge runs when one returns a `WhereInput`.
  *
- *  - **baseline** — same query handler, no RLS in the chain. The dispatch
- *    floor.
- *  - **rls(true)** — policy returns `true`; wrapper installs but no
- *    `baseWhere` is merged.
- *  - **rls(predicate)** — policy returns a `WhereInput`; full AND-merge
- *    happens per read.
+ * - **baseline** — same query handler, no RLS in the chain. The dispatch floor.
+ * - **rls(true)** — policy returns `true`; wrapper installs but no `baseWhere`
+ * is merged.
+ * - **rls(predicate)** — policy returns a `WhereInput`; full AND-merge happens
+ * per read.
  *
  * Each bench invokes the registered handler with a fresh ctx — that's
  * exactly what a per-request dispatch does in production.
@@ -33,7 +32,7 @@ interface FakeDb {
         delete: (id: string) => Promise<void>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
-        findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Array<Record<string, unknown>> }>;
+        findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         get: (id: string) => Promise<Record<string, unknown> | null>;
         insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
@@ -141,7 +140,9 @@ const policyTrue = definePolicy<BenchCtx>({
 const policyPredicate = definePolicy<BenchCtx>({
     on: "read",
     table: "documents",
-    when: ({ auth }) => ({ ownerId: auth.userId }),
+    when: ({ auth }) => {
+        return { ownerId: auth.userId };
+    },
 });
 
 const rlsTrueHandler = cirrus.query.use(rlsAsAny<BenchCtx>([policyTrue])).query(async ({ ctx }) => {
@@ -160,14 +161,14 @@ const rlsPredicateHandler = cirrus.query.use(rlsAsAny<BenchCtx>([policyPredicate
 
 describe("rls() middleware — per-query overhead", () => {
     bench("baseline: no RLS in the chain", async () => {
-        await baselineHandler.handler(buildCtx() as never, {});
+        await baselineHandler.handler(buildCtx(), {});
     });
 
     bench("rls(true): wrapper installs, no baseWhere merged", async () => {
-        await rlsTrueHandler.handler(buildCtx() as never, {});
+        await rlsTrueHandler.handler(buildCtx(), {});
     });
 
     bench("rls(predicate): full WhereInput AND-merge per read", async () => {
-        await rlsPredicateHandler.handler(buildCtx() as never, {});
+        await rlsPredicateHandler.handler(buildCtx(), {});
     });
 });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
@@ -9,7 +9,7 @@ import { createSqliteExec } from "./_helpers/node-sqlite.js";
 /**
  * Triggers run inline within the DO transaction; the counter / rank
  * companions are stepped BEFORE the after-trigger fires (see ctx-db.ts), so a
- * handler's `ctx.db.<table>.aggregate(...)` / `count(...)` / `rank(...)` MUST
+ * handler's `ctx.db.&lt;table>.aggregate(...)` / `count(...)` / `rank(...)` MUST
  * observe the just-staged write. These tests enforce that contract.
  */
 
@@ -45,7 +45,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
     };
 
     describe("triggers see staged aggregate/rank state inside the same transaction", () => {
-        test("after-insert trigger reads count() that includes the new row", async () => {
+        it("after-insert trigger reads count() that includes the new row", async () => {
             expect.assertions(1);
 
             const seen: number[] = [];
@@ -79,11 +79,11 @@ describe("ctx-db triggers — aggregates and rank", () => {
             expect(seen).toEqual([1, 2]);
         });
 
-        test("after-insert trigger reads aggregate() and groupBy()", async () => {
+        it("after-insert trigger reads aggregate() and groupBy()", async () => {
             expect.assertions(2);
 
-            const aggSeen: Array<null | number> = [];
-            const groupSeen: Array<{ count: number; projectId: unknown }> = []; // gitleaks:allow — kingfisher false positive on a structural TS type
+            const aggSeen: (null | number)[] = [];
+            const groupSeen: { count: number; projectId: unknown }[] = []; // gitleaks:allow — kingfisher false positive on a structural TS type
 
             const schema: SchemaLike = {
                 tables: {
@@ -98,7 +98,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
                                     const groups = await ctx.db.groupBy("todos", { by: ["projectId"] });
 
                                     aggSeen.push(sum);
-                                    groupSeen.push(...groups.map((entry) => ({ count: entry.value as number, projectId: entry.key["projectId"] })));
+                                    groupSeen.push(...groups.map((entry) => { return { count: entry.value as number, projectId: entry.key["projectId"] }; }));
                                 },
                                 op: "insert",
                                 timing: "after",
@@ -123,10 +123,10 @@ describe("ctx-db triggers — aggregates and rank", () => {
             ]);
         });
 
-        test("after-insert trigger sees the new row's rank position", async () => {
+        it("after-insert trigger sees the new row's rank position", async () => {
             expect.assertions(1);
 
-            const ranks: Array<null | { position: number; total: number }> = [];
+            const ranks: (null | { position: number; total: number })[] = [];
 
             const schema: SchemaLike = {
                 tables: {
@@ -164,7 +164,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
             ]);
         });
 
-        test("after-delete trigger sees the count without the deleted row", async () => {
+        it("after-delete trigger sees the count without the deleted row", async () => {
             expect.assertions(1);
 
             const counts: number[] = [];

@@ -1,7 +1,9 @@
 import { useCirrus } from "@cirrus/react";
-import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState } from "react";
+import type { ChangeEvent, ReactElement } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { ADMIN_FUNCTIONS, type MigrationDirection, type MigrationRunResult, type MigrationStatusRow } from "./admin.js";
+import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "./admin.js";
+import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
@@ -10,7 +12,7 @@ import { ShardInput } from "./shard-input.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 
-export interface MigrationsPanelProps {
+interface MigrationsPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
@@ -233,3 +235,5 @@ export function MigrationsPanel({ initialShardKey }: MigrationsPanelProps): Reac
         </div>
     );
 }
+
+export type { MigrationsPanelProps };

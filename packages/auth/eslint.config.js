@@ -46,6 +46,7 @@ export default createConfig(
             "@stylistic/no-extra-parens": "off",
             "@stylistic/operator-linebreak": "off",
             "@stylistic/quotes": "off",
+            "perfectionist/sort-objects": "off",
             "@typescript-eslint/method-signature-style": "warn",
             "@typescript-eslint/naming-convention": "warn",
             "@typescript-eslint/no-base-to-string": "error",

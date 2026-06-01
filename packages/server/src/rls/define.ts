@@ -8,7 +8,9 @@
  */
 import type { DefinePolicyInput, Policy, Role } from "./types.js";
 
-export const definePolicy = <Ctx = unknown>(input: DefinePolicyInput<Ctx>): Policy<Ctx> => ({ on: input.on, table: input.table, when: input.when });
+export const definePolicy = <Ctx = unknown>(input: DefinePolicyInput<Ctx>): Policy<Ctx> => {
+    return { on: input.on, table: input.table, when: input.when };
+};
 
 /**
  * Collect a list of policies into the structure the `rls()` middleware
@@ -19,4 +21,6 @@ export const definePolicy = <Ctx = unknown>(input: DefinePolicyInput<Ctx>): Poli
  */
 export const definePolicies = <Ctx = unknown>(policies: ReadonlyArray<Policy<Ctx>>): ReadonlyArray<Policy<Ctx>> => policies;
 
-export const defineRole = (name: string, options: Omit<Role, "name"> = {}): Role => ({ name, ...options });
+export const defineRole = (name: string, options: Omit<Role, "name"> = {}): Role => {
+    return { name, ...options };
+};

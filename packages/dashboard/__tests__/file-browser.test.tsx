@@ -2,10 +2,11 @@ import type { StorageListPage } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { FileBrowser } from "../src/file-browser.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
 
 const PAGE_ONE: StorageListPage = {
     cursor: "c1",
@@ -21,9 +22,7 @@ const PAGE_TWO: StorageListPage = {
 
 const createClient = (): MockClientHooks =>
     createMockClient({
-        listStorageObjects: (options): StorageListPage => {
-            return options.cursor === "c1" ? PAGE_TWO : PAGE_ONE;
-        },
+        listStorageObjects: (options): StorageListPage => (options.cursor === "c1" ? PAGE_TWO : PAGE_ONE),
     });
 
 const renderBrowser = (mock: MockClientHooks): ReactElement => (
@@ -33,7 +32,7 @@ const renderBrowser = (mock: MockClientHooks): ReactElement => (
 );
 
 describe("fileBrowser", () => {
-    test("lists objects with formatted sizes on mount", async () => {
+    it("lists objects with formatted sizes on mount", async () => {
         expect.assertions(4);
 
         render(renderBrowser(createClient()));
@@ -48,7 +47,7 @@ describe("fileBrowser", () => {
         expect(rows[0]?.textContent).toContain("image/png");
     });
 
-    test("forwards the prefix when listing", async () => {
+    it("forwards the prefix when listing", async () => {
         expect.assertions(1);
 
         const mock = createClient();
@@ -71,7 +70,7 @@ describe("fileBrowser", () => {
         expect(lastCall[0]).toMatchObject({ prefix: "avatars/" });
     });
 
-    test("appends the next page via the cursor", async () => {
+    it("appends the next page via the cursor", async () => {
         expect.assertions(1);
 
         render(renderBrowser(createClient()));
@@ -88,7 +87,7 @@ describe("fileBrowser", () => {
         expect(screen.queryByTestId("fb-next")).toBeNull();
     });
 
-    test("surfaces a listing error", async () => {
+    it("surfaces a listing error", async () => {
         expect.assertions(1);
 
         const mock = createMockClient({

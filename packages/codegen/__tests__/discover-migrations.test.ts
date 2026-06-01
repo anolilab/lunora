@@ -3,9 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Project } from "ts-morph";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { discoverMigrations } from "../src/discover-migrations.js";
+
+const NON_STATIC_ID_RE = /must declare `id` as a non-empty string literal/u;
+const DUPLICATE_ID_RE = /Duplicate migration id "dup"/u;
 
 let workdir: string;
 
@@ -28,7 +31,7 @@ describe("discover-migrations", () => {
     const newProject = (): Project => new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
     describe("discoverMigrations", () => {
-        test("lifts a top-level defineMigration export into MigrationIR", () => {
+        it("lifts a top-level defineMigration export into MigrationIR", () => {
             expect.assertions(1);
 
             writeSource(
@@ -48,7 +51,7 @@ describe("discover-migrations", () => {
             expect(result).toEqual([{ exportName: "backfill", filePath: "migrations", id: "backfill-read-by", table: "messages" }]);
         });
 
-        test("detects an aliased import — `import { defineMigration as dm }`", () => {
+        it("detects an aliased import — `import { defineMigration as dm }`", () => {
             expect.assertions(2);
 
             writeSource(
@@ -65,7 +68,7 @@ describe("discover-migrations", () => {
             expect(result[0]?.id).toBe("aliased");
         });
 
-        test("ignores a local `defineMigration` not imported from @cirrus/server", () => {
+        it("ignores a local `defineMigration` not imported from @cirrus/server", () => {
             expect.assertions(1);
 
             writeSource(
@@ -81,7 +84,7 @@ describe("discover-migrations", () => {
             expect(result).toHaveLength(0);
         });
 
-        test("leaves table empty when it is not a static string literal", () => {
+        it("leaves table empty when it is not a static string literal", () => {
             expect.assertions(1);
 
             writeSource(
@@ -98,7 +101,7 @@ describe("discover-migrations", () => {
             expect(result[0]).toMatchObject({ id: "dyn-table", table: "" });
         });
 
-        test("sorts discovered migrations by id", () => {
+        it("sorts discovered migrations by id", () => {
             expect.hasAssertions();
 
             writeSource(
@@ -121,7 +124,7 @@ describe("discover-migrations", () => {
             expect(result.map((migration) => migration.id)).toEqual(["a-first", "b-second"]);
         });
 
-        test("throws MIGRATION_ID_NOT_STATIC when id is not a string literal", () => {
+        it("throws MIGRATION_ID_NOT_STATIC when id is not a string literal", () => {
             expect.assertions(2);
 
             writeSource(
@@ -135,7 +138,7 @@ describe("discover-migrations", () => {
 
             const project = newProject();
 
-            expect(() => discoverMigrations(project, workdir)).toThrow(/must declare `id` as a non-empty string literal/u);
+            expect(() => discoverMigrations(project, workdir)).toThrow(NON_STATIC_ID_RE);
 
             try {
                 discoverMigrations(project, workdir);
@@ -144,7 +147,7 @@ describe("discover-migrations", () => {
             }
         });
 
-        test("throws DUPLICATE_MIGRATION_ID when two declarations share an id", () => {
+        it("throws DUPLICATE_MIGRATION_ID when two declarations share an id", () => {
             expect.assertions(3);
 
             writeSource(
@@ -164,7 +167,7 @@ describe("discover-migrations", () => {
 
             const project = newProject();
 
-            expect(() => discoverMigrations(project, workdir)).toThrow(/Duplicate migration id "dup"/u);
+            expect(() => discoverMigrations(project, workdir)).toThrow(DUPLICATE_ID_RE);
 
             try {
                 discoverMigrations(project, workdir);

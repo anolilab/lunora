@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { emitApi, emitDataModel, emitDrizzleSchema, emitServer, emitShard, runCodegen } from "../src/index.js";
 import type { FunctionIR, SchemaIR } from "../src/ir.js";
@@ -11,6 +11,7 @@ import type { FunctionIR, SchemaIR } from "../src/ir.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "simple");
 const expectedDirectory = join(fixtureRoot, "expected", "_generated");
+const SCHEMA_NOT_FOUND_RE = /schema\.ts not found/u;
 
 let workdir: string;
 
@@ -25,7 +26,7 @@ describe("run-codegen", () => {
     });
 
     describe("runCodegen", () => {
-        test("emits dataModel.ts with per-table Doc interfaces", () => {
+        it("emits dataModel.ts with per-table Doc interfaces", () => {
             expect.assertions(6);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -38,7 +39,7 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("text: string;");
         });
 
-        test("emits api.ts with grouped queries/mutations", () => {
+        it("emits api.ts with grouped queries/mutations", () => {
             expect.assertions(8);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -53,7 +54,7 @@ describe("run-codegen", () => {
             expect(result.generated.api).toContain("export const api = anyApi as unknown as ApiTypes;");
         });
 
-        test("routes internal functions to `internal`/InternalApiTypes, keeping them off the public `api`", () => {
+        it("routes internal functions to `internal`/InternalApiTypes, keeping them off the public `api`", () => {
             expect.assertions(8);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -76,7 +77,7 @@ describe("run-codegen", () => {
             expect(result.generated.shard).toContain('registered.visibility === "internal"');
         });
 
-        test("emits per-table index and searchIndex name unions in dataModel.ts", () => {
+        it("emits per-table index and searchIndex name unions in dataModel.ts", () => {
             expect.assertions(8);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -94,7 +95,7 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("export type SearchIndexName<T extends keyof DataModel>");
         });
 
-        test("emits literal validators as TS literal types and record as Record<K, V>", () => {
+        it("emits literal validators as TS literal types and record as Record<K, V>", () => {
             expect.assertions(6);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -113,7 +114,7 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).not.toContain("prefs: unknown");
         });
 
-        test("emits server.ts with project-typed query/mutation/action wrappers", () => {
+        it("emits server.ts with project-typed query/mutation/action wrappers", () => {
             expect.assertions(15);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -146,7 +147,7 @@ describe("run-codegen", () => {
             );
         });
 
-        test("emits a typed createCaller covering public and internal functions", () => {
+        it("emits a typed createCaller covering public and internal functions", () => {
             expect.assertions(7);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -167,7 +168,7 @@ describe("run-codegen", () => {
             expect(result.generated.server).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
         });
 
-        test("emits per-table ctx.db facade types in dataModel.ts", () => {
+        it("emits per-table ctx.db facade types in dataModel.ts", () => {
             expect.assertions(8);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -185,7 +186,7 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("export type DatabaseWriterFacade");
         });
 
-        test("emits the ctx.orm namespace + findFirstOrThrow on the read facade", () => {
+        it("emits the ctx.orm namespace + findFirstOrThrow on the read facade", () => {
             expect.assertions(12);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -213,7 +214,7 @@ describe("run-codegen", () => {
             expect(result.generated.shard).toContain("throw new Error(`unknown table: ");
         });
 
-        test("emits server.ts dispatch table keyed by `<namespace>:<fnName>`", () => {
+        it("emits server.ts dispatch table keyed by `<namespace>:<fnName>`", () => {
             expect.assertions(6);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -228,7 +229,7 @@ describe("run-codegen", () => {
             expect(result.generated.server).toContain("FUNCTION_NOT_FOUND");
         });
 
-        test("writes all generated files into _generated/", () => {
+        it("writes all generated files into _generated/", () => {
             expect.assertions(6);
 
             runCodegen({ projectRoot: workdir });
@@ -243,7 +244,7 @@ describe("run-codegen", () => {
             expect(existsSync(join(generatedDirectory, "shard.ts"))).toBe(true);
         });
 
-        test("emits drizzle.global.ts containing only `.global()` tables", () => {
+        it("emits drizzle.global.ts containing only `.global()` tables", () => {
             expect.assertions(3);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -256,7 +257,7 @@ describe("run-codegen", () => {
             expect(result.generated.drizzleGlobal).not.toContain('sqliteTable("messages"');
         });
 
-        test("emits drizzle column mappings for optional/array/bigint/bytes", () => {
+        it("emits drizzle column mappings for optional/array/bigint/bytes", () => {
             expect.assertions(7);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -281,7 +282,7 @@ describe("run-codegen", () => {
             expect(result.generated.drizzleGlobal).toContain('ownerId: text("ownerId").references(() => users._id).notNull()');
         });
 
-        test("emits drizzle.shard.ts containing shardBy/root tables", () => {
+        it("emits drizzle.shard.ts containing shardBy/root tables", () => {
             expect.assertions(5);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -297,7 +298,7 @@ describe("run-codegen", () => {
             expect(result.generated.drizzleShard).not.toContain('sqliteTable("users"');
         });
 
-        test("output matches committed expected/ files (snapshot)", () => {
+        it("output matches committed expected/ files (snapshot)", () => {
             expect.assertions(6);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -317,7 +318,7 @@ describe("run-codegen", () => {
             expect(result.generated.shard).toBe(expectedShard);
         });
 
-        test("emits shard.ts with a createShardDO factory wired to generated modules", () => {
+        it("emits shard.ts with a createShardDO factory wired to generated modules", () => {
             expect.assertions(8);
 
             const result = runCodegen({ projectRoot: workdir });
@@ -335,13 +336,13 @@ describe("run-codegen", () => {
             expect(result.generated.shard).not.toContain("createVectorSyncHook");
         });
 
-        test("throws when schema.ts is missing", () => {
+        it("throws when schema.ts is missing", () => {
             expect.assertions(1);
 
             const empty = mkdtempSync(join(tmpdir(), "cirrus-empty-"));
 
             try {
-                expect(() => runCodegen({ projectRoot: empty })).toThrow(/schema\.ts not found/u);
+                expect(() => runCodegen({ projectRoot: empty })).toThrow(SCHEMA_NOT_FOUND_RE);
             } finally {
                 rmSync(empty, { force: true, recursive: true });
             }
@@ -349,16 +350,18 @@ describe("run-codegen", () => {
     });
 
     describe("emitApi", () => {
-        const fn = (overrides: Partial<FunctionIR>): FunctionIR => ({
+        const fn = (overrides: Partial<FunctionIR>): FunctionIR => {
+ return {
             args: {},
             exportName: "list",
             filePath: "posts",
             kind: "query",
             returnType: "unknown",
             ...overrides,
-        });
+        };
+};
 
-        test("imports Doc when a return type references it", () => {
+        it("imports Doc when a return type references it", () => {
             expect.assertions(3);
 
             const output = emitApi([fn({ returnType: 'Doc<"posts">[]' })]);
@@ -368,7 +371,7 @@ describe("run-codegen", () => {
             expect(output).not.toContain("import type { Doc, Id }");
         });
 
-        test("imports both Doc and Id when both are referenced", () => {
+        it("imports both Doc and Id when both are referenced", () => {
             expect.assertions(1);
 
             const output = emitApi([fn({ args: { id: { kind: "id", tableName: "posts" } }, returnType: 'Doc<"posts">' })]);
@@ -376,7 +379,7 @@ describe("run-codegen", () => {
             expect(output).toContain('import type { Doc, Id } from "./dataModel.js";');
         });
 
-        test("imports only Id when no Doc is referenced", () => {
+        it("imports only Id when no Doc is referenced", () => {
             expect.assertions(2);
 
             const output = emitApi([fn({ args: { id: { kind: "id", tableName: "posts" } }, returnType: "{ ok: boolean }" })]);
@@ -385,7 +388,7 @@ describe("run-codegen", () => {
             expect(output).not.toContain("Doc");
         });
 
-        test("omits the dataModel import when neither is referenced", () => {
+        it("omits the dataModel import when neither is referenced", () => {
             expect.assertions(1);
 
             const output = emitApi([fn({ returnType: "{ ok: boolean }" })]);
@@ -395,7 +398,7 @@ describe("run-codegen", () => {
     });
 
     describe("emitShard", () => {
-        test("wires @cirrus/vectors auto-sync when the schema declares vector indexes", () => {
+        it("wires @cirrus/vectors auto-sync when the schema declares vector indexes", () => {
             expect.assertions(7);
 
             const schema: SchemaIR = {
@@ -427,7 +430,7 @@ describe("run-codegen", () => {
             expect(output).toContain("vectors,");
         });
 
-        test("omits @cirrus/vectors entirely when the schema declares no vectors", () => {
+        it("omits @cirrus/vectors entirely when the schema declares no vectors", () => {
             expect.assertions(4);
 
             const schema: SchemaIR = {
@@ -453,7 +456,7 @@ describe("run-codegen", () => {
             expect(output).toContain("export const createShardDO");
         });
 
-        test("binds `.global()` tables to the D1 facade and shard tables to the DO writer", () => {
+        it("binds `.global()` tables to the D1 facade and shard tables to the DO writer", () => {
             expect.assertions(5);
 
             const schema: SchemaIR = {
@@ -492,7 +495,7 @@ describe("run-codegen", () => {
             expect(output).toContain('facade["users"] = bindTable(globalDb, "users");');
         });
 
-        test("omits the D1 facade plumbing when no table is `.global()`", () => {
+        it("omits the D1 facade plumbing when no table is `.global()`", () => {
             expect.assertions(4);
 
             const schema: SchemaIR = {
@@ -518,7 +521,7 @@ describe("run-codegen", () => {
             expect(output).toContain('facade["messages"] = bindTable(db, "messages");');
         });
 
-        test("hoists the scheduler and threads it into createShardCtxDb for triggers", () => {
+        it("hoists the scheduler and threads it into createShardCtxDb for triggers", () => {
             expect.assertions(3);
 
             const schema: SchemaIR = {
@@ -550,16 +553,18 @@ describe("run-codegen", () => {
     });
 
     describe("emitServer", () => {
-        const fn = (exportName: string, overrides: Partial<FunctionIR> = {}): FunctionIR => ({
+        const fn = (exportName: string, overrides: Partial<FunctionIR> = {}): FunctionIR => {
+ return {
             args: {},
             exportName,
             filePath: "posts",
             kind: "query",
             returnType: "unknown",
             ...overrides,
-        });
+        };
+};
 
-        test("renders the caller arg as optional only when the function takes none", () => {
+        it("renders the caller arg as optional only when the function takes none", () => {
             expect.assertions(2);
 
             const output = emitServer([fn("ping"), fn("get", { args: { id: { kind: "id", tableName: "posts" } } })]);
@@ -568,7 +573,7 @@ describe("run-codegen", () => {
             expect(output).toContain('get: (args: { id: Id<"posts"> }) => Promise<unknown>;');
         });
 
-        test("threads a function's concrete return type through the caller", () => {
+        it("threads a function's concrete return type through the caller", () => {
             expect.assertions(2);
 
             const output = emitServer([fn("count", { returnType: "number" })]);
@@ -577,7 +582,7 @@ describe("run-codegen", () => {
             expect(output).toContain('count: (args) => callRegistered(context, "posts:count", args),');
         });
 
-        test("emits an empty caller (and no unused locals) when there are no functions", () => {
+        it("emits an empty caller (and no unused locals) when there are no functions", () => {
             expect.assertions(4);
 
             const output = emitServer([]);
@@ -609,7 +614,7 @@ describe("run-codegen", () => {
             vectorIndexes: [],
         };
 
-        test("renders timestamp/date as epoch-millisecond numbers in dataModel.ts", () => {
+        it("renders timestamp/date as epoch-millisecond numbers in dataModel.ts", () => {
             expect.assertions(2);
 
             const output = emitDataModel(schema);
@@ -618,7 +623,7 @@ describe("run-codegen", () => {
             expect(output).toContain("due: number;");
         });
 
-        test("maps timestamp/date to integer drizzle columns", () => {
+        it("maps timestamp/date to integer drizzle columns", () => {
             expect.assertions(2);
 
             const { shard } = emitDrizzleSchema(schema);

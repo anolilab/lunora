@@ -1,12 +1,14 @@
 import { useCirrus } from "@cirrus/react";
-import { type ReactElement, useCallback, useEffect, useState } from "react";
+import type { ReactElement } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { ADMIN_FUNCTIONS, type TableInfo, type TablePage } from "./admin.js";
+import type { TableInfo, TablePage } from "./admin.js";
+import { ADMIN_FUNCTIONS } from "./admin.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
 
-export interface SchemaViewerProps {
+interface SchemaViewerProps {
     /** Shard key the viewer targets. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
@@ -72,7 +74,7 @@ export function SchemaViewer({ initialShardKey }: SchemaViewerProps): ReactEleme
             try {
                 const page = (await client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey))) as TablePage;
 
-                setColumns((previous) => ({ ...previous, [table]: page.columns }));
+                setColumns((previous) => { return { ...previous, [table]: page.columns }; });
             } catch (error_) {
                 setError(errorMessage(error_));
             }
@@ -129,3 +131,5 @@ export function SchemaViewer({ initialShardKey }: SchemaViewerProps): ReactEleme
         </div>
     );
 }
+
+export type { SchemaViewerProps };

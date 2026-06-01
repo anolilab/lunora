@@ -1,5 +1,6 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import { drizzle as drizzleDO, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
+import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
+import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { ExportRow, ImportShardResult } from "./admin-export-import.js";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import.js";
@@ -12,7 +13,8 @@ import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } fro
 import { LogBuffer } from "./log-buffer.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
-import { ConflictError, type TransactionSqlLike } from "./transaction.js";
+import type { TransactionSqlLike } from "./transaction.js";
+import { ConflictError } from "./transaction.js";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
 
 /**
@@ -28,6 +30,7 @@ import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope,
  */
 export interface ShardDOState {
     acceptWebSocket: (ws: WebSocket, tags?: string[]) => void;
+
     /**
      * Concurrency-blocking gate — `state.blockConcurrencyWhile(fn)` delays
      * the next fetch dispatch until `fn` resolves. Used by
@@ -42,11 +45,13 @@ export interface ShardDOState {
     storage: {
         sql: {
             [key: string]: unknown;
+
             /**
              * Current size of the SQLite database in bytes. Backed by a real
              * getter on the runtime — read on every access.
              */
             readonly databaseSize?: number;
+
             /**
              * Run a SQL statement without parameters — used by the
              * transaction helper for BEGIN / COMMIT / ROLLBACK. The runtime
@@ -202,7 +207,9 @@ const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
             return;
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
     }
 };
 
@@ -485,7 +492,7 @@ export abstract class ShardDO {
      */
     private currentTracker: DependencyTracker | undefined;
 
-    constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
+    public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
 
@@ -549,7 +556,7 @@ export abstract class ShardDO {
      *      not await its return value. Drizzle's `transaction()` matches
      *      that — it passes the tx handle through and then returns.
      *      Handing it an async handler would let the transaction commit
-     *      before the handler resolves, breaking the `() => Promise<T> | T`
+     *      before the handler resolves, breaking the `() => Promise&lt;T> | T`
      *      contract.
      *
      * The raw-SQL approach below is async-safe and gives the
@@ -775,6 +782,7 @@ export abstract class ShardDO {
      * ceiling). We deliberately avoid throwing — apps should keep working;
      * the warning is the migration signal.
      */
+
     /**
      * Assemble the health snapshot served by `__cirrus_admin__:getMetrics`:
      * lifetime request/error counts since this instance woke, the live SQLite
@@ -822,7 +830,7 @@ export abstract class ShardDO {
 
         ShardDO.rootSizeWarned = true;
         console.warn(
-            `[@cirrus/do] __root__ Durable Object SQLite size is ${size} bytes (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). Plan a \`.shardBy()\` migration before you hit the wall. See https://cirrus.dev/docs/concepts/sharding for guidance.`,
+            `[@cirrus/do] __root__ Durable Object SQLite size is ${String(size)} bytes (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). Plan a \`.shardBy()\` migration before you hit the wall. See https://cirrus.dev/docs/concepts/sharding for guidance.`,
         );
     }
 
@@ -1019,9 +1027,7 @@ export abstract class ShardDO {
      * it returns `undefined` (no links); the codegen subclass overrides this with
      * the schema-derived map.
      */
-    protected tableRefs(table: string): Record<string, string> | undefined {
-        void table;
-
+    protected tableRefs(_table: string): Record<string, string> | undefined {
         return undefined;
     }
 
@@ -1034,9 +1040,7 @@ export abstract class ShardDO {
      * `schema.ts`, so it returns an empty list; the codegen-generated subclass
      * overrides this with `exportShardRows(...)` against the live writer.
      */
-    protected runShardExport(args: RunShardExportArgs): Promise<ExportRow[]> {
-        void args;
-
+    protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]> {
         return Promise.resolve([]);
     }
 
@@ -1048,9 +1052,7 @@ export abstract class ShardDO {
      * The base class can't build a writer; the codegen subclass overrides this
      * to call `importShardRows(...)` inside one transaction per batch.
      */
-    protected runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
-        void args;
-
+    protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult> {
         return Promise.resolve({ conflicts: 0, errors: [], inserted: {} });
     }
 
@@ -1121,7 +1123,7 @@ export abstract class ShardDO {
                 const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
                 const errorMessage =
                     status === "too_many"
-                        ? `subscription cap of ${ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET} reached on this socket`
+                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
                         : "failed to persist subscription attachment";
 
                 try {
@@ -1164,7 +1166,14 @@ export abstract class ShardDO {
                 return;
             }
 
-            void this.handleStream(ws, envelope.id, envelope.query.functionPath, envelope.query.args ?? {});
+            // Fire-and-forget: handleStream owns its own error reporting (it
+            // sends `type:"error"` frames to the socket). The trailing no-op
+            // catch only guards the rare pre-try throw path (e.g. ws.send on a
+            // socket the runtime already tore down) so a dead socket can't
+            // surface as an unhandled rejection.
+            this.handleStream(ws, envelope.id, envelope.query.functionPath, envelope.query.args ?? {}).catch(() => {
+                /* socket already gone; nothing to report */
+            });
 
             return;
         }
@@ -1196,6 +1205,7 @@ export abstract class ShardDO {
      *   4. On normal completion send `{type:"complete"}`; on throw send
      *      `{type:"error"}`. Either way drop the controller.
      */
+
     /**
      * Per-socket cap on concurrent stream iterators. Each in-flight stream
      * pins an `AbortController` + the user's async generator + any buffered
@@ -1233,7 +1243,7 @@ export abstract class ShardDO {
                     JSON.stringify({
                         type: "error",
                         id,
-                        error: { code: "TOO_MANY_STREAMS", message: `stream cap of ${ShardDO.MAX_STREAMS_PER_SOCKET} reached on this socket` },
+                        error: { code: "TOO_MANY_STREAMS", message: `stream cap of ${String(ShardDO.MAX_STREAMS_PER_SOCKET)} reached on this socket` },
                     }),
                 );
             } catch {
@@ -1288,7 +1298,7 @@ export abstract class ShardDO {
      * closed the socket by the time we're called — calling `ws.close()`
      * again would throw "WebSocket has been closed" in the Workers runtime.
      */
-    public async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+    public async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
         // Abort in-flight stream iterators bound to this socket so user
         // handlers stop pumping into a closed channel rather than discovering
         // it on the next yield.
@@ -1310,17 +1320,11 @@ export abstract class ShardDO {
 
         // Clear the attachment so a future reconnection starts clean.
         (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
-
-        void code;
-        void reason;
-        void wasClean;
     }
 
     /** Hibernation API: invoked on socket error. */
-    public webSocketError(ws: WebSocket, error: unknown): void {
+    public webSocketError(_ws: WebSocket, _error: unknown): void {
         // Subclasses can override with proper logging. Avoid throwing.
-        void ws;
-        void error;
     }
 
     /** Subclasses implement function dispatch. */
@@ -1455,28 +1459,22 @@ export abstract class ShardDO {
      * disables server re-execution and leaves the legacy {@link broadcastDelta}
      * path as the only live-update mechanism.
      */
-    protected executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
-        void functionPath;
-        void args;
-
+    protected executeSubscription(_functionPath: string, _args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
         return Promise.resolve(null);
     }
 
     /**
      * Look up a streaming-query function and return a thunk that produces the
-     * `AsyncIterable<unknown>` when handed an {@link AbortSignal}. The codegen
+     * `AsyncIterable&lt;unknown>` when handed an {@link AbortSignal}. The codegen
      * subclass overrides this to dispatch via `CIRRUS_FUNCTIONS`; the base
      * default returns `null`, which surfaces as `{type:"error", code:"NOT_FOUND"}`
      * to the client.
      *
-     * The deferred-iterator shape (`(signal) => AsyncIterable<unknown>`) keeps
+     * The deferred-iterator shape (`(signal) => AsyncIterable&lt;unknown>`) keeps
      * the cancel signal pluggable per-call without coupling this signature to
      * the wire-frame loop in {@link handleStream}.
      */
-    protected executeStream(functionPath: string, args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
-        void functionPath;
-        void args;
-
+    protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
         return null;
     }
 
@@ -1708,8 +1706,8 @@ export abstract class ShardDO {
      *      not suitable for production.
      *   2. Bearer token via `env.CIRRUS_WS_BEARER`. When set, the upgrade
      *      must present a matching token. We accept either an
-     *      `Authorization: Bearer <token>` header (preferred) or a
-     *      `?token=<token>` query parameter (the only escape hatch for
+     *      `Authorization: Bearer &lt;token>` header (preferred) or a
+     *      `?token=&lt;token>` query parameter (the only escape hatch for
      *      browsers, which can't customise headers on the WebSocket
      *      constructor). The match runs in constant time to avoid leaking
      *      the token via response-timing differences.

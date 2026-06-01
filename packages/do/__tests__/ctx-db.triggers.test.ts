@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabaseWriterLike, SchedulerLike, SchemaLike, TriggerContextLike, TriggerEventLike } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -29,10 +29,10 @@ describe("ctx-db triggers", () => {
     });
 
     describe("trigger firing", () => {
-        test("before/after insert fire in order with the new doc", async () => {
+        it("before/after insert fire in order with the new doc", async () => {
             expect.assertions(3);
 
-            const events: Array<{ doc?: unknown; phase: string }> = [];
+            const events: { doc?: unknown; phase: string }[] = [];
             const schema: SchemaLike = {
                 tables: {
                     messages: {
@@ -54,7 +54,7 @@ describe("ctx-db triggers", () => {
             expect((events[1]!.doc as Record<string, unknown>)["_id"]).toBe("m1");
         });
 
-        test("update triggers see merged doc and previous on patch", async () => {
+        it("update triggers see merged doc and previous on patch", async () => {
             expect.assertions(3);
 
             let captured: TriggerEventLike | undefined;
@@ -85,7 +85,7 @@ describe("ctx-db triggers", () => {
             expect((captured!.previous as Record<string, unknown>)["body"]).toBe("hi");
         });
 
-        test("replace supplies previous only when an update trigger exists", async () => {
+        it("replace supplies previous only when an update trigger exists", async () => {
             expect.assertions(2);
 
             let captured: TriggerEventLike | undefined;
@@ -115,10 +115,10 @@ describe("ctx-db triggers", () => {
             expect((captured!.doc as Record<string, unknown>)["body"]).toBe("fresh");
         });
 
-        test("delete triggers see previous; after fires once removed", async () => {
+        it("delete triggers see previous; after fires once removed", async () => {
             expect.assertions(3);
 
-            const events: Array<{ phase: string; previous?: unknown }> = [];
+            const events: { phase: string; previous?: unknown }[] = [];
             const schema: SchemaLike = {
                 tables: {
                     messages: {
@@ -141,7 +141,7 @@ describe("ctx-db triggers", () => {
             await expect(writer.get("m1")).resolves.toBeNull();
         });
 
-        test("a throwing beforeDelete aborts the delete — the row survives", async () => {
+        it("a throwing beforeDelete aborts the delete — the row survives", async () => {
             expect.assertions(2);
 
             const schema: SchemaLike = {
@@ -171,7 +171,7 @@ describe("ctx-db triggers", () => {
             await expect(writer.get("m1")).resolves.not.toBeNull();
         });
 
-        test("an afterInsert handler writing another table via ctx.db persists", async () => {
+        it("an afterInsert handler writing another table via ctx.db persists", async () => {
             expect.assertions(3);
 
             const schema: SchemaLike = {
@@ -203,7 +203,7 @@ describe("ctx-db triggers", () => {
             expect(page[0]!["table"]).toBe("messages");
         });
 
-        test("cascade delete fires the child table's delete triggers", async () => {
+        it("cascade delete fires the child table's delete triggers", async () => {
             expect.assertions(1);
 
             const deletedReactions: string[] = [];
@@ -238,7 +238,7 @@ describe("ctx-db triggers", () => {
             expect([...deletedReactions].sort()).toEqual(["r1", "r2"]);
         });
 
-        test("ctx.scheduler reaches the injected scheduler", async () => {
+        it("ctx.scheduler reaches the injected scheduler", async () => {
             expect.assertions(1);
 
             const runAfter = vi.fn<SchedulerLike["runAfter"]>(async () => "job-1");
@@ -267,7 +267,7 @@ describe("ctx-db triggers", () => {
             expect(runAfter).toHaveBeenCalledWith(0, "counters:recount", { id: "m1" });
         });
 
-        test("the default scheduler throws when a trigger uses it unconfigured", async () => {
+        it("the default scheduler throws when a trigger uses it unconfigured", async () => {
             expect.assertions(1);
 
             const schema: SchemaLike = {
@@ -292,7 +292,7 @@ describe("ctx-db triggers", () => {
             await expect(writer.insert("messages", { _id: "m1", body: "hi" }, { allowExplicitId: true })).rejects.toThrow(/no scheduler configured/);
         });
 
-        test("the recursion-depth guard aborts a self-triggering loop", async () => {
+        it("the recursion-depth guard aborts a self-triggering loop", async () => {
             expect.assertions(1);
 
             const schema: SchemaLike = {

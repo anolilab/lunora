@@ -9,10 +9,10 @@ import { initCirrus } from "../src/index.js";
  * logging, and observability all plug in here, so real apps stack 2-6 layers.
  * The bench measures how the dispatch cost grows with N.
  *
- *  - **N=0** — no .use; the dispatch floor.
- *  - **N=1** — one passthrough middleware (`async ({next}) => next()`).
- *  - **N=4** — four passthroughs; typical app.
- *  - **N=8** — eight; sanity check that the cost stays roughly linear.
+ * - **N=0** — no .use; the dispatch floor.
+ * - **N=1** — one passthrough middleware (`async ({next}) => next()`).
+ * - **N=4** — four passthroughs; typical app.
+ * - **N=8** — eight; sanity check that the cost stays roughly linear.
  *
  * Each layer's handler is `next()` only — we're isolating the runner, not
  * user code inside the middleware.

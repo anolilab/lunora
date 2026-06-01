@@ -34,10 +34,10 @@ export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
  * - `on` — the table whose rows feed the aggregate.
  * - `op` — the reducer. `count` is field-less; the others take `field`.
  * - `field` — the column the reducer applies to (required for non-count ops).
- * - `by` — group keys. When all `where` keys in a read participate in `by`,
- *   the reader can answer from the counter table without scanning rows.
+ * - `by` — group keys. When all `where` keys in a read participate in `by`, the
+ * reader can answer from the counter table without scanning rows.
  * - `where` — optional static predicate baked into the counter (only the rows
- *   matching it ever land in the counter).
+ * matching it ever land in the counter).
  */
 export interface AggregateIndexDefinition {
     by?: ReadonlyArray<string>;
@@ -62,19 +62,19 @@ export interface RankSortKey {
  * Declared rank index — a sorted companion table per `(partition tuple, sortBy)`
  * maintained by triggers, so:
  *
- *   - `rank(row)` returns the row's 1-based position within its partition under
- *     the declared `sortBy` order, plus the partition's total row count, in
- *     O(log n) lookups against the SQLite btree on the companion table.
- *   - `rankPage({ where, take, from })` walks the same companion table to
- *     return rows in the declared order — a sorted-pagination accelerator.
+ * - `rank(row)` returns the row's 1-based position within its partition under
+ * the declared `sortBy` order, plus the partition's total row count, in
+ * O(log n) lookups against the SQLite btree on the companion table.
+ * - `rankPage({ where, take, from })` walks the same companion table to return
+ * rows in the declared order — a sorted-pagination accelerator.
  *
  * Fields mirror `AggregateIndexDefinition`:
  *
- *   - `on` — the source table whose rows feed the rank.
- *   - `sortBy` — ordered keys driving the rank. Required.
- *   - `partitionBy` — columns that scope each rank context (e.g. `["channelId"]`
- *     to rank within a channel). Omitted ⇒ one global rank across the table.
- *   - `where` — static predicate baked into the index; only matching rows enter.
+ * - `on` — the source table whose rows feed the rank.
+ * - `sortBy` — ordered keys driving the rank. Required.
+ * - `partitionBy` — columns that scope each rank context (e.g. `["channelId"]`
+ * to rank within a channel). Omitted ⇒ one global rank across the table.
+ * - `where` — static predicate baked into the index; only matching rows enter.
  */
 export interface RankIndexDefinition {
     name: string;
@@ -91,10 +91,9 @@ export type OnDeleteAction = "cascade" | "restrict" | "set null";
  * A declared relation between two tables, recorded by `.relations((r) => …)`.
  *
  * - `one` (many-to-one): the FK column `field` lives on **this** table and
- *   points at `table`.`references` (default `_id`). Loads a single doc.
+ * points at `table`.`references` (default `_id`). Loads a single doc.
  * - `many` (one-to-many): the FK column `field` lives on the **target** table
- *   and points back at this table's `references` (default `_id`). Loads an
- *   array.
+ * and points back at this table's `references` (default `_id`). Loads an array.
  *
  * `onDelete` is meaningful only on `one`: it is the action applied to the
  * holder rows when the referenced parent row is deleted.
@@ -139,6 +138,7 @@ export interface TableDefinition<Shape extends Record<string, Validator> = Recor
      */
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
     indexes: ReadonlyArray<IndexDefinition>;
+
     /**
      * Rank indexes declared via `.rankIndex(name, opts)`. The runtime maintains
      * a sorted companion table per declared rank with a btree on
@@ -147,6 +147,7 @@ export interface TableDefinition<Shape extends Record<string, Validator> = Recor
      * sorted pagination.
      */
     rankIndexes: ReadonlyArray<RankIndexDefinition>;
+
     /**
      * Declared relations keyed by accessor name; empty unless `.relations()`
      * was called. Named `relationMap` (not `relations`) so the fluent
@@ -156,6 +157,7 @@ export interface TableDefinition<Shape extends Record<string, Validator> = Recor
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
     shape: Shape;
     shardMode: ShardMode;
+
     /**
      * Declared lifecycle triggers keyed by accessor name; empty unless
      * `.triggers()` was called. Named `triggerMap` (not `triggers`) so the
@@ -212,7 +214,7 @@ export type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A,
 
 /**
  * A streaming query registration. Unlike {@link RegisteredFunction} the handler
- * returns an `AsyncIterable<R>` synchronously (it does NOT `Promise<R>`); the
+ * returns an `AsyncIterable&lt;R>` synchronously (it does NOT `Promise&lt;R>`); the
  * runtime drives it frame by frame and forwards each chunk to the caller. The
  * third `signal` argument is wired to the caller's cancel signal so the handler
  * can stop early — break out of the loop or check `signal.aborted` between
@@ -254,12 +256,13 @@ export interface PaginationResult<T = Record<string, unknown>> {
 }
 
 export interface TableReader {
-    collect: () => Promise<Array<Record<string, unknown>>>;
+    collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReader;
     first: () => Promise<Record<string, unknown> | null>;
     paginate: (options: PaginationOptions) => Promise<PaginationResult>;
-    take: (limit: number) => Promise<Array<Record<string, unknown>>>;
+    take: (limit: number) => Promise<Record<string, unknown>[]>;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader;
+
     /**
      * Restrict the query to a declared `.searchIndex()`. The builder's
      * `.search(field, query)` runs a full-text match against the index's
@@ -365,7 +368,7 @@ export type TriggerEvent = TriggerDeleteEvent | TriggerInsertEvent | TriggerUpda
 export interface TriggerQueryPage {
     continueCursor: null | string;
     isDone: boolean;
-    page: Array<Record<string, unknown>>;
+    page: Record<string, unknown>[];
 }
 
 /** Args accepted by {@link TriggerDatabase} reads; mirrors `@cirrus/do`'s `QueryArgs`. */
@@ -431,12 +434,12 @@ export interface TriggerRankPageOptions {
 /**
  * Portable, table/id-addressed ORM writer handed to trigger handlers via
  * `ctx.db`. Mirrors `@cirrus/do`'s runtime `DatabaseWriterLike` surface — it is
- * **not** the generated per-table `ctx.db.<table>` facade (which can't be typed
+ * **not** the generated per-table `ctx.db.&lt;table>` facade (which can't be typed
  * from inside `defineTable`, where the full schema isn't known).
  *
  * `aggregate`/`groupBy`/`count`/`rank`/`rankPage` route through the same
  * trigger-maintained counter and rank tables the user-facing reader uses, so
- * a handler's `ctx.db.<table>.aggregate(...)` observes the just-staged write
+ * a handler's `ctx.db.&lt;table>.aggregate(...)` observes the just-staged write
  * within the same DO transaction (the counter step happens before the trigger
  * fires).
  */
@@ -614,33 +617,39 @@ export type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValida
 // identity per render would re-run effects every render and loop forever.
 const namespaceCache = new Map<PropertyKey, Record<string, unknown>>();
 
-export const anyApi: AnyApi = new Proxy({}, {
-    get(_target, namespace: PropertyKey) {
-        const cached = namespaceCache.get(namespace);
+export const anyApi: AnyApi = new Proxy(
+    {},
+    {
+        get(_target, namespace: PropertyKey) {
+            const cached = namespaceCache.get(namespace);
 
-        if (cached) {
-            return cached;
-        }
+            if (cached) {
+                return cached;
+            }
 
-        const refCache = new Map<PropertyKey, { __cirrusRef: string }>();
-        const nsProxy = new Proxy({}, {
-            get(_inner, functionName: PropertyKey) {
-                const cachedRef = refCache.get(functionName);
+            const refCache = new Map<PropertyKey, { __cirrusRef: string }>();
+            const nsProxy = new Proxy(
+                {},
+                {
+                    get(_inner, functionName: PropertyKey) {
+                        const cachedRef = refCache.get(functionName);
 
-                if (cachedRef) {
-                    return cachedRef;
-                }
+                        if (cachedRef) {
+                            return cachedRef;
+                        }
 
-                const ref = { __cirrusRef: `${String(namespace)}:${String(functionName)}` };
+                        const ref = { __cirrusRef: `${String(namespace)}:${String(functionName)}` };
 
-                refCache.set(functionName, ref);
+                        refCache.set(functionName, ref);
 
-                return ref;
-            },
-        });
+                        return ref;
+                    },
+                },
+            );
 
-        namespaceCache.set(namespace, nsProxy);
+            namespaceCache.set(namespace, nsProxy);
 
-        return nsProxy;
+            return nsProxy;
+        },
     },
-});
+);

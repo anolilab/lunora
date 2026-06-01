@@ -3,14 +3,14 @@
  *
  * A plugin packages three things keyed by a stable string identifier:
  *
- *   1. **Schema extension** — additional tables (and their indexes,
- *      relations, triggers) that the host app's schema merges in.
- *   2. **Middleware** — a builder-compatible middleware that runs on every
- *      procedure that opts in via `.use(plugin.middleware)`. By convention
- *      it extends `ctx.api.<key>` with helpers the plugin exposes.
- *   3. **(Future) API surface** — typed functions to expose under
- *      `ctx.api.<key>`. v1 leaves typing to the user; codegen integration
- *      is a follow-up so the type can be discovered automatically.
+ * 1. **Schema extension** — additional tables (and their indexes, relations,
+ * triggers) that the host app's schema merges in.
+ * 2. **Middleware** — a builder-compatible middleware that runs on every
+ * procedure that opts in via `.use(plugin.middleware)`. By convention it
+ * extends `ctx.api.&lt;key>` with helpers the plugin exposes.
+ * 3. **(Future) API surface** — typed functions to expose under
+ * `ctx.api.&lt;key>`. v1 leaves typing to the user; codegen integration is a
+ * follow-up so the type can be discovered automatically.
  *
  * Authoring shape (kitcn-style):
  *
@@ -29,7 +29,7 @@
  * export const schema = defineSchema({ todos: ... }).extend(ratelimit.extension);
  *
  * // procedure that uses the plugin:
- * const c = initCirrus.dataModel<DataModel>().create();
+ * const c = initCirrus.dataModel&lt;DataModel>().create();
  * export const rateLimitedQuery = c.query.use(ratelimit.middleware);
  * ```
  *
@@ -43,7 +43,7 @@
  *     throws if any extension table name overlaps with an existing table.
  *     Silent shadow would let one plugin invisibly hijack another's data.
  *   - **Middleware composability.** Plugins re-export middleware as
- *     plain `Middleware<...>` values; users compose them via the
+ *     plain `Middleware&lt;...>` values; users compose them via the
  *     existing `.use(...)` chain. No "install" verb that consumes the
  *     builder — each consumer decides which plugin middlewares to attach.
  */
@@ -91,10 +91,11 @@ export interface Plugin<TExt extends Record<string, TableDefinition> = Record<st
     readonly extension?: SchemaExtension<TExt>;
     /** Stable key identifying the plugin. Matches `extension.key` when set. */
     readonly key: string;
+
     /**
      * Optional middleware. Users attach with `c.query.use(plugin.middleware)`.
      * The middleware can extend `ctx`; convention is to attach helpers under
-     * `ctx.api.<key>`, e.g.
+     * `ctx.api.&lt;key>`, e.g.
      *
      * ```ts
      * middleware: ({ ctx, next }) =>

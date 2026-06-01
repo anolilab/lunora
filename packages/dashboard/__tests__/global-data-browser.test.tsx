@@ -2,10 +2,11 @@ import type { GlobalTablePage } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { GlobalDataBrowser } from "../src/global-data-browser.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
 
 const TABLES = [
     { name: "organizations", rowCount: 2 },
@@ -39,7 +40,7 @@ const renderBrowser = (mock: MockClientHooks): ReactElement => (
 );
 
 describe("globalDataBrowser", () => {
-    test("lists global tables with row counts on mount", async () => {
+    it("lists global tables with row counts on mount", async () => {
         expect.assertions(2);
 
         render(renderBrowser(createBrowserClient()));
@@ -50,7 +51,7 @@ describe("globalDataBrowser", () => {
         expect(screen.getByTestId("gdb-table-plans").textContent).toBe("plans (5)");
     });
 
-    test("pages through a selected table's rows", async () => {
+    it("pages through a selected table's rows", async () => {
         expect.assertions(2);
 
         render(renderBrowser(createBrowserClient()));
@@ -63,7 +64,7 @@ describe("globalDataBrowser", () => {
         expect(screen.getByTestId("gdb-page-info").textContent).toBe("1-2 of 2");
     });
 
-    test("shows an empty state when there are no global tables", async () => {
+    it("shows an empty state when there are no global tables", async () => {
         expect.assertions(1);
 
         render(renderBrowser(createMockClient({ listGlobalTables: () => [] })));
@@ -73,7 +74,7 @@ describe("globalDataBrowser", () => {
         expect(empty).toBeDefined();
     });
 
-    test("surfaces a table-listing error", async () => {
+    it("surfaces a table-listing error", async () => {
         expect.assertions(1);
 
         const mock = createMockClient();

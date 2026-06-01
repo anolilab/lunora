@@ -1,9 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ShardMetrics } from "../src/admin.js";
-import { aggregateMetrics, type ShardMetricsResult, shardsToAggregate } from "../src/metrics-aggregate.js";
+import type { ShardMetricsResult } from "../src/metrics-aggregate.js";
+import { aggregateMetrics, shardsToAggregate } from "../src/metrics-aggregate.js";
 
-const snapshot = (over: Partial<ShardMetrics> = {}): ShardMetrics => ({
+const snapshot = (over: Partial<ShardMetrics> = {}): ShardMetrics => {
+ return {
     cache: null,
     databaseSize: 1000,
     errors: 1,
@@ -12,13 +14,14 @@ const snapshot = (over: Partial<ShardMetrics> = {}): ShardMetrics => ({
     sinceMs: 0,
     uptimeMs: 0,
     ...over,
-});
+};
+};
 
-const ok = (shard: string, metrics: ShardMetrics): ShardMetricsResult => ({ error: null, metrics, shard });
-const down = (shard: string): ShardMetricsResult => ({ error: "ADMIN_FORBIDDEN", metrics: null, shard });
+const ok = (shard: string, metrics: ShardMetrics): ShardMetricsResult => { return { error: null, metrics, shard }; };
+const down = (shard: string): ShardMetricsResult => { return { error: "ADMIN_FORBIDDEN", metrics: null, shard }; };
 
 describe("aggregateMetrics", () => {
-    test("sums counters and database size across reachable shards", () => {
+    it("sums counters and database size across reachable shards", () => {
         expect.assertions(4);
 
         const agg = aggregateMetrics([
@@ -32,7 +35,7 @@ describe("aggregateMetrics", () => {
         expect(agg.reachable).toBe(2);
     });
 
-    test("counts unreachable shards as failed without throwing", () => {
+    it("counts unreachable shards as failed without throwing", () => {
         expect.assertions(2);
 
         const agg = aggregateMetrics([ok("a", snapshot()), down("b")]);
@@ -41,7 +44,7 @@ describe("aggregateMetrics", () => {
         expect(agg.failed).toBe(1);
     });
 
-    test("weights the combined cache hit-rate by hits+misses", () => {
+    it("weights the combined cache hit-rate by hits+misses", () => {
         expect.assertions(1);
 
         const agg = aggregateMetrics([
@@ -53,13 +56,13 @@ describe("aggregateMetrics", () => {
         expect(agg.hitRate).toBeCloseTo(0.45, 5);
     });
 
-    test("reports a null hit-rate when no shard has a cache", () => {
+    it("reports a null hit-rate when no shard has a cache", () => {
         expect.assertions(1);
 
         expect(aggregateMetrics([ok("a", snapshot({ cache: null }))]).hitRate).toBeNull();
     });
 
-    test("skips null databaseSize shards in the size total", () => {
+    it("skips null databaseSize shards in the size total", () => {
         expect.assertions(1);
 
         const agg = aggregateMetrics([ok("a", snapshot({ databaseSize: 200 })), ok("b", snapshot({ databaseSize: null }))]);
@@ -69,19 +72,19 @@ describe("aggregateMetrics", () => {
 });
 
 describe("shardsToAggregate", () => {
-    test("unions root, current, and recents, de-duplicated and root-first", () => {
+    it("unions root, current, and recents, de-duplicated and root-first", () => {
         expect.assertions(1);
 
         expect(shardsToAggregate("room-1", ["room-2", "room-1"])).toEqual(["", "room-1", "room-2"]);
     });
 
-    test("keeps just the root shard when current is blank and there are no recents", () => {
+    it("keeps just the root shard when current is blank and there are no recents", () => {
         expect.assertions(1);
 
         expect(shardsToAggregate("", [])).toEqual([""]);
     });
 
-    test("trims the current shard before de-duplicating", () => {
+    it("trims the current shard before de-duplicating", () => {
         expect.assertions(1);
 
         expect(shardsToAggregate("  room-1  ", ["room-1"])).toEqual(["", "room-1"]);

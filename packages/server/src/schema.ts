@@ -95,6 +95,7 @@ export interface TableBuilder<Shape extends Record<string, Validator> = Record<s
     global: () => TableBuilder<Shape>;
     /** Add a secondary index. */
     index: (name: string, fields: ReadonlyArray<string>, options?: { unique?: boolean }) => TableBuilder<Shape>;
+
     /**
      * Declare a rank index (sorted companion table, btree-backed) for
      * `rank(row)` / `rankPage()` reads in O(log n). See {@link RankIndexDefinition}.
@@ -114,12 +115,18 @@ export interface TableBuilder<Shape extends Record<string, Validator> = Record<s
 
 /** Shared relation builder — `one`/`many` produce {@link RelationDefinition}s, defaulting `references` to `_id`. */
 const relationBuilder: RelationBuilder = {
-    many: (table, options) => ({ field: options.field, kind: "many", references: options.references ?? "_id", table }),
-    one: (table, options) => ({ field: options.field, kind: "one", onDelete: options.onDelete, references: options.references ?? "_id", table }),
+    many: (table, options) => {
+        return { field: options.field, kind: "many", references: options.references ?? "_id", table };
+    },
+    one: (table, options) => {
+        return { field: options.field, kind: "one", onDelete: options.onDelete, references: options.references ?? "_id", table };
+    },
 };
 
 /** Build a {@link TriggerDefinition}; the handler's narrow event type is erased into the stored union. */
-const makeTrigger = (timing: TriggerTiming, op: TriggerOp, handler: TriggerHandler<TriggerEvent>): TriggerDefinition => ({ handler, op, timing });
+const makeTrigger = (timing: TriggerTiming, op: TriggerOp, handler: TriggerHandler<TriggerEvent>): TriggerDefinition => {
+    return { handler, op, timing };
+};
 
 /**
  * Build a per-`Shape` trigger builder. Runtime behavior is shape-agnostic —
@@ -127,14 +134,16 @@ const makeTrigger = (timing: TriggerTiming, op: TriggerOp, handler: TriggerHandl
  * widen each handler's narrow event param into the stored {@link TriggerEvent}
  * union. The precise per-`Shape` event typing lives in {@link TriggerBuilder}.
  */
-const createTriggerBuilder = <Shape extends Record<string, Validator>>(): TriggerBuilder<Shape> => ({
-    afterDelete: (handler) => makeTrigger("after", "delete", handler as TriggerHandler<TriggerEvent>),
-    afterInsert: (handler) => makeTrigger("after", "insert", handler as TriggerHandler<TriggerEvent>),
-    afterUpdate: (handler) => makeTrigger("after", "update", handler as TriggerHandler<TriggerEvent>),
-    beforeDelete: (handler) => makeTrigger("before", "delete", handler as TriggerHandler<TriggerEvent>),
-    beforeInsert: (handler) => makeTrigger("before", "insert", handler as TriggerHandler<TriggerEvent>),
-    beforeUpdate: (handler) => makeTrigger("before", "update", handler as TriggerHandler<TriggerEvent>),
-});
+const createTriggerBuilder = <Shape extends Record<string, Validator>>(): TriggerBuilder<Shape> => {
+    return {
+        afterDelete: (handler) => makeTrigger("after", "delete", handler as TriggerHandler<TriggerEvent>),
+        afterInsert: (handler) => makeTrigger("after", "insert", handler as TriggerHandler<TriggerEvent>),
+        afterUpdate: (handler) => makeTrigger("after", "update", handler as TriggerHandler<TriggerEvent>),
+        beforeDelete: (handler) => makeTrigger("before", "delete", handler as TriggerHandler<TriggerEvent>),
+        beforeInsert: (handler) => makeTrigger("before", "insert", handler as TriggerHandler<TriggerEvent>),
+        beforeUpdate: (handler) => makeTrigger("before", "update", handler as TriggerHandler<TriggerEvent>),
+    };
+};
 
 /** Options for `defineVectorIndex(...)` (DSL Shape B). */
 export interface VectorIndexOptions {
@@ -163,31 +172,6 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
     let shardMode: ShardMode = { kind: "root" };
 
     const builder: TableBuilder<Shape> = {
-        get aggregateIndexes() {
-            return aggregateIndexes;
-        },
-        get indexes() {
-            return indexes;
-        },
-        get rankIndexes() {
-            return rankIndexes;
-        },
-        get relationMap() {
-            return relations;
-        },
-        get searchIndexes() {
-            return searchIndexes;
-        },
-        shape,
-        get shardMode() {
-            return shardMode;
-        },
-        get triggerMap() {
-            return triggers;
-        },
-        get vectorIndexes() {
-            return vectorIndexes;
-        },
         aggregateIndex(name, options) {
             const op: AggregateOp = options?.op ?? "count";
 
@@ -209,6 +193,9 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
 
             return builder;
         },
+        get aggregateIndexes() {
+            return aggregateIndexes;
+        },
         global() {
             shardMode = { kind: "global" };
 
@@ -219,15 +206,20 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
 
             return builder;
         },
+        get indexes() {
+            return indexes;
+        },
         rankIndex(name, options) {
             if (!options.sortBy || options.sortBy.length === 0) {
                 throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
             }
 
-            const sortBy: RankSortKey[] = options.sortBy.map((key) => ({
-                direction: key.direction ?? "asc",
-                field: key.field,
-            }));
+            const sortBy: RankSortKey[] = options.sortBy.map((key) => {
+                return {
+                    direction: key.direction ?? "asc",
+                    field: key.field,
+                };
+            });
 
             rankIndexes.push({
                 name,
@@ -241,6 +233,12 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
 
             return builder;
         },
+        get rankIndexes() {
+            return rankIndexes;
+        },
+        get relationMap() {
+            return relations;
+        },
         relations(build) {
             Object.assign(relations, build(relationBuilder));
 
@@ -251,15 +249,28 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
 
             return builder;
         },
+        get searchIndexes() {
+            return searchIndexes;
+        },
+        shape,
         shardBy(field) {
             shardMode = { field, kind: "shardBy" };
 
             return builder;
         },
+        get shardMode() {
+            return shardMode;
+        },
+        get triggerMap() {
+            return triggers;
+        },
         triggers(build) {
             Object.assign(triggers, build(triggerBuilder));
 
             return builder;
+        },
+        get vectorIndexes() {
+            return vectorIndexes;
         },
         vectorize(field, options) {
             vectorIndexes.push({
@@ -283,15 +294,17 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
  * the `vectorIndexes` map of {@link defineSchema} when the source is derived
  * from multiple fields or a computation rather than a single column.
  */
-export const defineVectorIndex = (options: VectorIndexOptions): VectorIndexDefinition => ({
-    dimensions: options.dimensions,
-    embed: options.embed,
-    kind: "vectorIndex",
-    metadata: options.metadata,
-    metric: options.metric,
-    select: options.source.select,
-    table: options.source.table,
-});
+export const defineVectorIndex = (options: VectorIndexOptions): VectorIndexDefinition => {
+    return {
+        dimensions: options.dimensions,
+        embed: options.embed,
+        kind: "vectorIndex",
+        metadata: options.metadata,
+        metric: options.metric,
+        select: options.source.select,
+        table: options.source.table,
+    };
+};
 
 /**
  * Options for the standalone `defineAggregateIndex(name, opts)` helper (DSL
@@ -345,10 +358,12 @@ export const defineRankIndex = (name: string, options: RankIndexOptions): RankIn
         throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
     }
 
-    const sortBy: RankSortKey[] = options.sortBy.map((key) => ({
-        direction: key.direction ?? "asc",
-        field: key.field,
-    }));
+    const sortBy: RankSortKey[] = options.sortBy.map((key) => {
+        return {
+            direction: key.direction ?? "asc",
+            field: key.field,
+        };
+    });
 
     return { name, on: options.table, partitionBy: options.partitionBy, sortBy, where: options.where };
 };
@@ -362,6 +377,7 @@ export const defineRankIndex = (name: string, options: RankIndexOptions): RankIn
  * declarations. Both are folded into the matching `tables[on].*Indexes` array
  * so runtime backends read every index uniformly off the table definition.
  */
+
 /**
  * Schema with an in-place `.extend(plugin.extension)` method. Used so apps
  * can compose plugin schemas: `defineSchema({...}).extend(authPlugin.extension)`.
@@ -374,12 +390,14 @@ export type ExtendableSchema<T extends Record<string, TableDefinition>> = Schema
     extend: <X extends Record<string, TableDefinition>>(extension: SchemaExtension<X>) => ExtendableSchema<T & X>;
 };
 
-const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>): ExtendableSchema<T> => ({
-    ...schema,
-    extend<X extends Record<string, TableDefinition>>(extension: SchemaExtension<X>): ExtendableSchema<T & X> {
-        return withExtend(mergeSchemaExtension(schema, extension));
-    },
-});
+const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>): ExtendableSchema<T> => {
+    return {
+        ...schema,
+        extend<X extends Record<string, TableDefinition>>(extension: SchemaExtension<X>): ExtendableSchema<T & X> {
+            return withExtend(mergeSchemaExtension(schema, extension));
+        },
+    };
+};
 
 export const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,

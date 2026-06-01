@@ -52,7 +52,7 @@ export interface FieldOperators {
 
 /**
  * Structural runtime shape of the `where` argument. The codegen facade
- * layers a table-typed `Where<Doc>` on top; this is the untyped surface the
+ * layers a table-typed `Where&lt;Doc>` on top; this is the untyped surface the
  * compiler walks. A non-structural key is a field whose value is either a
  * literal (equality shorthand) or a {@link FieldOperators} object.
  */
@@ -66,7 +66,7 @@ export interface WhereInput {
 const OPERATOR_KEYS = ["eq", "ne", "lt", "lte", "gt", "gte", "in", "notIn", "isNull", "contains"] as const;
 const OPERATOR_KEY_SET = new Set<string>(OPERATOR_KEYS);
 
-/** Binary operators that map straight to `<ref> <cmp> ?` with one bound param. */
+/** Binary operators that map straight to `&lt;ref> &lt;cmp> ?` with one bound param. */
 const BINARY_COMPARATORS: Record<string, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
 
 /**

@@ -5,7 +5,7 @@ import type { SqlExec } from "./ctx-db.js";
  * over the same `/_cirrus/rpc` → shard `/rpc` path as ordinary functions, but
  * {@link ShardDO} intercepts them before user dispatch and serves them from the
  * helpers below. The `__cirrus_` namespace is reserved (it also backs the FTS
- * capability probe), so a real generated `<file>:<function>` can never collide.
+ * capability probe), so a real generated `&lt;file>:&lt;function>` can never collide.
  */
 export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
 
@@ -35,6 +35,7 @@ export interface TableInfo {
 /** A window of rows from one table, plus the column list and total size. */
 export interface TablePage {
     columns: string[];
+
     /**
      * Map of column → target table for foreign-key columns (those declared
      * `v.id("target")` in the schema), so a UI can render them as links. Absent
@@ -48,12 +49,14 @@ export interface TablePage {
 export interface ReadTablePageOptions {
     limit?: number;
     offset?: number;
+
     /**
      * Foreign-key map (doc field → target table) from the schema, echoed back on
      * the page so a UI can link `v.id("target")` cells. The base read has no
      * schema and passes nothing; the codegen subclass supplies it.
      */
     refs?: Record<string, string>;
+
     /**
      * Case-insensitive substring filter applied across every column server-side
      * (each column `CAST … AS TEXT LIKE`). When set, `total` reflects the

@@ -1,9 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { defineTable, v } from "../src/index.js";
 
 describe("defineTable().relations", () => {
-    test("table without .relations exposes an empty relationMap", () => {
+    it("table without .relations exposes an empty relationMap", () => {
         expect.assertions(1);
 
         const messages = defineTable({ body: v.string() });
@@ -11,13 +11,15 @@ describe("defineTable().relations", () => {
         expect(messages.relationMap).toEqual({});
     });
 
-    test("records one and many descriptors keyed by accessor name", () => {
+    it("records one and many descriptors keyed by accessor name", () => {
         expect.assertions(2);
 
-        const messages = defineTable({ authorId: v.id("users"), body: v.string() }).relations((r) => ({
-            author: r.one("users", { field: "authorId", onDelete: "cascade" }),
-            reactions: r.many("reactions", { field: "messageId" }),
-        }));
+        const messages = defineTable({ authorId: v.id("users"), body: v.string() }).relations((r) => {
+            return {
+                author: r.one("users", { field: "authorId", onDelete: "cascade" }),
+                reactions: r.many("reactions", { field: "messageId" }),
+            };
+        });
 
         expect(messages.relationMap.author).toEqual({
             field: "authorId",
@@ -34,53 +36,63 @@ describe("defineTable().relations", () => {
         });
     });
 
-    test("references defaults to _id and is overridable", () => {
+    it("references defaults to _id and is overridable", () => {
         expect.assertions(1);
 
-        const orders = defineTable({ customerSlug: v.string() }).relations((r) => ({
-            customer: r.one("customers", { field: "customerSlug", references: "slug" }),
-        }));
+        const orders = defineTable({ customerSlug: v.string() }).relations((r) => {
+            return {
+                customer: r.one("customers", { field: "customerSlug", references: "slug" }),
+            };
+        });
 
         expect(orders.relationMap.customer!.references).toBe("slug");
     });
 
-    test("one without onDelete leaves the action undefined", () => {
+    it("one without onDelete leaves the action undefined", () => {
         expect.assertions(1);
 
-        const messages = defineTable({ authorId: v.id("users") }).relations((r) => ({
-            author: r.one("users", { field: "authorId" }),
-        }));
+        const messages = defineTable({ authorId: v.id("users") }).relations((r) => {
+            return {
+                author: r.one("users", { field: "authorId" }),
+            };
+        });
 
         expect(messages.relationMap.author!.onDelete).toBeUndefined();
     });
 
-    test("supports self-referential relations", () => {
+    it("supports self-referential relations", () => {
         expect.assertions(2);
 
-        const categories = defineTable({ parentId: v.id("categories") }).relations((r) => ({
-            children: r.many("categories", { field: "parentId" }),
-            parent: r.one("categories", { field: "parentId" }),
-        }));
+        const categories = defineTable({ parentId: v.id("categories") }).relations((r) => {
+            return {
+                children: r.many("categories", { field: "parentId" }),
+                parent: r.one("categories", { field: "parentId" }),
+            };
+        });
 
         expect(categories.relationMap.parent!.table).toBe("categories");
         expect(categories.relationMap.children!.table).toBe("categories");
     });
 
-    test(".relations returns the same builder instance", () => {
+    it(".relations returns the same builder instance", () => {
         expect.assertions(1);
 
         const builder = defineTable({ authorId: v.id("users") });
-        const chained = builder.relations((r) => ({ author: r.one("users", { field: "authorId" }) }));
+        const chained = builder.relations((r) => {
+            return { author: r.one("users", { field: "authorId" }) };
+        });
 
         expect(chained).toBe(builder);
     });
 
-    test("chains alongside other builder methods", () => {
+    it("chains alongside other builder methods", () => {
         expect.assertions(2);
 
         const messages = defineTable({ authorId: v.id("users"), body: v.string() })
             .index("by_author", ["authorId"])
-            .relations((r) => ({ author: r.one("users", { field: "authorId" }) }));
+            .relations((r) => {
+                return { author: r.one("users", { field: "authorId" }) };
+            });
 
         expect(messages.indexes).toHaveLength(1);
         expect(Object.keys(messages.relationMap)).toEqual(["author"]);

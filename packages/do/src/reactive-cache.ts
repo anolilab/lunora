@@ -11,7 +11,7 @@
  *
  * Lifetime + storage model:
  *
- *   - In-memory `Map<key, CacheEntry>`. Insertion-order is the LRU order; we
+ *   - In-memory `Map&lt;key, CacheEntry>`. Insertion-order is the LRU order; we
  *     delete and re-set an entry on every read so the freshest one sits at
  *     the tail of the map. No timers — eviction runs purely on the
  *     set/delete paths.
@@ -22,7 +22,7 @@
  *     savings. (Durable Object hibernation drops in-memory state anyway.)
  *
  *   - Two indexes: the main `entries` map (key -> entry) and `tableIndex`
- *     (`table:id` -> Set<key>) so {@link ReactiveCache.invalidate} is O(deps)
+ *     (`table:id` -> Set&lt;key>) so {@link ReactiveCache.invalidate} is O(deps)
  *     instead of O(entries).
  *
  * Eviction:
@@ -68,11 +68,13 @@ export interface ReactiveCacheOptions {
      * (4 MiB). Use `Number.POSITIVE_INFINITY` to disable the byte cap.
      */
     maxBytes?: number;
+
     /**
      * Maximum number of cached entries. Default `1000`. Use
      * `Number.POSITIVE_INFINITY` to disable the entry cap.
      */
     maxEntries?: number;
+
     /**
      * Injectable wall clock for deterministic LRU testing. Defaults to a
      * monotonic counter (not `Date.now`) so two `run()` calls in the same
@@ -161,7 +163,7 @@ export class ReactiveCache {
      *
      * The callback is awaited inside the cache so concurrent callers for the
      * same key still race the underlying handler — a real Convex-style
-     * "in-flight dedup" would add a `Map<key, Promise>`; we keep this simpler
+     * "in-flight dedup" would add a `Map&lt;key, Promise>`; we keep this simpler
      * and accept that the first uncached hit may run the handler twice when
      * two callers arrive on the same tick. The single-DO concurrency model
      * makes that race vanishingly rare in practice.
@@ -404,7 +406,7 @@ export const stableStringify = (value: unknown): string => {
     }
 
     const record = value as Record<string, unknown>;
-    const keys = Object.keys(record).sort();
+    const keys = Object.keys(record).toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     const parts: string[] = [];
 
     for (const key of keys) {

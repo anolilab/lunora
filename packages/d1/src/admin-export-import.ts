@@ -10,19 +10,19 @@ import type { DatabaseWriterLike, SchemaLike } from "@cirrus/do";
 import type { D1Exec } from "./d1-ctx-db.js";
 
 /** One exported row: `doc` is reconstructed from the column tuple. */
-export interface ExportRow {
+interface ExportRow {
     doc: Record<string, unknown>;
     table: string;
 }
 
-export interface ImportError {
+interface ImportError {
     code: string;
     line: number;
     message: string;
     table: string;
 }
 
-export interface ImportResult {
+interface ImportResult {
     /** Skipped rows whose `_id` already exists. */
     conflicts: number;
     errors: ImportError[];
@@ -38,7 +38,7 @@ const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')
  * allowlist. Shard-local tables are skipped here — they're handled by the DO
  * helpers — so callers get a clean separation between the two storage planes.
  */
-export const selectGlobalTables = (schema: SchemaLike, requested?: ReadonlyArray<string>): string[] => {
+const selectGlobalTables = (schema: SchemaLike, requested?: ReadonlyArray<string>): string[] => {
     const isGlobal = (table: string): boolean => schema.tables[table]?.shardMode?.kind === "global";
 
     if (requested && requested.length > 0) {
@@ -75,7 +75,7 @@ const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknow
     return doc;
 };
 
-export interface ExportGlobalArgs {
+interface ExportGlobalArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
 }
@@ -87,7 +87,7 @@ export interface ExportGlobalArgs {
  * full validator pipeline; for a snapshot stream a plain offset scan is
  * sufficient and predictable).
  */
-export const exportGlobalRows = async function* (exec: D1Exec, schema: SchemaLike, args: ExportGlobalArgs): AsyncGenerator<ExportRow, void, undefined> {
+const exportGlobalRows = async function* (exec: D1Exec, schema: SchemaLike, args: ExportGlobalArgs): AsyncGenerator<ExportRow, void, undefined> {
     const tables = selectGlobalTables(schema, args.tables);
     const batchSize = args.batchSize ?? DEFAULT_BATCH_SIZE;
 
@@ -121,10 +121,9 @@ const validateRow = (schema: SchemaLike, table: string, doc: Record<string, unkn
         return `unknown table: ${table}`;
     }
 
-    const { _creationTime, _id, ...payload } = doc;
-
-    void _creationTime;
-    void _id;
+    // Strip the system fields (`_id`, `_creationTime`) so only declared
+    // schema fields are validated; the rest spread holds the payload.
+    const { _creationTime: _ignoredCreationTime, _id: _ignoredId, ...payload } = doc;
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         const candidate = (payload as Record<string, unknown>)[field];
@@ -152,11 +151,11 @@ const validateRow = (schema: SchemaLike, table: string, doc: Record<string, unkn
     return null;
 };
 
-export interface ImportGlobalArgs {
+interface ImportGlobalArgs {
     /**
      * Optional direct exec handle to the same D1 database the writer targets.
      * When supplied, the conflict pre-probe issues a single
-     * `SELECT 1 FROM <table> WHERE id = ? LIMIT 1` against the row's declared
+     * `SELECT 1 FROM &lt;table> WHERE id = ? LIMIT 1` against the row's declared
      * table instead of falling back to `writer.get(id)`, which scans every
      * global table looking for the id. Strongly recommended for large schemas
      * — the writer-fallback is O(N tables) per row.
@@ -167,8 +166,8 @@ export interface ImportGlobalArgs {
 }
 
 /** Minimal slice of `D1Exec` (declared locally to avoid a circular import). */
-export interface D1ExecLike {
-    all: (sql: string, parameters: readonly unknown[]) => Promise<Array<Record<string, unknown>>>;
+interface D1ExecLike {
+    all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
 }
 
 /**
@@ -178,7 +177,7 @@ export interface D1ExecLike {
  * conflict instead of bubbled as a UNIQUE error. Schema-failed rows surface in
  * `errors`; the rest land.
  */
-export const importGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportGlobalArgs): Promise<ImportResult> => {
+const importGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportGlobalArgs): Promise<ImportResult> => {
     const errors: ImportError[] = [];
     const inserted: Record<string, number> = {};
     let conflicts = 0;
@@ -248,3 +247,6 @@ export const importGlobalRows = async (writer: DatabaseWriterLike, schema: Schem
 
     return { conflicts, errors, inserted };
 };
+
+export { exportGlobalRows, importGlobalRows, selectGlobalTables };
+export type { D1ExecLike, ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult };

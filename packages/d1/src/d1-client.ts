@@ -7,20 +7,20 @@ import { drizzle as drizzleD1 } from "drizzle-orm/d1";
  * Minimal structural projection of `D1Database` to keep the adapter
  * compatible with the real workers-types value as well as unit-test doubles.
  */
-export interface D1DatabaseLike {
+interface D1DatabaseLike {
     batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
     exec?: (sql: string) => Promise<unknown>;
     prepare: (sql: string) => D1PreparedStatementLike;
     withSession: (bookmark?: string) => D1SessionLike;
 }
 
-export interface D1SessionLike {
+interface D1SessionLike {
     batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
     getBookmark: () => string | null;
     prepare: (sql: string) => D1PreparedStatementLike;
 }
 
-export interface D1PreparedStatementLike {
+interface D1PreparedStatementLike {
     // T lets callers type result rows (e.g. `.all<{ id: string }>()`); it flows
     // from the call site into the return, so it is intentionally caller-supplied.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
@@ -42,6 +42,7 @@ export interface D1PreparedStatementLike {
  * `batch`) for callers that want to build queries against generated
  * `sqliteTable` schemas instead of raw SQL strings.
  */
+
 /**
  * Cap on cached prepared statements per `D1Client` / `D1Session`. The cache
  * uses a `Map` (insertion order = LRU order) so an overflow evicts the
@@ -52,13 +53,13 @@ export interface D1PreparedStatementLike {
 const STMT_CACHE_CAPACITY = 256;
 
 /** Thin wrapper over a `D1DatabaseSession` exposing bookmark plumbing. */
-export class D1Session {
+class D1Session {
     private readonly session: D1SessionLike;
 
     /** See {@link D1Client.stmtCache}. Scoped per session. */
     private readonly stmtCache = new Map<string, D1PreparedStatementLike>();
 
-    constructor(session: D1SessionLike) {
+    public constructor(session: D1SessionLike) {
         this.session = session;
     }
 
@@ -116,7 +117,7 @@ export class D1Session {
     }
 }
 
-export class D1Client {
+class D1Client {
     private readonly db: D1DatabaseLike;
 
     /**
@@ -133,7 +134,7 @@ export class D1Client {
      */
     private drizzleHandle: DrizzleD1Database<Record<string, unknown>> | undefined;
 
-    constructor(db: D1DatabaseLike) {
+    public constructor(db: D1DatabaseLike) {
         this.db = db;
     }
 
@@ -231,3 +232,6 @@ export class D1Client {
         return this.db;
     }
 }
+
+export { D1Client, D1Session };
+export type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike };

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
@@ -16,7 +16,8 @@ interface ShardSpy {
 const createShardSpy = (handler: (shardKey: string, body: { args: Record<string, unknown> }) => Promise<Response> | Response): ShardSpy => {
     const calls: ShardCall[] = [];
 
-    const stubFor = (shardKey: string) => ({
+    const stubFor = (shardKey: string) => {
+ return {
         async fetch(request: Request): Promise<Response> {
             const body: { args: Record<string, unknown>; functionPath: string } = await request.json();
 
@@ -24,11 +25,12 @@ const createShardSpy = (handler: (shardKey: string, body: { args: Record<string,
 
             return handler(shardKey, body);
         },
-    });
+    };
+};
 
     const namespace: ShardNamespaceLike = {
         get: (id) => stubFor((id as { __name: string }).__name),
-        idFromName: (name) => ({ __name: name }),
+        idFromName: (name) => { return { __name: name }; },
     };
 
     return { calls, namespace };
@@ -37,7 +39,7 @@ const createShardSpy = (handler: (shardKey: string, body: { args: Record<string,
 const json = (value: unknown): Response => Response.json(value, { headers: { "content-type": "application/json" }, status: 200 });
 
 describe("orchestrateExport", () => {
-    test("fans out exportShard across every live shard for the requested tables", async () => {
+    it("fans out exportShard across every live shard for the requested tables", async () => {
         expect.assertions(5);
 
         const registry = createStaticShardRegistry({ messages: ["c1", "c2", "c3"], users: [] });
@@ -59,7 +61,7 @@ describe("orchestrateExport", () => {
         expect(spy.calls.every((c) => c.body.functionPath === "__cirrus_admin__:exportShard")).toBe(true);
     });
 
-    test("rolls up errors per shard without throwing", async () => {
+    it("rolls up errors per shard without throwing", async () => {
         expect.assertions(3);
 
         const registry = createStaticShardRegistry({ messages: ["c1", "c2"] });
@@ -83,7 +85,7 @@ describe("orchestrateExport", () => {
         expect(failed?.shardKey).toBe("c2");
     });
 
-    test("unions live shard keys across multiple tables", async () => {
+    it("unions live shard keys across multiple tables", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["c1", "c2"], notifications: ["c2", "c3"] });
@@ -100,7 +102,7 @@ describe("orchestrateExport", () => {
 });
 
 describe("orchestrateImport", () => {
-    test("forwards one batch per shard and sums the inserted counts", async () => {
+    it("forwards one batch per shard and sums the inserted counts", async () => {
         expect.assertions(3);
 
         const registry = createStaticShardRegistry({ messages: ["c1", "c2"] });
@@ -133,7 +135,7 @@ describe("orchestrateImport", () => {
         expect(result.failed).toBe(0);
     });
 
-    test("collects per-shard errors but does not throw", async () => {
+    it("collects per-shard errors but does not throw", async () => {
         expect.assertions(4);
 
         const registry = createStaticShardRegistry({ messages: ["c1", "c2"] });

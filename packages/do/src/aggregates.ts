@@ -108,7 +108,7 @@ export class CountRlsUnsupportedError extends Error {
 
     public readonly status: number = 422;
 
-    constructor(table?: string) {
+    public constructor(table?: string) {
         super(
             table === undefined
                 ? "count() is not supported in an RLS-restricted context"

@@ -1,14 +1,15 @@
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@cirrus/do";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { listGlobalTables, readGlobalTablePage } from "../src/introspect.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
 
-const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike =>
-    ({
+const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+ return {
         _meta: { column: { notNull: true, ...column } },
         kind,
-    }) as unknown as ValidatorLike;
+    };
+};
 
 // Two globals (`organizations`, `plans`) and one shard-local table (`local`)
 // that must never be surfaced by the introspector.
@@ -50,7 +51,7 @@ describe("d1 introspect", () => {
     });
 
     describe("listGlobalTables", () => {
-        test("returns only global tables with row counts, sorted by name", async () => {
+        it("returns only global tables with row counts, sorted by name", async () => {
             expect.assertions(1);
 
             await expect(listGlobalTables(harness.exec, schema)).resolves.toEqual([
@@ -61,7 +62,7 @@ describe("d1 introspect", () => {
     });
 
     describe("readGlobalTablePage", () => {
-        test("decodes rows (booleans, _id) and reports the column list", async () => {
+        it("decodes rows (booleans, _id) and reports the column list", async () => {
             expect.assertions(4);
 
             const page = await readGlobalTablePage(harness.exec, schema, { table: "organizations" });
@@ -72,7 +73,7 @@ describe("d1 introspect", () => {
             expect(page.rows[1]).toMatchObject({ _id: "o2", active: false });
         });
 
-        test("honours limit / offset", async () => {
+        it("honours limit / offset", async () => {
             expect.assertions(3);
 
             const page = await readGlobalTablePage(harness.exec, schema, { limit: 1, offset: 1, table: "organizations" });
@@ -82,7 +83,7 @@ describe("d1 introspect", () => {
             expect(page.total).toBe(2);
         });
 
-        test("rejects a non-global table", async () => {
+        it("rejects a non-global table", async () => {
             expect.assertions(1);
 
             await expect(readGlobalTablePage(harness.exec, schema, { table: "local" })).rejects.toMatchObject({ code: "UNKNOWN_TABLE" });

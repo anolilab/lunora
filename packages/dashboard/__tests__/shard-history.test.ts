@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { loadRecentShards, recordShard } from "../src/shard-history.js";
 
@@ -7,13 +7,13 @@ describe("shardHistory", () => {
         sessionStorage.clear();
     });
 
-    test("returns an empty list when nothing has been recorded", () => {
+    it("returns an empty list when nothing has been recorded", () => {
         expect.assertions(1);
 
         expect(loadRecentShards()).toEqual([]);
     });
 
-    test("records a shard and returns it most-recent-first", () => {
+    it("records a shard and returns it most-recent-first", () => {
         expect.assertions(1);
 
         recordShard("room-1");
@@ -22,7 +22,7 @@ describe("shardHistory", () => {
         expect(loadRecentShards()).toEqual(["room-2", "room-1"]);
     });
 
-    test("de-duplicates and moves a re-used shard to the front", () => {
+    it("de-duplicates and moves a re-used shard to the front", () => {
         expect.assertions(1);
 
         recordShard("a");
@@ -32,7 +32,7 @@ describe("shardHistory", () => {
         expect(loadRecentShards()).toEqual(["a", "b"]);
     });
 
-    test("ignores the empty (root) shard key", () => {
+    it("ignores the empty (root) shard key", () => {
         expect.assertions(1);
 
         recordShard("");
@@ -41,7 +41,7 @@ describe("shardHistory", () => {
         expect(loadRecentShards()).toEqual([]);
     });
 
-    test("caps the list at ten entries", () => {
+    it("caps the list at ten entries", () => {
         expect.assertions(2);
 
         for (let index = 0; index < 15; index += 1) {

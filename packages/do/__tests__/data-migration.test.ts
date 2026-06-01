@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -48,7 +48,7 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
 };
 
 /** Read every user ordered by id, decoded from the document column. */
-const allUsers = async (writer: DatabaseWriterLike): Promise<Array<Record<string, unknown>>> => {
+const allUsers = async (writer: DatabaseWriterLike): Promise<Record<string, unknown>[]> => {
     const result = await writer.findMany("users", { orderBy: [{ _id: "asc" }] });
 
     return result.page;
@@ -61,7 +61,7 @@ const stateRow = (id: string): Record<string, unknown> | undefined => harness.ra
 const bumpVersion: DataMigrationLike = {
     id: "bump-version",
     table: "users",
-    up: (document) => ({ ...document, version: Number(document["version"] ?? 0) + 1 }),
+    up: (document) => { return { ...document, version: Number(document["version"] ?? 0) + 1 }; },
 };
 
 describe("runDataMigration", () => {
@@ -74,7 +74,7 @@ describe("runDataMigration", () => {
     });
 
     describe("runDataMigration — up", () => {
-        test("rewrites every row and reports completed with cumulative counts", async () => {
+        it("rewrites every row and reports completed with cumulative counts", async () => {
             expect.assertions(2);
 
             const writer = setupWriter();
@@ -87,7 +87,7 @@ describe("runDataMigration", () => {
             expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
 
-        test("counts a row whose transform returns undefined as processed but not changed", async () => {
+        it("counts a row whose transform returns undefined as processed but not changed", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -107,7 +107,7 @@ describe("runDataMigration", () => {
             expect((await allUsers(writer)).map((document) => document["flagged"])).toEqual([undefined, undefined, true, true, true]);
         });
 
-        test("persists progress to the reserved state table", async () => {
+        it("persists progress to the reserved state table", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -123,7 +123,7 @@ describe("runDataMigration", () => {
             expect(row?.["updated_at"]).toBe(1_800_000_000_000);
         });
 
-        test("invokes onBatch once per persisted batch with climbing progress", async () => {
+        it("invokes onBatch once per persisted batch with climbing progress", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -150,7 +150,7 @@ describe("runDataMigration", () => {
             ]);
         });
 
-        test("does not invoke onBatch on a dry run (nothing is persisted)", async () => {
+        it("does not invoke onBatch on a dry run (nothing is persisted)", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -173,7 +173,7 @@ describe("runDataMigration", () => {
             expect(calls).toBe(0);
         });
 
-        test("a throwing onBatch is swallowed: the run completes and is not marked failed", async () => {
+        it("a throwing onBatch is swallowed: the run completes and is not marked failed", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -199,7 +199,7 @@ describe("runDataMigration", () => {
     });
 
     describe("runDataMigration — resume", () => {
-        test("a maxBatches-limited run resumes and visits each row exactly once", async () => {
+        it("a maxBatches-limited run resumes and visits each row exactly once", async () => {
             expect.assertions(7);
 
             const writer = setupWriter();
@@ -222,7 +222,7 @@ describe("runDataMigration", () => {
             expect((await allUsers(writer)).map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
 
-        test("re-running a completed migration is a no-op that returns the stored counts", async () => {
+        it("re-running a completed migration is a no-op that returns the stored counts", async () => {
             expect.assertions(2);
 
             const writer = setupWriter();
@@ -239,7 +239,7 @@ describe("runDataMigration", () => {
     });
 
     describe("runDataMigration — down", () => {
-        test("reverses via the down transform, discarding the completed up state", async () => {
+        it("reverses via the down transform, discarding the completed up state", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -247,10 +247,10 @@ describe("runDataMigration", () => {
             await seed(writer);
 
             const migration: DataMigrationLike = {
-                down: (document) => ({ ...document, version: Number(document["version"]) - 1 }),
+                down: (document) => { return { ...document, version: Number(document["version"]) - 1 }; },
                 id: "versioned",
                 table: "users",
-                up: (document) => ({ ...document, version: Number(document["version"]) + 1 }),
+                up: (document) => { return { ...document, version: Number(document["version"]) + 1 }; },
             };
 
             await runDataMigration({ migration, sql: harness.sql, writer });
@@ -261,7 +261,7 @@ describe("runDataMigration", () => {
             expect(stateRow("versioned")?.["direction"]).toBe("down");
         });
 
-        test("throws when the requested direction has no transform", async () => {
+        it("throws when the requested direction has no transform", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -273,7 +273,7 @@ describe("runDataMigration", () => {
     });
 
     describe("runDataMigration — dryRun", () => {
-        test("previews counts without rewriting rows or creating the state table", async () => {
+        it("previews counts without rewriting rows or creating the state table", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -294,7 +294,7 @@ describe("runDataMigration", () => {
     });
 
     describe("runDataMigration — failure", () => {
-        test("persists a failed state with partial counts and rethrows", async () => {
+        it("persists a failed state with partial counts and rethrows", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();

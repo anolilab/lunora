@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { CirrusRouteHandler, HttpActionCtx } from "../src/index.js";
 import { CirrusError, httpRoute, httpRouter, v } from "../src/index.js";
@@ -44,7 +44,7 @@ const readSse = async (response: Response): Promise<{ events: { data: unknown; e
 };
 
 describe("httpRoute stream() terminal", () => {
-    test("returns text/event-stream with data frames + a terminal event:complete", async () => {
+    it("returns text/event-stream with data frames + a terminal event:complete", async () => {
         expect.hasAssertions();
 
         const route = httpRoute.get("/api/ticks").stream(async function* ticksGen() {
@@ -64,7 +64,7 @@ describe("httpRoute stream() terminal", () => {
         expect(events.slice(0, 3).map((e) => e.data)).toEqual([{ tick: 1 }, { tick: 2 }, { tick: 3 }]);
     });
 
-    test("coerces searchParams + params and routes them through the stream handler", async () => {
+    it("coerces searchParams + params and routes them through the stream handler", async () => {
         expect.hasAssertions();
 
         const route = httpRoute
@@ -87,7 +87,7 @@ describe("httpRoute stream() terminal", () => {
         ]);
     });
 
-    test("surfaces a thrown CirrusError as an event:error frame", async () => {
+    it("surfaces a thrown CirrusError as an event:error frame", async () => {
         expect.assertions(2);
 
         // eslint-disable-next-line require-yield, sonarjs/generator-without-yield -- intentional: this generator only throws.
@@ -103,7 +103,7 @@ describe("httpRoute stream() terminal", () => {
         expect(error?.data).toMatchObject({ code: "FORBIDDEN", message: "nope" });
     });
 
-    test("returns 400 when search-param decoding fails (rejection happens before the stream starts)", async () => {
+    it("returns 400 when search-param decoding fails (rejection happens before the stream starts)", async () => {
         expect.assertions(1);
 
         const route = httpRoute

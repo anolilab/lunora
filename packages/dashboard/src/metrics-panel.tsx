@@ -1,16 +1,19 @@
 import { useCirrus } from "@cirrus/react";
-import { type ReactElement, useCallback, useEffect, useRef, useState } from "react";
+import type { ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ADMIN_FUNCTIONS, type ShardMetrics } from "./admin.js";
+import type { ShardMetrics } from "./admin.js";
+import { ADMIN_FUNCTIONS } from "./admin.js";
 import { adminRef, callOptions, errorMessage, formatBytes } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
-import { aggregateMetrics, type ShardMetricsResult, shardsToAggregate } from "./metrics-aggregate.js";
+import type { ShardMetricsResult } from "./metrics-aggregate.js";
+import { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate.js";
 import { loadRecentShards, recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 
-export interface MetricsPanelProps {
+interface MetricsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
@@ -29,7 +32,7 @@ const SPARK_HEIGHT = 24;
  * {@link SPARK_WIDTH} x {@link SPARK_HEIGHT} viewbox. A flat series renders along
  * the vertical midline.
  */
-const sparklinePoints = (series: readonly number[]): string => {
+const sparklinePoints = (series: ReadonlyArray<number>): string => {
     if (series.length < 2) {
         return "";
     }
@@ -57,14 +60,14 @@ const formatDuration = (ms: number): string => {
     const seconds = totalSeconds % 60;
 
     if (hours > 0) {
-        return `${hours}h ${minutes}m`;
+        return `${hours.toString()}h ${minutes.toString()}m`;
     }
 
     if (minutes > 0) {
-        return `${minutes}m ${seconds}s`;
+        return `${minutes.toString()}m ${seconds.toString()}s`;
     }
 
-    return `${seconds}s`;
+    return `${seconds.toString()}s`;
 };
 
 /** Cache hit-rate as a percentage string, or `—` when there's been no traffic. */
@@ -96,7 +99,7 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
     const [error, setError] = useState<null | string>(null);
     const { live, liveError, setLiveError, toggle } = useLiveToggle();
-    const [history, setHistory] = useState<readonly number[]>([]);
+    const [history, setHistory] = useState<ReadonlyArray<number>>([]);
 
     // Avoid setState after unmount and overlapping in-flight one-shot loads.
     const mountedRef = useRef(true);
@@ -283,7 +286,7 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                             height={SPARK_HEIGHT}
                             preserveAspectRatio="none"
                             role="img"
-                            viewBox={`0 0 ${SPARK_WIDTH} ${SPARK_HEIGHT}`}
+                            viewBox={`0 0 ${SPARK_WIDTH.toString()} ${SPARK_HEIGHT.toString()}`}
                             width={SPARK_WIDTH}
                         >
                             <polyline fill="none" points={sparklinePoints(history)} stroke="currentColor" strokeWidth={1} />
@@ -322,7 +325,7 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                     <dd data-testid="mt-cache">
                         {metrics.cache === null
                             ? "no cache configured"
-                            : `${hitRate(metrics.cache.hits, metrics.cache.misses)} (${metrics.cache.entries} entries)`}
+                            : `${hitRate(metrics.cache.hits, metrics.cache.misses)} (${metrics.cache.entries.toString()} entries)`}
                     </dd>
                 </dl>
             )}
@@ -332,7 +335,7 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
                     <dl data-testid="mt-aggregate-stats">
                         <dt>Shards</dt>
                         <dd data-testid="mt-agg-shards">
-                            {aggregate.reachable} reachable{aggregate.failed > 0 ? `, ${aggregate.failed} unreachable` : ""}
+                            {aggregate.reachable} reachable{aggregate.failed > 0 ? `, ${aggregate.failed.toString()} unreachable` : ""}
                         </dd>
 
                         <dt>Total requests</dt>
@@ -379,3 +382,5 @@ export function MetricsPanel({ initialShardKey }: MetricsPanelProps): ReactEleme
         </div>
     );
 }
+
+export type { MetricsPanelProps };

@@ -1,12 +1,12 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { LogEntry } from "../src/log-buffer.js";
 import { LogBuffer } from "../src/log-buffer.js";
 
-const entry = (message: string, timestamp: number): LogEntry => ({ level: "error", message, timestamp });
+const entry = (message: string, timestamp: number): LogEntry => { return { level: "error", message, timestamp }; };
 
 describe("logBuffer", () => {
-    test("returns entries newest-first", () => {
+    it("returns entries newest-first", () => {
         expect.assertions(2);
 
         const buffer = new LogBuffer();
@@ -19,7 +19,7 @@ describe("logBuffer", () => {
         expect(buffer.entries().map((event) => event.message)).toEqual(["third", "second", "first"]);
     });
 
-    test("evicts the oldest entry once capacity is exceeded", () => {
+    it("evicts the oldest entry once capacity is exceeded", () => {
         expect.assertions(2);
 
         const buffer = new LogBuffer(2);
@@ -33,7 +33,7 @@ describe("logBuffer", () => {
         expect(buffer.entries().map((event) => event.message)).toEqual(["c", "b"]);
     });
 
-    test("clear() empties the buffer", () => {
+    it("clear() empties the buffer", () => {
         expect.assertions(2);
 
         const buffer = new LogBuffer();
@@ -45,7 +45,7 @@ describe("logBuffer", () => {
         expect(buffer.entries()).toEqual([]);
     });
 
-    test("entries() returns a fresh array the caller can mutate safely", () => {
+    it("entries() returns a fresh array the caller can mutate safely", () => {
         expect.assertions(1);
 
         const buffer = new LogBuffer();
@@ -59,7 +59,7 @@ describe("logBuffer", () => {
         expect(buffer.size).toBe(1);
     });
 
-    test("falls back to the default capacity for a non-positive bound", () => {
+    it("falls back to the default capacity for a non-positive bound", () => {
         expect.assertions(1);
 
         const buffer = new LogBuffer(0);

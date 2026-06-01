@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike, FunctionRegistryLike } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
@@ -10,8 +10,8 @@ const fakeCtx: ExecutionContextLike = {
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => ({ fetch: async () => new Response("not used", { status: 200 }) }),
-    idFromName: (name) => ({ __name: name }),
+    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
+    idFromName: (name) => { return { __name: name }; },
 };
 
 const ADMIN_TOKEN = "admin-bear";
@@ -24,7 +24,7 @@ const REGISTRY: FunctionRegistryLike = {
 };
 
 describe("createWorker — functions admin endpoint", () => {
-    test("rejects without a valid admin bearer (403)", async () => {
+    it("rejects without a valid admin bearer (403)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, functions: REGISTRY, shardDO: noopNamespace });
@@ -34,7 +34,7 @@ describe("createWorker — functions admin endpoint", () => {
         expect(response.status).toBe(403);
     });
 
-    test("reports FUNCTIONS_NOT_CONFIGURED when no registry is bound (400)", async () => {
+    it("reports FUNCTIONS_NOT_CONFIGURED when no registry is bound (400)", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
@@ -52,7 +52,7 @@ describe("createWorker — functions admin endpoint", () => {
         expect(body.error.code).toBe("FUNCTIONS_NOT_CONFIGURED");
     });
 
-    test("returns public functions sorted by path, omitting internal ones", async () => {
+    it("returns public functions sorted by path, omitting internal ones", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, functions: REGISTRY, shardDO: noopNamespace });
@@ -73,7 +73,7 @@ describe("createWorker — functions admin endpoint", () => {
         });
     });
 
-    test("rejects non-GET (405)", async () => {
+    it("rejects non-GET (405)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, functions: REGISTRY, shardDO: noopNamespace });

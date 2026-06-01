@@ -1,11 +1,12 @@
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { FunctionRunner } from "../src/function-runner.js";
 import type { FunctionDescriptor } from "../src/index.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
 
 const functions: FunctionDescriptor[] = [
     { kind: "query", path: "messages:list" },
@@ -20,23 +21,23 @@ const renderRunner = (mock: MockClientHooks): ReactElement => (
 );
 
 describe("functionRunner", () => {
-    test("defaults to the first function and lists all of them", () => {
+    it("defaults to the first function and lists all of them", () => {
         expect.assertions(2);
 
         const mock = createMockClient();
 
         render(renderRunner(mock));
 
-        const select = screen.getByTestId("function-select") as HTMLSelectElement;
+        const select = screen.getByTestId<HTMLSelectElement>("function-select");
 
         expect(select.value).toBe("messages:list");
         expect(screen.getAllByRole("option")).toHaveLength(3);
     });
 
-    test("runs the selected query with parsed JSON args and renders the result", async () => {
+    it("runs the selected query with parsed JSON args and renders the result", async () => {
         expect.assertions(6);
 
-        const mock = createMockClient({ query: () => ({ rows: [1, 2] }) });
+        const mock = createMockClient({ query: () => { return { rows: [1, 2] }; } });
 
         render(renderRunner(mock));
 
@@ -56,10 +57,10 @@ describe("functionRunner", () => {
         expect(mock.mutation).not.toHaveBeenCalled();
     });
 
-    test("routes to client.mutation when the selected function is a mutation", async () => {
+    it("routes to client.mutation when the selected function is a mutation", async () => {
         expect.assertions(2);
 
-        const mock = createMockClient({ mutation: () => ({ ok: true }) });
+        const mock = createMockClient({ mutation: () => { return { ok: true }; } });
 
         render(renderRunner(mock));
 
@@ -78,7 +79,7 @@ describe("functionRunner", () => {
         expect(mock.query).not.toHaveBeenCalled();
     });
 
-    test("forwards a non-empty shard key in the call options", async () => {
+    it("forwards a non-empty shard key in the call options", async () => {
         expect.assertions(1);
 
         const mock = createMockClient({ query: () => null });
@@ -99,7 +100,7 @@ describe("functionRunner", () => {
         expect(call[2]).toEqual({ shardKey: "room-1" });
     });
 
-    test("reports invalid JSON without calling the client", () => {
+    it("reports invalid JSON without calling the client", () => {
         expect.assertions(2);
 
         const mock = createMockClient();
@@ -113,7 +114,7 @@ describe("functionRunner", () => {
         expect(mock.query).not.toHaveBeenCalled();
     });
 
-    test("surfaces a thrown server error in the error region", async () => {
+    it("surfaces a thrown server error in the error region", async () => {
         expect.assertions(2);
 
         const mock = createMockClient({
@@ -132,7 +133,7 @@ describe("functionRunner", () => {
         expect(screen.queryByTestId("result")).toBeNull();
     });
 
-    test("auto-discovers functions from the client when none are supplied", async () => {
+    it("auto-discovers functions from the client when none are supplied", async () => {
         expect.assertions(2);
 
         const mock = createMockClient({ listFunctions: () => functions });
@@ -150,10 +151,10 @@ describe("functionRunner", () => {
         });
 
         expect(mock.listFunctions).toHaveBeenCalledWith();
-        expect((screen.getByTestId("function-select") as HTMLSelectElement).value).toBe("messages:list");
+        expect(screen.getByTestId<HTMLSelectElement>("function-select").value).toBe("messages:list");
     });
 
-    test("surfaces a discovery error", async () => {
+    it("surfaces a discovery error", async () => {
         expect.assertions(1);
 
         const mock = createMockClient();
@@ -171,7 +172,7 @@ describe("functionRunner", () => {
         expect(discoverError.textContent).toBe("ADMIN_FORBIDDEN");
     });
 
-    test("hides the history list until a run has happened", () => {
+    it("hides the history list until a run has happened", () => {
         expect.assertions(1);
 
         const mock = createMockClient();
@@ -181,10 +182,10 @@ describe("functionRunner", () => {
         expect(screen.queryByTestId("fn-history")).toBeNull();
     });
 
-    test("appends a history entry after a successful run", async () => {
+    it("appends a history entry after a successful run", async () => {
         expect.assertions(3);
 
-        const mock = createMockClient({ query: () => ({ rows: [1] }) });
+        const mock = createMockClient({ query: () => { return { rows: [1] }; } });
 
         render(renderRunner(mock));
 
@@ -199,7 +200,7 @@ describe("functionRunner", () => {
         expect(screen.getByTestId("fn-history-status-0").textContent).toBe("✓");
     });
 
-    test("marks a failed run with an error indicator in history", async () => {
+    it("marks a failed run with an error indicator in history", async () => {
         expect.assertions(1);
 
         const mock = createMockClient({
@@ -217,10 +218,10 @@ describe("functionRunner", () => {
         expect(indicator.textContent).toBe("✗");
     });
 
-    test("prepends newest runs and caps the history at ten entries", async () => {
+    it("prepends newest runs and caps the history at ten entries", async () => {
         expect.assertions(2);
 
-        const mock = createMockClient({ mutation: () => ({ ok: true }), query: () => null });
+        const mock = createMockClient({ mutation: () => { return { ok: true }; }, query: () => null });
 
         render(renderRunner(mock));
 
@@ -250,10 +251,10 @@ describe("functionRunner", () => {
         expect(rows[0]?.textContent).toContain("messages:send (mutation)");
     });
 
-    test("loading a history entry restores its path, args and shard key", async () => {
+    it("loading a history entry restores its path, args and shard key", async () => {
         expect.assertions(4);
 
-        const mock = createMockClient({ mutation: () => ({ ok: true }), query: () => null });
+        const mock = createMockClient({ mutation: () => { return { ok: true }; }, query: () => null });
 
         render(renderRunner(mock));
 
@@ -272,9 +273,9 @@ describe("functionRunner", () => {
 
         fireEvent.click(screen.getByTestId("fn-history-load-0"));
 
-        expect((screen.getByTestId("function-select") as HTMLSelectElement).value).toBe("messages:send");
-        expect((screen.getByTestId("args-input") as HTMLTextAreaElement).value).toBe('{ "body": "hi" }');
-        expect((screen.getByTestId("shard-input") as HTMLInputElement).value).toBe("room-7");
+        expect(screen.getByTestId<HTMLSelectElement>("function-select").value).toBe("messages:send");
+        expect(screen.getByTestId<HTMLTextAreaElement>("args-input").value).toBe('{ "body": "hi" }');
+        expect(screen.getByTestId<HTMLInputElement>("shard-input").value).toBe("room-7");
         expect(screen.getByTestId("fn-history-status-0").textContent).toBe("✓");
     });
 });

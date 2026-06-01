@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { backfillRankIndexes, createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -32,7 +32,8 @@ const activeByChannel: RankIndexDefinitionLike = {
     where: { archived: false },
 };
 
-const makeSchema = (...indexes: RankIndexDefinitionLike[]): SchemaLike => ({
+const makeSchema = (...indexes: RankIndexDefinitionLike[]): SchemaLike => {
+ return {
     tables: {
         messages: {
             indexes: [],
@@ -44,7 +45,8 @@ const makeSchema = (...indexes: RankIndexDefinitionLike[]): SchemaLike => ({
             },
         },
     },
-});
+};
+};
 
 let harness: ReturnType<typeof createSqliteExec>;
 
@@ -64,7 +66,7 @@ describe("ctx-db rank", () => {
     });
 
     describe("rankIndex runtime", () => {
-        test("rank() returns 1-based position + partition total within partition", async () => {
+        it("rank() returns 1-based position + partition total within partition", async () => {
             expect.assertions(4);
 
             const writer = setupWriter(makeSchema(byChannelByCreation));
@@ -80,7 +82,7 @@ describe("ctx-db rank", () => {
             await expect(writer.rank("messages", "byChannel", { row: "m4" })).resolves.toEqual({ position: 1, total: 1 });
         });
 
-        test("rank() accepts a row document instead of an id", async () => {
+        it("rank() accepts a row document instead of an id", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byScoreDesc));
@@ -93,7 +95,7 @@ describe("ctx-db rank", () => {
             await expect(writer.rank("messages", "leaderboard", { row: doc! })).resolves.toEqual({ position: 1, total: 2 });
         });
 
-        test("rank() returns null when the row isn't in the index", async () => {
+        it("rank() returns null when the row isn't in the index", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byChannelByCreation));
@@ -103,7 +105,7 @@ describe("ctx-db rank", () => {
             await expect(writer.rank("messages", "byChannel", { row: "does-not-exist" })).resolves.toBeNull();
         });
 
-        test("desc sort puts the highest value first", async () => {
+        it("desc sort puts the highest value first", async () => {
             expect.assertions(3);
 
             const writer = setupWriter(makeSchema(byScoreDesc));
@@ -117,7 +119,7 @@ describe("ctx-db rank", () => {
             await expect(writer.rank("messages", "leaderboard", { row: "m1" })).resolves.toEqual({ position: 3, total: 3 });
         });
 
-        test("insert / update / delete maintains the rank companion atomically", async () => {
+        it("insert / update / delete maintains the rank companion atomically", async () => {
             expect.assertions(5);
 
             const writer = setupWriter(makeSchema(byChannelByCreation));
@@ -140,7 +142,7 @@ describe("ctx-db rank", () => {
             await expect(writer.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 1, total: 1 });
         });
 
-        test("static `where` filters rows out of the index", async () => {
+        it("static `where` filters rows out of the index", async () => {
             expect.assertions(5);
 
             const writer = setupWriter(makeSchema(activeByChannel));
@@ -160,7 +162,7 @@ describe("ctx-db rank", () => {
             await expect(writer.rank("messages", "activeByChannel", { row: "m3" })).resolves.toEqual({ position: 1, total: 1 });
         });
 
-        test("rank() returns null when the requested partition doesn't match the row's stored partition", async () => {
+        it("rank() returns null when the requested partition doesn't match the row's stored partition", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byChannelByCreation));
@@ -172,7 +174,7 @@ describe("ctx-db rank", () => {
             await expect(writer.rank("messages", "byChannel", { row: "m1", where: { channelId: "c2" } })).resolves.toBeNull();
         });
 
-        test("baseWhere participates identically to aggregates", async () => {
+        it("baseWhere participates identically to aggregates", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byChannelByCreation));
@@ -183,7 +185,7 @@ describe("ctx-db rank", () => {
             await expect(writer.rank("messages", "byChannel", { baseWhere: { channelId: "c1" }, row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
         });
 
-        test("restrictsCounts throws COUNT_RLS_UNSUPPORTED — same seam as count/aggregate", async () => {
+        it("restrictsCounts throws COUNT_RLS_UNSUPPORTED — same seam as count/aggregate", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byChannelByCreation));
@@ -196,7 +198,7 @@ describe("ctx-db rank", () => {
             });
         });
 
-        test("lazy backfill rebuilds the companion when rows pre-existed the index", async () => {
+        it("lazy backfill rebuilds the companion when rows pre-existed the index", async () => {
             expect.assertions(2);
 
             // Set up the schema with NO rank index, insert rows, then swap in the
@@ -217,7 +219,7 @@ describe("ctx-db rank", () => {
             await expect(writer2.rank("messages", "byChannel", { row: "m2" })).resolves.toEqual({ position: 2, total: 2 });
         });
 
-        test("explicit backfillRankIndexes is idempotent and populates empty companions", async () => {
+        it("explicit backfillRankIndexes is idempotent and populates empty companions", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema());
@@ -235,7 +237,7 @@ describe("ctx-db rank", () => {
             await expect(writer2.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
         });
 
-        test("rankPage walks the companion in declared sort order", async () => {
+        it("rankPage walks the companion in declared sort order", async () => {
             expect.assertions(3);
 
             const writer = setupWriter(makeSchema(byScoreDesc));
@@ -251,7 +253,7 @@ describe("ctx-db rank", () => {
             expect(page.continueCursor).toBeNull();
         });
 
-        test("rankPage paginates with cursor + take", async () => {
+        it("rankPage paginates with cursor + take", async () => {
             expect.assertions(5);
 
             const writer = setupWriter(makeSchema(byScoreDesc));
@@ -272,7 +274,7 @@ describe("ctx-db rank", () => {
             expect(second.isDone).toBe(false);
         });
 
-        test("rankPage scoped by partition `where`", async () => {
+        it("rankPage scoped by partition `where`", async () => {
             expect.assertions(1);
 
             const writer = setupWriter(makeSchema(byChannelByCreation));
@@ -286,7 +288,7 @@ describe("ctx-db rank", () => {
             expect(page.page.map((doc) => doc["_id"])).toEqual(["m1", "m3"]);
         });
 
-        test("unknown rankIndex name throws", async () => {
+        it("unknown rankIndex name throws", async () => {
             expect.assertions(2);
 
             const writer = setupWriter(makeSchema(byChannelByCreation));

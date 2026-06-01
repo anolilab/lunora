@@ -5,9 +5,10 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createShardCtxDb, runShardMigrations, type SchemaLike, type SqlExec } from "../src/ctx-db.js";
+import type { SchemaLike, SqlExec } from "../src/ctx-db.js";
+import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
 import { ReactiveCache, reactiveCacheKey } from "../src/reactive-cache.js";
 import type { ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
@@ -64,7 +65,7 @@ const newDb = () => {
 };
 
 describe("ctx-db + reactiveCache integration", () => {
-    test("insert invalidates the inserted row id AND the table's *scan deps", async () => {
+    it("insert invalidates the inserted row id AND the table's *scan deps", async () => {
         expect.assertions(3);
 
         const sql = newDb();
@@ -78,7 +79,7 @@ describe("ctx-db + reactiveCache integration", () => {
         const tracker = new Set([`users:${u1}`]);
         const scanTracker = new Set(["users:*scan"]);
 
-        await cache.run("byId", tracker, async () => ({ name: "alice" }));
+        await cache.run("byId", tracker, async () => { return { name: "alice" }; });
         await cache.run("listAll", scanTracker, async () => [{ name: "alice" }]);
 
         expect(cache.size().entries).toBe(2);
@@ -99,7 +100,7 @@ describe("ctx-db + reactiveCache integration", () => {
         expect(cached).toEqual({ name: "alice" });
     });
 
-    test("patch invalidates the row's per-id deps AND *scan entries", async () => {
+    it("patch invalidates the row's per-id deps AND *scan entries", async () => {
         expect.assertions(1);
 
         const sql = newDb();
@@ -107,7 +108,7 @@ describe("ctx-db + reactiveCache integration", () => {
         const writer = createShardCtxDb({ sql, schema, cache });
         const u1 = await writer.insert("users", { name: "alice" });
 
-        await cache.run("byId", new Set([`users:${u1}`]), async () => ({ name: "alice" }));
+        await cache.run("byId", new Set([`users:${u1}`]), async () => { return { name: "alice" }; });
         await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
 
         await writer.patch(u1, { name: "ALICE" });
@@ -116,7 +117,7 @@ describe("ctx-db + reactiveCache integration", () => {
         expect(cache.size().entries).toBe(0);
     });
 
-    test("delete invalidates the row's per-id deps AND *scan entries", async () => {
+    it("delete invalidates the row's per-id deps AND *scan entries", async () => {
         expect.assertions(1);
 
         const sql = newDb();
@@ -124,7 +125,7 @@ describe("ctx-db + reactiveCache integration", () => {
         const writer = createShardCtxDb({ sql, schema, cache });
         const u1 = await writer.insert("users", { name: "alice" });
 
-        await cache.run("byId", new Set([`users:${u1}`]), async () => ({ name: "alice" }));
+        await cache.run("byId", new Set([`users:${u1}`]), async () => { return { name: "alice" }; });
         await cache.run("scan", new Set(["users:*scan"]), async () => [{ name: "alice" }]);
 
         await writer.delete(u1);
@@ -132,7 +133,7 @@ describe("ctx-db + reactiveCache integration", () => {
         expect(cache.size().entries).toBe(0);
     });
 
-    test("writes to one table do not blow cache entries on another table", async () => {
+    it("writes to one table do not blow cache entries on another table", async () => {
         expect.assertions(2);
 
         const sql = newDb();
@@ -154,7 +155,7 @@ describe("ctx-db + reactiveCache integration", () => {
         expect(survivor).toEqual([]);
     });
 
-    test("reads via writer.get stamp per-id deps on the configured ReadHook", async () => {
+    it("reads via writer.get stamp per-id deps on the configured ReadHook", async () => {
         expect.assertions(1);
 
         const sql = newDb();
@@ -174,7 +175,7 @@ describe("ctx-db + reactiveCache integration", () => {
         expect(reads).toEqual([{ table: "users", idOrScan: u1 }]);
     });
 
-    test("findMany without where stamps *scan, with where stamps per-row ids", async () => {
+    it("findMany without where stamps *scan, with where stamps per-row ids", async () => {
         expect.assertions(3);
 
         const sql = newDb();
@@ -203,7 +204,7 @@ describe("ctx-db + reactiveCache integration", () => {
         expect(reads).not.toContainEqual({ table: "users", idOrScan: b });
     });
 
-    test("count() registers *scan deps so any write to the table invalidates the cached count", async () => {
+    it("count() registers *scan deps so any write to the table invalidates the cached count", async () => {
         expect.assertions(1);
 
         const sql = newDb();
@@ -224,7 +225,7 @@ describe("ctx-db + reactiveCache integration", () => {
         expect(reads).toEqual([{ table: "users", idOrScan: "*scan" }]);
     });
 
-    test("rank() and rankPage() register *scan deps so any write shifts the cached position", async () => {
+    it("rank() and rankPage() register *scan deps so any write shifts the cached position", async () => {
         expect.assertions(2);
 
         // Rank position is `count(rows-strictly-before) + 1` — any insert /
@@ -286,7 +287,8 @@ interface FakeWebSocket {
     serializeAttachment: (value: unknown) => void;
 }
 
-const createFakeWebSocket = (): FakeWebSocket => ({
+const createFakeWebSocket = (): FakeWebSocket => {
+ return {
     sent: [],
     attachment: undefined,
     send(data: string) {
@@ -299,7 +301,8 @@ const createFakeWebSocket = (): FakeWebSocket => ({
     deserializeAttachment() {
         return this.attachment;
     },
-});
+};
+};
 
 const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
     const sockets: FakeWebSocket[] = [];
@@ -369,7 +372,7 @@ class CachingShard extends ShardDO {
             this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
 
             return handler(args);
-        }).then((result) => ({ result, tables: new Set(["users"]) }));
+        }).then((result) => { return { result, tables: new Set(["users"]) }; });
     }
 
     public registerSocket(ws: FakeWebSocket, attachment: SocketAttachment = { subs: {} }): void {
@@ -409,7 +412,7 @@ describe("shardDO + reactiveCache: dispatch path", () => {
         shard = new CachingShard(state, {}, { reactiveCache: {} });
     });
 
-    test("cache hit: identical query+args runs handler once across two RPC dispatches", async () => {
+    it("cache hit: identical query+args runs handler once across two RPC dispatches", async () => {
         expect.assertions(1);
 
         shard.handlers.set("users:list", async () => {
@@ -424,7 +427,7 @@ describe("shardDO + reactiveCache: dispatch path", () => {
         expect(shard.execCount.get("users:list")).toBe(1);
     });
 
-    test("args sensitivity: different args go to different cache slots", async () => {
+    it("args sensitivity: different args go to different cache slots", async () => {
         expect.assertions(1);
 
         shard.handlers.set("users:list", async (args) => {
@@ -440,14 +443,12 @@ describe("shardDO + reactiveCache: dispatch path", () => {
         expect(shard.execCount.get("users:list")).toBe(2);
     });
 
-    test("opt-out: when no ReactiveCacheOptions is supplied, every dispatch re-runs (today's default)", async () => {
+    it("opt-out: when no ReactiveCacheOptions is supplied, every dispatch re-runs (today's default)", async () => {
         expect.assertions(1);
 
         const uncached = new CachingShard(state, {});
 
-        uncached.handlers.set("users:list", async () => {
-            return [{ name: "alice" }];
-        });
+        uncached.handlers.set("users:list", async () => [{ name: "alice" }]);
 
         await uncached.handleRpc("users:list", {});
         await uncached.handleRpc("users:list", {});
@@ -455,7 +456,7 @@ describe("shardDO + reactiveCache: dispatch path", () => {
         expect(uncached.execCount.get("users:list")).toBe(2);
     });
 
-    test("rLS interaction: restrictsCounts + baseWhere bake into the cache key", async () => {
+    it("rLS interaction: restrictsCounts + baseWhere bake into the cache key", async () => {
         expect.assertions(1);
 
         shard.handlers.set("users:count", async () => 1);
@@ -478,7 +479,7 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
         shard = new CachingShard(state, {}, { reactiveCache: {} });
     });
 
-    test("subscriber registered on a cached query gets a re-run + push when a mutation invalidates", async () => {
+    it("subscriber registered on a cached query gets a re-run + push when a mutation invalidates", async () => {
         expect.assertions(3);
 
         let counter = 0;
@@ -529,7 +530,7 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
         expect(lastPayload).toMatchObject({ id: "sub-a", type: "data" });
     });
 
-    test("invalidation BEFORE broadcast: re-run after mutation sees post-write state", async () => {
+    it("invalidation BEFORE broadcast: re-run after mutation sees post-write state", async () => {
         expect.assertions(1);
 
         const sequence: string[] = [];

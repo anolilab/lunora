@@ -58,7 +58,7 @@ const getStringArrayProperty = (object: ObjectLiteralExpression, key: string): s
 const asMetric = (value: string | undefined): VectorIndexIR["metric"] => (value && VECTOR_METRICS.has(value) ? (value as VectorIndexIR["metric"]) : undefined);
 
 const asOnDelete = (value: string | undefined): RelationIR["onDelete"] =>
-    value && ON_DELETE_ACTIONS.has(value) ? (value as RelationIR["onDelete"]) : undefined;
+    (value && ON_DELETE_ACTIONS.has(value) ? (value as RelationIR["onDelete"]) : undefined);
 
 /**
  * Parse the `.relations((r) => ({ ... }))` argument. The arrow's body is an
@@ -343,7 +343,7 @@ const parseStandaloneVectorIndexes = (object: ObjectLiteralExpression): VectorIn
 };
 
 /**
- * Load `<projectRoot>/cirrus/schema.ts`, find `defineSchema({...})`, and
+ * Load `&lt;projectRoot>/cirrus/schema.ts`, find `defineSchema({...})`, and
  * return a structural IR. Throws if the file or call cannot be found.
  */
 export const discoverSchema = (project: Project, schemaPath: string): SchemaIR => {

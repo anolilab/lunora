@@ -1,10 +1,12 @@
 import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ADMIN_FUNCTIONS, type ShardMetrics } from "../src/admin.js";
+import type { ShardMetrics } from "../src/admin.js";
+import { ADMIN_FUNCTIONS } from "../src/admin.js";
 import { MetricsPanel } from "../src/metrics-panel.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
 
 const METRICS: ShardMetrics = {
     cache: { bytes: 2048, entries: 3, evictions: 1, hits: 8, misses: 2 },
@@ -38,7 +40,7 @@ describe("metricsPanel", () => {
         vi.useRealTimers();
     });
 
-    test("renders the health snapshot on mount", async () => {
+    it("renders the health snapshot on mount", async () => {
         expect.assertions(5);
 
         render(renderPanel(createClient()));
@@ -52,7 +54,7 @@ describe("metricsPanel", () => {
         expect(screen.getByTestId("mt-cache").textContent).toBe("80.0% (3 entries)");
     });
 
-    test("notes when no cache is configured", async () => {
+    it("notes when no cache is configured", async () => {
         expect.assertions(1);
 
         render(renderPanel(createClient({ ...METRICS, cache: null })));
@@ -62,7 +64,7 @@ describe("metricsPanel", () => {
         expect(cache.textContent).toBe("no cache configured");
     });
 
-    test("forwards the shard key on refresh", async () => {
+    it("forwards the shard key on refresh", async () => {
         expect.assertions(1);
 
         const mock = createClient();
@@ -85,7 +87,7 @@ describe("metricsPanel", () => {
         expect(lastCall[2]).toEqual({ shardKey: "room-9" });
     });
 
-    test("surfaces an error", async () => {
+    it("surfaces an error", async () => {
         expect.assertions(1);
 
         const mock = createMockClient({
@@ -101,7 +103,7 @@ describe("metricsPanel", () => {
         expect(error.textContent).toBe("ADMIN_FORBIDDEN");
     });
 
-    test("shows a sparkline placeholder before two samples exist", async () => {
+    it("shows a sparkline placeholder before two samples exist", async () => {
         expect.assertions(2);
 
         render(renderPanel(createClient()));
@@ -112,7 +114,7 @@ describe("metricsPanel", () => {
         expect(screen.queryByTestId("mt-sparkline")).toBeNull();
     });
 
-    test("toggling Live opens a getMetrics subscription", async () => {
+    it("toggling Live opens a getMetrics subscription", async () => {
         expect.assertions(2);
 
         const mock = createClient();
@@ -130,7 +132,7 @@ describe("metricsPanel", () => {
         expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.getMetrics);
     });
 
-    test("renders a sparkline once at least two live samples accumulate", async () => {
+    it("renders a sparkline once at least two live samples accumulate", async () => {
         expect.assertions(2);
 
         const mock = createClient();
@@ -150,7 +152,7 @@ describe("metricsPanel", () => {
         expect(screen.queryByTestId("mt-sparkline-empty")).toBeNull();
     });
 
-    test("surfaces a rejected admin subscription as a live-unavailable notice", async () => {
+    it("surfaces a rejected admin subscription as a live-unavailable notice", async () => {
         expect.assertions(2);
 
         const mock = createClient();
@@ -169,7 +171,7 @@ describe("metricsPanel", () => {
         expect(screen.getByTestId("mt-live-error").textContent).toContain("admin subscription requires admin authorization");
     });
 
-    test("clears the live-unavailable notice once a push succeeds", async () => {
+    it("clears the live-unavailable notice once a push succeeds", async () => {
         expect.assertions(2);
 
         const mock = createClient();
@@ -193,7 +195,7 @@ describe("metricsPanel", () => {
         expect(screen.queryByTestId("mt-live-error")).toBeNull();
     });
 
-    test("live pushes update the snapshot and stop once Live is turned off", async () => {
+    it("live pushes update the snapshot and stop once Live is turned off", async () => {
         expect.assertions(2);
 
         const mock = createClient();
@@ -219,7 +221,7 @@ describe("metricsPanel", () => {
         expect(screen.getByTestId("mt-requests").textContent).toBe("42");
     });
 
-    test("all shards aggregates getMetrics across the known shards", async () => {
+    it("all shards aggregates getMetrics across the known shards", async () => {
         expect.assertions(3);
 
         // Seed a recently-visited shard so the aggregate covers more than root.

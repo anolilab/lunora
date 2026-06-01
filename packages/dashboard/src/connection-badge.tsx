@@ -1,5 +1,6 @@
 import { useConnectionStatus } from "@cirrus/react";
-import { type ReactElement, useMemo } from "react";
+import type { ReactElement } from "react";
+import { useMemo } from "react";
 
 /** Human-readable label + dot colour per connection status. */
 const LABELS = {
@@ -23,7 +24,7 @@ const DOT_BASE_STYLE = { borderRadius: "50%", display: "inline-block", height: 8
 export function ConnectionBadge(): ReactElement {
     const status = useConnectionStatus();
     const { color, text } = LABELS[status];
-    const dotStyle = useMemo(() => ({ ...DOT_BASE_STYLE, backgroundColor: color }), [color]);
+    const dotStyle = useMemo(() => { return { ...DOT_BASE_STYLE, backgroundColor: color }; }, [color]);
 
     return (
         <span aria-live="polite" data-status={status} data-testid="dash-connection" role="status" style={WRAPPER_STYLE}>

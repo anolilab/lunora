@@ -27,7 +27,7 @@ export interface AggregateMetrics {
  * summed only over reachable shards. The combined cache hit-rate weights by each
  * shard's hits+misses so a busy shard dominates a quiet one.
  */
-export const aggregateMetrics = (results: readonly ShardMetricsResult[]): AggregateMetrics => {
+export const aggregateMetrics = (results: ReadonlyArray<ShardMetricsResult>): AggregateMetrics => {
     let totalRequests = 0;
     let totalErrors = 0;
     let totalDatabaseSize = 0;
@@ -72,7 +72,7 @@ export const aggregateMetrics = (results: readonly ShardMetricsResult[]): Aggreg
  * recently-visited shards — de-duplicated, order-stable (root first). It's a
  * best-effort "shards we know about", not every shard that exists.
  */
-export const shardsToAggregate = (current: string, recents: readonly string[]): string[] => {
+export const shardsToAggregate = (current: string, recents: ReadonlyArray<string>): string[] => {
     const seen = new Set<string>();
     const out: string[] = [];
 

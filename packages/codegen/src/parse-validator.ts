@@ -177,8 +177,8 @@ function parseValidatorCall(call: CallExpression): ValidatorIR {
             const second = args[1];
 
             return {
-                kind: "record",
                 keyType: first && Node.isExpression(first) ? parseValidator(first) : { kind: "string" },
+                kind: "record",
                 valueType: second && Node.isExpression(second) ? parseValidator(second) : { kind: "any" },
             };
         }

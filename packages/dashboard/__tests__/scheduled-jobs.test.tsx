@@ -1,10 +1,15 @@
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { ScheduledJobs, type ScheduleRecord } from "../src/scheduled-jobs.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { ScheduleRecord } from "@cirrus/client";
+
+import { ScheduledJobs } from "../src/scheduled-jobs.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
+
+const SJ_ROW = /^sj-row-/;
 
 const RECORDS: ScheduleRecord[] = [
     { args: {}, enqueuedAt: 1, functionPath: "email:send", id: "b", scheduledFor: 2000 },
@@ -14,7 +19,7 @@ const RECORDS: ScheduleRecord[] = [
 const withProvider = (mock: MockClientHooks, children: ReactNode): ReactElement => <CirrusProvider client={mock.asClient}>{children}</CirrusProvider>;
 
 describe("scheduledJobs", () => {
-    test("renders jobs soonest-due first", async () => {
+    it("renders jobs soonest-due first", async () => {
         expect.assertions(2);
 
         const loadJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => RECORDS);
@@ -23,13 +28,13 @@ describe("scheduledJobs", () => {
 
         await screen.findByTestId("sj-table");
 
-        const rows = screen.getAllByTestId(/^sj-row-/);
+        const rows = screen.getAllByTestId(SJ_ROW);
 
         expect(rows[0]?.dataset.testid).toBe("sj-row-a");
         expect(rows[1]?.dataset.testid).toBe("sj-row-b");
     });
 
-    test("shows empty state when there are no jobs", async () => {
+    it("shows empty state when there are no jobs", async () => {
         expect.assertions(1);
 
         render(withProvider(createMockClient(), <ScheduledJobs loadJobs={async () => []} />));
@@ -39,7 +44,7 @@ describe("scheduledJobs", () => {
         expect(empty).toBeDefined();
     });
 
-    test("hides cancel controls for a custom read-only loader", async () => {
+    it("hides cancel controls for a custom read-only loader", async () => {
         expect.assertions(1);
 
         render(withProvider(createMockClient(), <ScheduledJobs loadJobs={async () => RECORDS} />));
@@ -49,11 +54,11 @@ describe("scheduledJobs", () => {
         expect(screen.queryByTestId("sj-cancel-a")).toBeNull();
     });
 
-    test("cancels a job and refetches", async () => {
+    it("cancels a job and refetches", async () => {
         expect.assertions(2);
 
         const loadJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => RECORDS);
-        const cancelJob = vi.fn<() => Promise<{ cancelled: boolean }>>(async () => ({ cancelled: true }));
+        const cancelJob = vi.fn<() => Promise<{ cancelled: boolean }>>(async () => { return { cancelled: true }; });
 
         render(withProvider(createMockClient(), <ScheduledJobs cancelJob={cancelJob} loadJobs={loadJobs} />));
 
@@ -77,7 +82,7 @@ describe("scheduledJobs", () => {
         expect(loadJobs.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 
-    test("falls back to the client's scheduler admin methods", async () => {
+    it("falls back to the client's scheduler admin methods", async () => {
         expect.assertions(2);
 
         const mock = createMockClient({ listScheduledJobs: () => RECORDS });
@@ -100,7 +105,7 @@ describe("scheduledJobs", () => {
         expect(mock.cancelScheduledJob).toHaveBeenCalledWith("a");
     });
 
-    test("toggling Auto polls the loader on an interval and stops when turned off", async () => {
+    it("toggling Auto polls the loader on an interval and stops when turned off", async () => {
         expect.assertions(2);
 
         vi.useFakeTimers();
@@ -133,7 +138,7 @@ describe("scheduledJobs", () => {
         }
     });
 
-    test("live subscribes to the scheduler WS and renders pushed job lists when client-sourced", async () => {
+    it("live subscribes to the scheduler WS and renders pushed job lists when client-sourced", async () => {
         expect.assertions(3);
 
         // No custom loadJobs → the panel sources from the client, so Live uses
@@ -159,7 +164,7 @@ describe("scheduledJobs", () => {
         expect(screen.getByTestId("sj-row-pushed")).toBeDefined();
     });
 
-    test("live falls back to polling labels when a custom loadJobs is supplied", async () => {
+    it("live falls back to polling labels when a custom loadJobs is supplied", async () => {
         expect.assertions(1);
 
         const mock = createMockClient();
@@ -172,7 +177,7 @@ describe("scheduledJobs", () => {
         expect(screen.getByTestId("sj-auto").textContent).toContain("Auto");
     });
 
-    test("under Live, cancelling does not fire a redundant HTTP refetch (the WS pushes the update)", async () => {
+    it("under Live, cancelling does not fire a redundant HTTP refetch (the WS pushes the update)", async () => {
         expect.assertions(2);
 
         const mock = createMockClient({ listScheduledJobs: () => RECORDS });

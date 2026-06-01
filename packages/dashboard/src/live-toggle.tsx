@@ -12,7 +12,7 @@ export interface LiveToggleProps {
  * The **Live** toggle button plus the "Live unavailable" notice shown when an
  * admin subscription is rejected (e.g. the client carries no admin `wsToken`).
  * Rendered identically across panels; only the test-id `prefix` differs. State
- * lives in {@link useLiveToggle}.
+ * lives in `useLiveToggle`.
  */
 export function LiveToggle({ live, liveError, onToggle, prefix }: LiveToggleProps): ReactElement {
     return (

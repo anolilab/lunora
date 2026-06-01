@@ -1,11 +1,9 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import type { FanOutRequest, MigrationFanOutRequest, ShardRegistry } from "../src/query-coordinator.js";
 import {
     createQueryCoordinator,
     createStaticShardRegistry,
-    type FanOutRequest,
-    type MigrationFanOutRequest,
-    type ShardRegistry,
 } from "../src/query-coordinator.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
@@ -23,7 +21,8 @@ interface ShardSpy {
 const createShardSpy = (handler: (shardKey: string) => Promise<Response> | Response): ShardSpy => {
     const calls: ShardCall[] = [];
 
-    const stubFor = (shardKey: string) => ({
+    const stubFor = (shardKey: string) => {
+ return {
         async fetch(request: Request): Promise<Response> {
             const body: { args: Record<string, unknown>; functionPath: string } = await request.json();
             const headers: Record<string, string> = {};
@@ -36,12 +35,13 @@ const createShardSpy = (handler: (shardKey: string) => Promise<Response> | Respo
 
             return handler(shardKey);
         },
-    });
+    };
+};
 
     const namespace: ShardNamespaceLike = {
         get: (id) => stubFor((id as { __name: string }).__name),
         getByName: (name) => stubFor(name),
-        idFromName: (name) => ({ __name: name }),
+        idFromName: (name) => { return { __name: name }; },
     };
 
     return { calls, namespace };
@@ -49,15 +49,17 @@ const createShardSpy = (handler: (shardKey: string) => Promise<Response> | Respo
 
 const json = (value: unknown, init?: ResponseInit): Response => Response.json(value, { headers: { "content-type": "application/json" }, status: 200, ...init });
 
-const buildRequest = (overrides: Partial<FanOutRequest> = {}): FanOutRequest => ({
+const buildRequest = (overrides: Partial<FanOutRequest> = {}): FanOutRequest => {
+ return {
     args: {},
     fanOut: { merge: { kind: "concat" }, table: "messages" },
     functionPath: "messages:list",
     ...overrides,
-});
+};
+};
 
 describe("createStaticShardRegistry", () => {
-    test("returns the configured keys for a known table", async () => {
+    it("returns the configured keys for a known table", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
@@ -66,7 +68,7 @@ describe("createStaticShardRegistry", () => {
         expect([...keys]).toEqual(["a", "b", "c"]);
     });
 
-    test("returns empty array for unknown tables", async () => {
+    it("returns empty array for unknown tables", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a"] });
@@ -77,7 +79,7 @@ describe("createStaticShardRegistry", () => {
 });
 
 describe("createQueryCoordinator", () => {
-    test("rejects maxConcurrency < 1", () => {
+    it("rejects maxConcurrency < 1", () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({});
@@ -85,7 +87,7 @@ describe("createQueryCoordinator", () => {
         expect(() => createQueryCoordinator({ maxConcurrency: 0, registry })).toThrow(/maxConcurrency must be >= 1/);
     });
 
-    test("returns merge-strategy identity when no shards are registered", async () => {
+    it("returns merge-strategy identity when no shards are registered", async () => {
         expect.assertions(2);
 
         const registry = createStaticShardRegistry({ messages: [] });
@@ -98,7 +100,7 @@ describe("createQueryCoordinator", () => {
         expect(result).toEqual({ data: [], errors: [], failed: 0, ok: 0 });
     });
 
-    test("forwards `headers` and `args` to every shard", async () => {
+    it("forwards `headers` and `args` to every shard", async () => {
         expect.assertions(4);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -121,7 +123,7 @@ describe("createQueryCoordinator", () => {
 });
 
 describe("merge strategies", () => {
-    test("concat — flattens arrays from each shard", async () => {
+    it("concat — flattens arrays from each shard", async () => {
         expect.assertions(3);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
@@ -147,7 +149,7 @@ describe("merge strategies", () => {
         expect(result.data).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
     });
 
-    test("sum — adds numeric results across shards", async () => {
+    it("sum — adds numeric results across shards", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
@@ -167,7 +169,7 @@ describe("merge strategies", () => {
         expect(result.data).toBe(22);
     });
 
-    test("topK — picks top K rows ordered by `by` field, desc by default", async () => {
+    it("topK — picks top K rows ordered by `by` field, desc by default", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
@@ -201,7 +203,7 @@ describe("merge strategies", () => {
         ]);
     });
 
-    test("topK — supports asc direction", async () => {
+    it("topK — supports asc direction", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a"] });
@@ -219,7 +221,7 @@ describe("merge strategies", () => {
         expect(result.data).toEqual([{ x: 1 }, { x: 2 }]);
     });
 
-    test("first — returns the first successful shard's value", async () => {
+    it("first — returns the first successful shard's value", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -239,7 +241,7 @@ describe("merge strategies", () => {
 });
 
 describe("error handling", () => {
-    test("non-2xx response from a shard becomes a ShardError, others still merge", async () => {
+    it("non-2xx response from a shard becomes a ShardError, others still merge", async () => {
         expect.assertions(7);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
@@ -264,7 +266,7 @@ describe("error handling", () => {
         expect(result.data).toEqual([{ shard: "a" }, { shard: "c" }]);
     });
 
-    test("thrown error from a shard becomes a ShardError", async () => {
+    it("thrown error from a shard becomes a ShardError", async () => {
         expect.assertions(3);
 
         const registry = createStaticShardRegistry({ messages: ["a"] });
@@ -281,7 +283,7 @@ describe("error handling", () => {
         expect(result.errors[0]?.timedOut).toBe(false);
     });
 
-    test("slow shard hits the per-shard timeout", async () => {
+    it("slow shard hits the per-shard timeout", async () => {
         expect.assertions(5);
 
         vi.useFakeTimers();
@@ -318,19 +320,21 @@ describe("error handling", () => {
 });
 
 describe("orchestrateMigration", () => {
-    const migrationRequest = (overrides: Partial<MigrationFanOutRequest> = {}): MigrationFanOutRequest => ({
+    const migrationRequest = (overrides: Partial<MigrationFanOutRequest> = {}): MigrationFanOutRequest => {
+ return {
         args: { id: "backfill" },
         functionPath: "__cirrus_admin__:runMigration",
         headers: { authorization: "Bearer admin" },
         table: "messages",
         ...overrides,
-    });
+    };
+};
 
     /** Mimic a shard's admin `runMigration` envelope: `{ result: MigrationRunResult }`. */
     const runResult = (changed: number, processed: number, status = "completed"): Response =>
         json({ result: { changed, cursor: null, direction: "up", dryRun: false, id: "backfill", processed, status } });
 
-    test("forwards the admin bearer and migration args to every shard", async () => {
+    it("forwards the admin bearer and migration args to every shard", async () => {
         expect.assertions(4);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -345,7 +349,7 @@ describe("orchestrateMigration", () => {
         expect(spy.calls.every((c) => c.body.args.dryRun === true)).toBe(true);
     });
 
-    test("sums counts and reports completed when every shard finishes", async () => {
+    it("sums counts and reports completed when every shard finishes", async () => {
         expect.assertions(7);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
@@ -369,7 +373,7 @@ describe("orchestrateMigration", () => {
         expect(result.shards[0]).toMatchObject({ shardKey: "a", result: { changed: 2, processed: 5, status: "completed" } });
     });
 
-    test("rolls up to failed when any shard's runner reports failure", async () => {
+    it("rolls up to failed when any shard's runner reports failure", async () => {
         expect.assertions(2);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -383,7 +387,7 @@ describe("orchestrateMigration", () => {
         expect(result.status).toBe("failed");
     });
 
-    test("rolls up to in_progress when a shard is cut short by maxBatches", async () => {
+    it("rolls up to in_progress when a shard is cut short by maxBatches", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -396,7 +400,7 @@ describe("orchestrateMigration", () => {
         expect(result.status).toBe("in_progress");
     });
 
-    test("an unreachable shard surfaces as an error and leaves the run in_progress", async () => {
+    it("an unreachable shard surfaces as an error and leaves the run in_progress", async () => {
         expect.assertions(5);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -419,7 +423,7 @@ describe("orchestrateMigration", () => {
         expect(result.shards.find((s) => s.shardKey === "b")?.error?.message).toContain("500");
     });
 
-    test("no live shards yields an empty, completed roll-up", async () => {
+    it("no live shards yields an empty, completed roll-up", async () => {
         expect.assertions(2);
 
         const registry = createStaticShardRegistry({ messages: [] });
@@ -432,7 +436,7 @@ describe("orchestrateMigration", () => {
         expect(result).toEqual({ changed: 0, failed: 0, ok: 0, processed: 0, shards: [], status: "completed" });
     });
 
-    test("status calls pass through each shard's payload without inventing counts", async () => {
+    it("status calls pass through each shard's payload without inventing counts", async () => {
         expect.assertions(4);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -453,7 +457,7 @@ describe("orchestrateMigration", () => {
 });
 
 describe("concurrency", () => {
-    test("maxConcurrency caps the number of in-flight shard RPCs", async () => {
+    it("maxConcurrency caps the number of in-flight shard RPCs", async () => {
         expect.assertions(2);
 
         let inFlight = 0;
@@ -481,7 +485,7 @@ describe("concurrency", () => {
         expect(spy.calls).toHaveLength(10);
     });
 
-    test("registry that returns Promise of keys is awaited", async () => {
+    it("registry that returns Promise of keys is awaited", async () => {
         expect.assertions(3);
 
         const asyncRegistry: ShardRegistry = {

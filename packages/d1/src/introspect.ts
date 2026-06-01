@@ -17,19 +17,19 @@ import type { SchemaLike } from "@cirrus/do";
 import type { D1Exec } from "./d1-ctx-db.js";
 
 /** A global table plus its current row count. */
-export interface GlobalTableInfo {
+interface GlobalTableInfo {
     name: string;
     rowCount: number;
 }
 
 /** A window of rows from one global table, plus the column list and total size. */
-export interface GlobalTablePage {
+interface GlobalTablePage {
     columns: string[];
     rows: Record<string, unknown>[];
     total: number;
 }
 
-export interface ReadGlobalTablePageOptions {
+interface ReadGlobalTablePageOptions {
     limit?: number;
     offset?: number;
     table: string;
@@ -83,10 +83,10 @@ const countRows = async (exec: D1Exec, quotedTable: string): Promise<number> => 
  * List every `.global()` table with its row count, ordered by name. Tables that
  * exist in D1 but aren't declared global in the schema are never returned.
  */
-export const listGlobalTables = async (exec: D1Exec, schema: SchemaLike): Promise<GlobalTableInfo[]> => {
+const listGlobalTables = async (exec: D1Exec, schema: SchemaLike): Promise<GlobalTableInfo[]> => {
     const names = Object.keys(schema.tables)
         .filter((name) => isGlobalTable(schema, name))
-        .sort((a, b) => a.localeCompare(b));
+        .toSorted((a, b) => a.localeCompare(b));
 
     const tables: GlobalTableInfo[] = [];
 
@@ -116,11 +116,11 @@ const columnsFor = (schema: SchemaLike, table: string): string[] => {
  * coerced into reading non-global D1 tables. `limit` is clamped to `[1, 500]`;
  * `offset` floors at `0`.
  */
-export const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: ReadGlobalTablePageOptions): Promise<GlobalTablePage> => {
+const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: ReadGlobalTablePageOptions): Promise<GlobalTablePage> => {
     const { table } = options;
 
     if (!isGlobalTable(schema, table)) {
-        throw Object.assign(new Error(`unknown global table: ${table}`), { name: "CirrusError", code: "UNKNOWN_TABLE", status: 404 });
+        throw Object.assign(new Error(`unknown global table: ${table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
     }
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
@@ -133,3 +133,6 @@ export const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, opti
 
     return { columns: columnsFor(schema, table), rows, total };
 };
+
+export { listGlobalTables, readGlobalTablePage };
+export type { GlobalTableInfo, GlobalTablePage, ReadGlobalTablePageOptions };

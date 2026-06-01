@@ -1,9 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { CirrusError, toErrorResponse } from "../src/errors.js";
 
 describe("cirrusError", () => {
-    test("defaults to 500 INTERNAL when no status is provided", () => {
+    it("defaults to 500 INTERNAL when no status is provided", () => {
         expect.assertions(2);
 
         const err = new CirrusError("boom", { code: "INTERNAL" });
@@ -12,7 +12,7 @@ describe("cirrusError", () => {
         expect(err.code).toBe("INTERNAL");
     });
 
-    test("toResponse roundtrips through JSON", async () => {
+    it("toResponse roundtrips through JSON", async () => {
         expect.assertions(2);
 
         const err = new CirrusError("nope", { code: "FORBIDDEN", status: 403 });
@@ -22,7 +22,7 @@ describe("cirrusError", () => {
         await expect(response.json()).resolves.toEqual({ error: { code: "FORBIDDEN", message: "nope" } });
     });
 
-    test("toErrorResponse passes CirrusError through unchanged", async () => {
+    it("toErrorResponse passes CirrusError through unchanged", async () => {
         expect.assertions(2);
 
         const err = new CirrusError("missing", { code: "NOT_FOUND", status: 404 });
@@ -32,7 +32,7 @@ describe("cirrusError", () => {
         await expect(response.json()).resolves.toEqual({ error: { code: "NOT_FOUND", message: "missing" } });
     });
 
-    test("toErrorResponse wraps generic errors as INTERNAL 500 with a sanitized message", async () => {
+    it("toErrorResponse wraps generic errors as INTERNAL 500 with a sanitized message", async () => {
         expect.assertions(2);
 
         // Per audit H10: never echo error.message to clients — it may leak
@@ -44,7 +44,7 @@ describe("cirrusError", () => {
         await expect(response.json()).resolves.toEqual({ error: { code: "INTERNAL", message: "Internal error" } });
     });
 
-    test("toErrorResponse handles non-Error throws", async () => {
+    it("toErrorResponse handles non-Error throws", async () => {
         expect.assertions(2);
 
         const response = toErrorResponse("just a string");
@@ -53,7 +53,7 @@ describe("cirrusError", () => {
         await expect(response.json()).resolves.toEqual({ error: { code: "INTERNAL", message: "Internal error" } });
     });
 
-    test("toErrorResponse maps a structural ConflictError shape to 409", async () => {
+    it("toErrorResponse maps a structural ConflictError shape to 409", async () => {
         expect.assertions(2);
 
         // Structurally identical to what `@cirrus/do` throws — the runtime
@@ -70,7 +70,7 @@ describe("cirrusError", () => {
         await expect(response.json()).resolves.toEqual({ error: { code: "CONFLICT", message: "stale version" } });
     });
 
-    test("toErrorResponse maps a structural CirrusError shape (name + code + status) to its status", async () => {
+    it("toErrorResponse maps a structural CirrusError shape (name + code + status) to its status", async () => {
         expect.assertions(2);
 
         // `@cirrus/do`'s `CountRlsUnsupportedError` (and any future

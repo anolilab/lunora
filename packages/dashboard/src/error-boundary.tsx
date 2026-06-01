@@ -1,6 +1,7 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import type { ErrorInfo, ReactNode } from "react";
+import { Component } from "react";
 
-export interface ErrorBoundaryProps {
+interface ErrorBoundaryProps {
     readonly children: ReactNode;
     /** Optional label naming the boundary's region, shown in the fallback. */
     readonly label?: string;
@@ -58,3 +59,5 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         );
     }
 }
+
+export type { ErrorBoundaryProps };

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { recordShard } from "../src/shard-history.js";
 import { ShardInput } from "../src/shard-input.js";
@@ -16,7 +16,7 @@ describe("shardInput", () => {
         sessionStorage.clear();
     });
 
-    test("renders the input with the panel's test id and no datalist when there's no history", () => {
+    it("renders the input with the panel's test id and no datalist when there's no history", () => {
         expect.assertions(2);
 
         render(<Harness />);
@@ -25,7 +25,7 @@ describe("shardInput", () => {
         expect(screen.queryByTestId("x-shard-recents")).toBeNull();
     });
 
-    test("offers recorded shards as datalist options", () => {
+    it("offers recorded shards as datalist options", () => {
         expect.assertions(2);
 
         recordShard("room-7");
@@ -43,16 +43,16 @@ describe("shardInput", () => {
         // Most-recent-first.
         expect(options).toEqual(["room-9", "room-7"]);
         // The input is wired to the datalist for native autocomplete.
-        expect((screen.getByTestId("x-shard") as HTMLInputElement).getAttribute("list")).toBe(datalist.id);
+        expect((screen.getByTestId("x-shard")).getAttribute("list")).toBe(datalist.id);
     });
 
-    test("propagates typed input through onChange", () => {
+    it("propagates typed input through onChange", () => {
         expect.assertions(1);
 
         render(<Harness />);
 
         fireEvent.change(screen.getByTestId("x-shard"), { target: { value: "tenant-3" } });
 
-        expect((screen.getByTestId("x-shard") as HTMLInputElement).value).toBe("tenant-3");
+        expect(screen.getByTestId<HTMLInputElement>("x-shard").value).toBe("tenant-3");
     });
 });

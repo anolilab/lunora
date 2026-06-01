@@ -1,6 +1,6 @@
 import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAutoRefresh } from "../src/use-auto-refresh.js";
 
@@ -20,7 +20,7 @@ describe("useAutoRefresh", () => {
         vi.restoreAllMocks();
     });
 
-    test("ticks on the interval while enabled", () => {
+    it("ticks on the interval while enabled", () => {
         expect.assertions(1);
 
         const onTick = vi.fn<() => void>();
@@ -32,7 +32,7 @@ describe("useAutoRefresh", () => {
         expect(onTick).toHaveBeenCalledTimes(3);
     });
 
-    test("does not tick while disabled", () => {
+    it("does not tick while disabled", () => {
         expect.assertions(1);
 
         const onTick = vi.fn<() => void>();
@@ -44,7 +44,7 @@ describe("useAutoRefresh", () => {
         expect(onTick).not.toHaveBeenCalled();
     });
 
-    test("stops ticking after unmount", () => {
+    it("stops ticking after unmount", () => {
         expect.assertions(1);
 
         const onTick = vi.fn<() => void>();
@@ -58,7 +58,7 @@ describe("useAutoRefresh", () => {
         expect(onTick).toHaveBeenCalledTimes(1);
     });
 
-    test("skips ticks while the document is hidden", () => {
+    it("skips ticks while the document is hidden", () => {
         expect.assertions(2);
 
         const onTick = vi.fn<() => void>();

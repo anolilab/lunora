@@ -45,6 +45,7 @@ export interface DependencyTracker {
      * so it can pass it to its invalidation index later without re-scanning.
      */
     collect: () => Set<string>;
+
     /**
      * Stamp `(table, id)` as a dependency of the in-flight query. Idempotent:
      * recording the same key twice is a no-op (backed by a `Set`).

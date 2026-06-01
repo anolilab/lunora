@@ -1,5 +1,5 @@
 import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@cirrus/do";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb, runD1RankMigrations } from "../src/d1-ctx-db.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
@@ -10,7 +10,7 @@ import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
  * coupling seam, and the opt-in migration helper.
  */
 
-const col = (kind: string): ValidatorLike => ({ _meta: { column: { notNull: true } }, kind });
+const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
 
 const byChannel: RankIndexDefinitionLike = {
     name: "byChannel",
@@ -25,7 +25,8 @@ const byScoreDesc: RankIndexDefinitionLike = {
     sortBy: [{ direction: "desc", field: "score" }],
 };
 
-const makeSchema = (...indexes: RankIndexDefinitionLike[]): SchemaLike => ({
+const makeSchema = (...indexes: RankIndexDefinitionLike[]): SchemaLike => {
+ return {
     tables: {
         messages: {
             indexes: [],
@@ -37,7 +38,8 @@ const makeSchema = (...indexes: RankIndexDefinitionLike[]): SchemaLike => ({
             },
         },
     },
-});
+};
+};
 
 let harness: ReturnType<typeof createD1Exec>;
 
@@ -66,7 +68,7 @@ describe("d1 rankIndex parity", () => {
         harness.close();
     });
 
-    test("rank() returns 1-based position + partition total", async () => {
+    it("rank() returns 1-based position + partition total", async () => {
         expect.assertions(3);
 
         const writer = await setupWriter(makeSchema(byChannel));
@@ -80,7 +82,7 @@ describe("d1 rankIndex parity", () => {
         await expect(writer.rank("messages", "byChannel", { row: "m3" })).resolves.toEqual({ position: 1, total: 1 });
     });
 
-    test("update / delete keeps the companion in step", async () => {
+    it("update / delete keeps the companion in step", async () => {
         expect.assertions(3);
 
         const writer = await setupWriter(makeSchema(byChannel));
@@ -98,7 +100,7 @@ describe("d1 rankIndex parity", () => {
         await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toBeNull();
     });
 
-    test("desc sort returns the highest first", async () => {
+    it("desc sort returns the highest first", async () => {
         expect.assertions(3);
 
         const writer = await setupWriter(makeSchema(byScoreDesc));
@@ -112,7 +114,7 @@ describe("d1 rankIndex parity", () => {
         await expect(writer.rank("messages", "leaderboard", { row: "m1" })).resolves.toEqual({ position: 3, total: 3 });
     });
 
-    test("restrictsCounts throws COUNT_RLS_UNSUPPORTED", async () => {
+    it("restrictsCounts throws COUNT_RLS_UNSUPPORTED", async () => {
         expect.assertions(1);
 
         const writer = await setupWriter(makeSchema(byChannel));
@@ -124,7 +126,7 @@ describe("d1 rankIndex parity", () => {
         });
     });
 
-    test("rankPage walks the companion in declared sort order", async () => {
+    it("rankPage walks the companion in declared sort order", async () => {
         expect.assertions(2);
 
         const writer = await setupWriter(makeSchema(byScoreDesc));
@@ -139,7 +141,7 @@ describe("d1 rankIndex parity", () => {
         expect(page.isDone).toBe(true);
     });
 
-    test("rankPage scoped by partition `where`", async () => {
+    it("rankPage scoped by partition `where`", async () => {
         expect.assertions(1);
 
         const writer = await setupWriter(makeSchema(byChannel));
@@ -153,7 +155,7 @@ describe("d1 rankIndex parity", () => {
         expect(page.page.map((doc) => doc["_id"])).toEqual(["m1", "m3"]);
     });
 
-    test("falls back to null when no rank companion exists (opt-in)", async () => {
+    it("falls back to null when no rank companion exists (opt-in)", async () => {
         expect.assertions(1);
 
         // Skip runD1RankMigrations — the companion isn't materialized.

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -13,10 +13,12 @@ import { createSqliteExec } from "./_helpers/node-sqlite.js";
  */
 const FIXED_CLOCK = 1_700_000_000_000;
 
-const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({
+const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+ return {
     _meta: { column: { notNull: true, ...column } },
     kind,
-});
+};
+};
 
 let harness: ReturnType<typeof createSqliteExec>;
 
@@ -66,7 +68,7 @@ describe("ctx-db constraints", () => {
     });
 
     describe("insert defaults", () => {
-        test("fills a `.default()` literal and a `.$defaultFn()` factory when absent", async () => {
+        it("fills a `.default()` literal and a `.$defaultFn()` factory when absent", async () => {
             expect.assertions(2);
 
             const { writer } = setup();
@@ -78,7 +80,7 @@ describe("ctx-db constraints", () => {
             expect(doc?.["seq"]).toBe(7);
         });
 
-        test("a provided value overrides the default", async () => {
+        it("a provided value overrides the default", async () => {
             expect.assertions(2);
 
             const { writer } = setup();
@@ -90,7 +92,7 @@ describe("ctx-db constraints", () => {
             expect(doc?.["seq"]).toBe(99);
         });
 
-        test("does not run `$onUpdateFn` on insert", async () => {
+        it("does not run `$onUpdateFn` on insert", async () => {
             expect.assertions(2);
 
             const { revCalls, writer } = setup();
@@ -104,7 +106,7 @@ describe("ctx-db constraints", () => {
     });
 
     describe("$onUpdateFn", () => {
-        test("recomputes on each patch that omits the field", async () => {
+        it("recomputes on each patch that omits the field", async () => {
             expect.assertions(3);
 
             const { revCalls, writer } = setup();
@@ -121,7 +123,7 @@ describe("ctx-db constraints", () => {
             expect(revCalls()).toBe(2);
         });
 
-        test("is skipped when the patch sets the field explicitly", async () => {
+        it("is skipped when the patch sets the field explicitly", async () => {
             expect.assertions(2);
 
             const { revCalls, writer } = setup();
@@ -134,7 +136,7 @@ describe("ctx-db constraints", () => {
             expect(revCalls()).toBe(0);
         });
 
-        test("recomputes on replace that omits the field, but honors an explicit value", async () => {
+        it("recomputes on replace that omits the field, but honors an explicit value", async () => {
             expect.assertions(2);
 
             const { writer } = setup();
@@ -152,7 +154,7 @@ describe("ctx-db constraints", () => {
     });
 
     describe(".unique() constraint", () => {
-        test("a duplicate insert throws a ConflictError (code CONFLICT, status 409)", async () => {
+        it("a duplicate insert throws a ConflictError (code CONFLICT, status 409)", async () => {
             expect.assertions(2);
 
             const { writer } = setup();
@@ -165,7 +167,7 @@ describe("ctx-db constraints", () => {
             await expect(conflict).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
         });
 
-        test("a patch that collides with another row's unique value conflicts", async () => {
+        it("a patch that collides with another row's unique value conflicts", async () => {
             expect.assertions(1);
 
             const { writer } = setup();
@@ -176,7 +178,7 @@ describe("ctx-db constraints", () => {
             await expect(writer.patch("i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
         });
 
-        test("distinct unique values insert cleanly", async () => {
+        it("distinct unique values insert cleanly", async () => {
             expect.assertions(1);
 
             const { writer } = setup();
@@ -214,7 +216,7 @@ describe("ctx-db constraints", () => {
             return createShardCtxDb({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
         };
 
-        test("(tenantId, slug) duplicate inserts conflict; differing in either column is allowed", async () => {
+        it("(tenantId, slug) duplicate inserts conflict; differing in either column is allowed", async () => {
             expect.assertions(2);
 
             const writer = setupTenantSlug();
@@ -233,7 +235,7 @@ describe("ctx-db constraints", () => {
             await expect(writer.count("pages")).resolves.toBe(3);
         });
 
-        test("a patch that creates a (tenantId, slug) collision is rejected", async () => {
+        it("a patch that creates a (tenantId, slug) collision is rejected", async () => {
             expect.assertions(1);
 
             const writer = setupTenantSlug();
@@ -252,7 +254,8 @@ describe("ctx-db constraints", () => {
          * runtime dep on `@cirrus/values` (kept light on purpose), so unit tests
          * pass a structural fake — same shape, hand-rolled `parse`.
          */
-        const checked = (kind: string, predicate: (value: unknown) => boolean, message: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({
+        const checked = (kind: string, predicate: (value: unknown) => boolean, message: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+ return {
             _meta: { column: { notNull: true, ...column } },
             kind,
             parse(value) {
@@ -266,7 +269,8 @@ describe("ctx-db constraints", () => {
 
                 return value;
             },
-        });
+        };
+};
 
         const setupCheck = () => {
             const schema: SchemaLike = {
@@ -287,7 +291,7 @@ describe("ctx-db constraints", () => {
             return createShardCtxDb({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
         };
 
-        test("insert rejects a row that fails the refinement", async () => {
+        it("insert rejects a row that fails the refinement", async () => {
             expect.assertions(1);
 
             const writer = setupCheck();
@@ -295,7 +299,7 @@ describe("ctx-db constraints", () => {
             await expect(writer.insert("orders", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
         });
 
-        test("insert accepts a row that passes the refinement", async () => {
+        it("insert accepts a row that passes the refinement", async () => {
             expect.assertions(2);
 
             const writer = setupCheck();
@@ -306,7 +310,7 @@ describe("ctx-db constraints", () => {
             await expect(writer.count("orders")).resolves.toBe(1);
         });
 
-        test("patch that flips a field to an invalid value is rejected", async () => {
+        it("patch that flips a field to an invalid value is rejected", async () => {
             expect.assertions(2);
 
             const writer = setupCheck();
@@ -318,7 +322,7 @@ describe("ctx-db constraints", () => {
             await expect(writer.get("o1")).resolves.toMatchObject({ amount: 10 });
         });
 
-        test("replace runs refinements after applyOnUpdate so defaulted fields are checked", async () => {
+        it("replace runs refinements after applyOnUpdate so defaulted fields are checked", async () => {
             expect.assertions(1);
 
             const writer = setupCheck();

@@ -10,7 +10,7 @@ import type { D1DatabaseLike } from "../../src/d1-client.js";
 import { D1Client } from "../../src/d1-client.js";
 import { MigrationRunner } from "../../src/migration-runner.js";
 
-export interface Env {
+interface Env {
     DB: D1Database;
 }
 
@@ -50,3 +50,5 @@ export default {
         return new Response("Not found", { status: 404 });
     },
 };
+
+export type { Env };

@@ -61,7 +61,7 @@ export interface SqlCursor<Row> extends Iterable<Row> {
 }
 
 /**
- * Minimal subset of `@cirrus/server`'s `Schema<T>` the adapter actually
+ * Minimal subset of `@cirrus/server`'s `Schema&lt;T>` the adapter actually
  * reads. Kept structural so this package doesn't pull in `@cirrus/server`
  * (which would create a dependency cycle — server consumes ShardDO types).
  */
@@ -114,6 +114,7 @@ export interface ColumnMetaLike {
 export interface ValidatorLike {
     readonly _meta?: { readonly column?: ColumnMetaLike };
     readonly kind?: string;
+
     /**
      * Optional runtime parser. Real validators from `@cirrus/values` always
      * supply this; the structural fakes used in DO unit tests typically don't.
@@ -168,6 +169,7 @@ export type WriteHook = (event: WriteEvent) => Promise<void> | void;
 
 export interface CtxDbOptions {
     broadcast?: BroadcastDelta;
+
     /**
      * Optional reactive cache. When supplied, every write (`insert`, `patch`,
      * `replace`, `delete`) invalidates the rows it touches via
@@ -182,6 +184,7 @@ export interface CtxDbOptions {
      */
     cache?: ReactiveCache;
     clock?: Clock;
+
     /**
      * Optional writer for tables flagged `.global()`. When provided, an
      * `onDelete` cascade declared on a shard-local table whose holder lives
@@ -189,7 +192,7 @@ export interface CtxDbOptions {
      * it, cross-backend cascades throw — same behaviour as v1.
      *
      * Generated `shard.ts` passes the same D1-backed writer it uses for
-     * `ctx.db.<globalTable>` reads/writes, so cascades and direct writes share
+     * `ctx.db.&lt;globalTable>` reads/writes, so cascades and direct writes share
      * one D1 round-trip path. Non-transactional across backends: the local
      * delete commits before the global cascade fires, so a failure on the
      * global side leaves the local row gone — document at the call site.
@@ -239,11 +242,11 @@ export interface PaginationOptions {
 }
 
 export interface TableReaderLike {
-    collect: () => Promise<Array<Record<string, unknown>>>;
+    collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;
     paginate: (options: PaginationOptions) => Promise<QueryPage>;
-    take: (limit: number) => Promise<Array<Record<string, unknown>>>;
+    take: (limit: number) => Promise<Record<string, unknown>[]>;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilderLike) => IndexRangeBuilderLike) => TableReaderLike;
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
 }
@@ -266,6 +269,7 @@ export interface DatabaseWriterLike {
      * the table.
      */
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
+
     /**
      * Count rows in `tableName`. Uses a declared `aggregateIndex` when one
      * covers the `where` keys (no scan); otherwise scans. Throws
@@ -278,6 +282,7 @@ export interface DatabaseWriterLike {
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
+
     /**
      * Group rows in `tableName` by the named keys and apply `options.agg` per
      * group (defaults to `count`). When a declared aggregate index's `by` set
@@ -285,6 +290,7 @@ export interface DatabaseWriterLike {
      * answered from the counter table.
      */
     groupBy: (tableName: string, options: GroupByOptions) => Promise<ReadonlyArray<GroupByEntry>>;
+
     /**
      * Insert a document, returning its generated id.
      *
@@ -298,6 +304,7 @@ export interface DatabaseWriterLike {
     insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean }) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
+
     /**
      * Return the 1-based position of `options.row` within its partition under
      * the declared rank index, plus the partition's total row count. Returns
@@ -309,6 +316,7 @@ export interface DatabaseWriterLike {
      * restricted-count ctx throws `COUNT_RLS_UNSUPPORTED` here too.
      */
     rank: (tableName: string, indexName: string, options: RankOptions) => Promise<null | RankResult>;
+
     /**
      * Walk the rank companion in declared sort order — sorted pagination
      * accelerator. `options.where` may pin the partition (`partitionBy` keys),
@@ -428,7 +436,7 @@ const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, un
 
     const ordered: Record<string, unknown> = {};
 
-    for (const field of [...by].sort()) {
+    for (const field of [...by].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
         ordered[field] = source[field] ?? null;
     }
 
@@ -631,7 +639,7 @@ const rowToDoc = (row: Record<string, unknown> | undefined): Record<string, unkn
 interface SearchStage {
     definition: SearchIndexDefinitionLike;
     field: string;
-    filters: Array<{ field: string; value: unknown }>;
+    filters: { field: string; value: unknown }[];
     hasQuery: boolean;
     indexName: string;
     query: string;
@@ -640,9 +648,9 @@ interface SearchStage {
 interface QueryStage {
     indexFields: ReadonlyArray<string>;
     indexName: string | undefined;
-    inMemoryFilters: Array<(doc: Record<string, unknown>) => boolean>;
+    inMemoryFilters: ((doc: Record<string, unknown>) => boolean)[];
     search?: SearchStage;
-    sqlConditions: Array<{ comparator: string; field: string; value: unknown }>;
+    sqlConditions: { comparator: string; field: string; value: unknown }[];
 }
 
 const createRangeBuilder = (stage: QueryStage): IndexRangeBuilderLike => {
@@ -693,9 +701,14 @@ const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilt
                 throw new Error(`search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`);
             }
 
-            search.field = field;
-            search.query = query;
-            search.hasQuery = true;
+            // Mutate the caller-owned stage in place (same object the query
+            // planner reads back); alias to a local so the param itself isn't
+            // reassigned.
+            const stage = search;
+
+            stage.field = field;
+            stage.query = query;
+            stage.hasQuery = true;
 
             return builder;
         },
@@ -725,7 +738,7 @@ const serializeSqlValue = (value: unknown): unknown => {
  * text column, JOIN back to the document table on the stored id, narrow by any
  * `.eq()` filter fields, and order by FTS5's `rank` (bm25 — best first).
  */
-const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined): Array<Record<string, unknown>> => {
+const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined): Record<string, unknown>[] => {
     const tokens = tokenizeSearch(search.query);
 
     if (tokens.length === 0) {
@@ -750,11 +763,11 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
     let querySql = `SELECT m.id, m._creationTime, m.${DOC_COLUMN} FROM ${quoteIdentifier(ftName)} f JOIN ${quoteIdentifier(tableName)} m ON m.id = f."__id__" WHERE ${where.join(" AND ")} ORDER BY f.rank, m._creationTime DESC`;
 
     if (typeof limit === "number") {
-        querySql += ` LIMIT ${Math.max(0, Math.floor(limit))}`;
+        querySql += ` LIMIT ${String(Math.max(0, Math.floor(limit)))}`;
     }
 
     const rows = runSql(sql, querySql, ...params).toArray();
-    const docs: Array<Record<string, unknown>> = [];
+    const docs: Record<string, unknown>[] = [];
 
     for (const row of rows) {
         const doc = rowToDoc(row);
@@ -774,7 +787,7 @@ const searchViaFts = (sql: SqlExec, tableName: string, search: SearchStage, limi
  * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
  * by creation time (newest first).
  */
-const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined): Array<Record<string, unknown>> => {
+const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, limit: number | undefined): Record<string, unknown>[] => {
     const tokens = tokenizeSearch(search.query);
 
     if (tokens.length === 0) {
@@ -796,7 +809,7 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
     }
 
     const rows = runSql(sql, querySql, ...params).toArray();
-    const scored: Array<{ creationTime: number; doc: Record<string, unknown>; score: number }> = [];
+    const scored: { creationTime: number; doc: Record<string, unknown>; score: number }[] = [];
 
     for (const row of rows) {
         const doc = rowToDoc(row);
@@ -827,18 +840,20 @@ const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte",
 
 /** Order keys for a paginated stage: the staged index, else creation order. */
 const paginateOrderKeys = (stage: QueryStage): OrderKey[] =>
-    stage.indexFields.length > 0
-        ? stage.indexFields.map((field) => ({ direction: "asc" as const, field }))
-        : [{ direction: "asc" as const, field: "_creationTime" }];
+    (stage.indexFields.length > 0
+        ? stage.indexFields.map((field) => { return { direction: "asc" as const, field }; })
+        : [{ direction: "asc" as const, field: "_creationTime" }]);
 
 /**
  * Re-express the staged `.withIndex()` range as a `where` tree and AND the
  * keyset seek onto it, so a single shared compiler renders the page predicate.
  */
 const paginateWhere = (stage: QueryStage, orderKeys: OrderKey[], cursor: null | string | undefined): undefined | WhereInput => {
-    const clauses: WhereInput[] = stage.sqlConditions.map((condition) => ({
+    const clauses: WhereInput[] = stage.sqlConditions.map((condition) => {
+ return {
         [condition.field]: { [COMPARATOR_TO_OPERATOR[condition.comparator] ?? "eq"]: condition.value },
-    }));
+    };
+});
 
     if (cursor) {
         clauses.push(buildSeekWhere(orderKeys, decodeCursor(cursor)));
@@ -852,8 +867,8 @@ const paginateWhere = (stage: QueryStage, orderKeys: OrderKey[], cursor: null | 
 };
 
 /** Decode rows to docs, applying the in-memory filters; stop at `cap` rows when bounding here. */
-const scanDocs = (rows: Array<Record<string, unknown>>, filters: QueryStage["inMemoryFilters"], cap: number | undefined): Array<Record<string, unknown>> => {
-    const docs: Array<Record<string, unknown>> = [];
+const scanDocs = (rows: Record<string, unknown>[], filters: QueryStage["inMemoryFilters"], cap: number | undefined): Record<string, unknown>[] => {
+    const docs: Record<string, unknown>[] = [];
 
     for (const row of rows) {
         const doc = rowToDoc(row);
@@ -893,7 +908,7 @@ const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, optio
     const filtered = stage.inMemoryFilters.length > 0;
 
     if (!filtered) {
-        querySql += ` LIMIT ${numItems + 1}`;
+        querySql += ` LIMIT ${String(numItems + 1)}`;
     }
 
     const rows = runSql(sql, querySql, ...params).toArray();
@@ -924,7 +939,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         sqlConditions: [],
     };
 
-    const runSearchFetch = (limit: number | undefined): Array<Record<string, unknown>> => {
+    const runSearchFetch = (limit: number | undefined): Record<string, unknown>[] => {
         const { search } = stage;
 
         if (!search) {
@@ -939,7 +954,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
             return docs;
         }
 
-        const result: Array<Record<string, unknown>> = [];
+        const result: Record<string, unknown>[] = [];
 
         for (const doc of docs) {
             if (stage.inMemoryFilters.every((predicate) => predicate(doc))) {
@@ -954,7 +969,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         return result;
     };
 
-    const runFetch = (limit: number | undefined): Array<Record<string, unknown>> => {
+    const runFetch = (limit: number | undefined): Record<string, unknown>[] => {
         if (stage.search) {
             return runSearchFetch(limit);
         }
@@ -979,11 +994,11 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         querySql += ` ORDER BY ${orderClause}`;
 
         if (typeof limit === "number" && stage.inMemoryFilters.length === 0) {
-            querySql += ` LIMIT ${Math.max(0, Math.floor(limit))}`;
+            querySql += ` LIMIT ${String(Math.max(0, Math.floor(limit)))}`;
         }
 
         const rows = runSql(sql, querySql, ...params).toArray();
-        const docs: Array<Record<string, unknown>> = [];
+        const docs: Record<string, unknown>[] = [];
 
         for (const row of rows) {
             const doc = rowToDoc(row);
@@ -1075,8 +1090,8 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
 };
 
 /** A table's fields paired with their column meta, skipping fields that declare none. */
-const tableColumns = (definition: TableDefinitionLike): Array<[string, ColumnMetaLike]> => {
-    const columns: Array<[string, ColumnMetaLike]> = [];
+const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
+    const columns: [string, ColumnMetaLike][] = [];
 
     for (const [field, validator] of Object.entries(definition.shape)) {
         const column = validator._meta?.column;
@@ -1119,15 +1134,19 @@ const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<s
  * unless the caller overrode them.
  */
 const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string, unknown>, target: Record<string, unknown>): void => {
+    // Mutate the caller-owned record in place; alias so the param isn't reassigned.
+    const out = target;
+
     for (const [field, column] of tableColumns(definition)) {
         if (column.onUpdateFn && !(field in provided)) {
-            target[field] = column.onUpdateFn();
+            out[field] = column.onUpdateFn();
         }
     }
 };
 
 /** workerd and node:sqlite both phrase a UNIQUE-index breach as "UNIQUE constraint failed". */
-const isUniqueViolation = (error: unknown): boolean => error instanceof Error && /unique constraint failed/i.test(error.message);
+const UNIQUE_VIOLATION_RE = /unique constraint failed/i;
+const isUniqueViolation = (error: unknown): boolean => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message);
 
 /** Run a write, remapping a UNIQUE-index breach to a {@link ConflictError} (code `CONFLICT`, 409). */
 const runWrite = (sql: SqlExec, table: string, query: string, ...params: unknown[]): void => {
@@ -1229,7 +1248,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         if (triggerDepth > MAX_TRIGGER_DEPTH) {
             triggerDepth -= 1;
 
-            throw new ConflictError(`trigger recursion exceeded ${MAX_TRIGGER_DEPTH} levels on "${event.table}" — check for a self-triggering write`);
+            throw new ConflictError(`trigger recursion exceeded ${String(MAX_TRIGGER_DEPTH)} levels on "${event.table}" — check for a self-triggering write`);
         }
 
         try {
@@ -1383,7 +1402,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         runSql(sql, `DELETE FROM ${quoteIdentifier(rankTable)}`);
 
         const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-        const columnList = ["__id__", "__partition__", ...sortColumns].map(quoteIdentifier).join(", ");
+        const columnList = ["__id__", "__partition__", ...sortColumns].map((column) => quoteIdentifier(column)).join(", ");
         const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
         const insertSql = `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`;
 
@@ -1482,7 +1501,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 }
 
                 const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-                const columnList = ["__id__", "__partition__", ...sortColumns].map(quoteIdentifier).join(", ");
+                const columnList = ["__id__", "__partition__", ...sortColumns].map((column) => quoteIdentifier(column)).join(", ");
                 const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
                 const partitionKey = encodePartitionKey(index.partitionBy ?? [], next);
                 const sortValues = index.sortBy.map((key) => serializeSqlValue(next[key.field] ?? null));
@@ -1646,11 +1665,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (limit !== undefined) {
                 // Over-fetch by one row to learn whether another page exists
                 // without issuing a second query.
-                querySql += ` LIMIT ${limit + 1}`;
+                querySql += ` LIMIT ${String(limit + 1)}`;
             }
 
             const rows = runSql(sql, querySql, ...params).toArray();
-            const docs: Array<Record<string, unknown>> = [];
+            const docs: Record<string, unknown>[] = [];
 
             for (const row of rows) {
                 const doc = rowToDoc(row);
@@ -1935,7 +1954,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 querySql += ` WHERE ${whereSql}`;
             }
 
-            querySql += ` GROUP BY ${groupOptions.by.map(jsonPath).join(", ")}`;
+            querySql += ` GROUP BY ${groupOptions.by.map((field) => jsonPath(field)).join(", ")}`;
 
             const rows = runSql(sql, querySql, ...params).toArray();
             const result: GroupByEntry[] = [];
@@ -1992,7 +2011,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
 
             // Look up the row's stored sort key + partition.
-            const sortColumnList = sortColumns.map(quoteIdentifier).join(", ");
+            const sortColumnList = sortColumns.map((column) => quoteIdentifier(column)).join(", ");
             const ownRows = runSql(sql, `SELECT "__partition__", ${sortColumnList} FROM ${quoteIdentifier(rankTable)} WHERE "__id__" = ?`, rowId).toArray();
 
             const [own] = ownRows;
@@ -2124,7 +2143,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                 if (decoded.length === expectedLength) {
                     // Lexicographic strict-after under per-key direction.
-                    const cols: Array<{ column: string; direction: "asc" | "desc" }> = [{ column: "__partition__", direction: "asc" }];
+                    const cols: { column: string; direction: "asc" | "desc" }[] = [{ column: "__partition__", direction: "asc" }];
 
                     for (const [i, column] of sortColumns.entries()) {
                         cols.push({ column, direction: index.sortBy[i]?.direction ?? "asc" });
@@ -2156,17 +2175,17 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const sortColumnList = sortColumns.map(quoteIdentifier).join(", ");
+            const sortColumnList = sortColumns.map((column) => quoteIdentifier(column)).join(", ");
             const idColumn = quoteIdentifier(RANK_TIEBREAK);
             const partitionColumn = `"__partition__"`;
             const innerWhere = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(" AND ")}` : "";
             const selectColumns = sortColumns.length > 0 ? `${idColumn}, ${partitionColumn}, ${sortColumnList}` : `${idColumn}, ${partitionColumn}`;
-            const querySql = `SELECT ${selectColumns} FROM ${quoteIdentifier(rankTable)}${innerWhere} ORDER BY ${orderClauses.join(", ")} LIMIT ${take + 1}`;
+            const querySql = `SELECT ${selectColumns} FROM ${quoteIdentifier(rankTable)}${innerWhere} ORDER BY ${orderClauses.join(", ")} LIMIT ${String(take + 1)}`;
             const rankRows = runSql(sql, querySql, ...params).toArray();
             const hasMore = rankRows.length > take;
             const usable = hasMore ? rankRows.slice(0, take) : rankRows;
 
-            const docs: Array<Record<string, unknown>> = [];
+            const docs: Record<string, unknown>[] = [];
 
             for (const rankRow of usable) {
                 const docRows = runSql(
@@ -2433,7 +2452,11 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             await applyOnDelete({
                 deletedId: id,
                 deletedReference: (references) => existing?.[references],
-                findHolders: async (holderTable, field, value) => (await routeForHolder(holderTable).findMany(holderTable, { where: { [field]: value } })).page,
+                findHolders: async (holderTable, field, value) => {
+                    const holders = await routeForHolder(holderTable).findMany(holderTable, { where: { [field]: value } });
+
+                    return holders.page;
+                },
                 onCascade: (holderTable, holderId) => routeForHolder(holderTable).delete(holderId),
                 onRestrict: (message) => {
                     throw new ConflictError(message);
@@ -2503,7 +2526,7 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
 
         for (const index of definition.indexes) {
             const indexName = `${tableName}_${index.name}`;
-            const expressions = index.fields.map(jsonPath).join(", ");
+            const expressions = index.fields.map((field) => jsonPath(field)).join(", ");
             const uniqueClause = index.unique ? "UNIQUE" : "";
             const indexSql = `CREATE ${uniqueClause} INDEX IF NOT EXISTS ${quoteIdentifier(indexName)} ON ${quoteIdentifier(tableName)} (${expressions})`;
 
@@ -2684,7 +2707,7 @@ export const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
             }
 
             const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-            const columnList = ["__id__", "__partition__", ...sortColumns].map(quoteIdentifier).join(", ");
+            const columnList = ["__id__", "__partition__", ...sortColumns].map((column) => quoteIdentifier(column)).join(", ");
             const placeholders = ["?", "?", ...sortColumns.map(() => "?")].join(", ");
             const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
 

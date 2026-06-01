@@ -4,13 +4,13 @@
  * by `runCodegen.test.ts`; this file targets edge cases like ts-morph's
  * `import("…")` qualifiers in inferred return types.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { emitApi } from "../src/emit.js";
 import type { FunctionIR } from "../src/ir.js";
 
 describe("emitApi", () => {
-    test("rewrites `import('./_generated/X')` qualifiers to `import('./X')` so paths resolve inside _generated/", () => {
+    it("rewrites `import('./_generated/X')` qualifiers to `import('./X')` so paths resolve inside _generated/", () => {
         expect.assertions(2);
 
         // Regression: when a handler returns a type from `_generated/dataModel`,
@@ -33,7 +33,7 @@ describe("emitApi", () => {
         expect(rendered).not.toContain('import("./_generated/dataModel.js")');
     });
 
-    test("leaves absolute `import('@scope/pkg')` qualifiers untouched", () => {
+    it("leaves absolute `import('@scope/pkg')` qualifiers untouched", () => {
         expect.assertions(1);
 
         const functions: ReadonlyArray<FunctionIR> = [
@@ -51,7 +51,7 @@ describe("emitApi", () => {
         expect(rendered).toContain('import("@cirrus/server").CirrusContext');
     });
 
-    test("rewrites the `_generated/` prefix even without a leading `./`", () => {
+    it("rewrites the `_generated/` prefix even without a leading `./`", () => {
         expect.assertions(2);
 
         const functions: ReadonlyArray<FunctionIR> = [

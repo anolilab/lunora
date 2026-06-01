@@ -9,11 +9,8 @@
 
 const CODE_STATUS = {
     BAD_REQUEST: 400,
-    UNAUTHORIZED: 401,
-    FORBIDDEN: 403,
-    NOT_FOUND: 404,
     CONFLICT: 409,
-    UNPROCESSABLE: 422,
+
     /**
      * `count()` invoked against a table whose context carries an active RLS
      * policy. The operation itself is unsupported in an RLS-restricted reader
@@ -22,21 +19,25 @@ const CODE_STATUS = {
      * 403 (policy denial).
      */
     COUNT_RLS_UNSUPPORTED: 422,
-    TOO_MANY_REQUESTS: 429,
+    FORBIDDEN: 403,
     INTERNAL_SERVER_ERROR: 500,
+    NOT_FOUND: 404,
     NOT_IMPLEMENTED: 501,
+    TOO_MANY_REQUESTS: 429,
+    UNAUTHORIZED: 401,
+    UNPROCESSABLE: 422,
 } as const;
 
 export type CirrusErrorCode = keyof typeof CODE_STATUS;
 
 export class CirrusError extends Error {
-    override readonly name = "CirrusError";
+    public override readonly name = "CirrusError";
 
-    readonly code: CirrusErrorCode;
+    public readonly code: CirrusErrorCode;
 
-    readonly status: number;
+    public readonly status: number;
 
-    constructor(code: CirrusErrorCode, message?: string) {
+    public constructor(code: CirrusErrorCode, message?: string) {
         super(message ?? code);
         this.code = code;
         this.status = CODE_STATUS[code];

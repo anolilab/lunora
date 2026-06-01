@@ -15,8 +15,8 @@
  * with one of:
  *
  *   POST   /create   body: { token, userId, ttlSeconds }
- *   GET    /get      header: `x-cirrus-session-token: <token>`
- *   DELETE /revoke   header: `x-cirrus-session-token: <token>`
+ *   GET    /get      header: `x-cirrus-session-token: &lt;token>`
+ *   DELETE /revoke   header: `x-cirrus-session-token: &lt;token>`
  *
  * Every request must additionally carry an `x-cirrus-session-secret` header
  * whose value matches `env.SESSION_DO_SECRET`. The DO is reachable from any
@@ -164,7 +164,7 @@ export class SessionDO {
 
     protected env: unknown;
 
-    constructor(state: SessionDOState, env: unknown) {
+    public constructor(state: SessionDOState, env: unknown) {
         this.state = state;
         this.env = env;
     }

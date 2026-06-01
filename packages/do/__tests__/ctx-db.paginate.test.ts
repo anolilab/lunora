@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -47,7 +47,7 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     await writer.insert("todos", { _id: "t5", archived: false, projectId: "p1", seq: 0 }, { allowExplicitId: true });
 };
 
-const ids = (docs: Array<Record<string, unknown>>): unknown[] => docs.map((doc) => doc["_id"]);
+const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((doc) => doc["_id"]);
 
 describe("ctx-db paginate", () => {
     beforeEach(() => {
@@ -59,7 +59,7 @@ describe("ctx-db paginate", () => {
     });
 
     describe("reader.paginate — index ordering", () => {
-        test("walks pages via continueCursor, covering every matching row exactly once", async () => {
+        it("walks pages via continueCursor, covering every matching row exactly once", async () => {
             expect.assertions(6);
 
             const writer = setupWriter();
@@ -85,7 +85,7 @@ describe("ctx-db paginate", () => {
             expect(second.continueCursor).toBeNull();
         });
 
-        test("a final page that exactly fills numItems still reports isDone with no cursor", async () => {
+        it("a final page that exactly fills numItems still reports isDone with no cursor", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -103,7 +103,7 @@ describe("ctx-db paginate", () => {
             expect(result.continueCursor).toBeNull();
         });
 
-        test("numItems larger than the result set returns everything and is done", async () => {
+        it("numItems larger than the result set returns everything and is done", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -120,7 +120,7 @@ describe("ctx-db paginate", () => {
             expect(result.continueCursor).toBeNull();
         });
 
-        test("an empty table yields an empty done page", async () => {
+        it("an empty table yields an empty done page", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -132,7 +132,7 @@ describe("ctx-db paginate", () => {
             expect(result.continueCursor).toBeNull();
         });
 
-        test("the seek is stable when a row is inserted before the cursor between pages", async () => {
+        it("the seek is stable when a row is inserted before the cursor between pages", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -158,7 +158,7 @@ describe("ctx-db paginate", () => {
     });
 
     describe("reader.paginate — with .filter()", () => {
-        test("applies the in-memory predicate while keeping the cursor on a returned row", async () => {
+        it("applies the in-memory predicate while keeping the cursor on a returned row", async () => {
             expect.assertions(6);
 
             const writer = setupWriter();

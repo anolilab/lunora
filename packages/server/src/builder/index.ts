@@ -66,7 +66,7 @@ const runMiddleware = async (middlewares: ReadonlyArray<Middleware<unknown, unkn
         const next = ((options?: { ctx: Record<string, unknown> }) =>
             dispatch(index + 1, options?.ctx ? { ...(ctx as Record<string, unknown>), ...options.ctx } : ctx)) as MiddlewareNext<unknown>;
 
-        return middleware({ ctx, next });
+        return await middleware({ ctx, next });
     };
 
     return dispatch(0, baseCtx);
@@ -97,7 +97,7 @@ const makeHandler =
 
 /**
  * Wrap a streaming user handler in the same arg-validation + middleware shell
- * as `makeHandler`, but return the user's `AsyncIterable<R>` directly so the
+ * as `makeHandler`, but return the user's `AsyncIterable&lt;R>` directly so the
  * runtime can drive it frame-by-frame. The handler receives an `AbortSignal`
  * the caller flips when they unsubscribe; it's the user's responsibility to
  * honour it (or to wire it into any awaited I/O).
@@ -143,54 +143,67 @@ const makeStreamHandler =
  * stamp `visibility: "internal"` onto the registered function. Public builders
  * declare neither, so codegen distinguishes them by the brand's mere presence.
  */
-const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "internal"): Record<string, unknown> => ({
-    __cirrusProcedure: kind,
-    ...(visibility ? { __cirrusVisibility: visibility } : {}),
-    [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => ({
-        args: state.args,
-        handler: makeHandler(state.args, state.middlewares, userHandler, state.output),
-        kind,
-        ...(visibility ? { visibility } : {}),
-    }),
-    input: (validators: ArgsValidator) => makeBuilder(kind, { ...state, args: { ...state.args, ...validators } }, visibility),
-    output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),
-    // `.stream()` is meaningful only on query builders. It's harmless to expose
-    // on every builder shape (callers can't hit it from action/mutation builders
-    // anyway since the type system narrows it away), but emitting it
-    // unconditionally keeps the runtime free of per-kind branching.
-    ...(kind === "query"
-        ? {
-              stream: <R>(
-                  userHandler: (options: {
-                      args: Record<string, unknown>;
-                      ctx: unknown;
-                      signal: AbortSignal;
-                  }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
-              ) => ({
-                  args: state.args,
-                  handler: makeStreamHandler(state.args, state.middlewares, userHandler),
-                  kind: "stream" as const,
-                  ...(visibility ? { visibility } : {}),
-              }),
-          }
-        : {}),
-    use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { ...state, middlewares: [...state.middlewares, middleware] }, visibility),
-});
+const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "internal"): Record<string, unknown> => {
+    return {
+        __cirrusProcedure: kind,
+        ...(visibility ? { __cirrusVisibility: visibility } : {}),
+        input: (validators: ArgsValidator) => makeBuilder(kind, { ...state, args: { ...state.args, ...validators } }, visibility),
+        [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => {
+            return {
+                args: state.args,
+                handler: makeHandler(state.args, state.middlewares, userHandler, state.output),
+                kind,
+                ...(visibility ? { visibility } : {}),
+            };
+        },
+        output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),
+        // `.stream()` is meaningful only on query builders. It's harmless to expose
+        // on every builder shape (callers can't hit it from action/mutation builders
+        // anyway since the type system narrows it away), but emitting it
+        // unconditionally keeps the runtime free of per-kind branching.
+        ...(kind === "query"
+            ? {
+                  stream: <R>(
+                      userHandler: (options: {
+                          args: Record<string, unknown>;
+                          ctx: unknown;
+                          signal: AbortSignal;
+                      }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+                  ) => {
+                      return {
+                          args: state.args,
+                          handler: makeStreamHandler(state.args, state.middlewares, userHandler),
+                          kind: "stream" as const,
+                          ...(visibility ? { visibility } : {}),
+                      };
+                  },
+              }
+            : {}),
+        use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { ...state, middlewares: [...state.middlewares, middleware] }, visibility),
+    };
+};
 
 /**
- * Entry point for the procedure builder. `dataModel<DM>()` binds the generated
+ * Entry point for the procedure builder. `dataModel&lt;DM>()` binds the generated
  * `DataModel` (phantom for now), and `.create()` yields the public root builders
  * plus their `internal*` counterparts.
  */
 export const initCirrus = {
-    dataModel: <DataModel>(): DataModelInit<DataModel> => ({
-        create: (_options?: CreateOptions): CirrusBuilders => ({
-            action: makeBuilder("action", { args: {}, middlewares: [] }) as unknown as ActionBuilder<ActionCtx, EmptyArgs>,
-            internalAction: makeBuilder("action", { args: {}, middlewares: [] }, "internal") as unknown as InternalActionBuilder<ActionCtx, EmptyArgs>,
-            internalMutation: makeBuilder("mutation", { args: {}, middlewares: [] }, "internal") as unknown as InternalMutationBuilder<MutationCtx, EmptyArgs>,
-            internalQuery: makeBuilder("query", { args: {}, middlewares: [] }, "internal") as unknown as InternalQueryBuilder<QueryCtx, EmptyArgs>,
-            mutation: makeBuilder("mutation", { args: {}, middlewares: [] }) as unknown as MutationBuilder<MutationCtx, EmptyArgs>,
-            query: makeBuilder("query", { args: {}, middlewares: [] }) as unknown as QueryBuilder<QueryCtx, EmptyArgs>,
-        }),
-    }),
+    dataModel: <DataModel>(): DataModelInit<DataModel> => {
+        return {
+            create: (_options?: CreateOptions): CirrusBuilders => {
+                return {
+                    action: makeBuilder("action", { args: {}, middlewares: [] }) as unknown as ActionBuilder<ActionCtx, EmptyArgs>,
+                    internalAction: makeBuilder("action", { args: {}, middlewares: [] }, "internal") as unknown as InternalActionBuilder<ActionCtx, EmptyArgs>,
+                    internalMutation: makeBuilder("mutation", { args: {}, middlewares: [] }, "internal") as unknown as InternalMutationBuilder<
+                        MutationCtx,
+                        EmptyArgs
+                    >,
+                    internalQuery: makeBuilder("query", { args: {}, middlewares: [] }, "internal") as unknown as InternalQueryBuilder<QueryCtx, EmptyArgs>,
+                    mutation: makeBuilder("mutation", { args: {}, middlewares: [] }) as unknown as MutationBuilder<MutationCtx, EmptyArgs>,
+                    query: makeBuilder("query", { args: {}, middlewares: [] }) as unknown as QueryBuilder<QueryCtx, EmptyArgs>,
+                };
+            },
+        };
+    },
 };

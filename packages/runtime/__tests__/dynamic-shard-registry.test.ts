@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "../src/dynamic-shard-registry.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
@@ -84,7 +84,7 @@ const createFakeNamespace = (stub: { fetch: (request: Request) => Promise<Respon
 };
 
 describe("createDynamicShardRegistry", () => {
-    test("listShardKeys returns the keys the DO has registered", async () => {
+    it("listShardKeys returns the keys the DO has registered", async () => {
         expect.assertions(1);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a", "b", "c"] });
@@ -96,7 +96,7 @@ describe("createDynamicShardRegistry", () => {
         expect([...result].toSorted()).toEqual(["a", "b", "c"]);
     });
 
-    test("uses SHARD_REGISTRY_DO_NAME by default for the DO instance", async () => {
+    it("uses SHARD_REGISTRY_DO_NAME by default for the DO instance", async () => {
         expect.assertions(1);
 
         const fakeDO = createFakeRegistryDO();
@@ -108,7 +108,7 @@ describe("createDynamicShardRegistry", () => {
         expect(namespace.instanceCalls).toContain(SHARD_REGISTRY_DO_NAME);
     });
 
-    test("honors a custom instanceName", async () => {
+    it("honors a custom instanceName", async () => {
         expect.assertions(2);
 
         const fakeDO = createFakeRegistryDO();
@@ -121,7 +121,7 @@ describe("createDynamicShardRegistry", () => {
         expect(namespace.instanceCalls).not.toContain(SHARD_REGISTRY_DO_NAME);
     });
 
-    test("register propagates to the DO and returns void", async () => {
+    it("register propagates to the DO and returns void", async () => {
         expect.assertions(2);
 
         const fakeDO = createFakeRegistryDO();
@@ -134,7 +134,7 @@ describe("createDynamicShardRegistry", () => {
         expect([...fakeDO.tables.get("messages")!]).toEqual(["channel-7"]);
     });
 
-    test("unregister propagates to the DO", async () => {
+    it("unregister propagates to the DO", async () => {
         expect.assertions(1);
 
         const fakeDO = createFakeRegistryDO({ messages: ["x", "y"] });
@@ -146,7 +146,7 @@ describe("createDynamicShardRegistry", () => {
         expect([...fakeDO.tables.get("messages")!]).toEqual(["y"]);
     });
 
-    test("listShardKeys caches within the TTL window", async () => {
+    it("listShardKeys caches within the TTL window", async () => {
         expect.assertions(1);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
@@ -162,7 +162,7 @@ describe("createDynamicShardRegistry", () => {
         expect(listCalls).toHaveLength(1);
     });
 
-    test("register busts the local cache", async () => {
+    it("register busts the local cache", async () => {
         expect.assertions(2);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
@@ -181,7 +181,7 @@ describe("createDynamicShardRegistry", () => {
         expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(2);
     });
 
-    test("unregister busts the local cache", async () => {
+    it("unregister busts the local cache", async () => {
         expect.assertions(1);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a", "b"] });
@@ -196,7 +196,7 @@ describe("createDynamicShardRegistry", () => {
         expect([...result]).toEqual(["b"]);
     });
 
-    test("invalidate() drops the entire cache", async () => {
+    it("invalidate() drops the entire cache", async () => {
         expect.assertions(1);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"], tasks: ["x"] });
@@ -214,7 +214,7 @@ describe("createDynamicShardRegistry", () => {
         expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(4);
     });
 
-    test("invalidate(table) drops only one entry", async () => {
+    it("invalidate(table) drops only one entry", async () => {
         expect.assertions(1);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"], tasks: ["x"] });
@@ -234,7 +234,7 @@ describe("createDynamicShardRegistry", () => {
         expect(listCalls.filter((c) => (c as { path: string }).path === "/list")).toHaveLength(3);
     });
 
-    test("cacheTtlMs=0 disables caching entirely", async () => {
+    it("cacheTtlMs=0 disables caching entirely", async () => {
         expect.assertions(1);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
@@ -248,7 +248,7 @@ describe("createDynamicShardRegistry", () => {
         expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(3);
     });
 
-    test("snapshot returns the full tables map", async () => {
+    it("snapshot returns the full tables map", async () => {
         expect.assertions(2);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"], tasks: ["x", "y"] });
@@ -261,7 +261,7 @@ describe("createDynamicShardRegistry", () => {
         expect([...snap["tasks"]!].toSorted()).toEqual(["x", "y"]);
     });
 
-    test("listShardKeys throws when the DO returns non-2xx", async () => {
+    it("listShardKeys throws when the DO returns non-2xx", async () => {
         expect.assertions(1);
 
         const failingDO = {
@@ -273,7 +273,7 @@ describe("createDynamicShardRegistry", () => {
         await expect(registry.listShardKeys("messages")).rejects.toThrow(/registry \/list returned 500/);
     });
 
-    test("dEFAULT_REGISTRY_CACHE_TTL_MS is 30s", () => {
+    it("dEFAULT_REGISTRY_CACHE_TTL_MS is 30s", () => {
         expect.assertions(1);
 
         expect(DEFAULT_REGISTRY_CACHE_TTL_MS).toBe(30_000);

@@ -5,6 +5,7 @@
  */
 export interface ShardNamespaceLike {
     get: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
+
     /**
      * `getByName` is the friendlier API but isn't on every workers-types
      * release yet. We prefer it when available and fall back to

@@ -46,14 +46,10 @@ export default createConfig(
             "@stylistic/no-extra-parens": "off",
             "@stylistic/operator-linebreak": "off",
             "@stylistic/quotes": "off",
-            "@typescript-eslint/array-type": "off",
-            "@typescript-eslint/explicit-member-accessibility": "off",
-            "@typescript-eslint/member-ordering": "off",
             "@typescript-eslint/method-signature-style": "warn",
             "@typescript-eslint/naming-convention": "warn",
             "@typescript-eslint/no-base-to-string": "error",
             "@typescript-eslint/no-confusing-void-expression": "warn",
-            "@typescript-eslint/no-empty-object-type": "off",
             "@typescript-eslint/no-import-type-side-effects": "warn",
             "@typescript-eslint/no-misused-promises": "warn",
             "@typescript-eslint/no-explicit-any": "error",
@@ -75,55 +71,69 @@ export default createConfig(
             "@typescript-eslint/prefer-nullish-coalescing": "warn",
             "@typescript-eslint/prefer-optional-chain": "warn",
             "@typescript-eslint/prefer-promise-reject-errors": "warn",
-            "@typescript-eslint/require-await": "off",
             "@typescript-eslint/restrict-plus-operands": "warn",
-            "@typescript-eslint/restrict-template-expressions": "off",
             "@typescript-eslint/unbound-method": "warn",
             "@typescript-eslint/use-unknown-in-catch-callback-variable": "warn",
-            "arrow-body-style": "off",
-            "class-methods-use-this": "off",
-            "compat/compat": "off",
             "consistent-return": "warn",
-            "e18e/prefer-static-regex": "off",
-            "func-style": "off",
-            "import/consistent-type-specifier-style": "off",
+            // Kept off: these `async` methods implement async interface
+            // contracts (TableReaderLike/DatabaseWriterLike, the DO hibernation
+            // API, registry HTTP handlers) whose Promise return type is
+            // mandated by the interface and awaited by callers/codegen — even
+            // when a base implementation is synchronous. Dropping `async` would
+            // break type conformance and consumers.
+            "@typescript-eslint/require-await": "off",
+            // Kept off: timing-safe `constantTimeEqual` in shard-do.ts / session-do.ts
+            // relies on XOR/OR folding; rewriting to avoid bitwise ops would
+            // reintroduce a timing side-channel. Defensive security guard.
+            "no-bitwise": "off",
+            // Kept off: this package's source is organized literately
+            // (interleaved exports + prose). Moving 100+ value/type exports to
+            // file end changes const/class evaluation order (TDZ risk) — build
+            // and behavior risk, no runtime benefit.
             "import/exports-last": "off",
-            "import/no-commonjs": "off",
-            "import/no-named-as-default-member": "off",
-            "import/no-namespace": "off",
             "import/no-unresolved": "off",
             "import/prefer-default-export": "off",
+            // Kept off: fires on design-doc prose JSDoc (indented blocks,
+            // `{@link Identifier}` references to functions/generics that aren't
+            // exported types). Doc-only; no runtime impact.
             "jsdoc/check-indentation": "off",
-            "jsdoc/escape-inline-tags": "off",
-            "jsdoc/lines-before-block": "off",
-            "jsdoc/match-description": "off",
             "jsdoc/no-undefined-types": "off",
-            "jsdoc/require-param-type": "off",
-            "jsdoc/text-escaping": "off",
-            "markdown/heading-increment": "off",
+            "jsdoc/match-description": "off",
+            // Kept off: reordering DO class members (ShardDO/SessionDO) risks
+            // disturbing field-initializer evaluation order; large churn, no
+            // runtime benefit. Member order on these classes is intentional.
+            "@typescript-eslint/member-ordering": "off",
+            // Kept off: Durable Object lifecycle handlers (webSocketError/etc.)
+            // and protected override-hook stubs must be instance methods —
+            // workerd dispatches them on the instance and codegen subclasses
+            // override them polymorphically. Making them static would break
+            // both contracts even when the base body doesn't read `this`.
+            "class-methods-use-this": "off",
+            // Kept off: ORM/transaction modules colocate small cohesive classes
+            // (e.g. OCC TransactionContext + retry helper); splitting harms
+            // cohesion with no runtime benefit.
             "max-classes-per-file": "off",
             "n/no-unsupported-features/es-builtins": "off",
             "n/no-unsupported-features/es-syntax": "off",
             "n/no-unsupported-features/node-builtins": "off",
             "no-alert": "warn",
             "no-await-in-loop": "warn",
-            "no-bitwise": "off",
-            "no-confusing-arrow": "off",
             "no-dupe-keys": "warn",
             "no-empty-pattern": "warn",
-            "no-param-reassign": "off",
-            "no-promise-executor-return": "off",
             "no-restricted-syntax": "warn",
             "no-secrets/no-secrets": "warn",
             "no-underscore-dangle": "off",
             "no-useless-assignment": "warn",
-            "no-void": "off",
             "perfectionist/sort-exports": "warn",
             "perfectionist/sort-interfaces": "warn",
-            "perfectionist/sort-jsx-props": "off",
             "perfectionist/sort-object-types": "warn",
+            // Kept off: many object literals here are serialized verbatim via
+            // `JSON.stringify` onto the WebSocket wire / HTTP responses, where
+            // key order is observable (clients and tests compare exact JSON
+            // strings). Auto-sorting object keys would silently change the
+            // serialized output — a behavior change. Type-level sorting
+            // (sort-object-types/sort-interfaces) stays on as warnings.
             "perfectionist/sort-objects": "off",
-            "preserve-caught-error": "off",
             "promise/always-return": "warn",
             "promise/catch-or-return": "warn",
             "promise/param-names": "warn",
@@ -135,40 +145,23 @@ export default createConfig(
             "sonarjs/cognitive-complexity": "warn",
             "sonarjs/deprecation": "error",
             "sonarjs/function-return-type": "warn",
-            "sonarjs/no-alphabetical-sort": "off",
             "sonarjs/no-extra-arguments": "warn",
             "sonarjs/no-hardcoded-passwords": "warn",
             "sonarjs/no-nested-conditional": "warn",
-            "sonarjs/no-nested-functions": "off",
             "sonarjs/no-unused-vars": "warn",
             "sonarjs/prefer-read-only-props": "warn",
-            "sonarjs/pseudo-random": "off",
             "sonarjs/slow-regex": "warn",
-            "sonarjs/void-use": "off",
             "unicorn/catch-error-name": "warn",
-            "unicorn/filename-case": "off",
-            "unicorn/no-anonymous-default-export": "off",
-            "unicorn/no-array-callback-reference": "off",
-            "unicorn/no-array-reduce": "off",
-            "unicorn/no-array-sort": "off",
-            "unicorn/no-await-expression-member": "off",
             "unicorn/no-immediate-mutation": "warn",
             "unicorn/no-null": "off",
             "unicorn/no-object-as-default-parameter": "warn",
-            "unicorn/no-process-exit": "off",
-            "unicorn/no-this-assignment": "off",
             "unicorn/number-literal-case": "warn",
             "unicorn/numeric-separators-style": "warn",
             "unicorn/prefer-add-event-listener": "warn",
             "unicorn/prefer-code-point": "warn",
-            "unicorn/prefer-global-this": "off",
-            "unicorn/prefer-top-level-await": "off",
             "unicorn/prevent-abbreviations": "off",
             "unused-imports/no-unused-vars": "warn",
-            "vars-on-top": "off",
-            "vitest/consistent-test-it": "off",
             "vitest/expect-expect": "warn",
-            "vitest/require-to-throw-message": "off",
         },
     },
     // Fixtures: allow `any` and loose typing.
@@ -211,6 +204,24 @@ export default createConfig(
             "unicorn/no-null": "off",
             "vitest/no-conditional-expect": "off",
             "vitest/prefer-strict-equal": "off",
+            // Test-only relaxations mirroring the @cirrus/runtime and
+            // @cirrus/server test blocks (which already completed this
+            // migration): pedantic style rules with no runtime impact on the
+            // shipped package, kept off in test/bench/fixture code only.
+            "@typescript-eslint/no-empty-object-type": "off",
+            "@typescript-eslint/restrict-template-expressions": "off",
+            "class-methods-use-this": "off",
+            "e18e/prefer-static-regex": "off",
+            "import/exports-last": "off",
+            "jsdoc/check-indentation": "off",
+            "jsdoc/no-undefined-types": "off",
+            "no-param-reassign": "off",
+            "no-promise-executor-return": "off",
+            "no-void": "off",
+            "sonarjs/no-alphabetical-sort": "off",
+            "sonarjs/void-use": "off",
+            "unicorn/no-array-sort": "off",
+            "unicorn/no-await-expression-member": "off",
         },
     },
     // Markdown code blocks: don't enforce language tags.

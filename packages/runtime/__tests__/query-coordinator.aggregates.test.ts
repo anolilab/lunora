@@ -1,6 +1,7 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { createQueryCoordinator, createStaticShardRegistry, type FanOutRequest, mergeStrategyForAggregate } from "../src/query-coordinator.js";
+import type { FanOutRequest } from "../src/query-coordinator.js";
+import { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "../src/query-coordinator.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
 /**
@@ -16,32 +17,36 @@ interface ShardSpy {
 }
 
 const createShards = (responses: Record<string, unknown>): ShardSpy => {
-    const stubFor = (shardKey: string) => ({
+    const stubFor = (shardKey: string) => {
+ return {
         async fetch(): Promise<Response> {
             const value = responses[shardKey];
 
             return Response.json(value, { status: 200 });
         },
-    });
+    };
+};
 
     const namespace: ShardNamespaceLike = {
         get: (id) => stubFor((id as { __name: string }).__name),
         getByName: (name) => stubFor(name),
-        idFromName: (name) => ({ __name: name }),
+        idFromName: (name) => { return { __name: name }; },
     };
 
     return { namespace };
 };
 
-const buildRequest = (overrides: Partial<FanOutRequest>): FanOutRequest => ({
+const buildRequest = (overrides: Partial<FanOutRequest>): FanOutRequest => {
+ return {
     args: {},
     fanOut: { merge: { kind: "sum" }, table: "messages" },
     functionPath: "messages:list",
     ...overrides,
-});
+};
+};
 
 describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
-    test("count fans out as sum", async () => {
+    it("count fans out as sum", async () => {
         expect.assertions(2);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
@@ -54,7 +59,7 @@ describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
         expect(result.ok).toBe(3);
     });
 
-    test("max picks the largest per-shard scalar", async () => {
+    it("max picks the largest per-shard scalar", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
@@ -66,7 +71,7 @@ describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
         expect(result.data).toBe(99);
     });
 
-    test("min picks the smallest per-shard scalar", async () => {
+    it("min picks the smallest per-shard scalar", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
@@ -78,7 +83,7 @@ describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
         expect(result.data).toBe(7);
     });
 
-    test("min / max return null when every shard payload is non-numeric", async () => {
+    it("min / max return null when every shard payload is non-numeric", async () => {
         expect.assertions(2);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -94,7 +99,7 @@ describe("cross-shard merge — count + aggregate(sum/max/min)", () => {
 });
 
 describe("cross-shard merge — groupBy", () => {
-    test("groupBy(sum) reduces per-shard entries into one per distinct key", async () => {
+    it("groupBy(sum) reduces per-shard entries into one per distinct key", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -124,7 +129,7 @@ describe("cross-shard merge — groupBy", () => {
         ]);
     });
 
-    test("groupBy(max) reduces with max across shards", async () => {
+    it("groupBy(max) reduces with max across shards", async () => {
         expect.assertions(1);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -142,7 +147,7 @@ describe("cross-shard merge — groupBy", () => {
         expect(result.data).toEqual([{ key: { channelId: "c1" }, value: 11 }]);
     });
 
-    test("groupBy treats keys canonically (property order doesn't matter)", async () => {
+    it("groupBy treats keys canonically (property order doesn't matter)", async () => {
         expect.assertions(2);
 
         const registry = createStaticShardRegistry({ messages: ["a", "b"] });
@@ -163,13 +168,13 @@ describe("cross-shard merge — groupBy", () => {
 });
 
 describe("mergeStrategyForAggregate", () => {
-    test("count → sum", () => {
+    it("count → sum", () => {
         expect.assertions(1);
 
         expect(mergeStrategyForAggregate({ kind: "count" })).toEqual({ kind: "sum" });
     });
 
-    test("aggregate(sum) → sum, max → max, min → min", () => {
+    it("aggregate(sum) → sum, max → max, min → min", () => {
         expect.assertions(3);
 
         expect(mergeStrategyForAggregate({ kind: "scalar", op: "sum" })).toEqual({ kind: "sum" });
@@ -177,20 +182,20 @@ describe("mergeStrategyForAggregate", () => {
         expect(mergeStrategyForAggregate({ kind: "scalar", op: "min" })).toEqual({ kind: "min" });
     });
 
-    test("aggregate(avg) throws — needs sum + count separately", () => {
+    it("aggregate(avg) throws — needs sum + count separately", () => {
         expect.assertions(1);
 
         expect(() => mergeStrategyForAggregate({ kind: "scalar", op: "avg" })).toThrow(/avg/);
     });
 
-    test("groupBy → groupBy with op-derived reducer (default sum)", () => {
+    it("groupBy → groupBy with op-derived reducer (default sum)", () => {
         expect.assertions(2);
 
         expect(mergeStrategyForAggregate({ kind: "groupBy" })).toEqual({ kind: "groupBy", op: "sum" });
         expect(mergeStrategyForAggregate({ agg: { op: "max" }, kind: "groupBy" })).toEqual({ kind: "groupBy", op: "max" });
     });
 
-    test("groupBy(avg) throws", () => {
+    it("groupBy(avg) throws", () => {
         expect.assertions(1);
 
         expect(() => mergeStrategyForAggregate({ agg: { op: "avg" }, kind: "groupBy" })).toThrow(/avg/);

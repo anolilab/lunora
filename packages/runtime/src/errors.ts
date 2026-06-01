@@ -1,4 +1,4 @@
-export interface CirrusErrorBody {
+interface CirrusErrorBody {
     error: {
         code: string;
         message: string;
@@ -9,12 +9,12 @@ export interface CirrusErrorBody {
  * Error type recognised by the runtime's error middleware. Anything thrown
  * that isn't a `CirrusError` is mapped to a generic 500 with code `INTERNAL`.
  */
-export class CirrusError extends Error {
+class CirrusError extends Error {
     public readonly code: string;
 
     public readonly status: number;
 
-    constructor(message: string, options: { cause?: unknown; code: string; status?: number } = { code: "INTERNAL" }) {
+    public constructor(message: string, options: { cause?: unknown; code: string; status?: number } = { code: "INTERNAL" }) {
         super(message, { cause: options.cause });
         this.name = "CirrusError";
         this.code = options.code;
@@ -25,8 +25,8 @@ export class CirrusError extends Error {
         const body: CirrusErrorBody = { error: { code: this.code, message: this.message } };
 
         return Response.json(body, {
-            status: this.status,
             headers: { "content-type": "application/json" },
+            status: this.status,
         });
     }
 }
@@ -62,7 +62,7 @@ const isStructuralConflictError = (error: unknown): error is StructuralCirrusErr
 const isStructuralCirrusError = (error: unknown): error is StructuralCirrusErrorLike => hasErrorShape(error, "CirrusError");
 
 /** Convert any thrown value into a JSON error response. */
-export const toErrorResponse = (error: unknown): Response => {
+const toErrorResponse = (error: unknown): Response => {
     if (error instanceof CirrusError) {
         return error.toResponse();
     }
@@ -71,8 +71,8 @@ export const toErrorResponse = (error: unknown): Response => {
         const body: CirrusErrorBody = { error: { code: error.code, message: error.message } };
 
         return Response.json(body, {
-            status: error.status,
             headers: { "content-type": "application/json" },
+            status: error.status,
         });
     }
 
@@ -85,7 +85,10 @@ export const toErrorResponse = (error: unknown): Response => {
     const body: CirrusErrorBody = { error: { code: "INTERNAL", message: "Internal error" } };
 
     return Response.json(body, {
-        status: 500,
         headers: { "content-type": "application/json" },
+        status: 500,
     });
 };
+
+export { CirrusError, toErrorResponse };
+export type { CirrusErrorBody };

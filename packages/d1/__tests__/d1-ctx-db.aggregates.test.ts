@@ -1,5 +1,5 @@
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb, runD1AggregateMigrations } from "../src/d1-ctx-db.js";
 import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
@@ -11,7 +11,7 @@ import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
  * tables.
  */
 
-const col = (kind: string): ValidatorLike => ({ _meta: { column: { notNull: true } }, kind });
+const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
 
 const byProject: AggregateIndexDefinitionLike = {
     by: ["projectId"],
@@ -20,7 +20,8 @@ const byProject: AggregateIndexDefinitionLike = {
     op: "count",
 };
 
-const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => ({
+const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
+ return {
     tables: {
         todos: {
             aggregateIndexes: indexes,
@@ -32,7 +33,8 @@ const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => (
             },
         },
     },
-});
+};
+};
 
 let harness: ReturnType<typeof createD1Exec>;
 
@@ -69,7 +71,7 @@ describe("d1 aggregateIndex parity", () => {
         harness.close();
     });
 
-    test("trigger-maintained counter answers indexed reads", async () => {
+    it("trigger-maintained counter answers indexed reads", async () => {
         expect.assertions(3);
 
         const writer = await setupWriter(makeSchema(byProject));
@@ -84,7 +86,7 @@ describe("d1 aggregateIndex parity", () => {
         await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(5);
     });
 
-    test("falls back to SCAN when the counter companion table is absent", async () => {
+    it("falls back to SCAN when the counter companion table is absent", async () => {
         expect.assertions(1);
 
         // Skip runD1AggregateMigrations — counter table doesn't exist.
@@ -107,7 +109,7 @@ describe("d1 aggregateIndex parity", () => {
         await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
     });
 
-    test("aggregate(sum) reduces matching rows via SQL", async () => {
+    it("aggregate(sum) reduces matching rows via SQL", async () => {
         expect.assertions(1);
 
         const writer = await setupWriter(makeSchema());
@@ -117,7 +119,7 @@ describe("d1 aggregateIndex parity", () => {
         await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(6);
     });
 
-    test("groupBy tallies per group via SQL", async () => {
+    it("groupBy tallies per group via SQL", async () => {
         expect.assertions(1);
 
         const writer = await setupWriter(makeSchema());
@@ -130,7 +132,7 @@ describe("d1 aggregateIndex parity", () => {
         expect(tally).toEqual({ p1: 4, p2: 1 });
     });
 
-    test("restrictsCounts throws COUNT_RLS_UNSUPPORTED", async () => {
+    it("restrictsCounts throws COUNT_RLS_UNSUPPORTED", async () => {
         expect.assertions(1);
 
         const writer = await setupWriter(makeSchema(byProject));
@@ -143,7 +145,7 @@ describe("d1 aggregateIndex parity", () => {
         });
     });
 
-    test("baseWhere is AND-merged into the SCAN predicate", async () => {
+    it("baseWhere is AND-merged into the SCAN predicate", async () => {
         expect.assertions(1);
 
         const writer = await setupWriter(makeSchema());

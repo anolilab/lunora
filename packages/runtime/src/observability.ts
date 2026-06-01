@@ -20,6 +20,7 @@
 export interface ObservabilityEvent {
     /** Wall-clock duration of the dispatch, in milliseconds. */
     durationMs: number;
+
     /**
      * Populated on `ok === false`. `code`/`status` mirror the CirrusError
      * taxonomy; `message` is the human-readable string (may include user
@@ -30,6 +31,7 @@ export interface ObservabilityEvent {
         message: string;
         status: number;
     };
+
     /**
      * Populated for fan-out dispatches.
      * `shards` is the total fan-out cardinality; `failed` counts shards that

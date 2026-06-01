@@ -1,6 +1,7 @@
 import type { FunctionReference } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
-import { type ChangeEvent, type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
+import type { ChangeEvent, ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { errorMessage, formatTimestamp } from "./internal.js";
 import { recordShard } from "./shard-history.js";
@@ -25,7 +26,7 @@ interface RunHistoryEntry {
 /** How many recent runs to retain in the in-memory history. */
 const MAX_HISTORY = 10;
 
-export interface FunctionRunnerProps {
+interface FunctionRunnerProps {
     /**
      * Functions to expose. When omitted, the runner auto-discovers them via the
      * client's `listFunctions()` (the admin-gated `/_cirrus/admin/functions`
@@ -243,13 +244,13 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
                 <ul data-testid="fn-history">
                     {runs.map((entry, index) => (
                         <li data-testid="fn-history-row" key={entry.id}>
-                            <span data-testid={`fn-history-status-${index}`}>{entry.status === "success" ? "✓" : "✗"}</span>{" "}
+                            <span data-testid={`fn-history-status-${index.toString()}`}>{entry.status === "success" ? "✓" : "✗"}</span>{" "}
                             <span>
                                 {entry.path} ({entry.kind})
                             </span>{" "}
                             <time>{formatTimestamp(entry.at)}</time>{" "}
                             <button
-                                data-testid={`fn-history-load-${index}`}
+                                data-testid={`fn-history-load-${index.toString()}`}
                                 onClick={() => {
                                     loadRun(entry);
                                 }}
@@ -264,3 +265,5 @@ export function FunctionRunner({ functions: functionsProp }: FunctionRunnerProps
         </div>
     );
 }
+
+export type { FunctionRunnerProps };

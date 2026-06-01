@@ -1,10 +1,12 @@
 import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { ADMIN_FUNCTIONS, type MigrationStatusRow } from "../src/admin.js";
+import type { MigrationStatusRow } from "../src/admin.js";
+import { ADMIN_FUNCTIONS } from "../src/admin.js";
 import { MigrationsPanel } from "../src/migrations.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
 
 const ROWS: MigrationStatusRow[] = [
     { changed: 5, cursor: null, direction: "up", error: null, id: "0001_backfill", processed: 10, startedAt: 1, status: "completed", updatedAt: 2 },
@@ -34,7 +36,7 @@ const renderPanel = (mock: MockClientHooks) => (
 );
 
 describe("migrationsPanel", () => {
-    test("lists migration status rows on mount", async () => {
+    it("lists migration status rows on mount", async () => {
         expect.assertions(1);
 
         render(renderPanel(createClient()));
@@ -44,7 +46,7 @@ describe("migrationsPanel", () => {
         expect(row.textContent).toContain("completed");
     });
 
-    test("requires an id before running", async () => {
+    it("requires an id before running", async () => {
         expect.assertions(1);
 
         render(renderPanel(createClient()));
@@ -58,7 +60,7 @@ describe("migrationsPanel", () => {
         expect(runError.textContent).toBe("Enter a migration id");
     });
 
-    test("runs a migration and reports the result", async () => {
+    it("runs a migration and reports the result", async () => {
         expect.assertions(1);
 
         const mock = createClient();
@@ -79,7 +81,7 @@ describe("migrationsPanel", () => {
         expect(runCall?.[1]).toMatchObject({ dryRun: false, id: "0002_rename" });
     });
 
-    test("toggling Live subscribes to migrationStatus and folds in pushed progress", async () => {
+    it("toggling Live subscribes to migrationStatus and folds in pushed progress", async () => {
         expect.assertions(2);
 
         const mock = createClient();

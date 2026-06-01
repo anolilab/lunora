@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
@@ -10,8 +10,8 @@ const fakeCtx: ExecutionContextLike = {
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => ({ fetch: async () => new Response("not used", { status: 200 }) }),
-    idFromName: (name) => ({ __name: name }),
+    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
+    idFromName: (name) => { return { __name: name }; },
 };
 
 const ADMIN_TOKEN = "admin-bear";
@@ -51,7 +51,7 @@ const recordingScheduler = (): { calls: { body: string; method: string; pathname
 };
 
 describe("createWorker — scheduled admin endpoints", () => {
-    test("list rejects without a valid admin bearer (403)", async () => {
+    it("list rejects without a valid admin bearer (403)", async () => {
         expect.assertions(1);
 
         const { namespace } = recordingScheduler();
@@ -62,7 +62,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(response.status).toBe(403);
     });
 
-    test("list reports SCHEDULER_NOT_CONFIGURED when no namespace is bound (400)", async () => {
+    it("list reports SCHEDULER_NOT_CONFIGURED when no namespace is bound (400)", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
@@ -80,7 +80,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(body.error.code).toBe("SCHEDULER_NOT_CONFIGURED");
     });
 
-    test("list forwards GET /list to the default scheduler instance", async () => {
+    it("list forwards GET /list to the default scheduler instance", async () => {
         expect.assertions(4);
 
         const { calls, idArgs, namespace } = recordingScheduler();
@@ -101,7 +101,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(idArgs).toEqual(["default"]);
     });
 
-    test("list targets a named scheduler instance", async () => {
+    it("list targets a named scheduler instance", async () => {
         expect.assertions(1);
 
         const { idArgs, namespace } = recordingScheduler();
@@ -116,7 +116,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(idArgs).toEqual(["tenant-a"]);
     });
 
-    test("list rejects non-GET (405)", async () => {
+    it("list rejects non-GET (405)", async () => {
         expect.assertions(1);
 
         const { namespace } = recordingScheduler();
@@ -131,7 +131,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(response.status).toBe(405);
     });
 
-    test("cancel forwards POST /cancel with the id", async () => {
+    it("cancel forwards POST /cancel with the id", async () => {
         expect.assertions(3);
 
         const { calls, namespace } = recordingScheduler();
@@ -155,7 +155,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(calls).toEqual([{ body: JSON.stringify({ id: "j1" }), method: "POST", pathname: "/cancel" }]);
     });
 
-    test("cancel rejects a missing id (400)", async () => {
+    it("cancel rejects a missing id (400)", async () => {
         expect.assertions(2);
 
         const { calls, namespace } = recordingScheduler();
@@ -175,7 +175,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(calls).toEqual([]);
     });
 
-    test("ws proxies the upgrade to the scheduler's /ws with a valid bearer", async () => {
+    it("ws proxies the upgrade to the scheduler's /ws with a valid bearer", async () => {
         expect.assertions(1);
 
         const { calls, namespace } = recordingScheduler();
@@ -190,7 +190,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(calls).toEqual([{ body: "", method: "GET", pathname: "/ws" }]);
     });
 
-    test("ws accepts the admin token via the ?token query parameter (browsers can't set headers)", async () => {
+    it("ws accepts the admin token via the ?token query parameter (browsers can't set headers)", async () => {
         expect.assertions(1);
 
         const { calls, namespace } = recordingScheduler();
@@ -205,7 +205,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(calls).toEqual([{ body: "", method: "GET", pathname: "/ws" }]);
     });
 
-    test("ws rejects an upgrade with no admin credentials (403)", async () => {
+    it("ws rejects an upgrade with no admin credentials (403)", async () => {
         expect.assertions(2);
 
         const { calls, namespace } = recordingScheduler();
@@ -217,7 +217,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(calls).toEqual([]);
     });
 
-    test("ws rejects a non-upgrade request (426)", async () => {
+    it("ws rejects a non-upgrade request (426)", async () => {
         expect.assertions(1);
 
         const { namespace } = recordingScheduler();

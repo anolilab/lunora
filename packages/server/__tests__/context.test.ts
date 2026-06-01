@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, test } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { MutationCtx, QueryCtx, ReadOnlyStorage, Storage } from "../src/index.js";
 import { query, v } from "../src/index.js";
@@ -12,7 +12,7 @@ type Assert<T extends true> = T;
 type Extends<X, Y> = X extends Y ? true : false;
 
 describe("queryCtx.storage / MutationCtx.storage", () => {
-    test("exposes the read-only storage surface (getSignedUrl, getUrl, download)", () => {
+    it("exposes the read-only storage surface (getSignedUrl, getUrl, download)", () => {
         expect.assertions(0);
 
         // Build a minimal `ReadOnlyStorage` double and verify it satisfies
@@ -32,7 +32,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
         expectTypeOf(mutationCtx.getSignedUrl).toBeFunction();
     });
 
-    test("does NOT expose write operations on QueryCtx.storage at the type level", () => {
+    it("does NOT expose write operations on QueryCtx.storage at the type level", () => {
         expect.assertions(1);
 
         // `upload` lives only on the full `cirrus-storage` Storage / on
@@ -57,10 +57,10 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
         expect(_checks).toEqual([true, true, true]);
     });
 
-    test("a query handler can call ctx.storage.getSignedUrl", async () => {
+    it("a query handler can call ctx.storage.getSignedUrl", async () => {
         expect.assertions(2);
 
-        const calls: Array<{ expiresInSeconds?: number; key: string }> = [];
+        const calls: { expiresInSeconds?: number; key: string }[] = [];
 
         const storage: ReadOnlyStorage = {
             download: async () => null,

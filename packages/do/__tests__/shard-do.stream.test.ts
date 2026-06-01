@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
@@ -14,7 +14,8 @@ interface FakeWebSocket {
     serializeAttachment: (value: unknown) => void;
 }
 
-const createFakeWebSocket = (): FakeWebSocket => ({
+const createFakeWebSocket = (): FakeWebSocket => {
+ return {
     attachment: undefined,
     closeCalled: false,
     sent: [],
@@ -27,7 +28,8 @@ const createFakeWebSocket = (): FakeWebSocket => ({
     deserializeAttachment() {
         return this.attachment;
     },
-});
+};
+};
 
 const parseFrames = (ws: FakeWebSocket) => ws.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
 
@@ -114,7 +116,7 @@ describe("shardDO streaming queries", () => {
         db.close();
     });
 
-    test("drives an async generator into ack -> chunk frames -> complete", async () => {
+    it("drives an async generator into ack -> chunk frames -> complete", async () => {
         expect.assertions(4);
 
         const shard = new StreamShard(state, {});
@@ -140,7 +142,7 @@ describe("shardDO streaming queries", () => {
         expect(frames.filter((f) => f.type === "chunk").map((f) => f.data)).toEqual([{ tick: 1 }, { tick: 2 }, { tick: 3 }]);
     });
 
-    test("client unsubscribe mid-stream aborts the iterator and stops further chunks", async () => {
+    it("client unsubscribe mid-stream aborts the iterator and stops further chunks", async () => {
         expect.assertions(3);
 
         const shard = new StreamShard(state, {});
@@ -180,7 +182,7 @@ describe("shardDO streaming queries", () => {
         expect(types).not.toContain("complete");
     });
 
-    test("returns NOT_FOUND error when the function isn't a registered stream", async () => {
+    it("returns NOT_FOUND error when the function isn't a registered stream", async () => {
         expect.assertions(2);
 
         const shard = new StreamShard(state, {});
@@ -196,7 +198,7 @@ describe("shardDO streaming queries", () => {
         expect((errorFrame?.error as { code?: string }).code).toBe("NOT_FOUND");
     });
 
-    test("admin-prefixed function path is rejected before lookup", async () => {
+    it("admin-prefixed function path is rejected before lookup", async () => {
         expect.assertions(2);
 
         const shard = new StreamShard(state, {});
@@ -211,7 +213,7 @@ describe("shardDO streaming queries", () => {
         expect(errorFrame?.message).toContain("public");
     });
 
-    test("webSocketClose aborts in-flight streams bound to that socket", async () => {
+    it("webSocketClose aborts in-flight streams bound to that socket", async () => {
         expect.assertions(1);
 
         const shard = new StreamShard(state, {});
@@ -243,7 +245,7 @@ describe("shardDO streaming queries", () => {
         expect(abortedSignal?.aborted).toBe(true);
     });
 
-    test("a handler that throws surfaces an event-shaped error frame with code + message", async () => {
+    it("a handler that throws surfaces an event-shaped error frame with code + message", async () => {
         expect.assertions(4);
 
         const shard = new StreamShard(state, {});

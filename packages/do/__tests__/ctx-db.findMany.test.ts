@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -45,7 +45,7 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     await writer.insert("todos", { _id: "t5", archived: false, priority: "high", projectId: "p1", seq: 0 }, { allowExplicitId: true });
 };
 
-const ids = (docs: Array<Record<string, unknown>>): unknown[] => docs.map((doc) => doc["_id"]);
+const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((doc) => doc["_id"]);
 
 describe("ctx-db findMany", () => {
     beforeEach(() => {
@@ -57,7 +57,7 @@ describe("ctx-db findMany", () => {
     });
 
     describe("findMany — where filtering", () => {
-        test("filters by an equality field, defaulting to creation+id order", async () => {
+        it("filters by an equality field, defaulting to creation+id order", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -72,7 +72,7 @@ describe("ctx-db findMany", () => {
             expect(result.continueCursor).toBeNull();
         });
 
-        test("combines equality, boolean and `in` operators", async () => {
+        it("combines equality, boolean and `in` operators", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -86,7 +86,7 @@ describe("ctx-db findMany", () => {
             expect(ids(result.page)).toEqual(["t1", "t2", "t5"]);
         });
 
-        test("returns an empty, done page when nothing matches", async () => {
+        it("returns an empty, done page when nothing matches", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -102,7 +102,7 @@ describe("ctx-db findMany", () => {
     });
 
     describe("findMany — orderBy", () => {
-        test("orders by a numeric field ascending and descending", async () => {
+        it("orders by a numeric field ascending and descending", async () => {
             expect.assertions(2);
 
             const writer = setupWriter();
@@ -116,7 +116,7 @@ describe("ctx-db findMany", () => {
             expect(ids(desc.page)).toEqual(["t3", "t2", "t1", "t5"]);
         });
 
-        test("applies a secondary sort key when the first ties", async () => {
+        it("applies a secondary sort key when the first ties", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -134,7 +134,7 @@ describe("ctx-db findMany", () => {
     });
 
     describe("findMany — keyset cursor pagination", () => {
-        test("walks pages via continueCursor, covering every row exactly once", async () => {
+        it("walks pages via continueCursor, covering every row exactly once", async () => {
             expect.assertions(6);
 
             const writer = setupWriter();
@@ -159,7 +159,7 @@ describe("ctx-db findMany", () => {
             expect(second.continueCursor).toBeNull();
         });
 
-        test("is stable when a row is inserted before the cursor between pages", async () => {
+        it("is stable when a row is inserted before the cursor between pages", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -182,7 +182,7 @@ describe("ctx-db findMany", () => {
             expect(ids(second.page)).toEqual(["t2", "t3"]);
         });
 
-        test("a final page that exactly fills the limit reports isDone with no cursor", async () => {
+        it("a final page that exactly fills the limit reports isDone with no cursor", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -199,7 +199,7 @@ describe("ctx-db findMany", () => {
     });
 
     describe("findFirst", () => {
-        test("returns the first row under the order, or null when none match", async () => {
+        it("returns the first row under the order, or null when none match", async () => {
             expect.assertions(2);
 
             const writer = setupWriter();
@@ -215,7 +215,7 @@ describe("ctx-db findMany", () => {
     });
 
     describe("findFirstOrThrow", () => {
-        test("returns the matched row, mirroring findFirst on a hit", async () => {
+        it("returns the matched row, mirroring findFirst on a hit", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -227,7 +227,7 @@ describe("ctx-db findMany", () => {
             expect(top["_id"]).toBe("t3");
         });
 
-        test("throws NotFoundError when no row matches", async () => {
+        it("throws NotFoundError when no row matches", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -239,7 +239,7 @@ describe("ctx-db findMany", () => {
     });
 
     describe("count", () => {
-        test("counts rows matching the where filter", async () => {
+        it("counts rows matching the where filter", async () => {
             expect.assertions(3);
 
             const writer = setupWriter();
@@ -251,7 +251,7 @@ describe("ctx-db findMany", () => {
             await expect(writer.count("todos")).resolves.toBe(5);
         });
 
-        test("aND-merges baseWhere into the count predicate", async () => {
+        it("aND-merges baseWhere into the count predicate", async () => {
             expect.assertions(2);
 
             const writer = setupWriter();
@@ -264,7 +264,7 @@ describe("ctx-db findMany", () => {
             await expect(writer.count("todos", { baseWhere: { projectId: "p1" }, where: { archived: true } })).resolves.toBe(1);
         });
 
-        test("count() throws COUNT_RLS_UNSUPPORTED when restrictsCounts is true", async () => {
+        it("count() throws COUNT_RLS_UNSUPPORTED when restrictsCounts is true", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -283,7 +283,7 @@ describe("ctx-db findMany", () => {
     });
 
     describe("baseWhere seam (RLS / aggregates)", () => {
-        test("findMany AND-merges baseWhere before compilation", async () => {
+        it("findMany AND-merges baseWhere before compilation", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -299,7 +299,7 @@ describe("ctx-db findMany", () => {
             expect(ids(result.page).sort()).toEqual(["t1", "t2", "t5"]);
         });
 
-        test("baseWhere alone narrows the result with no caller `where`", async () => {
+        it("baseWhere alone narrows the result with no caller `where`", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();
@@ -311,7 +311,7 @@ describe("ctx-db findMany", () => {
             expect(ids(result.page)).toEqual(["t4"]);
         });
 
-        test("findFirst honors the merged baseWhere", async () => {
+        it("findFirst honors the merged baseWhere", async () => {
             expect.assertions(1);
 
             const writer = setupWriter();

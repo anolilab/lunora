@@ -4,39 +4,37 @@
  *
  * What it does, at runtime:
  *
- *  1. **Reads** — wraps `ctx.db.findMany`/`findFirst`/`findFirstOrThrow`/
- *     `query`/`count`/`get`. Per table with a `read` policy, builds the
- *     effective `baseWhere` (intersection of role-applicable predicates) and
- *     threads it through the underlying ORM via the public
- *     `QueryArgs.baseWhere` seam (see `@cirrus/do/src/query-args.ts`). Also
- *     sets `restrictsCounts: true` for the same tables, so `count()` throws
- *     `COUNT_RLS_UNSUPPORTED` (kitcn's documented constraint).
+ * 1. **Reads** — wraps `ctx.db.findMany`/`findFirst`/`findFirstOrThrow`/
+ * `query`/`count`/`get`. Per table with a `read` policy, builds the effective
+ * `baseWhere` (intersection of role-applicable predicates) and threads it
+ * through the underlying ORM via the public `QueryArgs.baseWhere` seam (see
+ * `@cirrus/do/src/query-args.ts`). Also sets `restrictsCounts: true` for the
+ * same tables, so `count()` throws `COUNT_RLS_UNSUPPORTED` (kitcn's documented
+ * constraint).
  *
- *  2. **Writes** — wraps `insert`/`patch`/`replace`/`delete`. For an
- *     `update`/`delete` it fetches the pre-write row through the *unwrapped*
- *     writer (RLS doesn't apply to the policy evaluator itself, only to the
- *     caller-visible reader) and runs the matching write policy with `row`
- *     set; for `insert` it runs the policy against the candidate document.
- *     A policy returning `false` aborts the write with
- *     `CirrusError("FORBIDDEN")`.
+ * 2. **Writes** — wraps `insert`/`patch`/`replace`/`delete`. For an
+ * `update`/`delete` it fetches the pre-write row through the *unwrapped* writer
+ * (RLS doesn't apply to the policy evaluator itself, only to the caller-visible
+ * reader) and runs the matching write policy with `row` set; for `insert` it
+ * runs the policy against the candidate document. A policy returning `false`
+ * aborts the write with `CirrusError("FORBIDDEN")`.
  *
- *  3. **Opt-in scope** — a policy applies only inside procedures whose
- *     builder chain includes this middleware. The `rls()` call site is the
- *     boundary; procedures without it see the unwrapped `ctx.db` and ignore
- *     every policy in the list. This is by design (PLAN2 §3.2).
+ * 3. **Opt-in scope** — a policy applies only inside procedures whose builder
+ * chain includes this middleware. The `rls()` call site is the boundary;
+ * procedures without it see the unwrapped `ctx.db` and ignore every policy in
+ * the list. This is by design (PLAN2 §3.2).
  *
  * What it deliberately does **not** touch:
  *
- *  - The `{ kind, args, handler }` dispatch contract.
- *  - Triggers — cross-row trigger logic by design has the full row already
- *    (`event.before`/`event.after`), so RLS gates the user-facing DB methods
- *    inside trigger handlers but never the trigger payload itself. The
- *    wrapper is installed on `ctx.db`; trigger internals use the underlying
- *    writer.
- *  - `count()` is intercepted only on tables with an active read policy —
- *    unrelated tables count freely.
+ * - The `{ kind, args, handler }` dispatch contract.
+ * - Triggers — cross-row trigger logic by design has the full row already
+ * (`event.before`/`event.after`), so RLS gates the user-facing DB methods
+ * inside trigger handlers but never the trigger payload itself. The wrapper is
+ * installed on `ctx.db`; trigger internals use the underlying writer.
+ * - `count()` is intercepted only on tables with an active read policy —
+ * unrelated tables count freely.
  *
- * The middleware is signature-compatible with the builder's `Middleware<>`,
+ * The middleware is signature-compatible with the builder's `Middleware&lt;>`,
  * so `.use(rls(policies))` slots in like any other middleware.
  */
 import type { Middleware } from "../builder/types.js";
@@ -69,15 +67,15 @@ interface CountArgs {
 interface QueryPage {
     continueCursor: null | string;
     isDone: boolean;
-    page: Array<Record<string, unknown>>;
+    page: Record<string, unknown>[];
 }
 
 interface TableReaderLike {
-    collect: () => Promise<Array<Record<string, unknown>>>;
+    collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;
     paginate: (options: { cursor?: null | string; numItems: number }) => Promise<QueryPage>;
-    take: (limit: number) => Promise<Array<Record<string, unknown>>>;
+    take: (limit: number) => Promise<Record<string, unknown>[]>;
     withIndex: (indexName: string, range?: (q: unknown) => unknown) => TableReaderLike;
     withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike;
 }
@@ -130,8 +128,8 @@ const FALSE_PREDICATE: WhereInput = { OR: [] };
  * Collect a per-table map from a flat policy list. Order within each table
  * is preserved so the merge below honors author-declared precedence.
  */
-const indexByTable = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Map<string, Array<Policy<Ctx>>> => {
-    const map = new Map<string, Array<Policy<Ctx>>>();
+const indexByTable = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Map<string, Policy<Ctx>[]> => {
+    const map = new Map<string, Policy<Ctx>[]>();
 
     for (const policy of policies) {
         const existing = map.get(policy.table) ?? [];
@@ -147,11 +145,11 @@ const indexByTable = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Map<string, Ar
  * Decide the effective read `baseWhere` for a table given the request's
  * applicable read policies:
  *
- *  - any `true`        → unrestricted (return `undefined`).
- *  - any `WhereInput`  → OR them (multiple policies broaden access).
- *  - all `false`/empty → deny (return the FALSE sentinel).
- *  - all `undefined`   → deny (the table is read-guarded but every policy
- *                        abstained — fail CLOSED, never reveal every row).
+ * - any `true` → unrestricted (return `undefined`).
+ * - any `WhereInput` → OR them (multiple policies broaden access).
+ * - all `false`/empty → deny (return the FALSE sentinel).
+ * - all `undefined` → deny (the table is read-guarded but every policy
+ * abstained — fail CLOSED, never reveal every row).
  *
  * The Convex / kitcn convention is "any matching policy reveals the row";
  * we mirror that by OR-ing the predicates. This function is only ever reached
@@ -332,17 +330,15 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
  *
  * Decision semantics:
  *
- *  - `true`            → allow.
- *  - `false`           → deny (`CirrusError("FORBIDDEN")` at the call site).
- *  - `WhereInput`      → allow only when the candidate row (insert) or
- *                        pre-write row (update/delete) matches the predicate;
- *                        a mismatch denies the write. Evaluated by
- *                        {@link matchesWhere} with the same operator set as
- *                        the SQL compiler (`eq`/`ne`/`in`/`notIn`/`lt`/`lte`/
- *                        `gt`/`gte`/`isNull`/`contains` + `AND`/`OR`/`NOT`).
- *                        A predicate without a row to evaluate (defensive
- *                        case — the wrapper always passes one) denies.
- *  - `undefined`       → policy opts out; doesn't count as a decision.
+ * - `true` → allow.
+ * - `false` → deny (`CirrusError("FORBIDDEN")` at the call site).
+ * - `WhereInput` → allow only when the candidate row (insert) or pre-write row
+ * (update/delete) matches the predicate; a mismatch denies the write. Evaluated
+ * by {@link matchesWhere} with the same operator set as the SQL compiler
+ * (`eq`/`ne`/`in`/`notIn`/`lt`/`lte`/`gt`/`gte`/`isNull`/`contains` +
+ * `AND`/`OR`/`NOT`). A predicate without a row to evaluate (defensive case —
+ * the wrapper always passes one) denies.
+ * - `undefined` → policy opts out; doesn't count as a decision.
  *
  * Default-DENY: once a table participates in RLS (has any policy attached) a
  * write op with NO matching write policy is denied. Read policies do NOT
@@ -441,7 +437,7 @@ const mergeBaseWhere = (caller: undefined | WhereInput, injected: undefined | Wh
  * call. The wrapper is a fresh closure per request so the evaluator sees the
  * current `ctx`.
  */
-const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>>, context: PolicyContext<Ctx>): RlsDatabase => {
+const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Policy<Ctx>[]>, context: PolicyContext<Ctx>): RlsDatabase => {
     /**
      * Cached effective read `baseWhere` per table. Cached for the lifetime
      * of one wrapped writer — i.e. one request — so a single procedure
@@ -494,7 +490,7 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
         // round-trips.
         const probes = await Promise.all(
             [...perTable.keys()].map(async (tableName) => {
-                const probe = await base.findFirst(tableName, { where: { _id: id }, limit: 1 });
+                const probe = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
 
                 return probe?.["_id"] === id ? tableName : null;
             }),
@@ -601,7 +597,7 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
             // unguarded `row` below, leaking what the policy is meant to hide.
             const probes = await Promise.all(
                 [...perTable.keys()].map(async (tableName) => {
-                    const membership = await base.findFirst(tableName, { where: { _id: id }, limit: 1 });
+                    const membership = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
 
                     if (membership?.["_id"] !== id) {
                         return null;
@@ -613,7 +609,7 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
                         return { allowed: membership };
                     }
 
-                    const allowed = await base.findFirst(tableName, { where: { _id: id }, baseWhere, limit: 1 });
+                    const allowed = await base.findFirst(tableName, { baseWhere, limit: 1, where: { _id: id } });
 
                     return { allowed: allowed?.["_id"] === id ? allowed : null };
                 }),
@@ -651,7 +647,9 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
                 id,
                 "update",
                 () => base.patch(id, patch),
-                (preRow) => ({ ...preRow, ...patch }),
+                (preRow) => {
+                    return { ...preRow, ...patch };
+                },
             ),
 
         query(tableName) {
@@ -681,11 +679,13 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
                 // existing row; `_creationTime` honors a caller-supplied value
                 // (the writer keeps `document._creationTime` when present) and
                 // otherwise falls back to the existing row's value.
-                (preRow) => ({
-                    ...document,
-                    _creationTime: document["_creationTime"] ?? preRow["_creationTime"],
-                    _id: preRow["_id"],
-                }),
+                (preRow) => {
+                    return {
+                        ...document,
+                        _creationTime: document["_creationTime"] ?? preRow["_creationTime"],
+                        _id: preRow["_id"],
+                    };
+                },
             ),
     };
 };

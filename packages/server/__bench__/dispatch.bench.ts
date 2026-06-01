@@ -1,6 +1,7 @@
 import { bench, describe } from "vitest";
 
-import { type Id, mutation, query, v } from "../src/index.js";
+import type { Id } from "../src/index.js";
+import { mutation, query, v } from "../src/index.js";
 
 /**
  * `query()`/`mutation()`/`action()` wrap the user's handler with the args

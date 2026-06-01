@@ -1,9 +1,12 @@
 import { useCirrus } from "@cirrus/react";
-import { type ColumnDef, flexRender, getCoreRowModel, getSortedRowModel, type Row, type SortingState, useReactTable } from "@tanstack/react-table";
+import type { ColumnDef, Row, SortingState } from "@tanstack/react-table";
+import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type CSSProperties, type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ADMIN_FUNCTIONS, type TableInfo, type TablePage, type WriteRowResult } from "./admin.js";
+import type { TableInfo, TablePage, WriteRowResult } from "./admin.js";
+import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
@@ -13,7 +16,7 @@ import { useDebounced } from "./use-debounced.js";
 import { useLiveAdmin } from "./use-live-admin.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 
-export interface DataBrowserProps {
+interface DataBrowserProps {
     /**
      * Allow editing: surfaces insert/edit/delete actions that issue
      * `__cirrus_admin__:writeRow` ops through the schema-aware writer. Off by
@@ -34,7 +37,7 @@ const SCROLL_HEIGHT = 400;
 const ROW_HEIGHT = 36;
 
 /** Static styles, hoisted so they aren't reallocated (and re-flagged) per render. */
-const SCROLL_STYLE: CSSProperties = { height: `${SCROLL_HEIGHT}px`, overflow: "auto", position: "relative" };
+const SCROLL_STYLE: CSSProperties = { height: `${SCROLL_HEIGHT.toString()}px`, overflow: "auto", position: "relative" };
 const ROWS_STYLE: CSSProperties = { width: "100%" };
 const ROW_BASE_STYLE: CSSProperties = { left: 0, position: "absolute", top: 0, width: "100%" };
 
@@ -98,9 +101,7 @@ const rowDoc = (row: TableRow): Record<string, unknown> => {
  * prefer it; the positional fallback only applies to the rare idless page and is
  * hidden behind this helper so it isn't an inline array-index key.
  */
-const rowKey = (row: TableRow, index: number): string => {
-    return rowId(row) ?? `row-${index}`;
-};
+const rowKey = (row: TableRow, index: number): string => rowId(row) ?? `row-${index.toString()}`;
 
 /** Render a single cell value as text without throwing on objects or null. */
 const formatCell = (value: unknown): string => {
@@ -125,6 +126,26 @@ const formatCell = (value: unknown): string => {
         }
     }
 };
+
+/**
+ * Renders a foreign-key cell as a link to the target table. Extracted to module
+ * scope so the column-def `cell` renderer stays a flat callback instead of
+ * nesting another arrow for the click handler.
+ */
+function RefCell({ column, id, onNavigate, target }: { column: string; id: string; onNavigate: (target: string, id: string) => void; target: string }): ReactElement {
+    return (
+        <button
+            data-testid={`db-ref-${column}`}
+            onClick={() => {
+                onNavigate(target, id);
+            }}
+            title={`Open ${target} ${id}`}
+            type="button"
+        >
+            {id} ↗
+        </button>
+    );
+}
 
 /** The header glyph for a column given react-table's sort state: ` ▲`, ` ▼`, or empty. */
 const sortIndicator = (sorted: "asc" | "desc" | false): string => {
@@ -372,20 +393,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                     const value = info.getValue();
 
                     if (target !== undefined && (typeof value === "string" || typeof value === "number") && String(value) !== "") {
-                        const id = String(value);
-
-                        return (
-                            <button
-                                data-testid={`db-ref-${column}`}
-                                onClick={() => {
-                                    navigateToRef(target, id);
-                                }}
-                                title={`Open ${target} ${id}`}
-                                type="button"
-                            >
-                                {id} ↗
-                            </button>
-                        );
+                        return <RefCell column={column} id={String(value)} onNavigate={navigateToRef} target={target} />;
                     }
 
                     return formatCell(value);
@@ -459,7 +467,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
     // height is intrinsically dynamic (it tracks the virtualizer), so the style
     // object is rebuilt each render — react-virtual's canonical pattern.
     // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- dynamic virtualizer height
-    const tbodyStyle: CSSProperties = { display: "block", height: `${totalSize}px`, position: "relative" };
+    const tbodyStyle: CSSProperties = { display: "block", height: `${totalSize.toString()}px`, position: "relative" };
 
     const total = page?.total ?? 0;
     const hasPrevious = offset > 0;
@@ -475,7 +483,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
         // Per-row absolute offset from the virtualizer; necessarily a fresh object
         // each render since `start`/`size` change as the window scrolls.
         // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- dynamic virtualizer offset
-        const rowStyle: CSSProperties = { ...ROW_BASE_STYLE, height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` };
+        const rowStyle: CSSProperties = { ...ROW_BASE_STYLE, height: `${virtualRow.size.toString()}px`, transform: `translateY(${virtualRow.start.toString()}px)` };
 
         return (
             <tr data-testid="db-row" key={tableRow.id} style={rowStyle}>
@@ -689,7 +697,7 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
                         >
                             Previous
                         </button>
-                        <span data-testid="db-page-info">{`${rangeStart}-${rangeEnd} of ${total}`}</span>
+                        <span data-testid="db-page-info">{`${rangeStart.toString()}-${rangeEnd.toString()} of ${total.toString()}`}</span>
                         <button
                             data-testid="db-next"
                             disabled={!hasNext}
@@ -706,3 +714,5 @@ export function DataBrowser({ editable = false, initialShardKey, pageSize = DEFA
         </div>
     );
 }
+
+export type { DataBrowserProps };

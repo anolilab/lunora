@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { BroadcastDelta, DatabaseWriterLike } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -42,7 +42,7 @@ describe("ctx-db against real SQLite", () => {
     });
 
     describe("ctx-db against real SQLite — migrations", () => {
-        test("creates queryable tables for every non-global schema table", async () => {
+        it("creates queryable tables for every non-global schema table", async () => {
             expect.assertions(2);
 
             const { writer } = setupWriter({ idGenerator: () => "m_1" });
@@ -54,7 +54,7 @@ describe("ctx-db against real SQLite", () => {
             await expect(writer.query("roomMembers").collect()).resolves.toHaveLength(1);
         });
 
-        test("does not create a table for .global() tables", () => {
+        it("does not create a table for .global() tables", () => {
             expect.assertions(1);
 
             setupWriter();
@@ -64,7 +64,7 @@ describe("ctx-db against real SQLite", () => {
             expect(() => harness.raw('SELECT * FROM "profiles"')).toThrow();
         });
 
-        test("enforces UNIQUE indexes at the engine level", async () => {
+        it("enforces UNIQUE indexes at the engine level", async () => {
             expect.assertions(1);
 
             const { writer } = setupWriter();
@@ -78,7 +78,7 @@ describe("ctx-db against real SQLite", () => {
     });
 
     describe("ctx-db against real SQLite — round-trips", () => {
-        test("preserves boolean, null, number, and array types through JSON", async () => {
+        it("preserves boolean, null, number, and array types through JSON", async () => {
             expect.assertions(1);
 
             const { writer } = setupWriter({ idGenerator: () => "m_1" });
@@ -103,7 +103,7 @@ describe("ctx-db against real SQLite", () => {
             });
         });
 
-        test("get() returns null for an unknown id", async () => {
+        it("get() returns null for an unknown id", async () => {
             expect.assertions(1);
 
             const { writer } = setupWriter();
@@ -111,7 +111,7 @@ describe("ctx-db against real SQLite", () => {
             await expect(writer.get("nope")).resolves.toBeNull();
         });
 
-        test("patch merges, replace overwrites, delete removes — verified by re-read", async () => {
+        it("patch merges, replace overwrites, delete removes — verified by re-read", async () => {
             expect.assertions(3);
 
             const { writer } = setupWriter({ idGenerator: () => "m_1" });
@@ -133,7 +133,7 @@ describe("ctx-db against real SQLite", () => {
     });
 
     describe("ctx-db against real SQLite — queries", () => {
-        test("collect() orders by _creationTime ascending", async () => {
+        it("collect() orders by _creationTime ascending", async () => {
             expect.assertions(1);
 
             let now = 0;
@@ -154,7 +154,7 @@ describe("ctx-db against real SQLite", () => {
             expect(rows.map((row) => row["_id"])).toEqual(["b", "a"]);
         });
 
-        test("withIndex().eq() filters in the engine", async () => {
+        it("withIndex().eq() filters in the engine", async () => {
             expect.assertions(2);
 
             const { writer } = setupWriter();
@@ -171,7 +171,7 @@ describe("ctx-db against real SQLite", () => {
             expect(rows[0]).toMatchObject({ _id: "b" });
         });
 
-        test("withIndex() range on _creationTime uses real numeric comparison", async () => {
+        it("withIndex() range on _creationTime uses real numeric comparison", async () => {
             expect.assertions(1);
 
             let now = 0;
@@ -195,7 +195,7 @@ describe("ctx-db against real SQLite", () => {
             expect(rows.map((row) => row["_id"])).toEqual(["b", "c"]);
         });
 
-        test("take(n) limits at the engine when there is no in-memory filter", async () => {
+        it("take(n) limits at the engine when there is no in-memory filter", async () => {
             expect.assertions(1);
 
             let now = 0;
@@ -216,7 +216,7 @@ describe("ctx-db against real SQLite", () => {
             expect(rows.map((row) => row["_id"])).toEqual(["a", "b"]);
         });
 
-        test("filter() applies in JS after the engine fetch", async () => {
+        it("filter() applies in JS after the engine fetch", async () => {
             expect.assertions(2);
 
             const { writer } = setupWriter();
@@ -233,7 +233,7 @@ describe("ctx-db against real SQLite", () => {
             expect(rows[0]).toMatchObject({ _id: "a" });
         });
 
-        test("first() returns the earliest row or null", async () => {
+        it("first() returns the earliest row or null", async () => {
             expect.assertions(2);
 
             let now = 0;

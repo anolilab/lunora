@@ -1,10 +1,12 @@
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { ADMIN_FUNCTIONS, type ExportRow } from "../src/admin.js";
+import type { ExportRow } from "../src/admin.js";
+import { ADMIN_FUNCTIONS } from "../src/admin.js";
 import { ExportImportPanel } from "../src/export-import.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
 
 const EXPORT_ROWS: ExportRow[] = [
     { doc: { __id__: "m1", text: "hello" }, table: "messages" },
@@ -35,7 +37,7 @@ const renderPanel = (mock: MockClientHooks) => (
 );
 
 describe("exportImportPanel", () => {
-    test("exports rows into the NDJSON textarea", async () => {
+    it("exports rows into the NDJSON textarea", async () => {
         expect.assertions(2);
 
         render(renderPanel(createClient()));
@@ -44,13 +46,13 @@ describe("exportImportPanel", () => {
 
         await screen.findByText("Exported 2 rows.");
 
-        const textarea = screen.getByTestId("ei-ndjson") as HTMLTextAreaElement;
+        const textarea = screen.getByTestId<HTMLTextAreaElement>("ei-ndjson");
 
         expect(textarea.value.split("\n")).toHaveLength(2);
         expect(JSON.parse(textarea.value.split("\n")[0] ?? "")).toMatchObject({ table: "messages" });
     });
 
-    test("rejects malformed NDJSON before calling the server", async () => {
+    it("rejects malformed NDJSON before calling the server", async () => {
         expect.assertions(2);
 
         const mock = createClient();
@@ -67,7 +69,7 @@ describe("exportImportPanel", () => {
         expect(mock.query.mock.calls.some((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.importShard)).toBe(false);
     });
 
-    test("imports NDJSON and summarises the result", async () => {
+    it("imports NDJSON and summarises the result", async () => {
         expect.assertions(1);
 
         render(renderPanel(createClient()));

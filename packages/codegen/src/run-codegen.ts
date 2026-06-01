@@ -8,31 +8,6 @@ import { discoverMigrations } from "./discover-migrations.js";
 import { discoverSchema } from "./discover-schema.js";
 import { emitApi, emitDataModel, emitDrizzleSchema, emitServer, emitShard } from "./emit.js";
 
-export interface CodegenOptions {
-    /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
-    cirrusDirectory?: string;
-    /**
-     * When true, run discovery + emit (so any schema/function parse error
-     * surfaces) but skip writing files to `_generated/`. The returned
-     * `outputDirectory` is still the path that *would* have been written.
-     */
-    dryRun?: boolean;
-    /** Project root containing the `cirrus/` directory. */
-    projectRoot: string;
-}
-
-export interface CodegenResult {
-    generated: {
-        api: string;
-        dataModel: string;
-        drizzleGlobal: string;
-        drizzleShard: string;
-        server: string;
-        shard: string;
-    };
-    outputDirectory: string;
-}
-
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
     // content is identical to what's on disk.
@@ -68,8 +43,8 @@ const findTsconfig = (startPath: string): string | undefined => {
 };
 
 /**
- * Top-level codegen entry. Parses `<projectRoot>/cirrus/schema.ts` and every
- * function file under `<projectRoot>/cirrus/`, then writes
+ * Top-level codegen entry. Parses `&lt;projectRoot>/cirrus/schema.ts` and every
+ * function file under `&lt;projectRoot>/cirrus/`, then writes
  * `_generated/{api,server,dataModel}.ts` next to them.
  */
 export const runCodegen = (options: CodegenOptions): CodegenResult => {
@@ -84,7 +59,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // and path aliases work. Fall back to an isolated project otherwise.
     const tsconfigPath = findTsconfig(cirrusDirectory);
     const project = tsconfigPath
-        ? new Project({ tsConfigFilePath: tsconfigPath, skipAddingFilesFromTsConfig: false, useInMemoryFileSystem: false })
+        ? new Project({ skipAddingFilesFromTsConfig: false, tsConfigFilePath: tsconfigPath, useInMemoryFileSystem: false })
         : new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
     const schema = discoverSchema(project, schemaPath);
@@ -124,3 +99,29 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         outputDirectory,
     };
 };
+
+export interface CodegenOptions {
+    /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
+    cirrusDirectory?: string;
+
+    /**
+     * When true, run discovery + emit (so any schema/function parse error
+     * surfaces) but skip writing files to `_generated/`. The returned
+     * `outputDirectory` is still the path that *would* have been written.
+     */
+    dryRun?: boolean;
+    /** Project root containing the `cirrus/` directory. */
+    projectRoot: string;
+}
+
+export interface CodegenResult {
+    generated: {
+        api: string;
+        dataModel: string;
+        drizzleGlobal: string;
+        drizzleShard: string;
+        server: string;
+        shard: string;
+    };
+    outputDirectory: string;
+}

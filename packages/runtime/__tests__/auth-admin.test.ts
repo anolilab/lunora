@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { AuthIntrospector, ExecutionContextLike } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
@@ -10,8 +10,8 @@ const fakeCtx: ExecutionContextLike = {
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => ({ fetch: async () => new Response("not used", { status: 200 }) }),
-    idFromName: (name) => ({ __name: name }),
+    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
+    idFromName: (name) => { return { __name: name }; },
 };
 
 const ADMIN_TOKEN = "admin-bear";
@@ -19,15 +19,17 @@ const ADMIN_TOKEN = "admin-bear";
 const USERS = { rows: [{ email: "a@example.com", id: "u1" }], total: 1 };
 const SESSIONS = { rows: [{ id: "s1", userId: "u1" }], total: 1 };
 
-const introspector = (): AuthIntrospector => ({
+const introspector = (): AuthIntrospector => {
+ return {
     listSessions: vi.fn<AuthIntrospector["listSessions"]>(async () => SESSIONS),
     listUsers: vi.fn<AuthIntrospector["listUsers"]>(async () => USERS),
-});
+};
+};
 
 const authed = (url: string): Request => new Request(url, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" });
 
 describe("createWorker — auth introspection endpoints", () => {
-    test("users rejects without a valid admin bearer (403)", async () => {
+    it("users rejects without a valid admin bearer (403)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
@@ -37,7 +39,7 @@ describe("createWorker — auth introspection endpoints", () => {
         expect(response.status).toBe(403);
     });
 
-    test("users reports AUTH_NOT_CONFIGURED when no introspector is bound (400)", async () => {
+    it("users reports AUTH_NOT_CONFIGURED when no introspector is bound (400)", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
@@ -51,7 +53,7 @@ describe("createWorker — auth introspection endpoints", () => {
         expect(body.error.code).toBe("AUTH_NOT_CONFIGURED");
     });
 
-    test("users returns the introspector's page and forwards paging", async () => {
+    it("users returns the introspector's page and forwards paging", async () => {
         expect.assertions(3);
 
         const intro = introspector();
@@ -64,7 +66,7 @@ describe("createWorker — auth introspection endpoints", () => {
         expect(intro.listUsers).toHaveBeenCalledWith({ limit: 10, offset: 5 });
     });
 
-    test("sessions forwards userId + paging and returns the page", async () => {
+    it("sessions forwards userId + paging and returns the page", async () => {
         expect.assertions(3);
 
         const intro = introspector();
@@ -77,7 +79,7 @@ describe("createWorker — auth introspection endpoints", () => {
         expect(intro.listSessions).toHaveBeenCalledWith({ limit: 20, offset: undefined, userId: "u1" });
     });
 
-    test("sessions without a userId passes undefined", async () => {
+    it("sessions without a userId passes undefined", async () => {
         expect.assertions(1);
 
         const intro = introspector();
@@ -88,7 +90,7 @@ describe("createWorker — auth introspection endpoints", () => {
         expect(intro.listSessions).toHaveBeenCalledWith({ limit: undefined, offset: undefined, userId: undefined });
     });
 
-    test("users rejects non-GET (405)", async () => {
+    it("users rejects non-GET (405)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });

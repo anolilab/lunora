@@ -59,7 +59,7 @@ export interface WithInput {
 export interface ResolveWithOptions {
     counter: (tableName: string, where?: WhereInput) => Promise<number>;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
-    parents: Array<Record<string, unknown>>;
+    parents: Record<string, unknown>[];
     schema: { readonly tables: Record<string, TableDefinitionLike> };
     tableName: string;
     with: WithInput;
@@ -68,7 +68,7 @@ export interface ResolveWithOptions {
 const isGlobal = (definition: TableDefinitionLike | undefined): boolean => definition?.shardMode?.kind === "global";
 
 /** Distinct, non-nullish values of `field` across `rows`, preserving first-seen order. */
-const distinctValues = (rows: Array<Record<string, unknown>>, field: string): unknown[] => {
+const distinctValues = (rows: Record<string, unknown>[], field: string): unknown[] => {
     const seen = new Set<unknown>();
 
     for (const row of rows) {
@@ -154,7 +154,7 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
         const where: WhereInput = nested.where ? { AND: [nested.where, fkFilter] } : fkFilter;
         const { page } = await fetcher(relation.table, { orderBy: nested.orderBy, where, with: nested.with });
 
-        const groups = new Map<unknown, Array<Record<string, unknown>>>();
+        const groups = new Map<unknown, Record<string, unknown>[]>();
 
         for (const child of page) {
             const key = child[relation.field];
@@ -232,12 +232,14 @@ export const resolveWith = async (options: ResolveWithOptions): Promise<void> =>
 export interface ApplyOnDeleteOptions {
     deletedId: string;
     deletedReference: (references: string) => unknown;
+
     /**
      * Locate holder rows pointing at the deleted parent. Receives the
      * `holderTable` so the caller can route to the right backend
      * (DO SQLite vs D1) per-table.
      */
-    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Array<Record<string, unknown>>>;
+    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Record<string, unknown>[]>;
+
     /**
      * Delete a holder row. `holderTable` is the row's table so the caller can
      * route the delete to the matching backend's writer — same shape as
@@ -245,6 +247,7 @@ export interface ApplyOnDeleteOptions {
      */
     onCascade: (holderTable: string, id: string) => Promise<void>;
     onRestrict: (message: string) => never;
+
     /**
      * Null out the FK on a holder row. `holderTable` lets the caller route
      * the patch to the right backend.

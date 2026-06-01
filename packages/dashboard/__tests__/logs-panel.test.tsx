@@ -1,10 +1,14 @@
 import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { ADMIN_FUNCTIONS, type LogEntry } from "../src/admin.js";
+import type { LogEntry } from "../src/admin.js";
+import { ADMIN_FUNCTIONS } from "../src/admin.js";
 import { LogsPanel } from "../src/logs-panel.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
+
+const WINDOWED_ENTRY = /entry-\d+/;
 
 const ENTRIES: LogEntry[] = [
     { functionPath: "messages:send", level: "error", message: "boom", timestamp: 1_700_000_002_000 },
@@ -36,7 +40,7 @@ const renderPanel = (mock: MockClientHooks) => (
 );
 
 describe("logsPanel", () => {
-    test("renders a row per captured log on mount", async () => {
+    it("renders a row per captured log on mount", async () => {
         expect.assertions(3);
 
         render(renderPanel(createClient()));
@@ -50,7 +54,7 @@ describe("logsPanel", () => {
         expect(rows[0]?.textContent).toContain("messages:send");
     });
 
-    test("shows the empty state when there are no logs", async () => {
+    it("shows the empty state when there are no logs", async () => {
         expect.assertions(1);
 
         render(renderPanel(createClient([])));
@@ -60,7 +64,7 @@ describe("logsPanel", () => {
         expect(empty.textContent).toBe("No logs.");
     });
 
-    test("forwards the shard key on refresh", async () => {
+    it("forwards the shard key on refresh", async () => {
         expect.assertions(1);
 
         const mock = createClient();
@@ -83,7 +87,7 @@ describe("logsPanel", () => {
         expect(lastCall[2]).toEqual({ shardKey: "room-9" });
     });
 
-    test("surfaces an error", async () => {
+    it("surfaces an error", async () => {
         expect.assertions(1);
 
         const mock = createMockClient({
@@ -99,7 +103,7 @@ describe("logsPanel", () => {
         expect(error.textContent).toBe("ADMIN_FORBIDDEN");
     });
 
-    test("filters entries by case-insensitive search text", async () => {
+    it("filters entries by case-insensitive search text", async () => {
         expect.assertions(3);
 
         render(renderPanel(createClient(MIXED_ENTRIES)));
@@ -115,7 +119,7 @@ describe("logsPanel", () => {
         expect(rows[1]?.textContent).toContain("BOOM recovered");
     });
 
-    test("shows the empty state when the search matches nothing", async () => {
+    it("shows the empty state when the search matches nothing", async () => {
         expect.assertions(1);
 
         render(renderPanel(createClient(MIXED_ENTRIES)));
@@ -129,7 +133,7 @@ describe("logsPanel", () => {
         expect(empty.textContent).toBe("No logs.");
     });
 
-    test("filters entries by level", async () => {
+    it("filters entries by level", async () => {
         expect.assertions(2);
 
         render(renderPanel(createClient(MIXED_ENTRIES)));
@@ -144,7 +148,7 @@ describe("logsPanel", () => {
         expect(rows.every((row) => row.textContent?.includes("info"))).toBe(true);
     });
 
-    test("composes search and level filters", async () => {
+    it("composes search and level filters", async () => {
         expect.assertions(2);
 
         render(renderPanel(createClient(MIXED_ENTRIES)));
@@ -160,19 +164,21 @@ describe("logsPanel", () => {
         expect(rows[0]?.textContent).toContain("BOOM recovered");
     });
 
-    test("virtualizes a large buffer to a bounded number of DOM rows", async () => {
+    it("virtualizes a large buffer to a bounded number of DOM rows", async () => {
         // The buffer is a bounded 500-entry ring; un-windowed that is 500 <div>s.
         // With a ~400px viewport and ~36px rows the virtualizer should mount only
         // the visible slice (+ overscan) — a small, bounded count well under 500 —
         // which is what proves virtualization is actually windowing the list.
         expect.assertions(3);
 
-        const big: LogEntry[] = Array.from({ length: 500 }, (_, index) => ({
+        const big: LogEntry[] = Array.from({ length: 500 }, (_, index) => {
+ return {
             functionPath: `fn:${String(index)}`,
             level: "error" as const,
             message: `entry-${String(index)}`,
             timestamp: 1_700_000_000_000 + index,
-        }));
+        };
+});
 
         render(renderPanel(createClient(big)));
 
@@ -184,10 +190,10 @@ describe("logsPanel", () => {
         expect(rows.length).toBeLessThan(big.length);
         // Every mounted row is a real windowed entry from the buffer (which index
         // window jsdom lands on is irrelevant — that it is a small slice is).
-        expect(rows.every((row) => /entry-\d+/.test(row.textContent ?? ""))).toBe(true);
+        expect(rows.every((row) => WINDOWED_ENTRY.test(row.textContent ?? ""))).toBe(true);
     });
 
-    test("toggling Live subscribes to getLogs and renders pushed entries", async () => {
+    it("toggling Live subscribes to getLogs and renders pushed entries", async () => {
         expect.assertions(2);
 
         const mock = createClient([]);

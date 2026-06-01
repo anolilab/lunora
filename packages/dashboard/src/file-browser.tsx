@@ -1,12 +1,11 @@
 import type { StorageObject } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
-import { type ChangeEvent, type ReactElement, useCallback, useEffect, useState } from "react";
+import type { ChangeEvent, ReactElement } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { errorMessage, formatBytes } from "./internal.js";
 
-export type { StorageObject } from "@cirrus/client";
-
-export interface FileBrowserProps {
+interface FileBrowserProps {
     /** Object-key prefix the browser filters by on first load. */
     readonly initialPrefix?: string;
     /** Objects requested per page. Forwarded to the storage `list` limit. */
@@ -42,9 +41,7 @@ export function FileBrowser({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
             try {
                 const page = await client.listStorageObjects({ cursor, limit: pageSize, prefix: searchPrefix });
 
-                setObjects((previous) => {
-                    return append && previous !== null ? [...previous, ...page.objects] : page.objects;
-                });
+                setObjects((previous) => (append && previous !== null ? [...previous, ...page.objects] : page.objects));
                 setNextCursor(page.cursor);
             } catch (error_) {
                 if (!append) {
@@ -131,3 +128,5 @@ export function FileBrowser({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
         </div>
     );
 }
+
+export type { FileBrowserProps };

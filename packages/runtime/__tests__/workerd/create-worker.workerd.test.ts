@@ -8,13 +8,13 @@
  * round-trip.
  */
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 // `env`'s type comes from the ambient `Cloudflare.Env` augmentation in
 // `./env.d.ts`.
 
 describe("createWorker (workerd)", () => {
-    test("forwards authorization, cookie, and x-d1-bookmark to the shard", async () => {
+    it("forwards authorization, cookie, and x-d1-bookmark to the shard", async () => {
         expect.assertions(5);
 
         const response = await SELF.fetch("https://app.test/_cirrus/rpc", {
@@ -43,7 +43,7 @@ describe("createWorker (workerd)", () => {
         expect(forwarded.body).toEqual({ functionPath: "messages:list", args: { limit: 5 } });
     });
 
-    test("does NOT forward unrelated headers like user-agent or x-secret", async () => {
+    it("does NOT forward unrelated headers like user-agent or x-secret", async () => {
         expect.assertions(3);
 
         const response = await SELF.fetch("https://app.test/_cirrus/rpc", {
@@ -65,7 +65,7 @@ describe("createWorker (workerd)", () => {
         expect(forwarded.bookmark).toBeNull();
     });
 
-    test("propagates the shard's x-d1-bookmark response header back to the client (stub-level contract)", async () => {
+    it("propagates the shard's x-d1-bookmark response header back to the client (stub-level contract)", async () => {
         expect.assertions(1);
 
         // `createWorker` rebuilds the outbound RPC URL as
@@ -86,7 +86,7 @@ describe("createWorker (workerd)", () => {
         expect(direct.headers.get("x-d1-bookmark")).toBe("bm-99");
     });
 
-    test("dispatches custom routes by 'METHOD path' key before falling through", async () => {
+    it("dispatches custom routes by 'METHOD path' key before falling through", async () => {
         expect.assertions(5);
 
         const ok = await SELF.fetch("https://app.test/healthz");
@@ -109,7 +109,7 @@ describe("createWorker (workerd)", () => {
         expect(echoed).toEqual({ method: "POST", path: "/echo-method" });
     });
 
-    test("cirrusError surfaces its code+status; generic errors are sanitized to INTERNAL 500", async () => {
+    it("cirrusError surfaces its code+status; generic errors are sanitized to INTERNAL 500", async () => {
         expect.assertions(6);
 
         const cirrus = await SELF.fetch("https://app.test/boom-cirrus");

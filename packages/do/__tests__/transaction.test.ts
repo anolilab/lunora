@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ShardDO, type ShardDOState } from "../src/shard-do.js";
+import type { ShardDOState } from "../src/shard-do.js";
+import { ShardDO } from "../src/shard-do.js";
 import { ConflictError } from "../src/transaction.js";
 
 type ExecMock = ((query: string) => unknown) & {
@@ -73,7 +74,7 @@ describe("shardDO.runInTransaction", () => {
         shard = new TestShardDO(createFakeState(exec));
     });
 
-    test("wraps handler in BEGIN / COMMIT on success", async () => {
+    it("wraps handler in BEGIN / COMMIT on success", async () => {
         expect.assertions(2);
 
         const result = await shard.callRunInTransaction(() => 42);
@@ -82,7 +83,7 @@ describe("shardDO.runInTransaction", () => {
         expect(exec.mock.calls.map((call) => call[0])).toEqual(["BEGIN", "COMMIT"]);
     });
 
-    test("emits ROLLBACK when the handler throws", async () => {
+    it("emits ROLLBACK when the handler throws", async () => {
         expect.assertions(2);
 
         const boom = new Error("boom");
@@ -96,7 +97,7 @@ describe("shardDO.runInTransaction", () => {
         expect(exec.mock.calls.map((call) => call[0])).toEqual(["BEGIN", "ROLLBACK"]);
     });
 
-    test("re-throws ConflictError after rolling back", async () => {
+    it("re-throws ConflictError after rolling back", async () => {
         expect.assertions(2);
 
         const conflict = new ConflictError("stale version");
@@ -110,7 +111,7 @@ describe("shardDO.runInTransaction", () => {
         expect(exec.mock.calls.map((call) => call[0])).toEqual(["BEGIN", "ROLLBACK"]);
     });
 
-    test("refuses nested transactions with NESTED_TRANSACTION code", async () => {
+    it("refuses nested transactions with NESTED_TRANSACTION code", async () => {
         expect.assertions(1);
 
         await expect(
@@ -120,7 +121,7 @@ describe("shardDO.runInTransaction", () => {
         ).rejects.toMatchObject({ code: "NESTED_TRANSACTION", status: 500, name: "CirrusError" });
     });
 
-    test("swallows secondary ROLLBACK errors so the original throw propagates", async () => {
+    it("swallows secondary ROLLBACK errors so the original throw propagates", async () => {
         expect.assertions(1);
 
         let firstCall = true;
@@ -146,7 +147,7 @@ describe("shardDO.runInTransaction", () => {
         ).rejects.toBe(original);
     });
 
-    test("clears transactionDepth in the finally branch so a second tx can run", async () => {
+    it("clears transactionDepth in the finally branch so a second tx can run", async () => {
         expect.assertions(1);
 
         await shard.callRunInTransaction(() => 1);
@@ -157,7 +158,7 @@ describe("shardDO.runInTransaction", () => {
         expect(queries).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
     });
 
-    test("conflictError carries code / status / name as own properties", () => {
+    it("conflictError carries code / status / name as own properties", () => {
         expect.assertions(4);
 
         const error = new ConflictError();
@@ -170,7 +171,7 @@ describe("shardDO.runInTransaction", () => {
 });
 
 describe("shardDO.errorToResponse — ConflictError", () => {
-    test("maps a thrown ConflictError to a 409 with code CONFLICT", async () => {
+    it("maps a thrown ConflictError to a 409 with code CONFLICT", async () => {
         expect.assertions(3);
 
         const shard = new TestShardDO(createFakeState());

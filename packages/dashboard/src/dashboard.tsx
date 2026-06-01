@@ -1,4 +1,5 @@
-import { type ReactElement, useState } from "react";
+import type { ReactElement } from "react";
+import { useState } from "react";
 
 import { DataBrowser } from "./data-browser.js";
 import { ErrorBoundary } from "./error-boundary.js";
@@ -9,20 +10,22 @@ import { GlobalDataBrowser } from "./global-data-browser.js";
 import { LogsPanel } from "./logs-panel.js";
 import { MetricsPanel } from "./metrics-panel.js";
 import { MigrationsPanel } from "./migrations.js";
-import { ScheduledJobs, type ScheduledJobsProps } from "./scheduled-jobs.js";
+import type { ScheduledJobsProps } from "./scheduled-jobs.js";
+import { ScheduledJobs } from "./scheduled-jobs.js";
 import { SchemaViewer } from "./schema-viewer.js";
 import type { FunctionDescriptor } from "./types.js";
 import { UsersPanel } from "./users-panel.js";
 
 /** Identifier for each built-in dashboard tab. */
-export type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "logs" | "metrics" | "migrations" | "schedule" | "schema" | "users";
+type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "logs" | "metrics" | "migrations" | "schedule" | "schema" | "users";
 
-export interface DashboardProps {
+interface DashboardProps {
     /**
      * Make the data tab editable (insert/edit/delete rows). Off by default so
      * the dashboard is read-only unless the host opts in; see {@link DataBrowser}.
      */
     readonly dataEditable?: boolean;
+
     /**
      * Functions exposed in the runner tab. The runner tab only appears when at
      * least one descriptor is supplied (a query/mutation/action's `kind` is
@@ -31,11 +34,13 @@ export interface DashboardProps {
     readonly functions?: FunctionDescriptor[];
     /** Shard key every shard-scoped panel targets on first load. */
     readonly initialShardKey?: string;
+
     /**
      * Override how the schedule tab cancels a job. Defaults to the client's
      * scheduler admin endpoint; see {@link ScheduledJobs}.
      */
     readonly scheduledCancel?: ScheduledJobsProps["cancelJob"];
+
     /**
      * Override how the schedule tab loads jobs. Defaults to the client's
      * scheduler admin endpoint, so the tab works without extra wiring.
@@ -60,7 +65,7 @@ const TAB_LABELS: Record<DashboardTab, string> = {
 /**
  * A single tabbed shell that composes every dashboard panel — data browser,
  * schema overview, function runner, migrations, export/import and scheduled
- * jobs — behind one `<CirrusProvider>`. Tabs whose data source isn't configured
+ * jobs — behind one `&lt;CirrusProvider>`. Tabs whose data source isn't configured
  * (the function runner without `functions`, the schedule tab without
  * `scheduledLoad`) are omitted rather than rendered empty.
  *
@@ -115,3 +120,5 @@ export function Dashboard({ dataEditable = false, functions, initialShardKey, sc
         </div>
     );
 }
+
+export type { DashboardProps, DashboardTab };

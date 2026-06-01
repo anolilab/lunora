@@ -12,7 +12,7 @@ export class ConflictError extends Error {
 
     public readonly status: number = 409;
 
-    constructor(message: string = "Optimistic concurrency conflict") {
+    public constructor(message: string = "Optimistic concurrency conflict") {
         super(message);
         this.name = "ConflictError";
     }
@@ -30,7 +30,7 @@ export class NotFoundError extends Error {
 
     public readonly status: number = 404;
 
-    constructor(message: string = "Document not found") {
+    public constructor(message: string = "Document not found") {
         super(message);
         this.name = "NotFoundError";
     }

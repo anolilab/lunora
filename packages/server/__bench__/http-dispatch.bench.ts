@@ -9,14 +9,14 @@ import { httpAction, httpRoute, httpRouter, v } from "../src/index.js";
  * `app.fetch(request, env)` → middleware → handler → Response — for the
  * three surfaces shipped:
  *
- *  - **httpAction** — the raw `(ctx, request) => Response` adapter. The
- *    cheapest path; only the cirrus-ctx middleware runs.
- *  - **httpRoute (plain)** — typed route w/ no `.searchParams()/.body()/
- *    .params()/.output()`. Adds the builder-compiled handler over the raw
- *    one.
- *  - **httpRoute + searchParams** — adds the query-string parse + validate.
- *  - **httpRoute + body** — POST handler that parses + validates JSON body.
- *  - **httpRoute + output** — adds the output-schema validate on return.
+ * - **httpAction** — the raw `(ctx, request) => Response` adapter. The cheapest
+ * path; only the cirrus-ctx middleware runs.
+ * - **httpRoute (plain)** — typed route w/ no
+ * `.searchParams()/.body()/.params()/.output()`. Adds the builder-compiled
+ * handler over the raw one.
+ * - **httpRoute + searchParams** — adds the query-string parse + validate.
+ * - **httpRoute + body** — POST handler that parses + validates JSON body.
+ * - **httpRoute + output** — adds the output-schema validate on return.
  *
  * Subtract each variant from the plain `httpRoute` to see the per-step
  * cost of the typed builder pieces.
@@ -34,7 +34,9 @@ rawApp.get(
 );
 
 // httpRoute — plain (no validators, no output).
-const plainRoute = httpRoute.get("/plain").handler(() => ({ ok: true }));
+const plainRoute = httpRoute.get("/plain").handler(() => {
+    return { ok: true };
+});
 const plainApp = httpRouter();
 
 plainApp.get("/plain", plainRoute);
@@ -43,7 +45,9 @@ plainApp.get("/plain", plainRoute);
 const searchRoute = httpRoute
     .get("/search")
     .searchParams({ active: v.boolean(), limit: v.number() })
-    .handler(({ searchParams }) => ({ ok: true, params: searchParams }));
+    .handler(({ searchParams }) => {
+        return { ok: true, params: searchParams };
+    });
 const searchApp = httpRouter();
 
 searchApp.get("/search", searchRoute);
@@ -52,7 +56,9 @@ searchApp.get("/search", searchRoute);
 const bodyRoute = httpRoute
     .post("/body")
     .body({ text: v.string() })
-    .handler(({ body }) => ({ echo: body.text }));
+    .handler(({ body }) => {
+        return { echo: body.text };
+    });
 const bodyApp = httpRouter();
 
 bodyApp.post("/body", bodyRoute);
@@ -61,7 +67,9 @@ bodyApp.post("/body", bodyRoute);
 const outputRoute = httpRoute
     .get("/output")
     .output(v.object({ ok: v.boolean() }))
-    .handler(() => ({ ok: true }));
+    .handler(() => {
+        return { ok: true };
+    });
 const outputApp = httpRouter();
 
 outputApp.get("/output", outputRoute);

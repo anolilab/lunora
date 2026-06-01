@@ -1,10 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ConfirmButton } from "../src/confirm-button.js";
 
 describe("confirmButton", () => {
-    test("does not fire onConfirm until the confirm step is clicked", () => {
+    it("does not fire onConfirm until the confirm step is clicked", () => {
         expect.assertions(3);
 
         const onConfirm = vi.fn<() => void>();
@@ -26,7 +26,7 @@ describe("confirmButton", () => {
         expect(onConfirm).toHaveBeenCalledTimes(1);
     });
 
-    test("cancel dismisses the prompt without firing", () => {
+    it("cancel dismisses the prompt without firing", () => {
         expect.assertions(2);
 
         const onConfirm = vi.fn<() => void>();
@@ -45,7 +45,7 @@ describe("confirmButton", () => {
         expect(screen.getByTestId("act")).toBeDefined();
     });
 
-    test("disabled blocks both the trigger and the confirm step", () => {
+    it("disabled blocks both the trigger and the confirm step", () => {
         expect.assertions(2);
 
         const onConfirm = vi.fn<() => void>();
@@ -56,7 +56,7 @@ describe("confirmButton", () => {
             </ConfirmButton>,
         );
 
-        const trigger = screen.getByTestId("act") as HTMLButtonElement;
+        const trigger = screen.getByTestId<HTMLButtonElement>("act");
 
         expect(trigger.disabled).toBe(true);
 

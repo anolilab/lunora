@@ -6,7 +6,7 @@ import type { FunctionReference } from "@cirrus/client";
  * client method carries them, so the dashboard routes every admin call through
  * `client.query` — a pure one-shot RPC with no optimistic/offline machinery.
  */
-export const adminRef = (path: string): FunctionReference => ({ __cirrusRef: path });
+export const adminRef = (path: string): FunctionReference => { return { __cirrusRef: path }; };
 
 /** Translate a free-text shard key into the client's call options. Empty → root shard. */
 export const callOptions = (shardKey: string): { shardKey?: string } => {
@@ -16,9 +16,7 @@ export const callOptions = (shardKey: string): { shardKey?: string } => {
 };
 
 /** Narrow an unknown thrown value to a human-readable message. */
-export const errorMessage = (error: unknown): string => {
-    return error instanceof Error ? error.message : String(error);
-};
+export const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
  * Render a byte count compactly (e.g. `1.4 MB`). `null`/`undefined` render as an
@@ -30,7 +28,7 @@ export const formatBytes = (bytes: null | number | undefined): string => {
     }
 
     if (bytes < 1024) {
-        return `${bytes} B`;
+        return `${bytes.toString()} B`;
     }
 
     const units = ["KB", "MB", "GB", "TB"];
@@ -42,7 +40,7 @@ export const formatBytes = (bytes: null | number | undefined): string => {
         unit += 1;
     }
 
-    return `${value.toFixed(1)} ${units[unit]}`;
+    return `${value.toFixed(1)} ${units[unit] ?? "TB"}`;
 };
 
 /**

@@ -39,7 +39,8 @@ const total: AggregateIndexDefinitionLike = {
     op: "count",
 };
 
-const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => ({
+const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
+ return {
     tables: {
         todos: {
             aggregateIndexes: indexes,
@@ -50,7 +51,8 @@ const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => (
             },
         },
     },
-});
+};
+};
 
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let index = 0; index < ROW_COUNT; index += 1) {

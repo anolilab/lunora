@@ -18,7 +18,7 @@ const ROW_COUNT = 10_000;
 const PROJECTS = 10;
 const CLOCK = 1_700_000_000_000;
 
-const col = (kind: string): ValidatorLike => ({ _meta: { column: { notNull: true } }, kind });
+const col = (kind: string): ValidatorLike => { return { _meta: { column: { notNull: true } }, kind }; };
 
 const byProject: AggregateIndexDefinitionLike = {
     by: ["projectId"],
@@ -34,7 +34,8 @@ const total: AggregateIndexDefinitionLike = {
     op: "count",
 };
 
-const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => ({
+const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
+ return {
     tables: {
         todos: {
             aggregateIndexes: indexes,
@@ -42,7 +43,8 @@ const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => (
             shape: { priority: col("string"), projectId: col("string") },
         },
     },
-});
+};
+};
 
 const createWriter = async (schema: SchemaLike): Promise<DatabaseWriterLike> => {
     const harness = createD1Exec();

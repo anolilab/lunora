@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -18,7 +18,7 @@ const makeWriter = (schema: SchemaLike): DatabaseWriterLike => {
     return createShardCtxDb({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
 };
 
-const ids = (docs: Array<Record<string, unknown>>): unknown[] => docs.map((doc) => doc["_id"]);
+const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((doc) => doc["_id"]);
 
 describe("ctx-db relations", () => {
     beforeEach(() => {
@@ -65,7 +65,7 @@ describe("ctx-db relations", () => {
             await writer.insert("reactions", { _id: "r3", emoji: "🔥", messageId: "m2" }, { allowExplicitId: true });
         };
 
-        test("loads a one relation as Doc | null", async () => {
+        it("loads a one relation as Doc | null", async () => {
             expect.assertions(3);
 
             const writer = makeWriter(schema);
@@ -79,7 +79,7 @@ describe("ctx-db relations", () => {
             expect((page[1]!["author"] as Record<string, unknown>)["_id"]).toBe("u1");
         });
 
-        test("one relation with no match attaches null", async () => {
+        it("one relation with no match attaches null", async () => {
             expect.assertions(1);
 
             const writer = makeWriter(schema);
@@ -91,7 +91,7 @@ describe("ctx-db relations", () => {
             expect(page[0]!["author"]).toBeNull();
         });
 
-        test("loads a many relation as Doc[] grouped per parent", async () => {
+        it("loads a many relation as Doc[] grouped per parent", async () => {
             expect.assertions(2);
 
             const writer = makeWriter(schema);
@@ -102,11 +102,11 @@ describe("ctx-db relations", () => {
             const ada = page.find((row) => row["_id"] === "u1")!;
             const linus = page.find((row) => row["_id"] === "u2")!;
 
-            expect(ids(ada["messages"] as Array<Record<string, unknown>>)).toEqual(["m1", "m2"]);
-            expect(ids(linus["messages"] as Array<Record<string, unknown>>)).toEqual(["m3"]);
+            expect(ids(ada["messages"] as Record<string, unknown>[])).toEqual(["m1", "m2"]);
+            expect(ids(linus["messages"] as Record<string, unknown>[])).toEqual(["m3"]);
         });
 
-        test("many relation with no children attaches []", async () => {
+        it("many relation with no children attaches []", async () => {
             expect.assertions(1);
 
             const writer = makeWriter(schema);
@@ -118,7 +118,7 @@ describe("ctx-db relations", () => {
             expect(page[0]!["messages"]).toEqual([]);
         });
 
-        test("nested with recurses (users → messages → reactions)", async () => {
+        it("nested with recurses (users → messages → reactions)", async () => {
             expect.assertions(1);
 
             const writer = makeWriter(schema);
@@ -126,13 +126,13 @@ describe("ctx-db relations", () => {
             await seed(writer);
 
             const { page } = await writer.findMany("users", { where: { _id: "u1" }, with: { messages: { with: { reactions: true } } } });
-            const messages = page[0]!["messages"] as Array<Record<string, unknown>>;
+            const messages = page[0]!["messages"] as Record<string, unknown>[];
             const m1 = messages.find((row) => row["_id"] === "m1")!;
 
-            expect(ids(m1["reactions"] as Array<Record<string, unknown>>)).toEqual(["r1", "r2"]);
+            expect(ids(m1["reactions"] as Record<string, unknown>[])).toEqual(["r1", "r2"]);
         });
 
-        test("nested where + orderBy + limit apply to a many relation", async () => {
+        it("nested where + orderBy + limit apply to a many relation", async () => {
             expect.assertions(1);
 
             const writer = makeWriter(schema);
@@ -143,12 +143,12 @@ describe("ctx-db relations", () => {
                 where: { _id: "m1" },
                 with: { reactions: { limit: 1, orderBy: [{ emoji: "desc" }] } },
             });
-            const reactions = page[0]!["reactions"] as Array<Record<string, unknown>>;
+            const reactions = page[0]!["reactions"] as Record<string, unknown>[];
 
             expect(reactions).toHaveLength(1);
         });
 
-        test("_count attaches per-parent aggregate without loading rows", async () => {
+        it("_count attaches per-parent aggregate without loading rows", async () => {
             expect.assertions(4);
 
             const writer = makeWriter(schema);
@@ -163,7 +163,7 @@ describe("ctx-db relations", () => {
             expect(page[0]!["reactions"]).toBeUndefined();
         });
 
-        test("throws on an unknown relation name", async () => {
+        it("throws on an unknown relation name", async () => {
             expect.assertions(1);
 
             const writer = makeWriter(schema);
@@ -175,7 +175,8 @@ describe("ctx-db relations", () => {
     });
 
     describe("onDelete", () => {
-        const buildSchema = (action: "cascade" | "restrict" | "set null"): SchemaLike => ({
+        const buildSchema = (action: "cascade" | "restrict" | "set null"): SchemaLike => {
+ return {
             tables: {
                 messages: {
                     indexes: [{ fields: ["authorId"], name: "by_author" }],
@@ -194,9 +195,10 @@ describe("ctx-db relations", () => {
                 },
                 users: { indexes: [], shape: { name: { kind: "string" } } },
             },
-        });
+        };
+};
 
-        test("cascade deletes holder rows (and chains recursively)", async () => {
+        it("cascade deletes holder rows (and chains recursively)", async () => {
             expect.assertions(2);
 
             const writer = makeWriter(buildSchema("cascade"));
@@ -211,7 +213,7 @@ describe("ctx-db relations", () => {
             await expect(writer.get("r1")).resolves.toBeNull();
         });
 
-        test("set null clears the FK on holder rows", async () => {
+        it("set null clears the FK on holder rows", async () => {
             expect.assertions(2);
 
             const writer = makeWriter(buildSchema("set null"));
@@ -227,7 +229,7 @@ describe("ctx-db relations", () => {
             expect(message!["authorId"]).toBeNull();
         });
 
-        test("restrict throws when a holder still references the parent", async () => {
+        it("restrict throws when a holder still references the parent", async () => {
             expect.assertions(2);
 
             const writer = makeWriter(buildSchema("restrict"));
@@ -239,7 +241,7 @@ describe("ctx-db relations", () => {
             await expect(writer.get("u1")).resolves.not.toBeNull();
         });
 
-        test("restrict allows deletion once no holders remain", async () => {
+        it("restrict allows deletion once no holders remain", async () => {
             expect.assertions(1);
 
             const writer = makeWriter(buildSchema("restrict"));
@@ -265,7 +267,7 @@ describe("ctx-db relations", () => {
             },
         };
 
-        test("throws when a relation crosses the DO↔D1 boundary", async () => {
+        it("throws when a relation crosses the DO↔D1 boundary", async () => {
             expect.assertions(1);
 
             const writer = makeWriter(schema);
@@ -340,7 +342,7 @@ describe("ctx-db relations", () => {
             return { rows, writer };
         };
 
-        test("cascade reaches into the supplied globalDb when the holder is global", async () => {
+        it("cascade reaches into the supplied globalDb when the holder is global", async () => {
             expect.assertions(1);
 
             runShardMigrations(harness.sql, schema);
@@ -365,7 +367,7 @@ describe("ctx-db relations", () => {
             expect([...rows.keys()].sort()).toEqual(["m3"]);
         });
 
-        test("missing globalDb throws a helpful error rather than silently dropping the cascade", async () => {
+        it("missing globalDb throws a helpful error rather than silently dropping the cascade", async () => {
             expect.assertions(1);
 
             runShardMigrations(harness.sql, schema);
@@ -389,6 +391,6 @@ describe("ctx-db relations", () => {
          * symmetry from the DO side so a future Coordinator implementation
          * has a clear home.
          */
-        test.todo("global → shardBy cascade is documented as unsupported; covered in @cirrus/d1 tests");
+        it.todo("global → shardBy cascade is documented as unsupported; covered in @cirrus/d1 tests");
     });
 });

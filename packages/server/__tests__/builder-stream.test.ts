@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { initCirrus, v } from "../src/index.js";
 
@@ -19,7 +19,7 @@ const collect = async <T>(iter: AsyncIterable<T>, signal?: AbortSignal): Promise
 };
 
 describe("c.query.stream() terminal", () => {
-    test("registers with kind:'stream' and an async-iterable handler", async () => {
+    it("registers with kind:'stream' and an async-iterable handler", async () => {
         expect.hasAssertions();
 
         const counter = c.query.input({ count: v.number() }).stream(async function* counterStream({ args }) {
@@ -37,7 +37,7 @@ describe("c.query.stream() terminal", () => {
         expect(chunks).toEqual([0, 1, 2]);
     });
 
-    test("middleware ctx narrows for the streaming handler", async () => {
+    it("middleware ctx narrows for the streaming handler", async () => {
         expect.assertions(2);
 
         let observedCtx: unknown;
@@ -56,7 +56,7 @@ describe("c.query.stream() terminal", () => {
         expect(observedCtx).toMatchObject({ userId: "u_42" });
     });
 
-    test("aborting the signal stops further yields", async () => {
+    it("aborting the signal stops further yields", async () => {
         expect.hasAssertions();
 
         const ac = new AbortController();
@@ -83,7 +83,7 @@ describe("c.query.stream() terminal", () => {
         expect(yields).toEqual([0, 1, 2, 3]);
     });
 
-    test("rejects bad args synchronously at handler call time", () => {
+    it("rejects bad args synchronously at handler call time", () => {
         expect.assertions(1);
 
         const guarded = c.query.input({ rooms: v.number() }).stream(async function* guardedGen() {

@@ -1,13 +1,15 @@
 import { useCirrus } from "@cirrus/react";
-import { type ChangeEvent, type ReactElement, useCallback, useState } from "react";
+import type { ChangeEvent, ReactElement } from "react";
+import { useCallback, useState } from "react";
 
-import { ADMIN_FUNCTIONS, type ExportRow, type ImportShardResult } from "./admin.js";
+import type { ExportRow, ImportShardResult } from "./admin.js";
+import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions, errorMessage } from "./internal.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
 
-export interface ExportImportPanelProps {
+interface ExportImportPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
@@ -38,7 +40,7 @@ const parseNdjson = (text: string): ExportRow[] => {
         const parsed = JSON.parse(line) as unknown;
 
         if (typeof parsed !== "object" || parsed === null || typeof (parsed as ExportRow).table !== "string" || typeof (parsed as ExportRow).doc !== "object") {
-            throw new Error(`line ${index + 1}: expected a { table, doc } object`);
+            throw new Error(`line ${(index + 1).toString()}: expected a { table, doc } object`);
         }
 
         rows.push(parsed as ExportRow);
@@ -170,7 +172,7 @@ export function ExportImportPanel({ initialShardKey }: ExportImportPanelProps): 
                     {importResult.errors.length > 0 && (
                         <ul data-testid="ei-import-errors">
                             {importResult.errors.map((rowError) => (
-                                <li key={`${rowError.table}-${rowError.line}`}>
+                                <li key={`${rowError.table}-${rowError.line.toString()}`}>
                                     line {rowError.line} ({rowError.table}): {rowError.message}
                                 </li>
                             ))}
@@ -181,3 +183,5 @@ export function ExportImportPanel({ initialShardKey }: ExportImportPanelProps): 
         </div>
     );
 }
+
+export type { ExportImportPanelProps };

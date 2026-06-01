@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { D1DatabaseLike, D1PreparedStatementLike } from "../src/d1-client.js";
 import { MigrationRunner } from "../src/migration-runner.js";
@@ -7,6 +7,12 @@ interface FakeDb extends D1DatabaseLike {
     appliedHashes: string[];
     executed: { binds: unknown[]; sql: string }[];
 }
+
+// Matchers hoisted to module scope (avoids per-call regex recompilation).
+const TRACKING_INSERT_HASH_RE = /VALUES \('([0-9a-f]{64})'/u;
+const DUPLICATE_VERSION_RE = /Duplicate migration version/;
+const IDENTICAL_SQL_RE = /identical SQL/u;
+const MULTI_STATEMENT_RE = /more than one SQL statement/u;
 
 const sha256Hex = async (text: string): Promise<string> => {
     const bytes = new TextEncoder().encode(text);
@@ -30,7 +36,7 @@ const createDb = async (initiallyAppliedSql: string[] = []): Promise<FakeDb> => 
             first: async () => null,
             all: async () => {
                 if (sql.includes("SELECT hash FROM __drizzle_migrations")) {
-                    return { results: appliedHashes.map((h) => ({ hash: h })) as never[], success: true };
+                    return { results: appliedHashes.map((h) => { return { hash: h }; }) as never[], success: true };
                 }
 
                 return { results: [], success: true };
@@ -45,7 +51,7 @@ const createDb = async (initiallyAppliedSql: string[] = []): Promise<FakeDb> => 
                 // hex hash back out of the literal so the fake can simulate
                 // applied state.
                 if (sql.includes("INSERT INTO") && sql.includes("__drizzle_migrations")) {
-                    const match = /VALUES \('([0-9a-f]{64})'/u.exec(sql);
+                    const match = TRACKING_INSERT_HASH_RE.exec(sql);
 
                     if (match) {
                         appliedHashes.push(match[1]!);
@@ -63,7 +69,7 @@ const createDb = async (initiallyAppliedSql: string[] = []): Promise<FakeDb> => 
     const db: FakeDb = {
         executed,
         appliedHashes,
-        withSession: () => ({ prepare: makeStmt, getBookmark: () => null }),
+        withSession: () => { return { prepare: makeStmt, getBookmark: () => null }; },
         prepare: makeStmt,
         batch: async (stmts) => {
             for (const stmt of stmts) {
@@ -78,7 +84,7 @@ const createDb = async (initiallyAppliedSql: string[] = []): Promise<FakeDb> => 
 };
 
 describe("migrationRunner", () => {
-    test("applies pending migrations in order and records them", async () => {
+    it("applies pending migrations in order and records them", async () => {
         expect.assertions(5);
 
         const db = await createDb();
@@ -96,7 +102,7 @@ describe("migrationRunner", () => {
         expect(db.executed.some((e) => e.sql.startsWith("CREATE TABLE b"))).toBe(true);
     });
 
-    test("skips already-applied migrations", async () => {
+    it("skips already-applied migrations", async () => {
         expect.assertions(2);
 
         const initialSql = "CREATE TABLE a (id INTEGER);";
@@ -112,7 +118,7 @@ describe("migrationRunner", () => {
         expect(result.skipped.map((m) => m.version)).toEqual([1]);
     });
 
-    test("rejects duplicate versions at construction time", async () => {
+    it("rejects duplicate versions at construction time", async () => {
         expect.assertions(1);
 
         const db = await createDb();
@@ -123,10 +129,10 @@ describe("migrationRunner", () => {
                     { version: 1, name: "a", sql: "CREATE TABLE x (id INTEGER);" },
                     { version: 1, name: "b", sql: "CREATE TABLE y (id INTEGER);" },
                 ]),
-        ).toThrow(/Duplicate migration version/);
+        ).toThrow(DUPLICATE_VERSION_RE);
     });
 
-    test("rejects identical SQL across different versions", async () => {
+    it("rejects identical SQL across different versions", async () => {
         expect.assertions(1);
 
         const db = await createDb();
@@ -138,10 +144,10 @@ describe("migrationRunner", () => {
                     { version: 1, name: "first", sql: identicalSql },
                     { version: 2, name: "copy_paste", sql: identicalSql },
                 ]),
-        ).toThrow(/identical SQL/u);
+        ).toThrow(IDENTICAL_SQL_RE);
     });
 
-    test("rejects multi-statement migration SQL", async () => {
+    it("rejects multi-statement migration SQL", async () => {
         expect.assertions(1);
 
         const db = await createDb();
@@ -153,10 +159,10 @@ describe("migrationRunner", () => {
             },
         ]);
 
-        await expect(runner.run()).rejects.toThrow(/more than one SQL statement/u);
+        await expect(runner.run()).rejects.toThrow(MULTI_STATEMENT_RE);
     });
 
-    test("permits semicolons inside string literals", async () => {
+    it("permits semicolons inside string literals", async () => {
         expect.assertions(1);
 
         const db = await createDb();
@@ -167,7 +173,7 @@ describe("migrationRunner", () => {
         expect(result.applied.map((m) => m.version)).toEqual([1]);
     });
 
-    test("permits semicolons inside comments", async () => {
+    it("permits semicolons inside comments", async () => {
         expect.assertions(1);
 
         const db = await createDb();
@@ -184,7 +190,7 @@ describe("migrationRunner", () => {
         expect(result.applied.map((m) => m.version)).toEqual([1]);
     });
 
-    test("sorts out-of-order migrations before applying", async () => {
+    it("sorts out-of-order migrations before applying", async () => {
         expect.assertions(2);
 
         const db = await createDb();

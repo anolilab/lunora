@@ -134,10 +134,11 @@ export interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body exten
     output: <V extends Validator>(validator: V) => HttpRouteBuilder<SearchParams, Body, Params, Infer<V>>;
     params: <P extends ArgsValidator>(validators: P) => HttpRouteBuilder<SearchParams, Body, P & Params, Output>;
     searchParams: <S extends ArgsValidator>(validators: S) => HttpRouteBuilder<S & SearchParams, Body, Params, Output>;
+
     /**
      * Terminal: declare this route as a streaming Server-Sent Events endpoint.
      * The handler is an async generator (or any function returning an
-     * `AsyncIterable<R>`) that yields one chunk per SSE `data:` frame; on
+     * `AsyncIterable&lt;R>`) that yields one chunk per SSE `data:` frame; on
      * iterator completion the route writes a final `event: complete` frame; on
      * throw, an `event: error` frame is written with `{code, message}` before
      * the stream closes. The chunks are JSON-encoded; `R` is inferred from the
@@ -217,7 +218,7 @@ const coerceScalar = (kind: ValidatorKind, raw: string): unknown => {
 /**
  * Decode one declared query parameter from the hono request. Absent →
  * `undefined` (so `v.optional` passes and a required validator fails). An
- * `array` validator collects every repeated occurrence (`?tag=a&tag=b`) via
+ * `array` validator collects every repeated occurrence (`?tag=a&amp;tag=b`) via
  * `c.req.queries`, coercing each element.
  */
 const coerceSearchParam = (validator: Validator, c: Context<CirrusHttpEnv>, key: string): unknown => {
@@ -242,7 +243,7 @@ const coerceSearchParam = (validator: Validator, c: Context<CirrusHttpEnv>, key:
 
 /**
  * Validate each declared field of `source` through its validator, prefixing any
- * `ValidationError` with `label.<key>` so the 400 response points at the bad
+ * `ValidationError` with `label.&lt;key>` so the 400 response points at the bad
  * field. Optional fields absent from the source are skipped.
  */
 const parseFields = (validators: ArgsValidator, source: Record<string, unknown>, label: string): Record<string, unknown> => {
@@ -439,6 +440,7 @@ const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
  */
 const buildStreamHandler =
     (state: RouteState, userHandler: LooseStreamHandler): CirrusRouteHandler =>
+    // eslint-disable-next-line @typescript-eslint/require-await -- CirrusRouteHandler is contractually `(c) => Promise<Response>`; this handler returns synchronously (all awaits live inside the ReadableStream pump), so `async` is required by the type, not the body.
     async (c) => {
         let searchParams: Record<string, unknown>;
         let params: Record<string, unknown>;
@@ -460,6 +462,11 @@ const buildStreamHandler =
         });
 
         const stream = new ReadableStream<Uint8Array>({
+            cancel() {
+                // The downstream consumer dropped the stream — propagate the
+                // cancel to the user iterator so any in-flight work bails out.
+                ac.abort();
+            },
             async start(controller) {
                 try {
                     const iterator = userHandler({ ctx, params, request, searchParams, signal: ac.signal });
@@ -494,11 +501,6 @@ const buildStreamHandler =
                     controller.close();
                 }
             },
-            cancel() {
-                // The downstream consumer dropped the stream — propagate the
-                // cancel to the user iterator so any in-flight work bails out.
-                ac.abort();
-            },
         });
 
         return new Response(stream, {
@@ -512,14 +514,16 @@ const buildStreamHandler =
         });
     };
 
-const makeRouteBuilder = (state: RouteState): Record<string, unknown> => ({
-    body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
-    handler: (userHandler: LooseHandler): CirrusRouteHandler => buildRouteHandler(state, userHandler),
-    output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
-    params: (validators: ArgsValidator) => makeRouteBuilder({ ...state, params: { ...state.params, ...validators } }),
-    searchParams: (validators: ArgsValidator) => makeRouteBuilder({ ...state, searchParams: { ...state.searchParams, ...validators } }),
-    stream: (userHandler: LooseStreamHandler): CirrusRouteHandler => buildStreamHandler(state, userHandler),
-});
+const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
+    return {
+        body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
+        handler: (userHandler: LooseHandler): CirrusRouteHandler => buildRouteHandler(state, userHandler),
+        output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
+        params: (validators: ArgsValidator) => makeRouteBuilder({ ...state, params: { ...state.params, ...validators } }),
+        searchParams: (validators: ArgsValidator) => makeRouteBuilder({ ...state, searchParams: { ...state.searchParams, ...validators } }),
+        stream: (userHandler: LooseStreamHandler): CirrusRouteHandler => buildStreamHandler(state, userHandler),
+    };
+};
 
 const makeRouteFactory =
     (method: HttpMethod): HttpRouteFactory =>

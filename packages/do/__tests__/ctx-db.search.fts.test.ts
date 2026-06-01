@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { SchemaLike, SqlCursor, SqlExec } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -24,7 +24,8 @@ interface MatchRow {
     id: string;
 }
 
-const cursor = <Row>(rows: Row[]): SqlCursor<Row> => ({
+const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
+ return {
     [Symbol.iterator]() {
         return rows[Symbol.iterator]();
     },
@@ -38,7 +39,8 @@ const cursor = <Row>(rows: Row[]): SqlCursor<Row> => ({
     toArray() {
         return rows;
     },
-});
+};
+};
 
 const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: Recorded[] } => {
     const statements: Recorded[] = [];
@@ -89,7 +91,7 @@ const searchSchema: SchemaLike = {
 };
 
 describe("ctx-db search — FTS5 path (emitted SQL)", () => {
-    test("creates one FTS5 virtual table per search index during migration", () => {
+    it("creates one FTS5 virtual table per search index during migration", () => {
         expect.assertions(1);
 
         const { sql, statements } = createRecordingFts([]);
@@ -103,7 +105,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         ).toBe(true);
     });
 
-    test("syncs indexed text on insert via delete-then-insert", async () => {
+    it("syncs indexed text on insert via delete-then-insert", async () => {
         expect.assertions(2);
 
         const { sql, statements } = createRecordingFts([]);
@@ -121,7 +123,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         expect(add?.params).toStrictEqual(["hello world", "d1"]);
     });
 
-    test("clears the FTS row on delete (no re-insert)", async () => {
+    it("clears the FTS row on delete (no re-insert)", async () => {
         expect.assertions(2);
 
         const { sql, statements } = createRecordingFts([{ __doc__: JSON.stringify({ body: "bye", title: "a" }), _creationTime: 1, id: "d1" }]);
@@ -142,7 +144,7 @@ describe("ctx-db search — FTS5 path (emitted SQL)", () => {
         expect(ftsWritesAfter[0]?.params).toStrictEqual(["d1"]);
     });
 
-    test("emits a MATCH query joined to the document table, ordered by rank", async () => {
+    it("emits a MATCH query joined to the document table, ordered by rank", async () => {
         expect.assertions(3);
 
         const matchRows: MatchRow[] = [

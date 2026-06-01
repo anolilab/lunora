@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { SESSION_DO_TTL_DEFAULT, SessionDO } from "../src/session-do.js";
 
@@ -35,14 +35,16 @@ const createFakeStorage = (): {
     };
 };
 
-const authHeaders = (extra: Record<string, string> = {}): Record<string, string> => ({
+const authHeaders = (extra: Record<string, string> = {}): Record<string, string> => {
+ return {
     "content-type": "application/json",
     "x-cirrus-session-do-secret": TEST_SECRET,
     ...extra,
-});
+};
+};
 
 describe("sessionDO", () => {
-    test("create persists a record and returns it", async () => {
+    it("create persists a record and returns it", async () => {
         expect.assertions(3);
 
         const state = createFakeStorage();
@@ -64,7 +66,7 @@ describe("sessionDO", () => {
         expect(body.expiresAt).toBeGreaterThan(Date.now());
     });
 
-    test("get returns the persisted record, 404s for missing tokens", async () => {
+    it("get returns the persisted record, 404s for missing tokens", async () => {
         expect.assertions(2);
 
         const state = createFakeStorage();
@@ -89,7 +91,7 @@ describe("sessionDO", () => {
         expect(missing.status).toBe(404);
     });
 
-    test("get expires sessions lazily", async () => {
+    it("get expires sessions lazily", async () => {
         expect.assertions(2);
 
         const state = createFakeStorage();
@@ -104,7 +106,7 @@ describe("sessionDO", () => {
         await expect(state.storage.get(`s:${TOK_DEAD}`)).resolves.toBeUndefined();
     });
 
-    test("revoke deletes the record idempotently", async () => {
+    it("revoke deletes the record idempotently", async () => {
         expect.assertions(2);
 
         const state = createFakeStorage();
@@ -138,7 +140,7 @@ describe("sessionDO", () => {
         expect(second.status).toBe(200);
     });
 
-    test("rejects malformed create bodies", async () => {
+    it("rejects malformed create bodies", async () => {
         expect.assertions(2);
 
         const state = createFakeStorage();
@@ -165,7 +167,7 @@ describe("sessionDO", () => {
         expect(noJson.status).toBe(400);
     });
 
-    test("rejects requests missing the shared secret", async () => {
+    it("rejects requests missing the shared secret", async () => {
         expect.assertions(1);
 
         const state = createFakeStorage();
@@ -182,7 +184,7 @@ describe("sessionDO", () => {
         expect(response.status).toBe(401);
     });
 
-    test("falls back to the default TTL when none is supplied", async () => {
+    it("falls back to the default TTL when none is supplied", async () => {
         expect.assertions(1);
 
         const state = createFakeStorage();

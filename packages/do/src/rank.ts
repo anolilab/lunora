@@ -17,7 +17,7 @@
  *
  * Storage layout (per declared rankIndex):
  *
- *   T__rank_<name> (
+ *   T__rank_&lt;name> (
  *     __id__         TEXT PRIMARY KEY,
  *     __partition__  TEXT NOT NULL,   -- canonical-JSON tuple of partitionBy keys (or "")
  *     __sort_k0__    BLOB,            -- one column per sortBy key (typeless)
@@ -25,8 +25,8 @@
  *     ...
  *   );
  *
- *   CREATE INDEX T__rank_<name>__btree
- *       ON T__rank_<name> (__partition__, __sort_k0__ <dir0>, ..., __id__ ASC);
+ *   CREATE INDEX T__rank_&lt;name>__btree
+ *       ON T__rank_&lt;name> (__partition__, __sort_k0__ &lt;dir0>, ..., __id__ ASC);
  *
  * Auto-backfill: a rank companion is **lazily** populated on the first read
  * or write that targets an empty companion, by scanning the source table
@@ -86,7 +86,7 @@ export interface RankPageOptions extends RestrictableQueryOptions {
 export interface RankPage {
     continueCursor: null | string;
     isDone: boolean;
-    page: Array<Record<string, unknown>>;
+    page: Record<string, unknown>[];
 }
 
 /**
@@ -101,7 +101,7 @@ export const encodePartitionKey = (partitionBy: ReadonlyArray<string>, source: R
 
     const ordered: Record<string, unknown> = {};
 
-    for (const field of [...partitionBy].sort()) {
+    for (const field of [...partitionBy].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
         ordered[field] = source[field] ?? null;
     }
 
@@ -120,7 +120,7 @@ export const RANK_TIEBREAK = "__id__";
  * companion stays stable when an `INDEX` is rebuilt: a future rename of the
  * source field doesn't require ALTERing the rank table.
  */
-export const sortColumnName = (i: number): string => `__sort_k${i}__`;
+export const sortColumnName = (i: number): string => `__sort_k${String(i)}__`;
 
 /** Cheap predicate test against the index's static `where` (literal equality / `{ eq }` only). */
 export const matchesRankStaticWhere = (document: Record<string, unknown>, predicate: Record<string, unknown>): boolean => {

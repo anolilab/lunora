@@ -8,7 +8,7 @@ import { resolveShard } from "./resolve-shard.js";
 /**
  * Wire-format RPC envelope. Posted to `POST /_cirrus/rpc`.
  *
- * `functionPath` is the `<file>:<function>` identifier emitted by codegen,
+ * `functionPath` is the `&lt;file>:&lt;function>` identifier emitted by codegen,
  * e.g. `"messages:list"`. `shardKey` is optional — when omitted the runtime
  * routes to {@link WorkerOptions.defaultShardKey} (default `"__root__"`).
  *
@@ -16,19 +16,19 @@ import { resolveShard } from "./resolve-shard.js";
  * {@link WorkerOptions.queryCoordinator}; mutually exclusive with
  * `shardKey` (specifying both is a 400 — fan-out *is* the shard choice).
  */
-export interface RpcEnvelope {
+interface RpcEnvelope {
     args?: Record<string, unknown>;
     fanOut?: FanOutSpec;
     functionPath: string;
     shardKey?: string;
 }
 
-export interface ExecutionContextLike {
+interface ExecutionContextLike {
     passThroughOnException: () => void;
     waitUntil: (promise: Promise<unknown>) => void;
 }
 
-export type Route = (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> | Response;
+type Route = (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> | Response;
 
 /**
  * Context handed to HTTP-action handlers. Built per request by the worker; its
@@ -39,7 +39,7 @@ export type Route = (request: Request, env: unknown, ctx: ExecutionContextLike) 
  * `@cirrus/server` dependency while remaining assignable from the fully-typed
  * `HttpActionCtx` on the server side (`{ __cirrusRef }` is read at runtime).
  */
-export interface HttpActionContext {
+interface HttpActionContext {
     auth: { getIdentity: () => Promise<Record<string, unknown> | null>; userId: null | string };
     fetch: typeof globalThis.fetch;
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -47,7 +47,7 @@ export interface HttpActionContext {
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
 }
 
-export interface HttpActionLike {
+interface HttpActionLike {
     handler: (ctx: HttpActionContext, request: Request) => Promise<Response> | Response;
 }
 
@@ -58,7 +58,7 @@ export interface HttpActionLike {
  * per-request {@link HttpActionContext} is injected on the `__cirrusCtx` env
  * binding; the router lifts it into the handler's context.
  */
-export interface HttpRouterLike {
+interface HttpRouterLike {
     // A method signature (not an arrow property) so parameters are compared
     // bivariantly — this lets a real hono app, whose `fetch` is typed against its
     // own `Bindings`/`ExecutionContext` (which carries a required `props`), assign
@@ -78,7 +78,7 @@ export interface HttpRouterLike {
  * skip both `x-cirrus-userid` and `x-cirrus-identity` headers, and
  * `ctx.auth.userId` will be `undefined` on the shard side.
  */
-export interface ResolvedIdentity {
+interface ResolvedIdentity {
     /** Arbitrary additional claims. Must be JSON-serialisable. */
     [key: string]: unknown;
     /** Stable user identifier (e.g. `"user_2k3..."` or `"u_42"`). */
@@ -90,7 +90,7 @@ export interface ResolvedIdentity {
  * Structural so this package stays free of `@cirrus/server`. The codegen-
  * generated worker entry passes a thin projection of the user's schema.
  */
-export interface ShardingInfo {
+interface ShardingInfo {
     /** `global` when the table lives in D1; `shardBy` when keyed by a field; `root` (or absent) otherwise. */
     mode: { field?: string; kind: "global" | "root" | "shardBy" };
 }
@@ -99,24 +99,24 @@ export interface ShardingInfo {
  * Lookup the runtime uses to bucket an import row to its owning shard. Returns
  * `undefined` for unknown tables — the row is reported as a hard error.
  */
-export type AdminTableResolver = (table: string) => ShardingInfo | undefined;
+type AdminTableResolver = (table: string) => ShardingInfo | undefined;
 
 /**
  * Streamed bulk export of `.global()` tables, materialised as an async iterable
  * of `{table, doc}` rows. The runtime concatenates this stream after the
  * shard-local stream so the receiver sees a single NDJSON body.
  */
-export type GlobalExportFn = (request: { tables: ReadonlyArray<string> }) => AsyncIterable<{ doc: Record<string, unknown>; table: string }>;
+type GlobalExportFn = (request: { tables: ReadonlyArray<string> }) => AsyncIterable<{ doc: Record<string, unknown>; table: string }>;
 
 /** Bulk import of `.global()` rows. Returns insert counts + errors merged across tables. */
-export type GlobalImportFn = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; startLine?: number }) => Promise<{
+type GlobalImportFn = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; startLine?: number }) => Promise<{
     conflicts: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
 }>;
 
 /** One R2 object as the storage browser surfaces it. Mirrors `@cirrus/storage`'s `R2ObjectLike`. */
-export interface StorageObject {
+interface StorageObject {
     customMetadata?: Record<string, string>;
     etag: string;
     httpMetadata?: { contentType?: string };
@@ -130,16 +130,16 @@ export interface StorageObject {
  * `visibility` matter here, so the generated `CIRRUS_FUNCTIONS` map satisfies
  * the {@link FunctionRegistryLike} value shape.
  */
-export interface FunctionDescriptor {
+interface FunctionDescriptor {
     kind: "action" | "mutation" | "query";
-    /** The `<file>:<function>` identifier, e.g. `messages:list`. */
+    /** The `&lt;file>:&lt;function>` identifier, e.g. `messages:list`. */
     path: string;
     /** `"internal"` functions are never exposed by the discovery endpoint; absence === public. */
     visibility?: "internal" | "public";
 }
 
 /** One value in {@link FunctionRegistryLike} — the bits of a registered function the discovery endpoint reads. */
-export interface FunctionRegistryEntry {
+interface FunctionRegistryEntry {
     kind: "action" | "mutation" | "query";
     visibility?: "internal" | "public";
 }
@@ -148,23 +148,23 @@ export interface FunctionRegistryEntry {
  * The generated `CIRRUS_FUNCTIONS` dispatch table, narrowed to what the
  * discovery endpoint reads. Pass the map straight from `_generated/server.ts`.
  */
-export type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
+type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
 
 /**
  * Lists objects in the storage bucket for the admin file browser. Structurally
  * compatible with `@cirrus/storage`'s `Storage["list"]` — the runtime stays free
  * of a hard dependency on the storage package.
  */
-export type StorageListFn = (prefix?: string, opts?: { cursor?: string; limit?: number }) => Promise<{ cursor?: string; objects: StorageObject[] }>;
+type StorageListFn = (prefix?: string, opts?: { cursor?: string; limit?: number }) => Promise<{ cursor?: string; objects: StorageObject[] }>;
 
 /** One `.global()` table plus its row count. Mirrors `@cirrus/d1`'s `GlobalTableInfo`. */
-export interface GlobalTableInfo {
+interface GlobalTableInfo {
     name: string;
     rowCount: number;
 }
 
 /** A window of rows from one global table. Mirrors `@cirrus/d1`'s `GlobalTablePage`. */
-export interface GlobalTablePage {
+interface GlobalTablePage {
     columns: string[];
     rows: Record<string, unknown>[];
     total: number;
@@ -176,16 +176,16 @@ export interface GlobalTablePage {
  * (curried with the D1 exec + schema) — the runtime stays free of a hard
  * dependency on the D1 package.
  */
-export interface GlobalIntrospector {
+interface GlobalIntrospector {
     listTables: () => Promise<GlobalTableInfo[]>;
     readTablePage: (options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>;
 }
 
 /** A timestamp as better-auth stores it: epoch-ms, an ISO string, or absent. */
-export type AuthTimestamp = null | number | string;
+type AuthTimestamp = null | number | string;
 
 /** One authenticated user, as the auth browser surfaces it. Mirrors better-auth's `user` row. */
-export interface AuthUser {
+interface AuthUser {
     [key: string]: unknown;
     createdAt?: AuthTimestamp;
     email?: null | string;
@@ -196,7 +196,7 @@ export interface AuthUser {
 }
 
 /** One auth session, as the auth browser surfaces it. Mirrors better-auth's `session` row. */
-export interface AuthSession {
+interface AuthSession {
     [key: string]: unknown;
     createdAt?: AuthTimestamp;
     expiresAt?: AuthTimestamp;
@@ -207,7 +207,7 @@ export interface AuthSession {
 }
 
 /** A page of users or sessions plus the total count, for paginated browsing. */
-export interface AuthPage<T> {
+interface AuthPage<T> {
     rows: T[];
     total: number;
 }
@@ -219,18 +219,19 @@ export interface AuthPage<T> {
  * the runtime stays free of a hard dependency on `@cirrus/auth`. Omit it and
  * those endpoints respond `AUTH_NOT_CONFIGURED`.
  */
-export interface AuthIntrospector {
+interface AuthIntrospector {
     listSessions: (options: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthSession>>;
     listUsers: (options: { limit?: number; offset?: number }) => Promise<AuthPage<AuthUser>>;
 }
 
-export interface WorkerOptions {
+interface WorkerOptions {
     /**
      * Admin bearer token expected by the export/import endpoints. When unset,
      * the endpoints respond with `ADMIN_FORBIDDEN` — the same posture the
      * per-shard admin gate uses.
      */
     adminToken?: string;
+
     /**
      * Acknowledge — explicitly — that sharded and fan-out access may be
      * exercised by any caller (including unauthenticated ones) because no
@@ -245,6 +246,7 @@ export interface WorkerOptions {
      * configured.
      */
     allowUnauthenticatedShardAccess?: boolean;
+
     /**
      * Read-only introspector for the auth store's users and sessions, backing
      * the dashboard's users panel via `GET /_cirrus/admin/auth/users` and
@@ -252,6 +254,7 @@ export interface WorkerOptions {
      * `AUTH_NOT_CONFIGURED`.
      */
     authIntrospector?: AuthIntrospector;
+
     /**
      * Optional table-level authorization callback for fan-out RPC envelopes.
      * Called after `resolveIdentity` and before `coordinator.fanOut` walks
@@ -264,6 +267,7 @@ export interface WorkerOptions {
      * must opt in explicitly via this callback.
      */
     authorizeFanOut?: (identity: ResolvedIdentity | null, table: string, functionPath: string) => boolean | Promise<boolean>;
+
     /**
      * Optional per-shard authorization callback. Called from both the RPC
      * dispatch path and the WebSocket upgrade path after `resolveIdentity`
@@ -281,6 +285,7 @@ export interface WorkerOptions {
      * default.
      */
     authorizeShard?: (identity: ResolvedIdentity | null, shardKey: string) => boolean | Promise<boolean>;
+
     /**
      * D1 binding for `.global()` tables. Currently unused by the routing
      * layer; downstream packages will read it from `env.DB` directly.
@@ -288,11 +293,13 @@ export interface WorkerOptions {
     d1?: unknown;
     /** Default shard key used when an envelope omits one. */
     defaultShardKey?: string;
+
     /**
      * Stream `.global()` rows for the admin export endpoint. When omitted,
      * the export endpoint covers only shard-local tables.
      */
     exportGlobals?: GlobalExportFn;
+
     /**
      * The generated `CIRRUS_FUNCTIONS` map (from `_generated/server.ts`). When
      * set, the worker exposes the admin-gated `GET /_cirrus/admin/functions`
@@ -301,6 +308,7 @@ export interface WorkerOptions {
      * `FUNCTIONS_NOT_CONFIGURED`.
      */
     functions?: FunctionRegistryLike;
+
     /**
      * Read-only introspector for `.global()` (D1) tables, backing the data
      * browser's global mode via `GET /_cirrus/admin/global/tables` and
@@ -309,6 +317,7 @@ export interface WorkerOptions {
      * respond `GLOBALS_NOT_CONFIGURED`.
      */
     globalIntrospector?: GlobalIntrospector;
+
     /**
      * Router for HTTP actions (`httpRouter()` from `@cirrus/server`, a hono app).
      * Consulted for requests that miss the explicit {@link WorkerOptions.routes}
@@ -319,11 +328,13 @@ export interface WorkerOptions {
      * own 404 (a path-match with the wrong verb is a 404, not a 405).
      */
     httpRouter?: HttpRouterLike;
+
     /**
      * Insert `.global()` rows for the admin import endpoint. When omitted,
      * rows targeting global tables are reported as hard errors.
      */
     importGlobals?: GlobalImportFn;
+
     /**
      * Optional telemetry sink. When supplied, the worker emits one
      * `onRpc` event per dispatched RPC (single-shard forward or fan-out)
@@ -332,18 +343,21 @@ export interface WorkerOptions {
      * dispatch. See {@link ObservabilitySink}.
      */
     observability?: ObservabilitySink;
+
     /**
      * When true, the runtime calls `ctx.passThroughOnException()` at the top
      * of the fetch handler. Forwards uncaught exceptions to the origin
      * instead of returning a synthetic 500.
      */
     passThroughOnException?: boolean;
+
     /**
      * Coordinator for cross-shard RPCs. When absent, envelopes with
      * `fanOut` set are rejected with a 400. Construct via
      * `createQueryCoordinator({ registry })`.
      */
     queryCoordinator?: QueryCoordinator;
+
     /**
      * Resolve the calling identity from the inbound RPC request. Called once
      * per RPC (and per fan-out) before the request is forwarded to the
@@ -354,11 +368,13 @@ export interface WorkerOptions {
      * anonymous — no identity headers are injected.
      */
     resolveIdentity?: (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
+
     /**
      * Resolve a table's sharding metadata. Required by the import endpoint to
      * bucket rows; when omitted, every row routes to the default shard.
      */
     resolveTableSharding?: AdminTableResolver;
+
     /**
      * Map of routes for custom HTTP handlers (auth callbacks etc.). Keys can
      * be either `"METHOD path"` (e.g. `"GET /healthz"`) or just `"path"`
@@ -366,6 +382,7 @@ export interface WorkerOptions {
      * first.
      */
     routes?: Record<string, Route>;
+
     /**
      * Namespace binding for the `SchedulerDO` (typically `env.SCHEDULER`). When
      * set, the worker exposes the admin-gated `/_cirrus/admin/scheduled`
@@ -373,6 +390,7 @@ export interface WorkerOptions {
      * jobs. Omit it and those endpoints respond `SCHEDULER_NOT_CONFIGURED`.
      */
     schedulerDO?: ShardNamespaceLike;
+
     /**
      * Named `SchedulerDO` instance the admin endpoints target. Must match the
      * `instanceName` passed to `createScheduler` (both default to `default`).
@@ -380,6 +398,7 @@ export interface WorkerOptions {
     schedulerInstanceName?: string;
     /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
     shardDO: ShardNamespaceLike;
+
     /**
      * Storage lister backing the admin-gated `GET /_cirrus/admin/storage`
      * endpoint the dashboard's file browser calls. The structural shape matches
@@ -390,7 +409,7 @@ export interface WorkerOptions {
     storageList?: StorageListFn;
 }
 
-export interface RpcContext {
+interface RpcContext {
     ctx: ExecutionContextLike;
     env: unknown;
     request: Request;
@@ -690,11 +709,7 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
  * via a side channel. For now this falls through to an empty list — the CLI
  * always passes explicit `--tables` so this path is mainly defensive.
  */
-const collectKnownTables = (resolver: AdminTableResolver | undefined): string[] => {
-    void resolver;
-
-    return [];
-};
+const collectKnownTables = (_resolver: AdminTableResolver | undefined): string[] => [];
 
 interface AdminBatch {
     rows: { doc: Record<string, unknown>; table: string }[];
@@ -915,6 +930,7 @@ const streamingImport = async (
  * `Authorization` header handling is also plain — the per-shard gate is what
  * provides the constant-time check downstream.
  */
+
 /**
  * Length-independent constant-time string compare for token checks.
  *
@@ -923,12 +939,16 @@ const streamingImport = async (
  */
 const constantTimeEqual = (expected: string, supplied: string): boolean => {
     const max = Math.max(expected.length, supplied.length);
+    // Bitwise XOR/OR are load-bearing for the branch-free constant-time
+    // comparison that protects token/HMAC checks from timing side channels.
+    // eslint-disable-next-line no-bitwise
     let diff = expected.length ^ supplied.length;
 
     for (let index = 0; index < max; index += 1) {
         const ca = index < expected.length ? expected.charCodeAt(index) : 0;
         const cb = index < supplied.length ? supplied.charCodeAt(index) : 0;
 
+        // eslint-disable-next-line no-bitwise
         diff |= ca ^ cb;
     }
 
@@ -948,7 +968,7 @@ const verifyHmacSignature = async (secret: string, body: string, suppliedSignatu
     }
 
     const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
     const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
     const bytes = new Uint8Array(signature);
     let binary = "";
@@ -1002,7 +1022,7 @@ const checkAdminWsToken = (request: Request, expected: string | undefined): bool
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
  * be re-exported directly as `export default createWorker(...)`.
  */
-export const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> } => {
+const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> } => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
     // Fan-out and non-default shard routing are authorization-open when neither
@@ -1024,9 +1044,11 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
         // eslint-disable-next-line no-console -- surface the open authorization posture in logs
         console.warn(
-            `[cirrus] SECURITY: received ${kind} access but neither \`authorizeShard\` nor \`authorizeFanOut\` is configured — ` +
-            `any caller (including unauthenticated ones) can target any shard / fan out across the table. ` +
-            `Configure \`authorizeShard\`/\`authorizeFanOut\`, or set \`allowUnauthenticatedShardAccess: true\` to acknowledge this posture and silence this warning.`,
+            [
+                `[cirrus] SECURITY: received ${kind} access but neither \`authorizeShard\` nor \`authorizeFanOut\` is configured — `,
+                `any caller (including unauthenticated ones) can target any shard / fan out across the table. `,
+                `Configure \`authorizeShard\`/\`authorizeFanOut\`, or set \`allowUnauthenticatedShardAccess: true\` to acknowledge this posture and silence this warning.`,
+            ].join(""),
         );
     };
 
@@ -1068,7 +1090,7 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
      * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
      * in the `x-cirrus-scheduler-signature` header (secret in
      * `env.CIRRUS_SCHEDULER_SECRET`), or — when no HMAC secret is configured on
-     * the scheduler — an `authorization: Bearer <admin token>` fallback. An
+     * the scheduler — an `authorization: Bearer &lt;admin token>` fallback. An
      * unsigned/forged request is rejected with 403; we never run a job we can't
      * authenticate.
      *
@@ -1274,7 +1296,7 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
      * present and the caller is an admin. Shared by the list/cancel handlers so
      * both enforce the same gate before touching the scheduler.
      */
-    /** The `<CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
+    /** The `&lt;CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
     interface NotConfiguredError {
         code: string;
         message: string;
@@ -1423,8 +1445,10 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
         // client RPC path, so surfacing them in the runner would only mislead.
         const functions: FunctionDescriptor[] = Object.entries(registry)
             .filter(([, entry]) => entry.visibility !== "internal")
-            .map(([path, entry]) => ({ kind: entry.kind, path }))
-            .sort((a, b) => a.path.localeCompare(b.path));
+            .map(([path, entry]) => {
+                return { kind: entry.kind, path };
+            })
+            .toSorted((a, b) => a.path.localeCompare(b.path));
 
         return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
     };
@@ -1523,7 +1547,7 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
         return {
             auth: {
-                getIdentity: async () => claims,
+                getIdentity: () => Promise.resolve(claims),
                 userId,
             },
             fetch: globalThis.fetch.bind(globalThis),
@@ -1733,7 +1757,7 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
                     functionPath: envelope.functionPath,
                     ok: response.ok,
                     shardKey,
-                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${response.status}`, status: response.status } }),
+                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
                 });
 
                 // Propagate the DO's bookmark header so the client can pin reads
@@ -1745,7 +1769,7 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 
                     headers.set("x-d1-bookmark", responseBookmark);
 
-                    return new Response(response.body, { status: response.status, headers });
+                    return new Response(response.body, { headers, status: response.status });
                 }
 
                 return response;
@@ -1835,4 +1859,34 @@ export const createWorker = (options: WorkerOptions): { fetch: (request: Request
 };
 
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
-export const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
+const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
+
+export { createWorker, defineRpcEnvelope };
+export type {
+    AdminTableResolver,
+    AuthIntrospector,
+    AuthPage,
+    AuthSession,
+    AuthTimestamp,
+    AuthUser,
+    ExecutionContextLike,
+    FunctionDescriptor,
+    FunctionRegistryEntry,
+    FunctionRegistryLike,
+    GlobalExportFn,
+    GlobalImportFn,
+    GlobalIntrospector,
+    GlobalTableInfo,
+    GlobalTablePage,
+    HttpActionContext,
+    HttpActionLike,
+    HttpRouterLike,
+    ResolvedIdentity,
+    Route,
+    RpcContext,
+    RpcEnvelope,
+    ShardingInfo,
+    StorageListFn,
+    StorageObject,
+    WorkerOptions,
+};

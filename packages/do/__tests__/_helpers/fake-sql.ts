@@ -4,7 +4,7 @@ import type { SchemaLike, SqlCursor, SqlExec } from "../../src/ctx-db.js";
  * In-memory stand-in for the workerd `SqlStorage` surface used by the
  * ctx-db adapter. We only need to understand the small set of statements
  * the adapter emits — `CREATE TABLE`, `CREATE INDEX`, `INSERT`, `UPDATE`,
- * `DELETE`, `SELECT ... WHERE id = ?`, and `SELECT ... WHERE <conds>` —
+ * `DELETE`, `SELECT ... WHERE id = ?`, and `SELECT ... WHERE &lt;conds>` —
  * so we pattern-match the SQL string instead of pulling in an actual
  * SQLite implementation.
  */
@@ -44,7 +44,8 @@ const PROBE_ID = /^SELECT 1 FROM "([^"]+)" WHERE id = \? LIMIT 1$/u;
 const SELECT_ALL = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)"(?: WHERE (.+?))?(?: ORDER BY (.+?))?(?: LIMIT (\d+))?$/u;
 const SELECT_BY_ID = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id = \?$/u;
 
-const cursor = <Row>(rows: Row[]): SqlCursor<Row> => ({
+const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
+ return {
     [Symbol.iterator]() {
         return rows[Symbol.iterator]();
     },
@@ -58,7 +59,8 @@ const cursor = <Row>(rows: Row[]): SqlCursor<Row> => ({
     toArray() {
         return rows;
     },
-});
+};
+};
 
 const compareValues = (left: unknown, right: unknown): number => {
     if (typeof left === "number" && typeof right === "number") {
@@ -205,7 +207,7 @@ const sortRows = (rows: FakeRow[], orderClause: string | undefined): FakeRow[] =
                 .replace(/\s+ASC$/u, "")
                 .trim(),
         )
-        .map(parseFieldExpression);
+        .map((expression) => parseFieldExpression(expression));
 
     return [...rows].sort((leftRow, rightRow) => {
         for (const field of fields) {

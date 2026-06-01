@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { DatabaseWriterLike, RunShardExportArgs, RunShardImportArgs, SchemaLike, ShardDOState } from "@cirrus/do";
 import { createShardCtxDb, exportShardRows, importShardRows, runShardMigrations, ShardDO } from "@cirrus/do";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
@@ -16,7 +16,8 @@ import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
 const ADMIN_TOKEN = "roundtrip-admin";
 
-const minimalParser = (kind: string) => ({
+const minimalParser = (kind: string) => {
+ return {
     kind,
     parse(value: unknown) {
         if (kind === "string" && typeof value !== "string") {
@@ -25,7 +26,8 @@ const minimalParser = (kind: string) => ({
 
         return value;
     },
-});
+};
+};
 
 const schema: SchemaLike = {
     tables: {
@@ -138,14 +140,14 @@ const buildCluster = (shardKeys: string[]) => {
                 },
             };
         },
-        idFromName: (name) => ({ __name: name }),
+        idFromName: (name) => { return { __name: name }; },
     };
 
     return { namespace, shards };
 };
 
 describe("admin roundtrip — 3 shards", () => {
-    test("export → import across 3 shard buckets roundtrips identically", async () => {
+    it("export → import across 3 shard buckets roundtrips identically", async () => {
         expect.hasAssertions();
 
         const channelKeys = ["c1", "c2", "c3"];
@@ -170,7 +172,7 @@ describe("admin roundtrip — 3 shards", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: coordinator,
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : undefined,
+                (table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : undefined),
             shardDO: sourceCluster.namespace,
         });
 
@@ -198,7 +200,7 @@ describe("admin roundtrip — 3 shards", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: targetCoordinator,
             resolveTableSharding: (table: string): ShardingInfo | undefined =>
-                table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : undefined,
+                (table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : undefined),
             shardDO: targetCluster.namespace,
         });
 

@@ -13,6 +13,9 @@ import type { MigrationIR } from "./ir.js";
  * resolves), and fall back to the surface text when no symbol is available
  * (no tsconfig wired up).
  */
+/** Strips a trailing `.ts` extension from a relative source path. */
+const TS_EXTENSION_RE = /\.ts$/u;
+
 const isDefineMigration = (identifier: Identifier): boolean => {
     const symbol = identifier.getSymbol();
 
@@ -119,7 +122,7 @@ export const discoverMigrations = (project: Project, cirrusDirectory: string): M
         // discoverFunctions may have already added these files to the project;
         // reuse the existing SourceFile rather than re-adding (which throws).
         const source: SourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = relative(cirrusDirectory, filePath).split(sep).join("/").replace(/\.ts$/u, "");
+        const relativePath = relative(cirrusDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
 
         for (const statement of source.getVariableStatements()) {
             if (!statement.isExported()) {

@@ -1,5 +1,5 @@
 import { Project } from "ts-morph";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { discoverSchema } from "../src/discover-schema.js";
 import { emitDataModel } from "../src/emit.js";
@@ -18,7 +18,7 @@ const projectWith = (schemaSource: string): { project: Project; schemaPath: stri
 };
 
 describe("discoverSchema", () => {
-    test("captures searchIndex name + field + filterFields", () => {
+    it("captures searchIndex name + field + filterFields", () => {
         expect.assertions(3);
 
         const { project, schemaPath } = projectWith(`
@@ -45,7 +45,7 @@ describe("discoverSchema", () => {
         });
     });
 
-    test("searchIndex without filterFields leaves the field undefined (not an empty array)", () => {
+    it("searchIndex without filterFields leaves the field undefined (not an empty array)", () => {
         expect.assertions(2);
 
         const { project, schemaPath } = projectWith(`
@@ -63,7 +63,7 @@ describe("discoverSchema", () => {
         expect(docs?.searchIndexes[0]?.filterFields).toBeUndefined();
     });
 
-    test("tables without searchIndex calls expose an empty searchIndexes array", () => {
+    it("tables without searchIndex calls expose an empty searchIndexes array", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
@@ -79,7 +79,7 @@ describe("discoverSchema", () => {
         expect(schema.tables[0]?.searchIndexes).toEqual([]);
     });
 
-    test("indexes, shardBy and searchIndex coexist on the same table", () => {
+    it("indexes, shardBy and searchIndex coexist on the same table", () => {
         expect.assertions(3);
 
         const { project, schemaPath } = projectWith(`
@@ -104,7 +104,7 @@ describe("discoverSchema", () => {
         expect(messages?.searchIndexes[0]).toMatchObject({ field: "text", name: "by_text" });
     });
 
-    test("captures an inline .vectorize() index hoisted into schema.vectorIndexes (Shape A)", () => {
+    it("captures an inline .vectorize() index hoisted into schema.vectorIndexes (Shape A)", () => {
         expect.assertions(2);
 
         const { project, schemaPath } = projectWith(`
@@ -136,7 +136,7 @@ describe("discoverSchema", () => {
         expect(schema.vectorIndexes).toEqual(docs?.vectorIndexes);
     });
 
-    test("captures a standalone defineVectorIndex entry from the second arg (Shape B)", () => {
+    it("captures a standalone defineVectorIndex entry from the second arg (Shape B)", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
@@ -170,7 +170,7 @@ describe("discoverSchema", () => {
         ]);
     });
 
-    test("captures column modifiers into the field IR (and a chain no longer throws)", () => {
+    it("captures column modifiers into the field IR (and a chain no longer throws)", () => {
         expect.assertions(6);
 
         const { project, schemaPath } = projectWith(`
@@ -200,7 +200,7 @@ describe("discoverSchema", () => {
         expect(todos?.shape.plain).toEqual({ kind: "string" });
     });
 
-    test("captures timestamp/date kinds and the $type/defaultNow modifiers", () => {
+    it("captures timestamp/date kinds and the $type/defaultNow modifiers", () => {
         expect.assertions(4);
 
         const { project, schemaPath } = projectWith(`
@@ -227,7 +227,7 @@ describe("discoverSchema", () => {
         expect(events?.shape.externalId).toEqual({ column: { notNull: true }, kind: "string" });
     });
 
-    test("parses .relations() into one/many descriptors with references defaulting to _id", () => {
+    it("parses .relations() into one/many descriptors with references defaulting to _id", () => {
         expect.assertions(2);
 
         const { project, schemaPath } = projectWith(`
@@ -254,7 +254,7 @@ describe("discoverSchema", () => {
         expect(posts?.relations).toEqual([{ field: "authorId", kind: "one", name: "author", onDelete: "cascade", references: "_id", table: "users" }]);
     });
 
-    test("honors an explicit references and ignores onDelete on a many relation", () => {
+    it("honors an explicit references and ignores onDelete on a many relation", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
@@ -273,7 +273,7 @@ describe("discoverSchema", () => {
         expect(orgs?.relations[0]).toEqual({ field: "orgSlug", kind: "many", name: "members", onDelete: undefined, references: "slug", table: "members" });
     });
 
-    test("tables without .relations() expose an empty relations array", () => {
+    it("tables without .relations() expose an empty relations array", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
@@ -289,7 +289,7 @@ describe("discoverSchema", () => {
         expect(schema.tables[0]?.relations).toEqual([]);
     });
 
-    test("a .triggers() call is skipped without disrupting indexes/relations on the same table", () => {
+    it("a .triggers() call is skipped without disrupting indexes/relations on the same table", () => {
         expect.assertions(3);
 
         const { project, schemaPath } = projectWith(`
@@ -315,7 +315,7 @@ describe("discoverSchema", () => {
         expect(messages?.relations).toEqual([{ field: "authorId", kind: "one", name: "author", onDelete: undefined, references: "_id", table: "users" }]);
     });
 
-    test("emits the relation type machinery and per-table Relations map", () => {
+    it("emits the relation type machinery and per-table Relations map", () => {
         expect.assertions(8);
 
         const { project, schemaPath } = projectWith(`
@@ -346,7 +346,7 @@ describe("discoverSchema", () => {
         expect(dataModel).toContain("findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;");
     });
 
-    test("emits an empty Relations entry for tables that declare none", () => {
+    it("emits an empty Relations entry for tables that declare none", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
@@ -362,7 +362,7 @@ describe("discoverSchema", () => {
         expect(dataModel).toContain("users: {};");
     });
 
-    test("emits a VectorIndexName union covering both shapes", () => {
+    it("emits a VectorIndexName union covering both shapes", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`

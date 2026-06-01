@@ -1,5 +1,5 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { exportGlobalRows, importGlobalRows, selectGlobalTables } from "../src/admin-export-import.js";
 import { createD1CtxDb } from "../src/d1-ctx-db.js";
@@ -7,8 +7,8 @@ import { createD1Exec } from "./_helpers/node-sqlite-d1.js";
 
 const FIXED_CLOCK = 1_700_000_000_000;
 
-const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike =>
-    ({
+const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+ return {
         _meta: { column: { notNull: true, ...column } },
         kind,
 
@@ -27,7 +27,8 @@ const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike 
 
             return value;
         },
-    }) as unknown as ValidatorLike;
+    };
+};
 
 // The D1 writer is the global-tables view; only the `.global()` table is in
 // its schema (the DO ctx-db owns shard-local tables). The import helper still
@@ -76,13 +77,13 @@ describe("d1 admin export/import globals", () => {
     });
 
     describe("selectGlobalTables", () => {
-        test("returns only `.global()` tables", () => {
+        it("returns only `.global()` tables", () => {
             expect.assertions(1);
 
             expect(selectGlobalTables(mergedSchema)).toEqual(["settings"]);
         });
 
-        test("respects an allowlist (still only globals)", () => {
+        it("respects an allowlist (still only globals)", () => {
             expect.assertions(1);
 
             expect(selectGlobalTables(mergedSchema, ["settings", "local"])).toEqual(["settings"]);
@@ -90,7 +91,7 @@ describe("d1 admin export/import globals", () => {
     });
 
     describe("exportGlobalRows", () => {
-        test("yields every row of each global table", async () => {
+        it("yields every row of each global table", async () => {
             expect.assertions(2);
 
             await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
@@ -108,7 +109,7 @@ describe("d1 admin export/import globals", () => {
     });
 
     describe("importGlobalRows", () => {
-        test("inserts a batch and returns per-table counts", async () => {
+        it("inserts a batch and returns per-table counts", async () => {
             expect.assertions(3);
 
             const result = await importGlobalRows(writer, schema, {
@@ -123,7 +124,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.conflicts).toBe(0);
         });
 
-        test("skips non-global tables silently (someone else's responsibility)", async () => {
+        it("skips non-global tables silently (someone else's responsibility)", async () => {
             expect.assertions(1);
 
             const result = await importGlobalRows(writer, mergedSchema, {
@@ -136,13 +137,13 @@ describe("d1 admin export/import globals", () => {
             expect(result.inserted).toEqual({ settings: 1 });
         });
 
-        test("reports schema-failed rows in `errors` and continues", async () => {
+        it("reports schema-failed rows in `errors` and continues", async () => {
             expect.assertions(3);
 
             const result = await importGlobalRows(writer, schema, {
                 rows: [
                     { doc: { _id: "s1", name: "ok", value: "x" }, table: "settings" },
-                    { doc: { _id: "s2", name: 42 as unknown as string, value: "x" }, table: "settings" },
+                    { doc: { _id: "s2", name: 42, value: "x" }, table: "settings" },
                     { doc: { _id: "s3", name: "ok2", value: "y" }, table: "settings" },
                 ],
             });
@@ -152,7 +153,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors[0]).toMatchObject({ code: "VALIDATION_ERROR", table: "settings" });
         });
 
-        test("counts _id collisions as conflicts and skips them", async () => {
+        it("counts _id collisions as conflicts and skips them", async () => {
             expect.assertions(3);
 
             await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
@@ -172,7 +173,7 @@ describe("d1 admin export/import globals", () => {
             expect(reloaded).toMatchObject({ value: "dark" });
         });
 
-        test("roundtrip: export then re-import into a fresh D1 produces identical rows", async () => {
+        it("roundtrip: export then re-import into a fresh D1 produces identical rows", async () => {
             expect.assertions(3);
 
             await writer.insert("settings", { _id: "s1", name: "theme", value: "dark" }, { allowExplicitId: true });
@@ -204,7 +205,7 @@ describe("d1 admin export/import globals", () => {
             expect(result.inserted).toEqual({ settings: 2 });
             expect(result.errors).toEqual([]);
 
-            const reload = (await freshWriter.get("s1")) as Record<string, unknown> | null;
+            const reload = (await freshWriter.get("s1"));
 
             expect(reload).toMatchObject({ name: "theme", value: "dark" });
 

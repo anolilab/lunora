@@ -20,22 +20,23 @@
  * for a follow-up once codegen opts schemas into cross-shard call sites.
  */
 import { CirrusError } from "./errors.js";
-import { resolveShard, type ShardNamespaceLike } from "./resolve-shard.js";
+import type { ShardNamespaceLike } from "./resolve-shard.js";
+import { resolveShard } from "./resolve-shard.js";
 
 /**
  * Source of "which shard keys exist for a given table right now". Returning
  * an empty array is valid — the coordinator will respond with the merge
  * strategy's identity (empty array for `concat`, `0` for `sum`, etc.).
  */
-export interface ShardRegistry {
-    listShardKeys: (table: string) => Promise<readonly string[]> | readonly string[];
+interface ShardRegistry {
+    listShardKeys: (table: string) => Promise<ReadonlyArray<string>> | ReadonlyArray<string>;
 }
 
 /**
  * Static-map implementation. Useful for tests and for small deployments
  * where shard keys are known up front (e.g. a fixed set of channel IDs).
  */
-export const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, readonly string[]>>): ShardRegistry => {
+const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, ReadonlyArray<string>>>): ShardRegistry => {
     return {
         listShardKeys(table) {
             return table_to_keys[table] ?? [];
@@ -61,7 +62,7 @@ export const createStaticShardRegistry = (table_to_keys: Readonly<Record<string,
  * requires shipping `(sum, count)` per shard, not the post-shard mean.
  * Use two separate fan-outs (`sum` + `count`) and divide in the caller.
  */
-export type MergeStrategy =
+type MergeStrategy =
     | { kind: "concat" }
     | { by: string; direction?: "asc" | "desc"; k: number; kind: "topK" }
     | { kind: "first" }
@@ -81,7 +82,7 @@ export type MergeStrategy =
  * - `groupBy({ by, agg })` → `groupBy({ op })` (defaults to `sum` since
  *   `groupBy`'s default reducer is `count`).
  */
-export const mergeStrategyForAggregate = (
+const mergeStrategyForAggregate = (
     input:
         | { agg?: { op?: "avg" | "count" | "max" | "min" | "sum" }; kind: "groupBy" }
         | { kind: "count" }
@@ -131,7 +132,7 @@ export const mergeStrategyForAggregate = (
     });
 };
 
-export interface FanOutSpec {
+interface FanOutSpec {
     merge: MergeStrategy;
     /** Table whose shard keys drive the fan-out. */
     table: string;
@@ -143,7 +144,7 @@ export interface FanOutSpec {
  * exception, so callers can decide whether to retry or surface a partial
  * UI.
  */
-export interface ShardError {
+interface ShardError {
     /** Human-readable; tests assert on `.includes("timeout")` and similar. */
     message: string;
     shardKey: string;
@@ -151,23 +152,24 @@ export interface ShardError {
     timedOut: boolean;
 }
 
-export interface FanOutResult<T = unknown> {
+interface FanOutResult<T = unknown> {
     /** Merged value — type depends on the merge strategy. */
     data: T;
-    errors: readonly ShardError[];
+    errors: ReadonlyArray<ShardError>;
     /** Shards that failed or timed out. */
     failed: number;
     /** Shards that returned successfully. */
     ok: number;
 }
 
-export interface QueryCoordinatorOptions {
+interface QueryCoordinatorOptions {
     /**
      * Maximum number of shard RPCs to issue in parallel. Defaults to 16 —
      * keeps the 30-second Worker CPU budget healthy when fanning out to
      * dozens of shards and avoids stampeding the DO namespace.
      */
     maxConcurrency?: number;
+
     /**
      * Hard per-shard timeout in milliseconds. Defaults to 5000; a slow
      * shard surfaces in `errors[]` rather than stalling the aggregate.
@@ -177,7 +179,7 @@ export interface QueryCoordinatorOptions {
     registry: ShardRegistry;
 }
 
-export interface FanOutRequest {
+interface FanOutRequest {
     args?: Record<string, unknown>;
     fanOut: FanOutSpec;
     functionPath: string;
@@ -199,7 +201,7 @@ type ShardRpcRequest = Pick<FanOutRequest, "args" | "functionPath" | "headers">;
  * the `Authorization` bearer header the shard's admin gate requires (the
  * configured admin token), or every shard comes back as a 403 error.
  */
-export interface MigrationFanOutRequest {
+interface MigrationFanOutRequest {
     args?: Record<string, unknown>;
     functionPath: string;
     headers?: Record<string, string>;
@@ -208,14 +210,14 @@ export interface MigrationFanOutRequest {
 }
 
 /** One shard's outcome: either the unwrapped admin `result` payload, or an error. */
-export interface ShardMigrationOutcome {
+interface ShardMigrationOutcome {
     error?: { message: string; timedOut: boolean };
     /** The shard's admin `result`, peeled out of the `{ result }` envelope. */
     result?: unknown;
     shardKey: string;
 }
 
-export interface MigrationFanOutResult {
+interface MigrationFanOutResult {
     /** Summed `changed` across shards whose result carried a numeric count. */
     changed: number;
     /** Shards that errored or timed out. */
@@ -225,7 +227,8 @@ export interface MigrationFanOutResult {
     /** Summed `processed` across shards whose result carried a numeric count. */
     processed: number;
     /** Per-shard outcomes, in registry order. */
-    shards: readonly ShardMigrationOutcome[];
+    shards: ReadonlyArray<ShardMigrationOutcome>;
+
     /**
      * Rolled-up status. `"failed"` if any shard's runner reported failure;
      * `"in_progress"` if any shard is incomplete or unreachable (the run stays
@@ -234,8 +237,9 @@ export interface MigrationFanOutResult {
     status: "completed" | "failed" | "in_progress";
 }
 
-export interface QueryCoordinator {
+interface QueryCoordinator {
     fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
+
     /**
      * Fan an export admin RPC out to every live shard, returning the
      * per-shard `{rows}` payloads alongside any per-shard errors. Each shard
@@ -243,6 +247,7 @@ export interface QueryCoordinator {
      * collector — the worker assembles the NDJSON stream.
      */
     orchestrateExport: (namespace: ShardNamespaceLike, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
+
     /**
      * Fan an import admin RPC out by routing each row to its owning shard. The
      * shard registry resolves which shards exist; rows whose table has a
@@ -261,9 +266,10 @@ export interface QueryCoordinator {
  * bearer the per-shard gate expects. Shard registries are queried for the
  * complete set of live shards across all listed shard-local tables.
  */
-export interface ExportFanOutRequest {
+interface ExportFanOutRequest {
     args?: Record<string, unknown>;
     headers?: Record<string, string>;
+
     /**
      * Tables driving the fan-out. Shards are derived from the union of each
      * table's live shard keys — so an export of `["users","messages"]` reaches
@@ -274,17 +280,17 @@ export interface ExportFanOutRequest {
 }
 
 /** Per-shard export outcome. */
-export interface ShardExportOutcome {
+interface ShardExportOutcome {
     error?: { message: string; timedOut: boolean };
     /** Rows from this shard, or undefined when an error occurred. */
     rows?: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>;
     shardKey: string;
 }
 
-export interface ExportFanOutResult {
+interface ExportFanOutResult {
     failed: number;
     ok: number;
-    shards: readonly ShardExportOutcome[];
+    shards: ReadonlyArray<ShardExportOutcome>;
 }
 
 /**
@@ -292,7 +298,7 @@ export interface ExportFanOutResult {
  * into one batch per shard key — the coordinator's job is to forward each
  * batch and roll up the per-shard insert counts + errors.
  */
-export interface ImportFanOutRequest {
+interface ImportFanOutRequest {
     /**
      * Per-shard batches keyed by shard key. Each entry will be POSTed as the
      * `rows` arg of `__cirrus_admin__:importShard`. The shard's
@@ -302,7 +308,7 @@ export interface ImportFanOutRequest {
     headers?: Record<string, string>;
 }
 
-export interface ShardImportOutcome {
+interface ShardImportOutcome {
     error?: { message: string; timedOut: boolean };
     result?: {
         conflicts: number;
@@ -312,7 +318,7 @@ export interface ShardImportOutcome {
     shardKey: string;
 }
 
-export interface ImportFanOutResult {
+interface ImportFanOutResult {
     /** Total conflicts (skipped `_id`s) across shards. */
     conflicts: number;
     /** Errors merged across all per-shard outcomes. */
@@ -321,7 +327,7 @@ export interface ImportFanOutResult {
     /** Per-table summed insert counts. */
     inserted: Record<string, number>;
     ok: number;
-    shards: readonly ShardImportOutcome[];
+    shards: ReadonlyArray<ShardImportOutcome>;
 }
 
 const DEFAULT_CONCURRENCY = 16;
@@ -362,7 +368,7 @@ function rollUpStatus(anyFailed: boolean, incomplete: boolean): MigrationFanOutR
  * statuses up so a single failed shard reports `"failed"` and an incomplete or
  * unreachable shard reports `"in_progress"`.
  */
-function rollUpMigration(results: readonly ShardRpcOutcome[]): MigrationFanOutResult {
+function rollUpMigration(results: ReadonlyArray<ShardRpcOutcome>): MigrationFanOutResult {
     const shards: ShardMigrationOutcome[] = [];
     let ok = 0;
     let failed = 0;
@@ -400,7 +406,7 @@ function rollUpMigration(results: readonly ShardRpcOutcome[]): MigrationFanOutRe
  * project the inner `rows` array; an error surfaces an empty `rows` so the
  * caller can write the failed-shard entries without a special case.
  */
-function rollUpExport(results: readonly ShardRpcOutcome[]): ExportFanOutResult {
+function rollUpExport(results: ReadonlyArray<ShardRpcOutcome>): ExportFanOutResult {
     const shards: ShardExportOutcome[] = [];
     let ok = 0;
     let failed = 0;
@@ -424,7 +430,7 @@ function rollUpExport(results: readonly ShardRpcOutcome[]): ExportFanOutResult {
 }
 
 /** Sum the per-shard import counts/errors into a single roll-up. */
-function rollUpImport(results: readonly ShardRpcOutcome[]): ImportFanOutResult {
+function rollUpImport(results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResult {
     const shards: ShardImportOutcome[] = [];
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
@@ -535,7 +541,7 @@ async function callOneShard(namespace: ShardNamespaceLike, shardKey: string, pre
                 // needs to propagate.
             }
 
-            resolve({ kind: "err", message: `shard "${shardKey}" timed out after ${timeoutMs}ms`, shardKey, timedOut: true });
+            resolve({ kind: "err", message: `shard "${shardKey}" timed out after ${String(timeoutMs)}ms`, shardKey, timedOut: true });
         }, timeoutMs);
     });
 
@@ -544,7 +550,7 @@ async function callOneShard(namespace: ShardNamespaceLike, shardKey: string, pre
             const response = await stub.fetch(forwarded);
 
             if (!response.ok) {
-                return { kind: "err", message: `shard "${shardKey}" returned ${response.status}`, shardKey, timedOut: false };
+                return { kind: "err", message: `shard "${shardKey}" returned ${String(response.status)}`, shardKey, timedOut: false };
             }
 
             const value = await response.json();
@@ -568,11 +574,11 @@ async function callOneShard(namespace: ShardNamespaceLike, shardKey: string, pre
 
 async function runBoundedFanOut(
     namespace: ShardNamespaceLike,
-    keys: readonly string[],
+    keys: ReadonlyArray<string>,
     request: ShardRpcRequest,
     maxConcurrency: number,
     timeoutMs: number,
-): Promise<readonly ShardRpcOutcome[]> {
+): Promise<ReadonlyArray<ShardRpcOutcome>> {
     if (keys.length === 0) {
         return [];
     }
@@ -612,21 +618,24 @@ async function runBoundedFanOut(
 function canonicalJson(record: Record<string, unknown>): string {
     const ordered: Record<string, unknown> = {};
 
-    for (const key of Object.keys(record).sort()) {
+    // Code-unit ordering (NOT locale-aware) is load-bearing: it must match the
+    // aggregate counter's canonical key order across shards, so a localeCompare
+    // comparator would risk bucketing the same key tuple differently per shard.
+    for (const key of Object.keys(record).toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
         ordered[key] = record[key] ?? null;
     }
 
     return JSON.stringify(ordered);
 }
 
-function mergeShardResults(values: readonly unknown[], strategy: MergeStrategy): unknown {
+function mergeShardResults(values: ReadonlyArray<unknown>, strategy: MergeStrategy): unknown {
     switch (strategy.kind) {
         case "concat": {
             const out: unknown[] = [];
 
             for (const v of values) {
                 if (Array.isArray(v)) {
-                    out.push(...(v as readonly unknown[]));
+                    out.push(...(v as ReadonlyArray<unknown>));
                 }
             }
 
@@ -692,9 +701,10 @@ function mergeShardResults(values: readonly unknown[], strategy: MergeStrategy):
                         }
 
                         default: {
-                            const _exhaustive: never = op;
+                            // Compile-time exhaustiveness guard (no runtime effect).
+                            op satisfies never;
 
-                            void _exhaustive;
+                            break;
                         }
                     }
                 }
@@ -767,16 +777,17 @@ function mergeShardResults(values: readonly unknown[], strategy: MergeStrategy):
         }
 
         default: {
-            const _exhaustive: never = strategy;
-
-            void _exhaustive;
+            // Compile-time exhaustiveness guard: `satisfies never` fails the
+            // build if a new merge strategy is added without a case. Behaviour
+            // is unchanged — an unknown strategy returns the raw values.
+            strategy satisfies never;
 
             return values;
         }
     }
 }
 
-export const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordinator => {
+const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordinator => {
     const maxConcurrency = options.maxConcurrency ?? DEFAULT_CONCURRENCY;
     const perShardTimeoutMs = options.perShardTimeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -811,13 +822,6 @@ export const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryC
                 failed: errors.length,
                 ok: okShards.length,
             };
-        },
-        async orchestrateMigration(namespace: ShardNamespaceLike, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
-            const keys = await options.registry.listShardKeys(request.table);
-
-            const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
-
-            return rollUpMigration(results);
         },
         async orchestrateExport(namespace: ShardNamespaceLike, request: ExportFanOutRequest): Promise<ExportFanOutResult> {
             // Union the shard keys across all requested shard-local tables so
@@ -890,6 +894,34 @@ export const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryC
 
             return rollUpImport(outcomes);
         },
+        async orchestrateMigration(namespace: ShardNamespaceLike, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
+            const keys = await options.registry.listShardKeys(request.table);
+
+            const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
+
+            return rollUpMigration(results);
+        },
         registry: options.registry,
     };
+};
+
+export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate };
+export type {
+    ExportFanOutRequest,
+    ExportFanOutResult,
+    FanOutRequest,
+    FanOutResult,
+    FanOutSpec,
+    ImportFanOutRequest,
+    ImportFanOutResult,
+    MergeStrategy,
+    MigrationFanOutRequest,
+    MigrationFanOutResult,
+    QueryCoordinator,
+    QueryCoordinatorOptions,
+    ShardError,
+    ShardExportOutcome,
+    ShardImportOutcome,
+    ShardMigrationOutcome,
+    ShardRegistry,
 };

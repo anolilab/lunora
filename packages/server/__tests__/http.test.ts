@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { HttpActionCtx } from "../src/index.js";
 import { httpAction, httpRouter } from "../src/index.js";
@@ -6,7 +6,7 @@ import { httpAction, httpRouter } from "../src/index.js";
 const ctx = {} as HttpActionCtx;
 
 describe("httpAction", () => {
-    test("hands the injected ctx and the raw request to the wrapped handler", async () => {
+    it("hands the injected ctx and the raw request to the wrapped handler", async () => {
         expect.assertions(4);
 
         const seen: { ctx: HttpActionCtx; method: string }[] = [];
@@ -30,7 +30,7 @@ describe("httpAction", () => {
         expect(seen[0]!.method).toBe("PATCH");
     });
 
-    test("passes the raw Response through unchanged", async () => {
+    it("passes the raw Response through unchanged", async () => {
         expect.assertions(2);
 
         const app = httpRouter();
@@ -48,7 +48,7 @@ describe("httpAction", () => {
 });
 
 describe("httpRouter", () => {
-    test("routes by method", async () => {
+    it("routes by method", async () => {
         expect.assertions(2);
 
         const app = httpRouter();
@@ -66,7 +66,7 @@ describe("httpRouter", () => {
         await expect((await app.fetch(new Request("https://x/r", { method: "POST" }), { __cirrusCtx: ctx })).text()).resolves.toBe("POST");
     });
 
-    test("returns hono's 404 for an unmatched path", async () => {
+    it("returns hono's 404 for an unmatched path", async () => {
         expect.assertions(1);
 
         const app = httpRouter();
@@ -79,7 +79,7 @@ describe("httpRouter", () => {
         expect((await app.fetch(new Request("https://x/unknown"), { __cirrusCtx: ctx })).status).toBe(404);
     });
 
-    test("a path-match with the wrong verb is a 404", async () => {
+    it("a path-match with the wrong verb is a 404", async () => {
         expect.assertions(1);
 
         const app = httpRouter();
@@ -92,7 +92,7 @@ describe("httpRouter", () => {
         expect((await app.fetch(new Request("https://x/thing", { method: "POST" }), { __cirrusCtx: ctx })).status).toBe(404);
     });
 
-    test("errors when the action context was not injected (router used outside the runtime)", async () => {
+    it("errors when the action context was not injected (router used outside the runtime)", async () => {
         expect.assertions(1);
 
         const app = httpRouter();

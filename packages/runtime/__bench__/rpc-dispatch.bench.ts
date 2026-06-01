@@ -34,7 +34,7 @@ const makeShard = (): ShardNamespaceLike => {
     return {
         get: () => stub,
         getByName: () => stub,
-        idFromName: (name) => ({ __name: name }),
+        idFromName: (name) => { return { __name: name }; },
     };
 };
 
@@ -46,11 +46,11 @@ const buildRequest = (body: Record<string, unknown>): Request =>
 
 const noAuthWorker = createWorker({ shardDO: makeShard() });
 const useridWorker = createWorker({
-    resolveIdentity: () => ({ userId: "user_42" }),
+    resolveIdentity: () => { return { userId: "user_42" }; },
     shardDO: makeShard(),
 });
 const claimsWorker = createWorker({
-    resolveIdentity: () => ({ email: "u@example.com", roles: ["admin"], userId: "user_42" }),
+    resolveIdentity: () => { return { email: "u@example.com", roles: ["admin"], userId: "user_42" }; },
     shardDO: makeShard(),
 });
 

@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, StorageListFn } from "../src/create-worker.js";
 import { createWorker } from "../src/create-worker.js";
@@ -10,8 +10,8 @@ const fakeCtx: ExecutionContextLike = {
 };
 
 const noopNamespace: ShardNamespaceLike = {
-    get: () => ({ fetch: async () => new Response("not used", { status: 200 }) }),
-    idFromName: (name) => ({ __name: name }),
+    get: () => { return { fetch: async () => new Response("not used", { status: 200 }) }; },
+    idFromName: (name) => { return { __name: name }; },
 };
 
 const ADMIN_TOKEN = "admin-bear";
@@ -19,7 +19,7 @@ const ADMIN_TOKEN = "admin-bear";
 const PAGE = { cursor: "c1", objects: [{ etag: "e1", key: "a.png", size: 10 }] };
 
 describe("createWorker — storage admin endpoint", () => {
-    test("rejects without a valid admin bearer (403)", async () => {
+    it("rejects without a valid admin bearer (403)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList: async () => PAGE });
@@ -29,7 +29,7 @@ describe("createWorker — storage admin endpoint", () => {
         expect(response.status).toBe(403);
     });
 
-    test("reports STORAGE_NOT_CONFIGURED when no lister is bound (400)", async () => {
+    it("reports STORAGE_NOT_CONFIGURED when no lister is bound (400)", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
@@ -47,7 +47,7 @@ describe("createWorker — storage admin endpoint", () => {
         expect(body.error.code).toBe("STORAGE_NOT_CONFIGURED");
     });
 
-    test("forwards prefix / cursor / limit to the lister and returns the page", async () => {
+    it("forwards prefix / cursor / limit to the lister and returns the page", async () => {
         expect.assertions(3);
 
         const storageList = vi.fn<StorageListFn>(async () => PAGE);
@@ -67,7 +67,7 @@ describe("createWorker — storage admin endpoint", () => {
         expect(storageList).toHaveBeenCalledWith("avatars/", { cursor: "z", limit: 25 });
     });
 
-    test("rejects non-GET (405)", async () => {
+    it("rejects non-GET (405)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList: async () => PAGE });

@@ -8,9 +8,9 @@ export type FunctionKind = "action" | "mutation" | "query";
  */
 export interface FunctionDescriptor {
     kind: FunctionKind;
-    /** The `<file>:<function>` identifier, e.g. `messages:list`. */
+    /** The `&lt;file>:&lt;function>` identifier, e.g. `messages:list`. */
     path: string;
 }
 
-/** Outcome of a single {@link FunctionRunner} invocation. */
+/** Outcome of a single `FunctionRunner` invocation. */
 export type RunStatus = "error" | "idle" | "running" | "success";

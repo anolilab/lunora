@@ -1,9 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, v } from "../src/index.js";
 
 describe("defineTable", () => {
-    test("returns a table definition with shape and default __root__ shard mode", () => {
+    it("returns a table definition with shape and default __root__ shard mode", () => {
         expect.assertions(4);
 
         const messages = defineTable({
@@ -17,7 +17,7 @@ describe("defineTable", () => {
         expect(messages.searchIndexes).toEqual([]);
     });
 
-    test(".index appends an index definition", () => {
+    it(".index appends an index definition", () => {
         expect.assertions(3);
 
         const messages = defineTable({ channelId: v.id("channels"), createdAt: v.number() })
@@ -29,7 +29,7 @@ describe("defineTable", () => {
         expect(messages.indexes[1]).toMatchObject({ fields: ["channelId", "createdAt"], name: "by_channel_time", unique: true });
     });
 
-    test(".searchIndex appends a search index definition", () => {
+    it(".searchIndex appends a search index definition", () => {
         expect.assertions(2);
 
         const documents = defineTable({ body: v.string(), workspaceId: v.id("workspaces") }).searchIndex("by_body", {
@@ -41,7 +41,7 @@ describe("defineTable", () => {
         expect(documents.searchIndexes[0]).toMatchObject({ field: "body", filterFields: ["workspaceId"], name: "by_body" });
     });
 
-    test(".shardBy marks the table as shard-local", () => {
+    it(".shardBy marks the table as shard-local", () => {
         expect.assertions(1);
 
         const documents = defineTable({ body: v.string(), workspaceId: v.id("workspaces") }).shardBy("workspaceId");
@@ -49,7 +49,7 @@ describe("defineTable", () => {
         expect(documents.shardMode).toEqual({ field: "workspaceId", kind: "shardBy" });
     });
 
-    test(".global marks the table as global", () => {
+    it(".global marks the table as global", () => {
         expect.assertions(1);
 
         const users = defineTable({ email: v.string() }).global();
@@ -57,7 +57,7 @@ describe("defineTable", () => {
         expect(users.shardMode).toEqual({ kind: "global" });
     });
 
-    test("table without .vectorize exposes an empty vectorIndexes array", () => {
+    it("table without .vectorize exposes an empty vectorIndexes array", () => {
         expect.assertions(1);
 
         const docs = defineTable({ body: v.string() });
@@ -65,7 +65,7 @@ describe("defineTable", () => {
         expect(docs.vectorIndexes).toEqual([]);
     });
 
-    test(".vectorize appends an inline vector index (Shape A)", () => {
+    it(".vectorize appends an inline vector index (Shape A)", () => {
         expect.assertions(3);
 
         const embed = (text: string): ReadonlyArray<number> => [text.length];
@@ -84,7 +84,7 @@ describe("defineTable", () => {
         expect(docs.vectorIndexes[0]?.embed).toBe(embed);
     });
 
-    test(".aggregateIndex defaults to count and stashes the by-tuple", () => {
+    it(".aggregateIndex defaults to count and stashes the by-tuple", () => {
         expect.assertions(5);
 
         const todos = defineTable({ archived: v.boolean(), projectId: v.string() })
@@ -102,7 +102,7 @@ describe("defineTable", () => {
         expect(schema.tables.todos.aggregateIndexes[1]?.on).toBe("todos");
     });
 
-    test(".aggregateIndex(non-count) requires a field", () => {
+    it(".aggregateIndex(non-count) requires a field", () => {
         expect.assertions(1);
 
         const builder = defineTable({ seq: v.number() });
@@ -110,7 +110,7 @@ describe("defineTable", () => {
         expect(() => builder.aggregateIndex("seqSum", { op: "sum" })).toThrow(/requires a "field"/);
     });
 
-    test(".rankIndex stashes name, sortBy (asc default) + partitionBy + where", () => {
+    it(".rankIndex stashes name, sortBy (asc default) + partitionBy + where", () => {
         expect.assertions(6);
 
         const messages = defineTable({ archived: v.boolean(), channelId: v.string(), createdAt: v.number(), score: v.number() })
@@ -140,7 +140,7 @@ describe("defineTable", () => {
         expect(schema.tables.messages.rankIndexes[1]?.on).toBe("messages");
     });
 
-    test(".rankIndex requires a non-empty sortBy", () => {
+    it(".rankIndex requires a non-empty sortBy", () => {
         expect.assertions(1);
 
         const builder = defineTable({ score: v.number() });
@@ -148,7 +148,7 @@ describe("defineTable", () => {
         expect(() => builder.rankIndex("bad", { sortBy: [] })).toThrow(/sortBy/);
     });
 
-    test("builder chains return the same instance", () => {
+    it("builder chains return the same instance", () => {
         expect.assertions(1);
 
         const builder = defineTable({ a: v.string() });
@@ -159,7 +159,7 @@ describe("defineTable", () => {
 });
 
 describe("defineSchema", () => {
-    test("collects tables into a Schema", () => {
+    it("collects tables into a Schema", () => {
         expect.assertions(3);
 
         const schema = defineSchema({
@@ -172,7 +172,7 @@ describe("defineSchema", () => {
         expect(schema.tables.messages.shardMode).toEqual({ field: "channelId", kind: "shardBy" });
     });
 
-    test("defaults vectorIndexes to an empty object when the second arg is omitted", () => {
+    it("defaults vectorIndexes to an empty object when the second arg is omitted", () => {
         expect.assertions(1);
 
         const schema = defineSchema({ users: defineTable({ email: v.string() }) });
@@ -180,7 +180,7 @@ describe("defineSchema", () => {
         expect(schema.vectorIndexes).toEqual({});
     });
 
-    test("standalone defineAggregateIndex entries fold onto the owning table", () => {
+    it("standalone defineAggregateIndex entries fold onto the owning table", () => {
         expect.assertions(2);
 
         const schema = defineSchema(
@@ -195,7 +195,7 @@ describe("defineSchema", () => {
         expect(schema.tables.todos.aggregateIndexes[0]).toMatchObject({ by: ["projectId"], name: "byProject", on: "todos", op: "count" });
     });
 
-    test("standalone defineAggregateIndex throws when `on` table is unknown", () => {
+    it("standalone defineAggregateIndex throws when `on` table is unknown", () => {
         expect.assertions(1);
 
         expect(() =>
@@ -203,7 +203,7 @@ describe("defineSchema", () => {
         ).toThrow(/unknown table/);
     });
 
-    test("standalone defineRankIndex entries fold onto the owning table", () => {
+    it("standalone defineRankIndex entries fold onto the owning table", () => {
         expect.assertions(2);
 
         const schema = defineSchema(
@@ -224,7 +224,7 @@ describe("defineSchema", () => {
         });
     });
 
-    test("standalone defineRankIndex throws when `table` is unknown", () => {
+    it("standalone defineRankIndex throws when `table` is unknown", () => {
         expect.assertions(1);
 
         expect(() =>
@@ -237,13 +237,13 @@ describe("defineSchema", () => {
         ).toThrow(/unknown table/);
     });
 
-    test("defineRankIndex requires a non-empty sortBy", () => {
+    it("defineRankIndex requires a non-empty sortBy", () => {
         expect.assertions(1);
 
         expect(() => defineRankIndex("bad", { sortBy: [], table: "messages" })).toThrow(/sortBy/);
     });
 
-    test("registers standalone defineVectorIndex entries from the second arg (Shape B)", () => {
+    it("registers standalone defineVectorIndex entries from the second arg (Shape B)", () => {
         expect.assertions(2);
 
         const embed = async (text: string): Promise<ReadonlyArray<number>> => [text.length];

@@ -5,19 +5,20 @@
  * and verify the Sessions API + MigrationRunner against the actual binding.
  * The mock-based suite under `__tests__/D1Client.test.ts` exercises the same
  * logic against doubles — the value here is verifying the wire shapes that
- * mocks cannot model:
- *
- *  - `env.DB.withSession(bookmark)` returns a real session whose bookmark
- *    changes after a write.
- *  - `MigrationRunner` correctly bootstraps `__drizzle_migrations` via the
- *    drizzle d1 batch path and is idempotent across re-runs against a real
- *    SQLite store. Guards against drizzle-internal regressions in the batch
- *    `_prepare()`/`stmt.bind()` chain that unit-test doubles can't catch.
+ * mocks cannot model: `env.DB.withSession(bookmark)` returns a real session
+ * whose bookmark changes after a write; `MigrationRunner` correctly bootstraps
+ * `__drizzle_migrations` via the drizzle d1 batch path and is idempotent across
+ * re-runs against a real SQLite store. Guards against drizzle-internal
+ * regressions in the batch `_prepare()`/`stmt.bind()` chain that unit-test
+ * doubles can't catch.
  */
 import { env, SELF } from "cloudflare:test";
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 // `env` is typed via the `Cloudflare.Env` augmentation in `./env.d.ts`.
+
+/** Lowercase hex SHA-256 shape guard. Hoisted to avoid per-call recompilation. */
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
 
 const dropUsers = async (): Promise<void> => {
     try {
@@ -38,7 +39,7 @@ describe("d1 (workerd)", () => {
         await dropUsers();
     });
 
-    test("migrationRunner applies migrations against a real D1 database and is idempotent", async () => {
+    it("migrationRunner applies migrations against a real D1 database and is idempotent", async () => {
         expect.assertions(6);
 
         const migrations = [
@@ -69,10 +70,10 @@ describe("d1 (workerd)", () => {
         const rows = await env.DB.prepare("SELECT hash FROM __drizzle_migrations ORDER BY id").all<{ hash: string }>();
 
         expect(rows.results).toHaveLength(2);
-        expect(rows.results.every((row) => /^[0-9a-f]{64}$/u.test(row.hash))).toBe(true);
+        expect(rows.results.every((row) => SHA256_HEX_RE.test(row.hash))).toBe(true);
     });
 
-    test("migrationRunner applies separate single-statement migrations in order", async () => {
+    it("migrationRunner applies separate single-statement migrations in order", async () => {
         expect.assertions(5);
 
         // Each migration must be a single SQL statement (multi-statement
@@ -102,7 +103,7 @@ describe("d1 (workerd)", () => {
         await env.DB.prepare("DROP TABLE IF EXISTS posts").run();
     });
 
-    test("withSession() returns a real D1 bookmark after a write", async () => {
+    it("withSession() returns a real D1 bookmark after a write", async () => {
         expect.assertions(2);
 
         await env.DB.prepare("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)").run();
@@ -124,7 +125,7 @@ describe("d1 (workerd)", () => {
         expect(list.rows).toEqual([{ id: "u1", name: "Ada" }]);
     });
 
-    test("d1Client.prepare() works against the real binding for raw SQL", async () => {
+    it("d1Client.prepare() works against the real binding for raw SQL", async () => {
         expect.assertions(1);
 
         await env.DB.prepare("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL)").run();

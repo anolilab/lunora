@@ -33,7 +33,8 @@ const triggerMap = (count: number): Record<string, TriggerDefinitionLike> => {
     return map;
 };
 
-const schemaWithTriggers = (count: number): SchemaLike => ({
+const schemaWithTriggers = (count: number): SchemaLike => {
+ return {
     tables: {
         todos: {
             indexes: [],
@@ -41,7 +42,8 @@ const schemaWithTriggers = (count: number): SchemaLike => ({
             triggerMap: count === 0 ? undefined : triggerMap(count),
         },
     },
-});
+};
+};
 
 const makeWriter = (count: number) => {
     const harness = createSqliteExec();

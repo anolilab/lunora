@@ -12,7 +12,7 @@ import type {
 } from "@cirrus/client";
 import { vi } from "vitest";
 
-export interface MockClientHooks {
+interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
     asClient: CirrusClient;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
@@ -38,11 +38,9 @@ export interface MockClientHooks {
 type Impl = (reference: string, args: unknown, options: unknown) => unknown;
 
 const makeMethod = (impl?: Impl): ReturnType<typeof vi.fn> =>
-    vi.fn<(fn: FunctionReference, args: unknown, options: unknown) => Promise<unknown>>(async (fn: FunctionReference, args: unknown, options: unknown) => {
-        return impl ? impl(fn.__cirrusRef, args, options) : undefined;
-    });
+    vi.fn<(fn: FunctionReference, args: unknown, options: unknown) => Promise<unknown>>(async (fn: FunctionReference, args: unknown, options: unknown) => (impl ? impl(fn.__cirrusRef, args, options) : undefined));
 
-export interface MockClientImpls {
+interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
     listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
@@ -162,3 +160,5 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         subscribeScheduledJobs,
     };
 };
+
+export type { MockClientHooks, MockClientImpls };

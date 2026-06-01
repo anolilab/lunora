@@ -2,10 +2,11 @@ import type { AuthPage, AuthSession, AuthUser } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { UsersPanel } from "../src/users-panel.js";
-import { createMockClient, type MockClientHooks } from "./mock-client.js";
+import type { MockClientHooks } from "./mock-client.js";
+import { createMockClient } from "./mock-client.js";
 
 const USERS: AuthUser[] = [
     { createdAt: 1, email: "a@example.com", emailVerified: true, id: "u1", name: "Ann" },
@@ -23,7 +24,7 @@ const createUsersClient = (): MockClientHooks =>
 
             return { rows: SESSIONS, total: SESSIONS.length };
         },
-        listAuthUsers: (): AuthPage<AuthUser> => ({ rows: USERS, total: USERS.length }),
+        listAuthUsers: (): AuthPage<AuthUser> => { return { rows: USERS, total: USERS.length }; },
     });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
@@ -33,7 +34,7 @@ const renderPanel = (mock: MockClientHooks): ReactElement => (
 );
 
 describe("usersPanel", () => {
-    test("lists users on mount", async () => {
+    it("lists users on mount", async () => {
         expect.assertions(2);
 
         render(renderPanel(createUsersClient()));
@@ -44,7 +45,7 @@ describe("usersPanel", () => {
         expect(screen.getByTestId("us-row-u2").textContent).toContain("Bob");
     });
 
-    test("loads a user's sessions on demand", async () => {
+    it("loads a user's sessions on demand", async () => {
         expect.assertions(2);
 
         const mock = createUsersClient();
@@ -59,7 +60,7 @@ describe("usersPanel", () => {
         expect(screen.getByTestId("us-session-s1").textContent).toContain("curl");
     });
 
-    test("shows an empty state for a user with no sessions", async () => {
+    it("shows an empty state for a user with no sessions", async () => {
         expect.assertions(1);
 
         const mock = createUsersClient();
@@ -73,7 +74,7 @@ describe("usersPanel", () => {
         expect(empty).toBeDefined();
     });
 
-    test("surfaces a users-listing error", async () => {
+    it("surfaces a users-listing error", async () => {
         expect.assertions(1);
 
         const mock = createMockClient();
@@ -87,7 +88,7 @@ describe("usersPanel", () => {
         expect(error.textContent).toBe("AUTH_NOT_CONFIGURED");
     });
 
-    test("toggling Auto re-lists users on an interval", async () => {
+    it("toggling Auto re-lists users on an interval", async () => {
         expect.assertions(1);
 
         vi.useFakeTimers();

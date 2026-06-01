@@ -1,6 +1,6 @@
 import type { SchemaLike as VectorSchemaLike, VectorSearchLike } from "@cirrus/vectors";
 import { createVectorSyncHook } from "@cirrus/vectors";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { WriteHook } from "../src/ctx-db.js";
 import { createShardCtxDb, runShardMigrations } from "../src/ctx-db.js";
@@ -20,15 +20,15 @@ const vectorsSchema: VectorSchemaLike = {
     vectorIndexes: {},
 };
 
-const fakeVectorSearch = (): VectorSearchLike & { deletes: Array<[string, ReadonlyArray<string>]>; upserts: Array<[string, unknown]> } => {
-    const upserts: Array<[string, unknown]> = [];
-    const deletes: Array<[string, ReadonlyArray<string>]> = [];
+const fakeVectorSearch = (): VectorSearchLike & { deletes: [string, ReadonlyArray<string>][]; upserts: [string, unknown][] } => {
+    const upserts: [string, unknown][] = [];
+    const deletes: [string, ReadonlyArray<string>][] = [];
 
     return {
         deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => void deletes.push([indexName, ids])),
         deletes,
         getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
-        query: vi.fn<VectorSearchLike["query"]>(async () => ({ count: 0, matches: [] })),
+        query: vi.fn<VectorSearchLike["query"]>(async () => { return { count: 0, matches: [] }; }),
         upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName, input) => void upserts.push([indexName, input])),
         upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async (indexName, input) => void upserts.push([indexName, input])),
         upserts,
@@ -55,7 +55,7 @@ const setup = (): { vectors: ReturnType<typeof fakeVectorSearch>; writer: Return
 };
 
 describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => {
-    test("a committed insert syncs an upsert to the vector index", async () => {
+    it("a committed insert syncs an upsert to the vector index", async () => {
         expect.assertions(3);
 
         const { vectors, writer } = setup();
@@ -67,7 +67,7 @@ describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => 
         expect(vectors.deletes).toEqual([]);
     });
 
-    test("a committed update re-embeds the merged row", async () => {
+    it("a committed update re-embeds the merged row", async () => {
         expect.assertions(1);
 
         const { vectors, writer } = setup();
@@ -80,7 +80,7 @@ describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => 
         expect(vectors.upserts).toEqual([["messages-text", { embed, id: "m_1", input: "edited body", metadata: { authorId: "ann" } }]]);
     });
 
-    test("a committed delete propagates deleteByIds to the index", async () => {
+    it("a committed delete propagates deleteByIds to the index", async () => {
         expect.assertions(1);
 
         const { vectors, writer } = setup();
@@ -91,7 +91,7 @@ describe("createShardCtxDb + createVectorSyncHook (composed write path)", () => 
         expect(vectors.deletes).toEqual([["messages-text", ["m_1"]]]);
     });
 
-    test("writes to a table with no vector index are not synced", async () => {
+    it("writes to a table with no vector index are not synced", async () => {
         expect.assertions(2);
 
         const { vectors, writer } = setup();

@@ -98,16 +98,18 @@ export interface SchemaIR {
 export interface FunctionIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
-    /** Path relative to `<projectRoot>/cirrus/` without extension, e.g. "messages". */
+    /** Path relative to `&lt;projectRoot>/cirrus/` without extension, e.g. "messages". */
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
+
     /**
-     * Serialized TS source for the handler's return type, with `Promise<T>`
+     * Serialized TS source for the handler's return type, with `Promise&lt;T>`
      * unwrapped so callers see `T` directly. Defaults to `"unknown"` when
      * ts-morph cannot resolve the type (typically because the consuming
      * project lacks a tsconfig that can reach `@cirrus/server`).
      */
     returnType: string;
+
     /**
      * Call surface the function is exposed on. Absent (or `"public"`) means it
      * lands in the generated `api`; `"internal"` routes it to the separate
@@ -118,14 +120,14 @@ export interface FunctionIR {
 
 /**
  * A `defineMigration({...})` declaration discovered in the user's cirrus
- * sources. The emitted `CIRRUS_MIGRATIONS` registry keys on {@link id}; the
- * import wiring needs {@link exportName}/{@link filePath}. {@link table} is
+ * sources. The emitted `CIRRUS_MIGRATIONS` registry keys on {@link MigrationIR.id}; the
+ * import wiring needs {@link MigrationIR.exportName}/{@link MigrationIR.filePath}. {@link MigrationIR.table} is
  * informational (the runtime object carries the authoritative value).
  */
 export interface MigrationIR {
     /** Export binding name, used to reference the module member in generated imports. */
     exportName: string;
-    /** Path relative to `<projectRoot>/cirrus/` without extension, e.g. "migrations". */
+    /** Path relative to `&lt;projectRoot>/cirrus/` without extension, e.g. "migrations". */
     filePath: string;
     /** Stable migration id — the registry key and per-shard run-state key. */
     id: string;

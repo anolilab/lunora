@@ -1,11 +1,12 @@
 import type { AuthSession, AuthUser } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
-import { type ReactElement, useCallback, useEffect, useState } from "react";
+import type { ReactElement } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { errorMessage, formatTimestamp } from "./internal.js";
 import { useAutoRefresh } from "./use-auto-refresh.js";
 
-export interface UsersPanelProps {
+interface UsersPanelProps {
     /** Users (and sessions) requested per page. */
     readonly pageSize?: number;
 }
@@ -182,3 +183,5 @@ export function UsersPanel({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
         </div>
     );
 }
+
+export type { UsersPanelProps };

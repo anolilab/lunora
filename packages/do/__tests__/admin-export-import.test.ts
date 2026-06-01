@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ExportRow } from "../src/admin-export-import.js";
 import { exportShardRows, importShardRows, selectExportTables, validateImportRow } from "../src/admin-export-import.js";
@@ -11,7 +11,8 @@ import { createSqliteExec } from "./_helpers/node-sqlite.js";
 
 const ADMIN_TOKEN = "s3cret-admin";
 
-const minimalParser = (kind: string) => ({
+const minimalParser = (kind: string) => {
+ return {
     kind,
     parse(value: unknown) {
         if (kind === "string" && typeof value !== "string") {
@@ -28,7 +29,8 @@ const minimalParser = (kind: string) => ({
 
         return value;
     },
-});
+};
+};
 
 const usersSchema: SchemaLike = {
     tables: {
@@ -65,19 +67,19 @@ const globalUsersSchema: SchemaLike = {
 };
 
 describe("selectExportTables", () => {
-    test("returns every shard-local user table when no allowlist is given", () => {
+    it("returns every shard-local user table when no allowlist is given", () => {
         expect.assertions(1);
 
         expect(selectExportTables(usersSchema)).toEqual(["messages", "users"]);
     });
 
-    test("filters out global tables", () => {
+    it("filters out global tables", () => {
         expect.assertions(1);
 
         expect(selectExportTables(globalUsersSchema)).toEqual(["local"]);
     });
 
-    test("respects an explicit allowlist (still skipping globals)", () => {
+    it("respects an explicit allowlist (still skipping globals)", () => {
         expect.assertions(1);
 
         expect(selectExportTables(globalUsersSchema, ["global", "local"])).toEqual(["local"]);
@@ -85,13 +87,13 @@ describe("selectExportTables", () => {
 });
 
 describe("validateImportRow", () => {
-    test("accepts a well-formed row", () => {
+    it("accepts a well-formed row", () => {
         expect.assertions(1);
 
         expect(validateImportRow(usersSchema, "users", { email: "a@b.com", name: "Alice" })).toBeNull();
     });
 
-    test("rejects a row whose field fails the validator", () => {
+    it("rejects a row whose field fails the validator", () => {
         expect.assertions(1);
 
         const result = validateImportRow(usersSchema, "users", { email: 42, name: "Alice" });
@@ -99,7 +101,7 @@ describe("validateImportRow", () => {
         expect(result).toMatch(/email/);
     });
 
-    test("ignores `_id` / `_creationTime` (framework-managed)", () => {
+    it("ignores `_id` / `_creationTime` (framework-managed)", () => {
         expect.assertions(1);
 
         expect(
@@ -112,7 +114,7 @@ describe("validateImportRow", () => {
         ).toBeNull();
     });
 
-    test("rejects unknown tables", () => {
+    it("rejects unknown tables", () => {
         expect.assertions(1);
 
         expect(validateImportRow(usersSchema, "nope", {})).toMatch(/unknown table/);
@@ -145,7 +147,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         db.close();
     });
 
-    test("exports every row across tables", async () => {
+    it("exports every row across tables", async () => {
         expect.assertions(3);
 
         const rows: ExportRow[] = [];
@@ -159,7 +161,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         expect(rows.filter((r) => r.table === "messages")).toHaveLength(2);
     });
 
-    test("respects a table allowlist", async () => {
+    it("respects a table allowlist", async () => {
         expect.assertions(1);
 
         const rows: ExportRow[] = [];
@@ -171,7 +173,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         expect(rows.map((r) => r.table)).toEqual(["users", "users", "users"]);
     });
 
-    test("import inserts a batch and surfaces per-table counts", async () => {
+    it("import inserts a batch and surfaces per-table counts", async () => {
         expect.assertions(5);
 
         const freshDb = createSqliteExec();
@@ -197,7 +199,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         freshDb.close();
     });
 
-    test("schema-failed rows do not abort the batch — they're reported in errors[]", async () => {
+    it("schema-failed rows do not abort the batch — they're reported in errors[]", async () => {
         expect.assertions(3);
 
         const freshDb = createSqliteExec();
@@ -220,7 +222,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         freshDb.close();
     });
 
-    test("a row whose _id collides with an existing doc is skipped and counted as a conflict", async () => {
+    it("a row whose _id collides with an existing doc is skipped and counted as a conflict", async () => {
         expect.assertions(3);
 
         const rows: ExportRow[] = [
@@ -239,7 +241,7 @@ describe("exportShardRows / importShardRows roundtrip", () => {
         expect(existing).toMatchObject({ email: "u1@x.io" });
     });
 
-    test("roundtrip: export then import into a fresh shard produces identical rows", async () => {
+    it("roundtrip: export then import into a fresh shard produces identical rows", async () => {
         expect.hasAssertions();
 
         const exported: ExportRow[] = [];
@@ -339,7 +341,7 @@ describe("shardDO admin export/import dispatch", () => {
             method: "POST",
         });
 
-    test("dispatches exportShard and returns rows", async () => {
+    it("dispatches exportShard and returns rows", async () => {
         expect.assertions(3);
 
         const shard = new ExportShardImpl(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -354,7 +356,7 @@ describe("shardDO admin export/import dispatch", () => {
         expect(body.result.rows.map((r) => r.table).sort()).toEqual(["messages", "users"]);
     });
 
-    test("dispatches importShard and inserts rows", async () => {
+    it("dispatches importShard and inserts rows", async () => {
         expect.assertions(3);
 
         const shard = new ExportShardImpl(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
@@ -373,7 +375,7 @@ describe("shardDO admin export/import dispatch", () => {
         expect(body.result.errors).toEqual([]);
     });
 
-    test("rejects without an admin token", async () => {
+    it("rejects without an admin token", async () => {
         expect.assertions(1);
 
         const shard = new ExportShardImpl(state, {});

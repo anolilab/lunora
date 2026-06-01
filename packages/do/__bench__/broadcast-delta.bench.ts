@@ -43,7 +43,8 @@ const createFakeWebSocket = (subs: Record<string, SubscriptionQuery>): FakeWebSo
     return ws;
 };
 
-const createFakeState = (sockets: FakeWebSocket[]): ShardDOState => ({
+const createFakeState = (sockets: FakeWebSocket[]): ShardDOState => {
+ return {
     storage: { sql: { exec: () => undefined } },
     id: { name: "bench-shard" },
     acceptWebSocket(ws) {
@@ -52,7 +53,8 @@ const createFakeState = (sockets: FakeWebSocket[]): ShardDOState => ({
     getWebSockets() {
         return sockets as unknown as WebSocket[];
     },
-});
+};
+};
 
 class BenchShard extends ShardDO {
     public override async handleRpc(): Promise<unknown> {

@@ -1,14 +1,13 @@
 import type { ScheduleRecord } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
-import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConfirmButton } from "./confirm-button.js";
 import { errorMessage, formatTimestamp } from "./internal.js";
 import { useAutoRefresh } from "./use-auto-refresh.js";
 
-export type { ScheduleRecord } from "@cirrus/client";
-
-export interface ScheduledJobsProps {
+interface ScheduledJobsProps {
     /**
      * Cancel a pending job by id. Defaults to `client.cancelScheduledJob` when
      * {@link ScheduledJobsProps.loadJobs} is also left to the client. When a
@@ -16,10 +15,11 @@ export interface ScheduledJobsProps {
      * hidden — useful for a read-only view.
      */
     readonly cancelJob?: (id: string) => Promise<{ cancelled: boolean }>;
+
     /**
      * Load the pending scheduled jobs. Defaults to `client.listScheduledJobs`,
      * which hits the worker's admin-gated `/_cirrus/admin/scheduled` endpoint —
-     * so the panel works out of the box under `<CirrusProvider>`, provided the
+     * so the panel works out of the box under `&lt;CirrusProvider>`, provided the
      * worker is built with a `schedulerDO` namespace and `adminToken`. Override
      * it to source jobs from elsewhere.
      */
@@ -27,16 +27,14 @@ export interface ScheduledJobsProps {
 }
 
 /** A scheduled timestamp is always a finite epoch-ms; guard non-finite to an em dash. */
-const formatScheduledFor = (value: number): string => {
-    return Number.isFinite(value) ? formatTimestamp(value, "—") : "—";
-};
+const formatScheduledFor = (value: number): string => (Number.isFinite(value) ? formatTimestamp(value, "—") : "—");
 
 /**
  * View — and cancel — the functions queued via `runAfter` / `runAt` on the
  * scheduler. Cron *triggers* are static wrangler config and don't appear here;
  * this lists the dynamic, in-flight schedule only.
  *
- * Works out of the box under `<CirrusProvider>` via the client's scheduler
+ * Works out of the box under `&lt;CirrusProvider>` via the client's scheduler
  * admin methods; pass {@link ScheduledJobsProps.loadJobs} /
  * {@link ScheduledJobsProps.cancelJob} to override the transport.
  */
@@ -69,7 +67,7 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
             const records = await load();
 
             // Soonest-due first so the next thing to fire is at the top.
-            setJobs([...records].sort((a, b) => a.scheduledFor - b.scheduledFor));
+            setJobs(records.toSorted((a, b) => a.scheduledFor - b.scheduledFor));
         } catch (error_) {
             setJobs(null);
             setError(errorMessage(error_));
@@ -96,7 +94,7 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
 
         return client.subscribeScheduledJobs((records) => {
             setError(null);
-            setJobs([...records].sort((a, b) => a.scheduledFor - b.scheduledFor));
+            setJobs(records.toSorted((a, b) => a.scheduledFor - b.scheduledFor));
         });
     }, [auto, livePush, client]);
 
@@ -198,3 +196,5 @@ export function ScheduledJobs({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
         </div>
     );
 }
+
+export type { ScheduledJobsProps };
