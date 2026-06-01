@@ -9,6 +9,12 @@ type Assert<T extends true> = T;
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 
+const assertOk: (condition: unknown, message: string) => asserts condition = (condition, message) => {
+    if (!condition) {
+        throw new Error(message);
+    }
+};
+
 const REFINEMENT_RE = /refinement/u;
 const LOWERCASE_SLUG_RE = /^[a-z]+$/u;
 const EMPTY_RE = /empty/u;
@@ -118,11 +124,10 @@ describe("composites", () => {
 
         const result = schema.safeParse([1, "two", 3]);
 
-        expect(result.ok).toBe(false);
+        assertOk(!result.ok, "expected parse to fail");
 
-        if (!result.ok) {
-            expect(result.error.path).toEqual([1]);
-        }
+        expect(result.ok).toBe(false);
+        expect(result.error.path).toEqual([1]);
     });
 
     it("union accepts any variant, rejects none", () => {
@@ -216,13 +221,12 @@ describe("error paths", () => {
 
         const result = schema.safeParse({ users: [{ email: "ok" }, { email: 42 }] });
 
-        expect(result.ok).toBe(false);
+        assertOk(!result.ok, "expected parse to fail");
 
-        if (!result.ok) {
-            expect(result.error.path).toEqual(["users", 1, "email"]);
-            expect(result.error.expected).toBe("string");
-            expect(result.error.received).toBe("number");
-        }
+        expect(result.ok).toBe(false);
+        expect(result.error.path).toEqual(["users", 1, "email"]);
+        expect(result.error.expected).toBe("string");
+        expect(result.error.received).toBe("number");
     });
 
     it("safeParse returns ok on success", () => {
@@ -230,11 +234,10 @@ describe("error paths", () => {
 
         const result = v.string().safeParse("hello");
 
-        expect(result.ok).toBe(true);
+        assertOk(result.ok, "expected parse to succeed");
 
-        if (result.ok) {
-            expect(result.value).toBe("hello");
-        }
+        expect(result.ok).toBe(true);
+        expect(result.value).toBe("hello");
     });
 });
 
@@ -276,20 +279,21 @@ describe(".check() refinement", () => {
 
         const nonNeg = v.number().check((n) => n >= 0, "must be non-negative");
 
+        let caught: unknown;
+
         try {
             nonNeg.parse(-1);
-
-            expect.fail("expected ValidationError");
         } catch (error: unknown) {
-            expect(error).toBeInstanceOf(ValidationError);
-
-            if (error instanceof ValidationError) {
-                expect(error.expected).toBe("must be non-negative");
-                // describeValue stringifies primitives by their typeof.
-                expect(error.received).toBe("number");
-                expect(error.message).toContain("non-negative");
-            }
+            caught = error;
         }
+
+        assertOk(caught instanceof ValidationError, "expected ValidationError");
+
+        expect(caught).toBeInstanceOf(ValidationError);
+        expect(caught.expected).toBe("must be non-negative");
+        // describeValue stringifies primitives by their typeof.
+        expect(caught.received).toBe("number");
+        expect(caught.message).toContain("non-negative");
     });
 
     it("uses a default message when none is supplied", () => {
@@ -297,17 +301,18 @@ describe(".check() refinement", () => {
 
         const evenOnly = v.number().check((n) => n % 2 === 0);
 
+        let caught: unknown;
+
         try {
             evenOnly.parse(3);
-
-            expect.fail("expected ValidationError");
         } catch (error: unknown) {
-            expect(error).toBeInstanceOf(ValidationError);
-
-            if (error instanceof ValidationError) {
-                expect(error.expected).toMatch(REFINEMENT_RE);
-            }
+            caught = error;
         }
+
+        assertOk(caught instanceof ValidationError, "expected ValidationError");
+
+        expect(caught).toBeInstanceOf(ValidationError);
+        expect(caught.expected).toMatch(REFINEMENT_RE);
     });
 
     it("composes — multiple .check() calls all must pass", () => {
@@ -329,17 +334,18 @@ describe(".check() refinement", () => {
         const positiveInt = v.number().check((n) => Number.isInteger(n) && n > 0);
 
         // Non-number fails the underlying number parser, not the refinement.
+        let caught: unknown;
+
         try {
             positiveInt.parse("3");
-
-            expect.fail("expected ValidationError");
         } catch (error: unknown) {
-            expect(error).toBeInstanceOf(ValidationError);
-
-            if (error instanceof ValidationError) {
-                expect(error.expected).toBe("number");
-            }
+            caught = error;
         }
+
+        assertOk(caught instanceof ValidationError, "expected ValidationError");
+
+        expect(caught).toBeInstanceOf(ValidationError);
+        expect(caught.expected).toBe("number");
     });
 
     it("works on column validators and preserves modifier chain", () => {
@@ -361,10 +367,9 @@ describe(".check() refinement", () => {
         const positive = v.number().check((n) => n > 0, "must be positive");
         const failure = positive.safeParse(-3);
 
-        expect(failure.ok).toBe(false);
+        assertOk(!failure.ok, "expected parse to fail");
 
-        if (!failure.ok) {
-            expect(failure.error.expected).toBe("must be positive");
-        }
+        expect(failure.ok).toBe(false);
+        expect(failure.error.expected).toBe("must be positive");
     });
 });
