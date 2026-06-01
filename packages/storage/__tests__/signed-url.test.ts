@@ -105,6 +105,26 @@ describe("signedUrl", () => {
         expect(result.method).toBe("PUT");
     });
 
+    it("returns malformed for an unsupported method", async () => {
+        expect.assertions(2);
+
+        const url = await buildSignedUrl({
+            baseUrl: "https://cdn.test",
+            expiresInSeconds: 60,
+            key: "uploads/x.png",
+            method: "GET",
+            secret: "shh",
+        });
+        const tampered = new URL(url);
+
+        tampered.searchParams.set("method", "DELETE");
+
+        const result = await verifySignedUrl(tampered.toString(), "shh");
+
+        expect(result.valid).toBe(false);
+        expect(result.reason).toBe("malformed");
+    });
+
     it("handles keys with multiple path segments", async () => {
         expect.assertions(2);
 

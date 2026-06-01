@@ -48,7 +48,9 @@ const extractHost = (input: string): string => {
 };
 
 /**
- * Worker-signed URL: `${publicBaseUrl}/${key}?exp=&lt;unix>&amp;method=&lt;GET|PUT>&amp;sig=&lt;base64url-hmac>`.
+ * Worker-signed URL: the `publicBaseUrl` joined to the object `key`, plus a query
+ * string carrying `exp` (unix seconds), `method` (`GET` or `PUT`) and `sig`
+ * (a base64url HMAC).
  *
  * The HMAC canonical includes the URL host so a signature minted for one bucket
  * cannot be replayed against another host on the same signing secret. Even so,
@@ -106,7 +108,10 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
 
     const exp = Number.parseInt(url.searchParams.get("exp") ?? "", 10);
     const sig = url.searchParams.get("sig");
-    const method = (url.searchParams.get("method") ?? "GET") as "GET" | "PUT";
+    // Keep `method` as a plain string so the GET/PUT guard below stays a real
+    // runtime check (a `as "GET" | "PUT"` cast would make the linter — and the
+    // type system — treat the guard as dead code).
+    const method = url.searchParams.get("method") ?? "GET";
 
     if (!sig || !Number.isFinite(exp)) {
         return { reason: "malformed", valid: false };

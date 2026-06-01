@@ -10,8 +10,16 @@ const MAX_LIST_LIMIT = 1000;
 /** Default page size for `list()` — chosen to bound a default call's response shape. */
 const DEFAULT_LIST_LIMIT = 100;
 
-/** Trailing-slash trimmer for `publicBaseUrl`; hoisted to avoid per-call recompilation. */
-const TRAILING_SLASHES_RE = /\/+$/;
+/** Trailing-slash trimmer for `publicBaseUrl` — a linear scan (no regex backtracking). */
+const trimTrailingSlashes = (value: string): string => {
+    let end = value.length;
+
+    while (end > 0 && value[end - 1] === "/") {
+        end -= 1;
+    }
+
+    return value.slice(0, end);
+};
 
 /**
  * Reject keys that escape the bucket, contain a path-traversal segment, or
@@ -71,6 +79,9 @@ export const scopeKey = (prefix: string, key: string): string => {
 };
 
 export const createStorage = (options: CirrusStorageOptions): Storage => {
+    // Defensive runtime guard: `bucket` is required by the type, but JS callers
+    // (and `createStorage({})` misuse — exercised by a test) can omit it.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the type
     if (!options.bucket) {
         throw new Error("@cirrus/storage: `bucket` is required");
     }
@@ -87,7 +98,13 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         // known up front; callers streaming uploads must rely on the upstream
         // R2 multipart enforcement or pre-buffer.
         if (typeof uploadOptions.maxSize === "number") {
-            const size = body instanceof ArrayBuffer ? body.byteLength : body instanceof Blob ? body.size : undefined;
+            let size: number | undefined;
+
+            if (body instanceof ArrayBuffer) {
+                size = body.byteLength;
+            } else if (body instanceof Blob) {
+                size = body.size;
+            }
 
             if (size !== undefined && size > uploadOptions.maxSize) {
                 throw new Error(`@cirrus/storage: body exceeds maxSize (${String(size)} > ${String(uploadOptions.maxSize)})`);
@@ -117,7 +134,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         // `prefix` is intentionally permissive: it's read-only and a malformed
         // value just produces an empty result. We still reject NUL bytes since
         // the R2 binding silently truncates at the NUL on some runtimes.
-        if (prefix !== undefined && prefix.includes("\0")) {
+        if (prefix?.includes("\0")) {
             throw new Error("@cirrus/storage: prefix contains NUL byte");
         }
 
@@ -144,7 +161,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
             .map((segment) => encodeURIComponent(segment))
             .join("/");
 
-        return `${options.publicBaseUrl.replace(TRAILING_SLASHES_RE, "")}/${safeKey}`;
+        return `${trimTrailingSlashes(options.publicBaseUrl)}/${safeKey}`;
     };
 
     const getSignedUrl = async (key: string, signedOptions: SignedUrlOptions = {}): Promise<string> => {
