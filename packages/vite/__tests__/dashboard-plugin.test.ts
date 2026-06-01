@@ -102,7 +102,7 @@ describe("dashboardPlugin", () => {
         await Promise.resolve();
 
         expect(dashNext).not.toHaveBeenCalled();
-        expect(server.transformIndexHtml).toHaveBeenCalledWith();
+        expect(server.transformIndexHtml).toHaveBeenCalledWith(DASHBOARD_PATH, expect.stringContaining("@cirrus/dashboard/mount"));
         expect(end).toHaveBeenCalledTimes(1);
         expect((end.mock.calls[0] as [string])[0]).toContain("@cirrus/dashboard/mount");
 
