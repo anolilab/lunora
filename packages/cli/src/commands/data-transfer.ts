@@ -134,8 +134,8 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
 
     // Open the output sink: stdout when `out` is `undefined` / `-`, otherwise
     // a file stream so a 10M-row dump never bloats Node's heap.
-    const useStdout = options.out === undefined || options.out === "-";
-    const sink = useStdout ? process.stdout : createWriteStream(options.out!, { encoding: "utf8" });
+    const outPath = options.out === undefined || options.out === "-" ? undefined : options.out;
+    const sink = outPath === undefined ? process.stdout : createWriteStream(outPath, { encoding: "utf8" });
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -185,14 +185,14 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
         await writeWithBackpressure(`${leftover}\n`);
     }
 
-    if (!useStdout) {
+    if (outPath !== undefined) {
         await new Promise<void>((resolve, reject) => {
             (sink as ReturnType<typeof createWriteStream>).end((error?: Error) => {
                 error ? reject(error) : resolve();
             });
         });
 
-        options.logger.success(`wrote ${String(rows)} rows to ${options.out!} (${String(bytes)} bytes)`);
+        options.logger.success(`wrote ${String(rows)} rows to ${outPath} (${String(bytes)} bytes)`);
     }
 
     return { bytes, code: 0, rows };

@@ -43,9 +43,9 @@ const readWrangler = (projectRoot: string): Record<string, unknown> | undefined 
     }
 
     try {
-        const parsed = parseJsonc(readFileSync(file, "utf8"));
+        const parsed: unknown = parseJsonc(readFileSync(file, "utf8"));
 
-        return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+        return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
     } catch {
         return undefined;
     }
@@ -78,7 +78,7 @@ const resolveRemoteUrl = (wrangler: Record<string, unknown> | undefined): string
     const { routes } = wrangler;
 
     if (Array.isArray(routes) && routes.length > 0) {
-        const first = routes[0];
+        const first: unknown = routes[0];
 
         if (typeof first === "string") {
             return `https://${first.split("/")[0] ?? first}${DASHBOARD_PATH}`;

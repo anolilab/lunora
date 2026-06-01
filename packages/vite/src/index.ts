@@ -62,7 +62,7 @@ export const cirrus = async (options?: CirrusPluginOptions): Promise<ReadonlyArr
         const overlay = await overlayPlugin();
 
         if (Array.isArray(overlay)) {
-            plugins.push(...overlay);
+            plugins.push(...(overlay as ReadonlyArray<Plugin>));
         } else {
             plugins.push(overlay as Plugin);
         }
@@ -81,7 +81,7 @@ export const cirrus = async (options?: CirrusPluginOptions): Promise<ReadonlyArr
                 const result = factory(resolved.cloudflare);
 
                 if (Array.isArray(result)) {
-                    plugins.push(...result);
+                    plugins.push(...(result as ReadonlyArray<Plugin>));
                 } else {
                     plugins.push(result as Plugin);
                 }

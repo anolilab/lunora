@@ -129,6 +129,65 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
 };
 
 /**
+ * Type-tree walker: returns true if any reachable symbol's declaration lives
+ * in the handler's own source file but isn't exported (so it cannot be
+ * referenced by name from anywhere outside that file).
+ */
+function referencesUnreachableLocalType(type: Type, handlerFilePath: string, seen = new Set<Type>()): boolean {
+    if (seen.has(type)) {
+        return false;
+    }
+
+    seen.add(type);
+
+    for (const candidate of [type.getSymbol(), type.getAliasSymbol()]) {
+        if (!candidate) {
+            continue;
+        }
+
+        for (const declaration of candidate.getDeclarations()) {
+            const declarationFile = declaration.getSourceFile();
+
+            if (declarationFile.isInNodeModules() || declarationFile.isDeclarationFile()) {
+                continue;
+            }
+
+            if (declarationFile.getFilePath() !== handlerFilePath) {
+                continue;
+            }
+
+            if ((Node.isInterfaceDeclaration(declaration) || Node.isTypeAliasDeclaration(declaration)) && !declaration.isExported()) {
+                return true;
+            }
+        }
+    }
+
+    for (const argument of type.getTypeArguments()) {
+        if (referencesUnreachableLocalType(argument, handlerFilePath, seen)) {
+            return true;
+        }
+    }
+
+    if (type.isUnion()) {
+        for (const component of type.getUnionTypes()) {
+            if (referencesUnreachableLocalType(component, handlerFilePath, seen)) {
+                return true;
+            }
+        }
+    }
+
+    if (type.isIntersection()) {
+        for (const component of type.getIntersectionTypes()) {
+            if (referencesUnreachableLocalType(component, handlerFilePath, seen)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
  * Render a handler's resolved return type via ts-morph's type checker. Unwraps
  * the outer `Promise<…>` so the emitted `FunctionReference<Kind, Args, Return>`
  * matches what callers see post-await. Shared by the object-literal `query(...)`
@@ -292,65 +351,6 @@ const discoverBuilderProcedure = (call: CallExpression, callee: PropertyAccessEx
         // the procedure internal.
         visibility: receiverType.getProperty("__cirrusVisibility") ? "internal" : "public",
     };
-};
-
-/**
- * Type-tree walker: returns true if any reachable symbol's declaration lives
- * in the handler's own source file but isn't exported (so it cannot be
- * referenced by name from anywhere outside that file).
- */
-const referencesUnreachableLocalType = (type: Type, handlerFilePath: string, seen: Set<Type> = new Set()): boolean => {
-    if (seen.has(type)) {
-        return false;
-    }
-
-    seen.add(type);
-
-    for (const candidate of [type.getSymbol(), type.getAliasSymbol()]) {
-        if (!candidate) {
-            continue;
-        }
-
-        for (const declaration of candidate.getDeclarations()) {
-            const declarationFile = declaration.getSourceFile();
-
-            if (declarationFile.isInNodeModules() || declarationFile.isDeclarationFile()) {
-                continue;
-            }
-
-            if (declarationFile.getFilePath() !== handlerFilePath) {
-                continue;
-            }
-
-            if ((Node.isInterfaceDeclaration(declaration) || Node.isTypeAliasDeclaration(declaration)) && !declaration.isExported()) {
-                return true;
-            }
-        }
-    }
-
-    for (const argument of type.getTypeArguments()) {
-        if (referencesUnreachableLocalType(argument, handlerFilePath, seen)) {
-            return true;
-        }
-    }
-
-    if (type.isUnion()) {
-        for (const component of type.getUnionTypes()) {
-            if (referencesUnreachableLocalType(component, handlerFilePath, seen)) {
-                return true;
-            }
-        }
-    }
-
-    if (type.isIntersection()) {
-        for (const component of type.getIntersectionTypes()) {
-            if (referencesUnreachableLocalType(component, handlerFilePath, seen)) {
-                return true;
-            }
-        }
-    }
-
-    return false;
 };
 
 /**

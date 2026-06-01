@@ -68,7 +68,13 @@ const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number, fn: (
                 return;
             }
 
-            results[index] = await fn(items[index]!, index);
+            // `index < items.length` is guaranteed above, so the indexed read
+            // yields a real element; `at` keeps the access in-bounds without a
+            // non-null assertion. `T` itself cannot be `undefined` for a
+            // populated array here, so the cast restores the element type.
+            const item = items.at(index) as T;
+
+            results[index] = await fn(item, index);
         }
     });
 

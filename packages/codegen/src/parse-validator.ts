@@ -57,15 +57,19 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
  * Used by both schema discovery and function-args discovery so the rendered
  * TS types are identical regardless of where a validator appears.
  */
-export const parseValidator = (expression: Expression): ValidatorIR => {
+export function parseValidator(expression: Expression): ValidatorIR {
     if (Node.isCallExpression(expression)) {
+        // parseValidatorCall <-> parseValidator/parseObjectShape are mutually
+        // recursive, so one forward reference is unavoidable here. Function
+        // declarations hoist, so this is safe at runtime.
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define
         return parseValidatorCall(expression);
     }
 
     return { kind: "any", sourceText: expression.getText() };
-};
+}
 
-export const parseObjectShape = (object: ObjectLiteralExpression): Record<string, ValidatorIR> => {
+export function parseObjectShape(object: ObjectLiteralExpression): Record<string, ValidatorIR> {
     const out: Record<string, ValidatorIR> = {};
 
     for (const property of object.getProperties()) {
@@ -97,9 +101,9 @@ export const parseObjectShape = (object: ObjectLiteralExpression): Record<string
     }
 
     return out;
-};
+}
 
-const parseValidatorCall = (call: CallExpression): ValidatorIR => {
+function parseValidatorCall(call: CallExpression): ValidatorIR {
     const callee = call.getExpression();
 
     if (!Node.isPropertyAccessExpression(callee)) {
@@ -193,4 +197,4 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
             throw new Error(`Unsupported validator kind: ${member}`);
         }
     }
-};
+}
