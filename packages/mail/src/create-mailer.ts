@@ -90,14 +90,15 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
             await provider.initialize?.();
 
             const toList = toAddressList(payload.to);
+            const [firstRecipient] = toList ?? [];
 
-            if (!toList || toList.length === 0) {
+            if (!toList || firstRecipient === undefined) {
                 throw new Error("@cirrus/mail: at least one recipient is required");
             }
 
             const result = await provider.sendEmail({
                 from: toAddress(payload.from ?? defaultFrom),
-                to: toList.length === 1 ? toList[0]! : toList,
+                to: toList.length === 1 ? firstRecipient : toList,
                 subject: payload.subject,
                 html: payload.html,
                 text: payload.text,
