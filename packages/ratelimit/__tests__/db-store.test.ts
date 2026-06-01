@@ -40,10 +40,13 @@ const createFakeDatabase = (): RateLimitDatabase => {
         }
     };
 
+    const matches = (document: Record<string, unknown>, constraints: [string, unknown][]): boolean =>
+        constraints.every(([field, value]) => document[field] === value);
+
     const query = (): RateLimitDatabaseQuery => {
         const constraints: [string, unknown][] = [];
         const handle: RateLimitDatabaseQuery = {
-            first: async () => [...rows.values()].find((document_) => constraints.every(([field, value]) => document_[field] === value)) ?? null,
+            first: async () => [...rows.values()].find((document) => matches(document, constraints)) ?? null,
             withIndex: (_indexName, range) => {
                 const recorder: RateLimitDatabaseIndexRange = {
                     eq: (field, value) => {

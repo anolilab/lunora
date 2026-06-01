@@ -2,21 +2,21 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { RateLimiter } from "../src/rate-limiter.js";
 import { createMemoryStore, createSqlStore } from "../src/store.js";
-import { createSqliteSql } from "./_helpers/node-sqlite.js";
+import createSqliteSql from "./_helpers/node-sqlite.js";
 
 describe("memory store", () => {
-    it("round-trips and deletes values", () => {
+    it("round-trips and deletes values", async () => {
         expect.assertions(3);
 
         const store = createMemoryStore();
 
         expect(store.get("k")).toBeUndefined();
 
-        store.set("k", { ts: 5, value: 3 });
+        await store.set("k", { ts: 5, value: 3 });
 
         expect(store.get("k")).toEqual({ ts: 5, value: 3 });
 
-        store.delete("k");
+        await store.delete("k");
 
         expect(store.get("k")).toBeUndefined();
     });
@@ -33,40 +33,40 @@ describe("sql store (real node:sqlite)", () => {
         harness.close();
     });
 
-    it("persists fractional token-bucket values across reads", () => {
+    it("persists fractional token-bucket values across reads", async () => {
         expect.assertions(1);
 
         const store = createSqlStore({ sql: harness.sql });
 
-        store.set("send:alice", { ts: 1234, value: 2.5 });
+        await store.set("send:alice", { ts: 1234, value: 2.5 });
 
         expect(store.get("send:alice")).toEqual({ ts: 1234, value: 2.5 });
     });
 
-    it("round-trips the sliding-window previous-window count", () => {
+    it("round-trips the sliding-window previous-window count", async () => {
         expect.assertions(1);
 
         const store = createSqlStore({ sql: harness.sql });
 
-        store.set("hits:bob", { prev: 7, ts: 1000, value: 3 });
+        await store.set("hits:bob", { prev: 7, ts: 1000, value: 3 });
 
         expect(store.get("hits:bob")).toEqual({ prev: 7, ts: 1000, value: 3 });
     });
 
-    it("upserts on conflict and deletes", () => {
+    it("upserts on conflict and deletes", async () => {
         expect.assertions(3);
 
         const store = createSqlStore({ sql: harness.sql });
 
-        store.set("k", { ts: 1, value: 1 });
+        await store.set("k", { ts: 1, value: 1 });
 
         expect(store.get("k")).toEqual({ ts: 1, value: 1 });
 
-        store.set("k", { ts: 2, value: 9 });
+        await store.set("k", { ts: 2, value: 9 });
 
         expect(store.get("k")).toEqual({ ts: 2, value: 9 });
 
-        store.delete("k");
+        await store.delete("k");
 
         expect(store.get("k")).toBeUndefined();
     });

@@ -44,6 +44,7 @@ const buildLimiter = <Names extends string>(config: RateLimitConfigMap<Names>) =
 // aggregation path users see in production.
 const prime = async <Names extends string>(limiter: RateLimiter<Names>, name: Names, hits: number): Promise<void> => {
     for (let index = 0; index < hits; index += 1) {
+        // eslint-disable-next-line no-await-in-loop -- ordered stateful calls
         await limiter.limit(name, { key: "user-42" });
     }
 };

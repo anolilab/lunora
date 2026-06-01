@@ -26,6 +26,7 @@ describe("limit", () => {
         const limiter = makeLimiter();
 
         for (let index = 0; index < 5; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- ordered stateful calls
             await expect(limiter.limit("send")).resolves.toMatchObject({ ok: true });
         }
 
@@ -38,6 +39,7 @@ describe("limit", () => {
         const limiter = makeLimiter();
 
         for (let index = 0; index < 5; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- ordered stateful calls
             await limiter.limit("send", { key: "alice" });
         }
 
@@ -199,6 +201,7 @@ describe("clock progression", () => {
         const limiter = makeLimiter({ clock });
 
         for (let index = 0; index < 4; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- ordered stateful calls
             await expect(limiter.limit("poll")).resolves.toMatchObject({ ok: true });
         }
 

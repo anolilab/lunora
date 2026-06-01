@@ -8,7 +8,7 @@ import type { SqlLike } from "../../src/store.js";
  * `prepare(...).all(...)` (never `DatabaseSync#exec`, which the repo's
  * secret-scan hook flags) so the store is exercised against a real engine.
  */
-export const createSqliteSql = (): { close: () => void; sql: SqlLike } => {
+const createSqliteSql = (): { close: () => void; sql: SqlLike } => {
     const database = new DatabaseSync(":memory:");
 
     const run = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): { toArray: () => Row[] } => {
@@ -25,3 +25,5 @@ export const createSqliteSql = (): { close: () => void; sql: SqlLike } => {
         sql: { exec: run },
     };
 };
+
+export default createSqliteSql;
