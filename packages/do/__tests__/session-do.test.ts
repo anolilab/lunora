@@ -46,7 +46,6 @@ describe("sessionDO", () => {
         expect.assertions(3);
 
         const state = createFakeStorage();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
 
         const response = await session.fetch(
@@ -69,7 +68,6 @@ describe("sessionDO", () => {
         expect.assertions(2);
 
         const state = createFakeStorage();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
 
         await session.fetch(
@@ -99,7 +97,6 @@ describe("sessionDO", () => {
         // Inject an already-expired record so the lazy-expire branch runs.
         await state.storage.put(`s:${TOK_DEAD}`, { userId: "u", createdAt: Date.now() - 10_000, expiresAt: Date.now() - 1 });
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
         const response = await session.fetch(new Request("https://session.internal/get", { headers: authHeaders({ "x-cirrus-session-token": TOK_DEAD }) }));
 
@@ -111,7 +108,6 @@ describe("sessionDO", () => {
         expect.assertions(2);
 
         const state = createFakeStorage();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
 
         await session.fetch(
@@ -146,7 +142,6 @@ describe("sessionDO", () => {
         expect.assertions(2);
 
         const state = createFakeStorage();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
 
         const noToken = await session.fetch(
@@ -174,7 +169,6 @@ describe("sessionDO", () => {
         expect.assertions(1);
 
         const state = createFakeStorage();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
 
         const response = await session.fetch(
@@ -192,7 +186,6 @@ describe("sessionDO", () => {
         expect.assertions(1);
 
         const state = createFakeStorage();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = new SessionDO(state as any, TEST_ENV);
 
         const response = await session.fetch(

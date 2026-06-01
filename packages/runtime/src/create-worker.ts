@@ -476,834 +476,6 @@ const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
  */
 const MIGRATION_ADMIN_OPS = new Set<string>(["__cirrus_admin__:migrationStatus", "__cirrus_admin__:runMigration"]);
 
-/**
- * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
- * be re-exported directly as `export default createWorker(...)`.
- */
-export const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> } => {
-    const defaultShard = options.defaultShardKey ?? "__root__";
-
-    // Fan-out and non-default shard routing are authorization-open when neither
-    // `authorizeShard` nor `authorizeFanOut` is configured — any caller can name
-    // any shard or fan a function across every shard for a table. That's the
-    // historical posture, kept for backward compatibility, but it's a footgun in
-    // production. Warn loudly exactly once (per worker instance) when such a
-    // request is actually seen, unless the operator has acknowledged the posture
-    // via `allowUnauthenticatedShardAccess`.
-    const hasAnyShardAuth = Boolean(options.authorizeShard) || Boolean(options.authorizeFanOut);
-    let warnedUnauthenticatedShardAccess = false;
-
-    const warnUnauthenticatedShardAccessOnce = (kind: "fan-out" | "shard"): void => {
-        if (hasAnyShardAuth || options.allowUnauthenticatedShardAccess || warnedUnauthenticatedShardAccess) {
-            return;
-        }
-
-        warnedUnauthenticatedShardAccess = true;
-
-        // eslint-disable-next-line no-console -- surface the open authorization posture in logs
-        console.warn(
-            `[cirrus] SECURITY: received ${kind} access but neither \`authorizeShard\` nor \`authorizeFanOut\` is configured — ` +
-            `any caller (including unauthenticated ones) can target any shard / fan out across the table. ` +
-            `Configure \`authorizeShard\`/\`authorizeFanOut\`, or set \`allowUnauthenticatedShardAccess: true\` to acknowledge this posture and silence this warning.`,
-        );
-    };
-
-    const handle = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<Response> => {
-        const url = new URL(request.url);
-
-        // Fast-path reject on a declared `Content-Length` over the cap — cheap
-        // (a header read, no body materialization) but NOT authoritative:
-        // `Content-Length` is forgeable. A chunked body omits it and a
-        // non-numeric value parses to `NaN`, so a missing/unparseable length is
-        // treated as "unknown" (let the request through here) — the real
-        // enforcement happens in `readBodyTextWithLimit` / the streaming import
-        // reader, which abort with 413 once cumulative bytes exceed the cap.
-        if (request.method === "POST" || request.method === "PUT") {
-            const len = Number(request.headers.get("content-length") ?? "");
-
-            if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
-                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
-            }
-        }
-
-        // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
-        // We also accept legacy pathname-only keys for ad-hoc handlers.
-        const methodAndPath = `${request.method} ${url.pathname}`;
-        const route = options.routes?.[methodAndPath] ?? options.routes?.[url.pathname];
-
-        if (route) {
-            return route(request, env, ctx);
-        }
-
-        if (url.pathname === WS_PATH) {
-            if (request.headers.get("Upgrade") !== "websocket") {
-                throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
-            }
-
-            const shardKey = url.searchParams.get("shard") ?? defaultShard;
-
-            // Resolve the calling identity (if any) and run the per-shard
-            // authorization callback before forwarding. The WS path doesn't
-            // need the rest of the forward context — only the identity for
-            // the authorization decision.
-            if (options.authorizeShard) {
-                const identity = options.resolveIdentity ? ((await options.resolveIdentity(request, env)) ?? null) : null;
-                const allowed = await options.authorizeShard(identity, shardKey);
-
-                if (!allowed) {
-                    throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
-                }
-            } else if (shardKey !== defaultShard) {
-                warnUnauthenticatedShardAccessOnce("shard");
-            }
-
-            return forwardToShard(options.shardDO, shardKey, request);
-        }
-
-        if (url.pathname === RPC_PATH) {
-            if (request.method !== "POST") {
-                throw new CirrusError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-            }
-
-            const envelope = await parseEnvelope(request);
-
-            if (envelope.fanOut && envelope.shardKey) {
-                throw new CirrusError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
-            }
-
-            // Refuse fan-out envelopes that arrive without a coordinator
-            // configured BEFORE we invoke `resolveIdentity` — otherwise the
-            // hook would be called for a request that's already destined for
-            // a 400, wasting any DB/IO it performs to look up the user.
-            if (envelope.fanOut && !options.queryCoordinator) {
-                throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
-                    code: "BAD_REQUEST",
-                    status: 400,
-                });
-            }
-
-            // Forward selected headers from the inbound request so the DO can
-            // honour auth, sessions, and D1 read-your-writes consistency.
-            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-            // Per-shard authorization runs after identity resolution and before
-            // the request is forwarded. Fan-out envelopes target every
-            // live shard for the table (no client-named shardKey), so the
-            // per-shard gate cannot authorize them — `authorizeFanOut`
-            // gates fan-out at the table level. Single-shard dispatch
-            // goes through `authorizeShard`.
-            if (envelope.fanOut) {
-                if (options.authorizeFanOut) {
-                    const allowed = await options.authorizeFanOut(identity, envelope.fanOut.table, envelope.functionPath);
-
-                    if (!allowed) {
-                        throw new CirrusError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
-                    }
-                } else if (options.authorizeShard) {
-                    // `authorizeShard` is configured but `authorizeFanOut`
-                    // is not. Fan-out is a privileged op (it bypasses the
-                    // per-shard gate by design), so default-deny instead
-                    // of silently letting any authenticated caller
-                    // enumerate every shard for the table.
-                    throw new CirrusError("Fan-out requires `authorizeFanOut` to be configured on the worker when `authorizeShard` is set", {
-                        code: "FORBIDDEN_FANOUT",
-                        status: 403,
-                    });
-                } else {
-                    // Neither callback configured: fan-out is authorization-open.
-                    warnUnauthenticatedShardAccessOnce("fan-out");
-                }
-            } else if (options.authorizeShard) {
-                const shardKeyForAuth = envelope.shardKey ?? defaultShard;
-                const allowed = await options.authorizeShard(identity, shardKeyForAuth);
-
-                if (!allowed) {
-                    throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
-                }
-            } else if (envelope.shardKey !== undefined && envelope.shardKey !== defaultShard) {
-                // No per-shard gate and the caller named a non-default shard.
-                warnUnauthenticatedShardAccessOnce("shard");
-            }
-
-            // Timing wraps the dispatch only — envelope parse + coordinator
-            // gate + identity resolution happen above and are not part of
-            // the user-observable RPC duration we report.
-            const rpcStartedAt = Date.now();
-            const { observability } = options;
-
-            if (envelope.fanOut) {
-                // Coordinator presence was checked above.
-                const coordinator = options.queryCoordinator!;
-
-                try {
-                    const result = await coordinator.fanOut(options.shardDO, {
-                        args: envelope.args ?? {},
-                        fanOut: envelope.fanOut,
-                        functionPath: envelope.functionPath,
-                        headers: forwardedHeaders,
-                    });
-
-                    emitRpcEvent(observability, {
-                        durationMs: Date.now() - rpcStartedAt,
-                        fanOut: {
-                            failed: result.failed,
-                            shards: result.ok + result.failed,
-                            table: envelope.fanOut.table,
-                        },
-                        functionPath: envelope.functionPath,
-                        ok: true,
-                    });
-
-                    return Response.json(result, {
-                        headers: { "content-type": "application/json" },
-                        status: 200,
-                    });
-                } catch (error) {
-                    emitRpcEvent(
-                        observability,
-                        buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { fanOut: { table: envelope.fanOut.table } }),
-                    );
-                    throw error;
-                }
-            }
-
-            const shardKey = envelope.shardKey ?? defaultShard;
-
-            // Re-emit the RPC body to the shard at its `/rpc` route.
-            const forwarded = new Request(`https://shard.internal/rpc`, {
-                body: JSON.stringify({ args: envelope.args ?? {}, functionPath: envelope.functionPath }),
-                headers: forwardedHeaders,
-                method: "POST",
-            });
-
-            try {
-                const response = await forwardToShard(options.shardDO, shardKey, forwarded);
-
-                // A non-2xx from the shard is reported as ok=false even though no
-                // exception was thrown — the user-visible result is still an error
-                // surface, just one the shard chose to encode in the status code.
-                emitRpcEvent(observability, {
-                    durationMs: Date.now() - rpcStartedAt,
-                    functionPath: envelope.functionPath,
-                    ok: response.ok,
-                    shardKey,
-                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${response.status}`, status: response.status } }),
-                });
-
-                // Propagate the DO's bookmark header so the client can pin reads
-                // after a write.
-                const responseBookmark = response.headers.get("x-d1-bookmark");
-
-                if (responseBookmark) {
-                    const headers = new Headers(response.headers);
-
-                    headers.set("x-d1-bookmark", responseBookmark);
-
-                    return new Response(response.body, { status: response.status, headers });
-                }
-
-                return response;
-            } catch (error) {
-                emitRpcEvent(observability, buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { shardKey }));
-                throw error;
-            }
-        }
-
-        if (url.pathname === SCHEDULER_DISPATCH_PATH) {
-            return handleSchedulerDispatch(request, env);
-        }
-
-        if (url.pathname === MIGRATE_PATH) {
-            return handleMigrate(request, env);
-        }
-
-        if (url.pathname === EXPORT_PATH) {
-            return handleExport(request, env);
-        }
-
-        if (url.pathname === IMPORT_PATH) {
-            return handleImport(request, env);
-        }
-
-        if (url.pathname === SCHEDULED_WS_PATH) {
-            return handleScheduledWebSocket(request);
-        }
-
-        if (url.pathname === SCHEDULED_CANCEL_PATH) {
-            return handleScheduledCancel(request);
-        }
-
-        if (url.pathname === SCHEDULED_PATH) {
-            return handleScheduledList(request);
-        }
-
-        if (url.pathname === STORAGE_PATH) {
-            return handleStorageList(request);
-        }
-
-        if (url.pathname === FUNCTIONS_PATH) {
-            return handleFunctionsList(request);
-        }
-
-        if (url.pathname === GLOBAL_TABLES_PATH) {
-            return handleGlobalTables(request);
-        }
-
-        if (url.pathname === GLOBAL_TABLE_PATH) {
-            return handleGlobalTablePage(request);
-        }
-
-        if (url.pathname === AUTH_USERS_PATH) {
-            return handleAuthUsers(request);
-        }
-
-        if (url.pathname === AUTH_SESSIONS_PATH) {
-            return handleAuthSessions(request);
-        }
-
-        // HTTP actions are the lowest-priority matcher: explicit routes and the
-        // internal `/_cirrus/*` endpoints above always win. Once the request
-        // reaches the router, hono owns routing — its 404 is the terminal 404.
-        const httpRouteResponse = await dispatchHttpRoute(request, env, ctx);
-
-        if (httpRouteResponse) {
-            return httpRouteResponse;
-        }
-
-        return new Response("Not found", { status: 404 });
-    };
-
-    const handleMigrate = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Migration endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
-        }
-
-        if (!options.queryCoordinator) {
-            throw new CirrusError("Migration endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const migrate = await parseMigrateRequest(request);
-
-        // Forward the inbound `Authorization` bearer so each shard's admin gate
-        // accepts the fanned-out RPC.
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const result = await options.queryCoordinator.orchestrateMigration(options.shardDO, {
-            args: migrate.args,
-            functionPath: migrate.functionPath,
-            headers: forwardedHeaders,
-            table: migrate.table,
-        });
-
-        return Response.json(result, {
-            headers: { "content-type": "application/json" },
-            status: 200,
-        });
-    };
-
-    /**
-     * Receiver for the `SchedulerDO`'s scheduled-job dispatch. The scheduler DO
-     * POSTs `{ functionPath, args, shardKey, scheduledFor, id }` as raw JSON,
-     * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
-     * in the `x-cirrus-scheduler-signature` header (secret in
-     * `env.CIRRUS_SCHEDULER_SECRET`), or — when no HMAC secret is configured on
-     * the scheduler — an `authorization: Bearer <admin token>` fallback. An
-     * unsigned/forged request is rejected with 403; we never run a job we can't
-     * authenticate.
-     *
-     * On success the job is dispatched through the SAME shard-forward path as
-     * `/_cirrus/rpc` (re-applying `authorizeShard` for the named shard so the
-     * scheduler cannot bypass per-shard auth), and the shard's response is
-     * propagated.
-     */
-    const handleSchedulerDispatch = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Scheduler dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        // Read the raw body verbatim (byte-budgeted) — the HMAC is computed over
-        // these exact bytes, so we must verify before re-encoding/parsing.
-        const rawBody = await readBodyTextWithLimit(request);
-
-        const envRecord = (env ?? {}) as Record<string, unknown>;
-        const schedulerSecret = typeof envRecord["CIRRUS_SCHEDULER_SECRET"] === "string" ? (envRecord["CIRRUS_SCHEDULER_SECRET"] as string) : undefined;
-        const adminBearer =
-            options.adminToken ?? (typeof envRecord["CIRRUS_ADMIN_TOKEN"] === "string" ? (envRecord["CIRRUS_ADMIN_TOKEN"] as string) : undefined);
-
-        const signatureHeader = request.headers.get("x-cirrus-scheduler-signature");
-
-        let authenticated = false;
-
-        if (signatureHeader && schedulerSecret) {
-            authenticated = await verifyHmacSignature(schedulerSecret, rawBody, signatureHeader);
-        } else if (adminBearer) {
-            // Fallback bearer path — the scheduler uses this only when no HMAC
-            // secret is configured on its side.
-            authenticated = checkAdminAuth(request, adminBearer);
-        }
-
-        if (!authenticated) {
-            throw new CirrusError("Scheduler dispatch requires a valid signature or admin bearer", { code: "FORBIDDEN", status: 403 });
-        }
-
-        let body: unknown;
-
-        try {
-            body = JSON.parse(rawBody);
-        } catch {
-            throw new CirrusError("Scheduler dispatch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; shardKey?: unknown };
-
-        if (typeof candidate.functionPath !== "string" || candidate.functionPath.length === 0) {
-            throw new CirrusError("Scheduler dispatch is missing `functionPath`", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const args = (candidate.args ?? {}) as Record<string, unknown>;
-        const shardKey = typeof candidate.shardKey === "string" && candidate.shardKey.length > 0 ? candidate.shardKey : defaultShard;
-
-        // Re-apply per-shard authorization so a scheduled job cannot reach a
-        // shard a direct RPC for the same shard would be denied. The scheduler
-        // runs jobs server-side with no end-user identity, so authorize with a
-        // `null` identity — the host's callback decides whether system-initiated
-        // dispatch is permitted for the shard.
-        if (options.authorizeShard) {
-            const allowed = await options.authorizeShard(null, shardKey);
-
-            if (!allowed) {
-                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
-            }
-        }
-
-        const forwarded = new Request("https://shard.internal/rpc", {
-            body: JSON.stringify({ args, functionPath: candidate.functionPath }),
-            headers: { "content-type": "application/json" },
-            method: "POST",
-        });
-
-        return forwardToShard(options.shardDO, shardKey, forwarded);
-    };
-
-    const handleExport = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Export endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin export endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        if (!options.queryCoordinator) {
-            throw new CirrusError("Export endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const body = await parseExportBody(request);
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        // Partition the requested tables into shard-local vs global. `null`
-        // tables means "every table" — we let the per-shard exporter decide.
-        const shardLocalTables: string[] = [];
-        const globalTables: string[] = [];
-
-        if (body.tables && body.tables.length > 0) {
-            for (const table of body.tables) {
-                const info = options.resolveTableSharding?.(table);
-
-                if (info?.mode.kind === "global") {
-                    globalTables.push(table);
-                } else {
-                    shardLocalTables.push(table);
-                }
-            }
-        }
-
-        const wantGlobals = body.tables === undefined || globalTables.length > 0;
-        const exportGlobalsFn = options.exportGlobals;
-
-        // Stream NDJSON: shard-local rows first (from `orchestrateExport`'s
-        // collected envelopes), then global rows (from the D1 helper). The
-        // shard fan-out is materialised because each shard returns a single
-        // envelope; we still write the response incrementally so a slow
-        // consumer never inflates worker memory.
-        const stream = new ReadableStream<Uint8Array>({
-            async pull(controller) {
-                const encoder = new TextEncoder();
-                const writeRow = (row: { doc: Record<string, unknown>; table: string }): void => {
-                    controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
-                };
-
-                try {
-                    // Shard-local: only fan out when caller wants any of them.
-                    if (body.tables === undefined || shardLocalTables.length > 0) {
-                        const coordinator = options.queryCoordinator!;
-                        const exportTables = body.tables === undefined ? [] : shardLocalTables;
-                        // When tables is undefined the per-shard exporter
-                        // visits every shard-local table, but we still need a
-                        // table list to seed the registry probe. Fall back to
-                        // `resolveTableSharding`'s keys if the caller passed
-                        // none — best effort; a project without the resolver
-                        // will simply not fan out automatically.
-                        const probeTables =
-                            exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
-
-                        const result = await coordinator.orchestrateExport(options.shardDO, {
-                            args: { tables: exportTables },
-                            headers: forwardedHeaders,
-                            tables: probeTables,
-                        });
-
-                        for (const shard of result.shards) {
-                            if (shard.error) {
-                                continue;
-                            }
-
-                            for (const row of shard.rows ?? []) {
-                                writeRow(row);
-                            }
-                        }
-                    }
-
-                    // Globals: stream rows from the D1 helper when configured.
-                    if (wantGlobals && exportGlobalsFn) {
-                        const tablesArg = body.tables === undefined ? [] : globalTables;
-                        const iter = exportGlobalsFn({ tables: tablesArg });
-
-                        for await (const row of iter) {
-                            writeRow(row);
-                        }
-                    }
-
-                    controller.close();
-                } catch (error: unknown) {
-                    controller.error(error);
-                }
-            },
-        });
-
-        return new Response(stream, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
-    };
-
-    const handleImport = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin import endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        if (!options.queryCoordinator) {
-            throw new CirrusError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const result = await streamingImport(request, options, forwardedHeaders);
-
-        return Response.json(result, {
-            headers: { "content-type": "application/json" },
-            status: 200,
-        });
-    };
-
-    /**
-     * Resolve the configured `SchedulerDO` stub, asserting the binding is
-     * present and the caller is an admin. Shared by the list/cancel handlers so
-     * both enforce the same gate before touching the scheduler.
-     */
-    /** The `<CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
-    interface NotConfiguredError {
-        code: string;
-        message: string;
-    }
-
-    // --- Shared admin-endpoint helpers --------------------------------------
-    // Every admin route shares the same "valid bearer, else 403; required option
-    // configured, else <CODE>_NOT_CONFIGURED 400" preamble. Centralizing it keeps
-    // the gate uniform — a change to the auth posture touches one place.
-
-    /** Throw 403 unless the request carries a valid admin bearer. */
-    const assertAdminAuthorized = (request: Request): void => {
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-    };
-
-    /** Assert admin auth, then assert a worker option is configured; return it (narrowed non-undefined). */
-    const requireAdminOption = <T>(request: Request, value: T | undefined, notConfigured: NotConfiguredError): T => {
-        assertAdminAuthorized(request);
-
-        if (value === undefined) {
-            throw new CirrusError(notConfigured.message, { code: notConfigured.code, status: 400 });
-        }
-
-        return value;
-    };
-
-    /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
-    const queryParam = (url: URL, name: string): string | undefined => {
-        const value = url.searchParams.get(name);
-
-        return value === null || value === "" ? undefined : value;
-    };
-
-    /** Parse the shared `limit` / `offset` paging params off an admin GET request. */
-    const parsePaging = (request: Request): { limit?: number; offset?: number } => {
-        const url = new URL(request.url);
-        const limitParam = url.searchParams.get("limit");
-        const offsetParam = url.searchParams.get("offset");
-        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
-        const offset = offsetParam === null ? undefined : Number.parseInt(offsetParam, 10);
-
-        return {
-            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
-            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
-        };
-    };
-
-    const requireSchedulerNamespace = (): ShardNamespaceLike => {
-        if (options.schedulerDO === undefined) {
-            throw new CirrusError("scheduled endpoints require a `schedulerDO` namespace on the worker", { code: "SCHEDULER_NOT_CONFIGURED", status: 400 });
-        }
-
-        return options.schedulerDO;
-    };
-
-    const resolveSchedulerStub = (request: Request): ResolvedShard => {
-        assertAdminAuthorized(request);
-
-        return resolveShard(requireSchedulerNamespace(), options.schedulerInstanceName ?? "default");
-    };
-
-    const handleScheduledList = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Scheduled-list endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const stub = resolveSchedulerStub(request);
-
-        return stub.fetch(new Request("https://scheduler.internal/list", { method: "GET" }));
-    };
-
-    /**
-     * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
-     * dashboard can subscribe to the live job list. A browser `WebSocket` can't
-     * set an `Authorization` header, so the admin token is also accepted via the
-     * `?token=` query parameter — the only channel the constructor allows.
-     */
-    const handleScheduledWebSocket = (request: Request): Promise<Response> => {
-        if (request.headers.get("Upgrade") !== "websocket") {
-            throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken) && !checkAdminWsToken(request, options.adminToken)) {
-            throw new CirrusError("admin authorization required", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const namespace = requireSchedulerNamespace();
-        const stub = resolveShard(namespace, options.schedulerInstanceName ?? "default");
-
-        return stub.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
-    };
-
-    const handleScheduledCancel = async (request: Request): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Scheduled-cancel endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const stub = resolveSchedulerStub(request);
-        const body = (await request.json().catch(() => null)) as { id?: unknown } | null;
-
-        if (typeof body?.id !== "string" || body.id === "") {
-            throw new CirrusError("Scheduled-cancel requires a string `id`", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        return stub.fetch(
-            new Request("https://scheduler.internal/cancel", {
-                body: JSON.stringify({ id: body.id }),
-                headers: { "content-type": "application/json" },
-                method: "POST",
-            }),
-        );
-    };
-
-    const handleStorageList = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Storage endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const storageList = requireAdminOption(request, options.storageList, {
-            code: "STORAGE_NOT_CONFIGURED",
-            message: "storage endpoint requires a `storageList` function on the worker",
-        });
-
-        const url = new URL(request.url);
-        const result = await storageList(queryParam(url, "prefix"), {
-            cursor: queryParam(url, "cursor"),
-            ...parsePaging(request),
-        });
-
-        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleFunctionsList = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const registry = requireAdminOption(request, options.functions, {
-            code: "FUNCTIONS_NOT_CONFIGURED",
-            message: "functions endpoint requires a `functions` registry on the worker",
-        });
-
-        // Internal functions are never exposed — they're unreachable from the
-        // client RPC path, so surfacing them in the runner would only mislead.
-        const functions: FunctionDescriptor[] = Object.entries(registry)
-            .filter(([, entry]) => entry.visibility !== "internal")
-            .map(([path, entry]) => ({ kind: entry.kind, path }))
-            .sort((a, b) => a.path.localeCompare(b.path));
-
-        return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleGlobalTables = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.globalIntrospector, {
-            code: "GLOBALS_NOT_CONFIGURED",
-            message: "global endpoints require a `globalIntrospector` on the worker",
-        });
-
-        return Response.json(await introspector.listTables(), { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleGlobalTablePage = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.globalIntrospector, {
-            code: "GLOBALS_NOT_CONFIGURED",
-            message: "global endpoints require a `globalIntrospector` on the worker",
-        });
-
-        const table = queryParam(new URL(request.url), "table");
-
-        if (table === undefined) {
-            throw new CirrusError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const page = await introspector.readTablePage({ ...parsePaging(request), table });
-
-        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleAuthUsers = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Auth-users endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.authIntrospector, {
-            code: "AUTH_NOT_CONFIGURED",
-            message: "auth endpoints require an `authIntrospector` on the worker",
-        });
-
-        return Response.json(await introspector.listUsers(parsePaging(request)), { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleAuthSessions = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Auth-sessions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.authIntrospector, {
-            code: "AUTH_NOT_CONFIGURED",
-            message: "auth endpoints require an `authIntrospector` on the worker",
-        });
-
-        const userId = queryParam(new URL(request.url), "userId");
-        const page = await introspector.listSessions({ ...parsePaging(request), userId });
-
-        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const dispatchHttpRoute = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<null | Response> => {
-        if (!options.httpRouter) {
-            return null;
-        }
-
-        // Build the action context up front and inject it on a private env
-        // binding; the router's middleware lifts it into the handler's context.
-        // hono then matches/dispatches and returns its own response (incl. 404).
-        const httpCtx = await buildHttpActionCtx(request, env);
-
-        return options.httpRouter.fetch(request, { ...(env as object), __cirrusCtx: httpCtx }, ctx);
-    };
-
-    const buildHttpActionCtx = async (request: Request, env: unknown): Promise<HttpActionContext> => {
-        const { claims, headers, userId } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
-            const functionPath = (reference as { __cirrusRef?: unknown }).__cirrusRef;
-
-            if (typeof functionPath !== "string") {
-                throw new CirrusError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
-            }
-
-            const forwarded = new Request("https://shard.internal/rpc", {
-                body: JSON.stringify({ args, functionPath }),
-                headers,
-                method: "POST",
-            });
-
-            const response = await forwardToShard(options.shardDO, defaultShard, forwarded);
-            const payload = (await response.json()) as { error?: { code?: string; message?: string }; result?: unknown };
-
-            if (payload.error) {
-                throw new CirrusError(payload.error.message ?? "shard RPC failed", {
-                    code: payload.error.code ?? "INTERNAL",
-                    status: response.status,
-                });
-            }
-
-            return payload.result as R;
-        };
-
-        return {
-            auth: {
-                getIdentity: async () => claims,
-                userId,
-            },
-            fetch: globalThis.fetch.bind(globalThis),
-            runAction: run,
-            runMutation: run,
-            runQuery: run,
-        };
-    };
-
-    return {
-        async fetch(request, env, ctx) {
-            if (options.passThroughOnException) {
-                ctx.passThroughOnException();
-            }
-
-            try {
-                return await handle(request, env, ctx);
-            } catch (error: unknown) {
-                return toErrorResponse(error);
-            }
-        },
-    };
-};
-
 interface ForwardContext {
     /** Identity claims minus `userId`, or `null` when anonymous / no extra claims. */
     claims: Record<string, unknown> | null;
@@ -1685,7 +857,12 @@ const streamingImport = async (
     // Fan shard-local batches out via the coordinator. The order of batches
     // is insertion order so error line numbers reflect the source NDJSON.
     if (perShard.size > 0) {
-        const coordinator = options.queryCoordinator!;
+        const coordinator = options.queryCoordinator;
+
+        if (!coordinator) {
+            throw new CirrusError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
         const result = await coordinator.orchestrateImport(options.shardDO, {
             batches: [...perShard.values()],
             headers: forwardedHeaders,
@@ -1721,9 +898,9 @@ const streamingImport = async (
             for (const [index, globalRow] of globalRows.entries()) {
                 errors.push({
                     code: "GLOBAL_NOT_CONFIGURED",
-                    line: globalLineMap[index]!,
-                    message: `row targets global table "${globalRow!.table}" but no \`importGlobals\` is configured`,
-                    table: globalRow!.table,
+                    line: globalLineMap[index] ?? 1,
+                    message: `row targets global table "${globalRow.table}" but no \`importGlobals\` is configured`,
+                    table: globalRow.table,
                 });
             }
         }
@@ -1819,6 +996,843 @@ const checkAdminWsToken = (request: Request, expected: string | undefined): bool
     const supplied = new URL(request.url).searchParams.get("token");
 
     return supplied !== null && constantTimeEqual(expected, supplied);
+};
+
+/**
+ * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
+ * be re-exported directly as `export default createWorker(...)`.
+ */
+export const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: unknown, ctx: ExecutionContextLike) => Promise<Response> } => {
+    const defaultShard = options.defaultShardKey ?? "__root__";
+
+    // Fan-out and non-default shard routing are authorization-open when neither
+    // `authorizeShard` nor `authorizeFanOut` is configured — any caller can name
+    // any shard or fan a function across every shard for a table. That's the
+    // historical posture, kept for backward compatibility, but it's a footgun in
+    // production. Warn loudly exactly once (per worker instance) when such a
+    // request is actually seen, unless the operator has acknowledged the posture
+    // via `allowUnauthenticatedShardAccess`.
+    const hasAnyShardAuth = Boolean(options.authorizeShard) || Boolean(options.authorizeFanOut);
+    let warnedUnauthenticatedShardAccess = false;
+
+    const warnUnauthenticatedShardAccessOnce = (kind: "fan-out" | "shard"): void => {
+        if (hasAnyShardAuth || options.allowUnauthenticatedShardAccess || warnedUnauthenticatedShardAccess) {
+            return;
+        }
+
+        warnedUnauthenticatedShardAccess = true;
+
+        // eslint-disable-next-line no-console -- surface the open authorization posture in logs
+        console.warn(
+            `[cirrus] SECURITY: received ${kind} access but neither \`authorizeShard\` nor \`authorizeFanOut\` is configured — ` +
+            `any caller (including unauthenticated ones) can target any shard / fan out across the table. ` +
+            `Configure \`authorizeShard\`/\`authorizeFanOut\`, or set \`allowUnauthenticatedShardAccess: true\` to acknowledge this posture and silence this warning.`,
+        );
+    };
+
+    const handleMigrate = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Migration endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
+        }
+
+        if (!options.queryCoordinator) {
+            throw new CirrusError("Migration endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const migrate = await parseMigrateRequest(request);
+
+        // Forward the inbound `Authorization` bearer so each shard's admin gate
+        // accepts the fanned-out RPC.
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const result = await options.queryCoordinator.orchestrateMigration(options.shardDO, {
+            args: migrate.args,
+            functionPath: migrate.functionPath,
+            headers: forwardedHeaders,
+            table: migrate.table,
+        });
+
+        return Response.json(result, {
+            headers: { "content-type": "application/json" },
+            status: 200,
+        });
+    };
+
+    /**
+     * Receiver for the `SchedulerDO`'s scheduled-job dispatch. The scheduler DO
+     * POSTs `{ functionPath, args, shardKey, scheduledFor, id }` as raw JSON,
+     * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
+     * in the `x-cirrus-scheduler-signature` header (secret in
+     * `env.CIRRUS_SCHEDULER_SECRET`), or — when no HMAC secret is configured on
+     * the scheduler — an `authorization: Bearer <admin token>` fallback. An
+     * unsigned/forged request is rejected with 403; we never run a job we can't
+     * authenticate.
+     *
+     * On success the job is dispatched through the SAME shard-forward path as
+     * `/_cirrus/rpc` (re-applying `authorizeShard` for the named shard so the
+     * scheduler cannot bypass per-shard auth), and the shard's response is
+     * propagated.
+     */
+    const handleSchedulerDispatch = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Scheduler dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        // Read the raw body verbatim (byte-budgeted) — the HMAC is computed over
+        // these exact bytes, so we must verify before re-encoding/parsing.
+        const rawBody = await readBodyTextWithLimit(request);
+
+        const envRecord = (env ?? {}) as Record<string, unknown>;
+        const schedulerSecret = typeof envRecord["CIRRUS_SCHEDULER_SECRET"] === "string" ? (envRecord["CIRRUS_SCHEDULER_SECRET"] as string) : undefined;
+        const adminBearer =
+            options.adminToken ?? (typeof envRecord["CIRRUS_ADMIN_TOKEN"] === "string" ? (envRecord["CIRRUS_ADMIN_TOKEN"] as string) : undefined);
+
+        const signatureHeader = request.headers.get("x-cirrus-scheduler-signature");
+
+        let authenticated = false;
+
+        if (signatureHeader && schedulerSecret) {
+            authenticated = await verifyHmacSignature(schedulerSecret, rawBody, signatureHeader);
+        } else if (adminBearer) {
+            // Fallback bearer path — the scheduler uses this only when no HMAC
+            // secret is configured on its side.
+            authenticated = checkAdminAuth(request, adminBearer);
+        }
+
+        if (!authenticated) {
+            throw new CirrusError("Scheduler dispatch requires a valid signature or admin bearer", { code: "FORBIDDEN", status: 403 });
+        }
+
+        let body: unknown;
+
+        try {
+            body = JSON.parse(rawBody);
+        } catch {
+            throw new CirrusError("Scheduler dispatch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; shardKey?: unknown };
+
+        if (typeof candidate.functionPath !== "string" || candidate.functionPath.length === 0) {
+            throw new CirrusError("Scheduler dispatch is missing `functionPath`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const args = (candidate.args ?? {}) as Record<string, unknown>;
+        const shardKey = typeof candidate.shardKey === "string" && candidate.shardKey.length > 0 ? candidate.shardKey : defaultShard;
+
+        // Re-apply per-shard authorization so a scheduled job cannot reach a
+        // shard a direct RPC for the same shard would be denied. The scheduler
+        // runs jobs server-side with no end-user identity, so authorize with a
+        // `null` identity — the host's callback decides whether system-initiated
+        // dispatch is permitted for the shard.
+        if (options.authorizeShard) {
+            const allowed = await options.authorizeShard(null, shardKey);
+
+            if (!allowed) {
+                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+            }
+        }
+
+        const forwarded = new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: candidate.functionPath }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+
+        return forwardToShard(options.shardDO, shardKey, forwarded);
+    };
+
+    const handleExport = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Export endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin export endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const coordinator = options.queryCoordinator;
+
+        if (!coordinator) {
+            throw new CirrusError("Export endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const body = await parseExportBody(request);
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        // Partition the requested tables into shard-local vs global. `null`
+        // tables means "every table" — we let the per-shard exporter decide.
+        const shardLocalTables: string[] = [];
+        const globalTables: string[] = [];
+
+        if (body.tables && body.tables.length > 0) {
+            for (const table of body.tables) {
+                const info = options.resolveTableSharding?.(table);
+
+                if (info?.mode.kind === "global") {
+                    globalTables.push(table);
+                } else {
+                    shardLocalTables.push(table);
+                }
+            }
+        }
+
+        const wantGlobals = body.tables === undefined || globalTables.length > 0;
+        const exportGlobalsFn = options.exportGlobals;
+
+        // Stream NDJSON: shard-local rows first (from `orchestrateExport`'s
+        // collected envelopes), then global rows (from the D1 helper). The
+        // shard fan-out is materialised because each shard returns a single
+        // envelope; we still write the response incrementally so a slow
+        // consumer never inflates worker memory.
+        const stream = new ReadableStream<Uint8Array>({
+            async pull(controller) {
+                const encoder = new TextEncoder();
+                const writeRow = (row: { doc: Record<string, unknown>; table: string }): void => {
+                    controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
+                };
+
+                try {
+                    // Shard-local: only fan out when caller wants any of them.
+                    if (body.tables === undefined || shardLocalTables.length > 0) {
+                        const exportTables = body.tables === undefined ? [] : shardLocalTables;
+                        // When tables is undefined the per-shard exporter
+                        // visits every shard-local table, but we still need a
+                        // table list to seed the registry probe. Fall back to
+                        // `resolveTableSharding`'s keys if the caller passed
+                        // none — best effort; a project without the resolver
+                        // will simply not fan out automatically.
+                        const probeTables =
+                            exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
+
+                        const result = await coordinator.orchestrateExport(options.shardDO, {
+                            args: { tables: exportTables },
+                            headers: forwardedHeaders,
+                            tables: probeTables,
+                        });
+
+                        for (const shard of result.shards) {
+                            if (shard.error) {
+                                continue;
+                            }
+
+                            for (const row of shard.rows ?? []) {
+                                writeRow(row);
+                            }
+                        }
+                    }
+
+                    // Globals: stream rows from the D1 helper when configured.
+                    if (wantGlobals && exportGlobalsFn) {
+                        const tablesArg = body.tables === undefined ? [] : globalTables;
+                        const iter = exportGlobalsFn({ tables: tablesArg });
+
+                        for await (const row of iter) {
+                            writeRow(row);
+                        }
+                    }
+
+                    controller.close();
+                } catch (error: unknown) {
+                    controller.error(error);
+                }
+            },
+        });
+
+        return new Response(stream, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
+    };
+
+    const handleImport = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin import endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        if (!options.queryCoordinator) {
+            throw new CirrusError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const result = await streamingImport(request, options, forwardedHeaders);
+
+        return Response.json(result, {
+            headers: { "content-type": "application/json" },
+            status: 200,
+        });
+    };
+
+    /**
+     * Resolve the configured `SchedulerDO` stub, asserting the binding is
+     * present and the caller is an admin. Shared by the list/cancel handlers so
+     * both enforce the same gate before touching the scheduler.
+     */
+    /** The `<CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
+    interface NotConfiguredError {
+        code: string;
+        message: string;
+    }
+
+    // --- Shared admin-endpoint helpers --------------------------------------
+    // Every admin route shares the same "valid bearer, else 403; required option
+    // configured, else <CODE>_NOT_CONFIGURED 400" preamble. Centralizing it keeps
+    // the gate uniform — a change to the auth posture touches one place.
+
+    /** Throw 403 unless the request carries a valid admin bearer. */
+    const assertAdminAuthorized = (request: Request): void => {
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+    };
+
+    /** Assert admin auth, then assert a worker option is configured; return it (narrowed non-undefined). */
+    const requireAdminOption = <T>(request: Request, value: T | undefined, notConfigured: NotConfiguredError): T => {
+        assertAdminAuthorized(request);
+
+        if (value === undefined) {
+            throw new CirrusError(notConfigured.message, { code: notConfigured.code, status: 400 });
+        }
+
+        return value;
+    };
+
+    /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
+    const queryParam = (url: URL, name: string): string | undefined => {
+        const value = url.searchParams.get(name);
+
+        return value === null || value === "" ? undefined : value;
+    };
+
+    /** Parse the shared `limit` / `offset` paging params off an admin GET request. */
+    const parsePaging = (request: Request): { limit?: number; offset?: number } => {
+        const url = new URL(request.url);
+        const limitParam = url.searchParams.get("limit");
+        const offsetParam = url.searchParams.get("offset");
+        const limit = limitParam === null ? undefined : Number.parseInt(limitParam, 10);
+        const offset = offsetParam === null ? undefined : Number.parseInt(offsetParam, 10);
+
+        return {
+            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
+        };
+    };
+
+    const requireSchedulerNamespace = (): ShardNamespaceLike => {
+        if (options.schedulerDO === undefined) {
+            throw new CirrusError("scheduled endpoints require a `schedulerDO` namespace on the worker", { code: "SCHEDULER_NOT_CONFIGURED", status: 400 });
+        }
+
+        return options.schedulerDO;
+    };
+
+    const resolveSchedulerStub = (request: Request): ResolvedShard => {
+        assertAdminAuthorized(request);
+
+        return resolveShard(requireSchedulerNamespace(), options.schedulerInstanceName ?? "default");
+    };
+
+    const handleScheduledList = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Scheduled-list endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const stub = resolveSchedulerStub(request);
+
+        return stub.fetch(new Request("https://scheduler.internal/list", { method: "GET" }));
+    };
+
+    /**
+     * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
+     * dashboard can subscribe to the live job list. A browser `WebSocket` can't
+     * set an `Authorization` header, so the admin token is also accepted via the
+     * `?token=` query parameter — the only channel the constructor allows.
+     */
+    const handleScheduledWebSocket = (request: Request): Promise<Response> => {
+        if (request.headers.get("Upgrade") !== "websocket") {
+            throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken) && !checkAdminWsToken(request, options.adminToken)) {
+            throw new CirrusError("admin authorization required", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const namespace = requireSchedulerNamespace();
+        const stub = resolveShard(namespace, options.schedulerInstanceName ?? "default");
+
+        return stub.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
+    };
+
+    const handleScheduledCancel = async (request: Request): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Scheduled-cancel endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const stub = resolveSchedulerStub(request);
+        const body = (await request.json().catch(() => null)) as { id?: unknown } | null;
+
+        if (typeof body?.id !== "string" || body.id === "") {
+            throw new CirrusError("Scheduled-cancel requires a string `id`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return stub.fetch(
+            new Request("https://scheduler.internal/cancel", {
+                body: JSON.stringify({ id: body.id }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+    };
+
+    const handleStorageList = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Storage endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const storageList = requireAdminOption(request, options.storageList, {
+            code: "STORAGE_NOT_CONFIGURED",
+            message: "storage endpoint requires a `storageList` function on the worker",
+        });
+
+        const url = new URL(request.url);
+        const result = await storageList(queryParam(url, "prefix"), {
+            cursor: queryParam(url, "cursor"),
+            ...parsePaging(request),
+        });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleFunctionsList = (request: Request): Response => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const registry = requireAdminOption(request, options.functions, {
+            code: "FUNCTIONS_NOT_CONFIGURED",
+            message: "functions endpoint requires a `functions` registry on the worker",
+        });
+
+        // Internal functions are never exposed — they're unreachable from the
+        // client RPC path, so surfacing them in the runner would only mislead.
+        const functions: FunctionDescriptor[] = Object.entries(registry)
+            .filter(([, entry]) => entry.visibility !== "internal")
+            .map(([path, entry]) => ({ kind: entry.kind, path }))
+            .sort((a, b) => a.path.localeCompare(b.path));
+
+        return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleGlobalTables = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.globalIntrospector, {
+            code: "GLOBALS_NOT_CONFIGURED",
+            message: "global endpoints require a `globalIntrospector` on the worker",
+        });
+
+        return Response.json(await introspector.listTables(), { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleGlobalTablePage = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.globalIntrospector, {
+            code: "GLOBALS_NOT_CONFIGURED",
+            message: "global endpoints require a `globalIntrospector` on the worker",
+        });
+
+        const table = queryParam(new URL(request.url), "table");
+
+        if (table === undefined) {
+            throw new CirrusError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const page = await introspector.readTablePage({ ...parsePaging(request), table });
+
+        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleAuthUsers = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Auth-users endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.authIntrospector, {
+            code: "AUTH_NOT_CONFIGURED",
+            message: "auth endpoints require an `authIntrospector` on the worker",
+        });
+
+        return Response.json(await introspector.listUsers(parsePaging(request)), { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleAuthSessions = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Auth-sessions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.authIntrospector, {
+            code: "AUTH_NOT_CONFIGURED",
+            message: "auth endpoints require an `authIntrospector` on the worker",
+        });
+
+        const userId = queryParam(new URL(request.url), "userId");
+        const page = await introspector.listSessions({ ...parsePaging(request), userId });
+
+        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const buildHttpActionCtx = async (request: Request, env: unknown): Promise<HttpActionContext> => {
+        const { claims, headers, userId } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
+            const functionPath = (reference as { __cirrusRef?: unknown }).__cirrusRef;
+
+            if (typeof functionPath !== "string") {
+                throw new CirrusError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
+            }
+
+            const forwarded = new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args, functionPath }),
+                headers,
+                method: "POST",
+            });
+
+            const response = await forwardToShard(options.shardDO, defaultShard, forwarded);
+            const payload = (await response.json()) as { error?: { code?: string; message?: string }; result?: unknown };
+
+            if (payload.error) {
+                throw new CirrusError(payload.error.message ?? "shard RPC failed", {
+                    code: payload.error.code ?? "INTERNAL",
+                    status: response.status,
+                });
+            }
+
+            return payload.result as R;
+        };
+
+        return {
+            auth: {
+                getIdentity: async () => claims,
+                userId,
+            },
+            fetch: globalThis.fetch.bind(globalThis),
+            runAction: run,
+            runMutation: run,
+            runQuery: run,
+        };
+    };
+
+    const dispatchHttpRoute = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<null | Response> => {
+        if (!options.httpRouter) {
+            return null;
+        }
+
+        // Build the action context up front and inject it on a private env
+        // binding; the router's middleware lifts it into the handler's context.
+        // hono then matches/dispatches and returns its own response (incl. 404).
+        const httpCtx = await buildHttpActionCtx(request, env);
+
+        return options.httpRouter.fetch(request, { ...(env as object), __cirrusCtx: httpCtx }, ctx);
+    };
+
+    const handle = async (request: Request, env: unknown, ctx: ExecutionContextLike): Promise<Response> => {
+        const url = new URL(request.url);
+
+        // Fast-path reject on a declared `Content-Length` over the cap — cheap
+        // (a header read, no body materialization) but NOT authoritative:
+        // `Content-Length` is forgeable. A chunked body omits it and a
+        // non-numeric value parses to `NaN`, so a missing/unparseable length is
+        // treated as "unknown" (let the request through here) — the real
+        // enforcement happens in `readBodyTextWithLimit` / the streaming import
+        // reader, which abort with 413 once cumulative bytes exceed the cap.
+        if (request.method === "POST" || request.method === "PUT") {
+            const len = Number(request.headers.get("content-length") ?? "");
+
+            if (Number.isFinite(len) && len > MAX_BODY_BYTES) {
+                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+            }
+        }
+
+        // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
+        // We also accept legacy pathname-only keys for ad-hoc handlers.
+        const methodAndPath = `${request.method} ${url.pathname}`;
+        const route = options.routes?.[methodAndPath] ?? options.routes?.[url.pathname];
+
+        if (route) {
+            return route(request, env, ctx);
+        }
+
+        if (url.pathname === WS_PATH) {
+            if (request.headers.get("Upgrade") !== "websocket") {
+                throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
+            }
+
+            const shardKey = url.searchParams.get("shard") ?? defaultShard;
+
+            // Resolve the calling identity (if any) and run the per-shard
+            // authorization callback before forwarding. The WS path doesn't
+            // need the rest of the forward context — only the identity for
+            // the authorization decision.
+            if (options.authorizeShard) {
+                const identity = options.resolveIdentity ? ((await options.resolveIdentity(request, env)) ?? null) : null;
+                const allowed = await options.authorizeShard(identity, shardKey);
+
+                if (!allowed) {
+                    throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+                }
+            } else if (shardKey !== defaultShard) {
+                warnUnauthenticatedShardAccessOnce("shard");
+            }
+
+            return forwardToShard(options.shardDO, shardKey, request);
+        }
+
+        if (url.pathname === RPC_PATH) {
+            if (request.method !== "POST") {
+                throw new CirrusError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            }
+
+            const envelope = await parseEnvelope(request);
+
+            if (envelope.fanOut && envelope.shardKey) {
+                throw new CirrusError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
+            }
+
+            // Refuse fan-out envelopes that arrive without a coordinator
+            // configured BEFORE we invoke `resolveIdentity` — otherwise the
+            // hook would be called for a request that's already destined for
+            // a 400, wasting any DB/IO it performs to look up the user.
+            if (envelope.fanOut && !options.queryCoordinator) {
+                throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
+                    code: "BAD_REQUEST",
+                    status: 400,
+                });
+            }
+
+            // Forward selected headers from the inbound request so the DO can
+            // honour auth, sessions, and D1 read-your-writes consistency.
+            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+            // Per-shard authorization runs after identity resolution and before
+            // the request is forwarded. Fan-out envelopes target every
+            // live shard for the table (no client-named shardKey), so the
+            // per-shard gate cannot authorize them — `authorizeFanOut`
+            // gates fan-out at the table level. Single-shard dispatch
+            // goes through `authorizeShard`.
+            if (envelope.fanOut) {
+                if (options.authorizeFanOut) {
+                    const allowed = await options.authorizeFanOut(identity, envelope.fanOut.table, envelope.functionPath);
+
+                    if (!allowed) {
+                        throw new CirrusError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
+                    }
+                } else if (options.authorizeShard) {
+                    // `authorizeShard` is configured but `authorizeFanOut`
+                    // is not. Fan-out is a privileged op (it bypasses the
+                    // per-shard gate by design), so default-deny instead
+                    // of silently letting any authenticated caller
+                    // enumerate every shard for the table.
+                    throw new CirrusError("Fan-out requires `authorizeFanOut` to be configured on the worker when `authorizeShard` is set", {
+                        code: "FORBIDDEN_FANOUT",
+                        status: 403,
+                    });
+                } else {
+                    // Neither callback configured: fan-out is authorization-open.
+                    warnUnauthenticatedShardAccessOnce("fan-out");
+                }
+            } else if (options.authorizeShard) {
+                const shardKeyForAuth = envelope.shardKey ?? defaultShard;
+                const allowed = await options.authorizeShard(identity, shardKeyForAuth);
+
+                if (!allowed) {
+                    throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+                }
+            } else if (envelope.shardKey !== undefined && envelope.shardKey !== defaultShard) {
+                // No per-shard gate and the caller named a non-default shard.
+                warnUnauthenticatedShardAccessOnce("shard");
+            }
+
+            // Timing wraps the dispatch only — envelope parse + coordinator
+            // gate + identity resolution happen above and are not part of
+            // the user-observable RPC duration we report.
+            const rpcStartedAt = Date.now();
+            const { observability } = options;
+
+            if (envelope.fanOut) {
+                // Coordinator presence was checked above; re-assert for the
+                // type system without a non-null assertion.
+                const coordinator = options.queryCoordinator;
+
+                if (!coordinator) {
+                    throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
+                        code: "BAD_REQUEST",
+                        status: 400,
+                    });
+                }
+
+                try {
+                    const result = await coordinator.fanOut(options.shardDO, {
+                        args: envelope.args ?? {},
+                        fanOut: envelope.fanOut,
+                        functionPath: envelope.functionPath,
+                        headers: forwardedHeaders,
+                    });
+
+                    emitRpcEvent(observability, {
+                        durationMs: Date.now() - rpcStartedAt,
+                        fanOut: {
+                            failed: result.failed,
+                            shards: result.ok + result.failed,
+                            table: envelope.fanOut.table,
+                        },
+                        functionPath: envelope.functionPath,
+                        ok: true,
+                    });
+
+                    return Response.json(result, {
+                        headers: { "content-type": "application/json" },
+                        status: 200,
+                    });
+                } catch (error) {
+                    emitRpcEvent(
+                        observability,
+                        buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { fanOut: { table: envelope.fanOut.table } }),
+                    );
+                    throw error;
+                }
+            }
+
+            const shardKey = envelope.shardKey ?? defaultShard;
+
+            // Re-emit the RPC body to the shard at its `/rpc` route.
+            const forwarded = new Request(`https://shard.internal/rpc`, {
+                body: JSON.stringify({ args: envelope.args ?? {}, functionPath: envelope.functionPath }),
+                headers: forwardedHeaders,
+                method: "POST",
+            });
+
+            try {
+                const response = await forwardToShard(options.shardDO, shardKey, forwarded);
+
+                // A non-2xx from the shard is reported as ok=false even though no
+                // exception was thrown — the user-visible result is still an error
+                // surface, just one the shard chose to encode in the status code.
+                emitRpcEvent(observability, {
+                    durationMs: Date.now() - rpcStartedAt,
+                    functionPath: envelope.functionPath,
+                    ok: response.ok,
+                    shardKey,
+                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${response.status}`, status: response.status } }),
+                });
+
+                // Propagate the DO's bookmark header so the client can pin reads
+                // after a write.
+                const responseBookmark = response.headers.get("x-d1-bookmark");
+
+                if (responseBookmark) {
+                    const headers = new Headers(response.headers);
+
+                    headers.set("x-d1-bookmark", responseBookmark);
+
+                    return new Response(response.body, { status: response.status, headers });
+                }
+
+                return response;
+            } catch (error) {
+                emitRpcEvent(observability, buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { shardKey }));
+                throw error;
+            }
+        }
+
+        if (url.pathname === SCHEDULER_DISPATCH_PATH) {
+            return handleSchedulerDispatch(request, env);
+        }
+
+        if (url.pathname === MIGRATE_PATH) {
+            return handleMigrate(request, env);
+        }
+
+        if (url.pathname === EXPORT_PATH) {
+            return handleExport(request, env);
+        }
+
+        if (url.pathname === IMPORT_PATH) {
+            return handleImport(request, env);
+        }
+
+        if (url.pathname === SCHEDULED_WS_PATH) {
+            return handleScheduledWebSocket(request);
+        }
+
+        if (url.pathname === SCHEDULED_CANCEL_PATH) {
+            return handleScheduledCancel(request);
+        }
+
+        if (url.pathname === SCHEDULED_PATH) {
+            return handleScheduledList(request);
+        }
+
+        if (url.pathname === STORAGE_PATH) {
+            return handleStorageList(request);
+        }
+
+        if (url.pathname === FUNCTIONS_PATH) {
+            return handleFunctionsList(request);
+        }
+
+        if (url.pathname === GLOBAL_TABLES_PATH) {
+            return handleGlobalTables(request);
+        }
+
+        if (url.pathname === GLOBAL_TABLE_PATH) {
+            return handleGlobalTablePage(request);
+        }
+
+        if (url.pathname === AUTH_USERS_PATH) {
+            return handleAuthUsers(request);
+        }
+
+        if (url.pathname === AUTH_SESSIONS_PATH) {
+            return handleAuthSessions(request);
+        }
+
+        // HTTP actions are the lowest-priority matcher: explicit routes and the
+        // internal `/_cirrus/*` endpoints above always win. Once the request
+        // reaches the router, hono owns routing — its 404 is the terminal 404.
+        const httpRouteResponse = await dispatchHttpRoute(request, env, ctx);
+
+        if (httpRouteResponse) {
+            return httpRouteResponse;
+        }
+
+        return new Response("Not found", { status: 404 });
+    };
+
+    return {
+        async fetch(request, env, ctx) {
+            if (options.passThroughOnException) {
+                ctx.passThroughOnException();
+            }
+
+            try {
+                return await handle(request, env, ctx);
+            } catch (error: unknown) {
+                return toErrorResponse(error);
+            }
+        },
+    };
 };
 
 /** Re-exported helper so callers can roundtrip envelopes in tests. */

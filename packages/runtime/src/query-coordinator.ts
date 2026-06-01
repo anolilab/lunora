@@ -327,130 +327,13 @@ export interface ImportFanOutResult {
 const DEFAULT_CONCURRENCY = 16;
 const DEFAULT_TIMEOUT_MS = 5000;
 
-export const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordinator => {
-    const maxConcurrency = options.maxConcurrency ?? DEFAULT_CONCURRENCY;
-    const perShardTimeoutMs = options.perShardTimeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-    if (maxConcurrency < 1) {
-        throw new CirrusError("maxConcurrency must be >= 1", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    return {
-        async fanOut<T>(namespace: ShardNamespaceLike, request: FanOutRequest): Promise<FanOutResult<T>> {
-            const keys = await options.registry.listShardKeys(request.fanOut.table);
-
-            const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
-
-            const okValues: unknown[] = [];
-            const okShards: string[] = [];
-            const errors: ShardError[] = [];
-
-            for (const result of results) {
-                if (result.kind === "ok") {
-                    okValues.push(result.value);
-                    okShards.push(result.shardKey);
-                } else {
-                    errors.push({ message: result.message, shardKey: result.shardKey, timedOut: result.timedOut });
-                }
-            }
-
-            const merged = mergeShardResults(okValues, request.fanOut.merge);
-
-            return {
-                data: merged as T,
-                errors,
-                failed: errors.length,
-                ok: okShards.length,
-            };
-        },
-        async orchestrateMigration(namespace: ShardNamespaceLike, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
-            const keys = await options.registry.listShardKeys(request.table);
-
-            const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
-
-            return rollUpMigration(results);
-        },
-        async orchestrateExport(namespace: ShardNamespaceLike, request: ExportFanOutRequest): Promise<ExportFanOutResult> {
-            // Union the shard keys across all requested shard-local tables so
-            // an export of `["users","messages"]` reaches every shard that
-            // holds either table. Skip globals — they live in D1, not a DO.
-            const union = new Set<string>();
-
-            for (const table of request.tables) {
-                const keys = await options.registry.listShardKeys(table);
-
-                for (const key of keys) {
-                    union.add(key);
-                }
-            }
-
-            const shardKeys = [...union];
-
-            const exportRequest: ShardRpcRequest = {
-                // Spread the caller's `args` (`batchSize`, future export knobs)
-                // before the `tables` field so they reach the shard RPC. The
-                // earlier `{ tables }` literal silently dropped them.
-                args: { ...request.args, tables: [...request.tables] },
-                functionPath: "__cirrus_admin__:exportShard",
-                headers: request.headers,
-            };
-
-            const results = await runBoundedFanOut(namespace, shardKeys, exportRequest, maxConcurrency, perShardTimeoutMs);
-
-            return rollUpExport(results);
-        },
-        async orchestrateImport(namespace: ShardNamespaceLike, request: ImportFanOutRequest): Promise<ImportFanOutResult> {
-            // Each shard gets its own pre-bucketed batch — we can't reuse
-            // `runBoundedFanOut` because that helper sends the same args to
-            // every shard. The structure mirrors it: bounded `Promise.all`
-            // workers pulling jobs off a shared cursor.
-            const { batches } = request;
-            const outcomes: ShardRpcOutcome[] = Array.from({ length: batches.length });
-            let cursor = 0;
-
-            const concurrency = Math.min(maxConcurrency, batches.length);
-
-            const worker = async (): Promise<void> => {
-                while (true) {
-                    const index = cursor;
-
-                    cursor += 1;
-
-                    if (index >= batches.length) {
-                        return;
-                    }
-
-                    const batch = batches[index]!;
-
-                    outcomes[index] = await callOneShard(
-                        namespace,
-                        batch.shardKey,
-                        prepareShardRpc({
-                            args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
-                            functionPath: "__cirrus_admin__:importShard",
-                            headers: request.headers,
-                        }),
-                        perShardTimeoutMs,
-                    );
-                }
-            };
-
-            if (concurrency > 0) {
-                await Promise.all(Array.from({ length: concurrency }, () => worker()));
-            }
-
-            return rollUpImport(outcomes);
-        },
-        registry: options.registry,
-    };
-};
-
 /** Admin RPCs wrap their payload in `{ result }`; peel it so callers see the runner's value. */
-const unwrapResult = (value: unknown): unknown =>
-    value !== null && typeof value === "object" && "result" in value ? (value as { result: unknown }).result : value;
+function unwrapResult(value: unknown): unknown {
+    return value !== null && typeof value === "object" && "result" in value ? (value as { result: unknown }).result : value;
+}
 
 /** Numeric counts + status read defensively off a `MigrationRunResult`-shaped payload. */
-const readRunCounts = (payload: unknown): { changed: number; processed: number; status: string | undefined } => {
+function readRunCounts(payload: unknown): { changed: number; processed: number; status: string | undefined } {
     const run = (payload ?? {}) as { changed?: unknown; processed?: unknown; status?: unknown };
 
     return {
@@ -458,10 +341,10 @@ const readRunCounts = (payload: unknown): { changed: number; processed: number; 
         processed: typeof run.processed === "number" ? run.processed : 0,
         status: typeof run.status === "string" ? run.status : undefined,
     };
-};
+}
 
 /** `"failed"` dominates, then incompleteness; an all-clean run reports `"completed"`. */
-const rollUpStatus = (anyFailed: boolean, incomplete: boolean): MigrationFanOutResult["status"] => {
+function rollUpStatus(anyFailed: boolean, incomplete: boolean): MigrationFanOutResult["status"] {
     if (anyFailed) {
         return "failed";
     }
@@ -471,7 +354,7 @@ const rollUpStatus = (anyFailed: boolean, incomplete: boolean): MigrationFanOutR
     }
 
     return "completed";
-};
+}
 
 /**
  * Fold per-shard RPC outcomes into a {@link MigrationFanOutResult}: sum the
@@ -479,7 +362,7 @@ const rollUpStatus = (anyFailed: boolean, incomplete: boolean): MigrationFanOutR
  * statuses up so a single failed shard reports `"failed"` and an incomplete or
  * unreachable shard reports `"in_progress"`.
  */
-const rollUpMigration = (results: readonly ShardRpcOutcome[]): MigrationFanOutResult => {
+function rollUpMigration(results: readonly ShardRpcOutcome[]): MigrationFanOutResult {
     const shards: ShardMigrationOutcome[] = [];
     let ok = 0;
     let failed = 0;
@@ -509,7 +392,7 @@ const rollUpMigration = (results: readonly ShardRpcOutcome[]): MigrationFanOutRe
     }
 
     return { changed, failed, ok, processed, shards, status: rollUpStatus(anyFailed, anyInProgress || failed > 0) };
-};
+}
 
 /**
  * Roll per-shard export outcomes into a flat list. The DO admin handler
@@ -517,7 +400,7 @@ const rollUpMigration = (results: readonly ShardRpcOutcome[]): MigrationFanOutRe
  * project the inner `rows` array; an error surfaces an empty `rows` so the
  * caller can write the failed-shard entries without a special case.
  */
-const rollUpExport = (results: readonly ShardRpcOutcome[]): ExportFanOutResult => {
+function rollUpExport(results: readonly ShardRpcOutcome[]): ExportFanOutResult {
     const shards: ShardExportOutcome[] = [];
     let ok = 0;
     let failed = 0;
@@ -538,10 +421,10 @@ const rollUpExport = (results: readonly ShardRpcOutcome[]): ExportFanOutResult =
     }
 
     return { failed, ok, shards };
-};
+}
 
 /** Sum the per-shard import counts/errors into a single roll-up. */
-const rollUpImport = (results: readonly ShardRpcOutcome[]): ImportFanOutResult => {
+function rollUpImport(results: readonly ShardRpcOutcome[]): ImportFanOutResult {
     const shards: ShardImportOutcome[] = [];
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
@@ -569,8 +452,10 @@ const rollUpImport = (results: readonly ShardRpcOutcome[]): ImportFanOutResult =
             inserted[table] = (inserted[table] ?? 0) + Number(count);
         }
 
-        if (Array.isArray(payload?.errors)) {
-            errors.push(...payload.errors);
+        const payloadErrors = payload?.errors;
+
+        if (Array.isArray(payloadErrors)) {
+            errors.push(...(payloadErrors as ReadonlyArray<{ code: string; line: number; message: string; table: string }>));
         }
 
         conflicts += Number(payload?.conflicts ?? 0);
@@ -586,7 +471,7 @@ const rollUpImport = (results: readonly ShardRpcOutcome[]): ImportFanOutResult =
     }
 
     return { conflicts, errors, failed, inserted, ok, shards };
-};
+}
 
 interface ShardRpcOk {
     kind: "ok";
@@ -616,48 +501,14 @@ interface PreparedShardRpc {
     readonly headers: Record<string, string>;
 }
 
-const prepareShardRpc = (request: ShardRpcRequest): PreparedShardRpc => ({
-    body: JSON.stringify({ args: request.args ?? {}, functionPath: request.functionPath }),
-    headers: { "content-type": "application/json", ...request.headers },
-});
-
-const runBoundedFanOut = async (
-    namespace: ShardNamespaceLike,
-    keys: readonly string[],
-    request: ShardRpcRequest,
-    maxConcurrency: number,
-    timeoutMs: number,
-): Promise<readonly ShardRpcOutcome[]> => {
-    if (keys.length === 0) {
-        return [];
-    }
-
-    const prepared = prepareShardRpc(request);
-    const outcomes: ShardRpcOutcome[] = Array.from({ length: keys.length });
-    let cursor = 0;
-
-    const worker = async (): Promise<void> => {
-        while (true) {
-            const index = cursor;
-
-            cursor += 1;
-
-            if (index >= keys.length) {
-                return;
-            }
-
-            outcomes[index] = await callOneShard(namespace, keys[index]!, prepared, timeoutMs);
-        }
+function prepareShardRpc(request: ShardRpcRequest): PreparedShardRpc {
+    return {
+        body: JSON.stringify({ args: request.args ?? {}, functionPath: request.functionPath }),
+        headers: { "content-type": "application/json", ...request.headers },
     };
+}
 
-    const concurrency = Math.min(maxConcurrency, keys.length);
-
-    await Promise.all(Array.from({ length: concurrency }, () => worker()));
-
-    return outcomes;
-};
-
-const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
+async function callOneShard(namespace: ShardNamespaceLike, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> {
     const stub = resolveShard(namespace, shardKey);
 
     // AbortController lets the timeout branch tear the in-flight fetch down
@@ -713,16 +564,69 @@ const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, pre
             clearTimeout(timeoutId);
         }
     }
-};
+}
 
-const mergeShardResults = (values: readonly unknown[], strategy: MergeStrategy): unknown => {
+async function runBoundedFanOut(
+    namespace: ShardNamespaceLike,
+    keys: readonly string[],
+    request: ShardRpcRequest,
+    maxConcurrency: number,
+    timeoutMs: number,
+): Promise<readonly ShardRpcOutcome[]> {
+    if (keys.length === 0) {
+        return [];
+    }
+
+    const prepared = prepareShardRpc(request);
+    const outcomes: ShardRpcOutcome[] = Array.from({ length: keys.length });
+    let cursor = 0;
+
+    const worker = async (): Promise<void> => {
+        while (true) {
+            const index = cursor;
+
+            cursor += 1;
+
+            const shardKey = keys[index];
+
+            if (index >= keys.length || shardKey === undefined) {
+                return;
+            }
+
+            outcomes[index] = await callOneShard(namespace, shardKey, prepared, timeoutMs);
+        }
+    };
+
+    const concurrency = Math.min(maxConcurrency, keys.length);
+
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+    return outcomes;
+}
+
+/**
+ * Canonical-JSON encoding of a key tuple — same shape the aggregate counter
+ * uses to stay stable across runs. Lets two shards file the same `{ a, b }`
+ * group under the same merged bucket regardless of property order.
+ */
+function canonicalJson(record: Record<string, unknown>): string {
+    const ordered: Record<string, unknown> = {};
+
+    for (const key of Object.keys(record).sort()) {
+        ordered[key] = record[key] ?? null;
+    }
+
+    return JSON.stringify(ordered);
+}
+
+function mergeShardResults(values: readonly unknown[], strategy: MergeStrategy): unknown {
     switch (strategy.kind) {
         case "concat": {
             const out: unknown[] = [];
 
             for (const v of values) {
                 if (Array.isArray(v)) {
-                    out.push(...v);
+                    out.push(...(v as readonly unknown[]));
                 }
             }
 
@@ -870,19 +774,122 @@ const mergeShardResults = (values: readonly unknown[], strategy: MergeStrategy):
             return values;
         }
     }
-};
+}
 
-/**
- * Canonical-JSON encoding of a key tuple — same shape the aggregate counter
- * uses to stay stable across runs. Lets two shards file the same `{ a, b }`
- * group under the same merged bucket regardless of property order.
- */
-const canonicalJson = (record: Record<string, unknown>): string => {
-    const ordered: Record<string, unknown> = {};
+export const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordinator => {
+    const maxConcurrency = options.maxConcurrency ?? DEFAULT_CONCURRENCY;
+    const perShardTimeoutMs = options.perShardTimeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-    for (const key of Object.keys(record).sort()) {
-        ordered[key] = record[key] ?? null;
+    if (maxConcurrency < 1) {
+        throw new CirrusError("maxConcurrency must be >= 1", { code: "BAD_REQUEST", status: 400 });
     }
 
-    return JSON.stringify(ordered);
+    return {
+        async fanOut<T>(namespace: ShardNamespaceLike, request: FanOutRequest): Promise<FanOutResult<T>> {
+            const keys = await options.registry.listShardKeys(request.fanOut.table);
+
+            const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
+
+            const okValues: unknown[] = [];
+            const okShards: string[] = [];
+            const errors: ShardError[] = [];
+
+            for (const result of results) {
+                if (result.kind === "ok") {
+                    okValues.push(result.value);
+                    okShards.push(result.shardKey);
+                } else {
+                    errors.push({ message: result.message, shardKey: result.shardKey, timedOut: result.timedOut });
+                }
+            }
+
+            const merged = mergeShardResults(okValues, request.fanOut.merge);
+
+            return {
+                data: merged as T,
+                errors,
+                failed: errors.length,
+                ok: okShards.length,
+            };
+        },
+        async orchestrateMigration(namespace: ShardNamespaceLike, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
+            const keys = await options.registry.listShardKeys(request.table);
+
+            const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
+
+            return rollUpMigration(results);
+        },
+        async orchestrateExport(namespace: ShardNamespaceLike, request: ExportFanOutRequest): Promise<ExportFanOutResult> {
+            // Union the shard keys across all requested shard-local tables so
+            // an export of `["users","messages"]` reaches every shard that
+            // holds either table. Skip globals — they live in D1, not a DO.
+            const union = new Set<string>();
+
+            for (const table of request.tables) {
+                const keys = await options.registry.listShardKeys(table);
+
+                for (const key of keys) {
+                    union.add(key);
+                }
+            }
+
+            const shardKeys = [...union];
+
+            const exportRequest: ShardRpcRequest = {
+                // Spread the caller's `args` (`batchSize`, future export knobs)
+                // before the `tables` field so they reach the shard RPC. The
+                // earlier `{ tables }` literal silently dropped them.
+                args: { ...request.args, tables: [...request.tables] },
+                functionPath: "__cirrus_admin__:exportShard",
+                headers: request.headers,
+            };
+
+            const results = await runBoundedFanOut(namespace, shardKeys, exportRequest, maxConcurrency, perShardTimeoutMs);
+
+            return rollUpExport(results);
+        },
+        async orchestrateImport(namespace: ShardNamespaceLike, request: ImportFanOutRequest): Promise<ImportFanOutResult> {
+            // Each shard gets its own pre-bucketed batch — we can't reuse
+            // `runBoundedFanOut` because that helper sends the same args to
+            // every shard. The structure mirrors it: bounded `Promise.all`
+            // workers pulling jobs off a shared cursor.
+            const { batches } = request;
+            const outcomes: ShardRpcOutcome[] = Array.from({ length: batches.length });
+            let cursor = 0;
+
+            const concurrency = Math.min(maxConcurrency, batches.length);
+
+            const worker = async (): Promise<void> => {
+                while (true) {
+                    const index = cursor;
+
+                    cursor += 1;
+
+                    const batch = batches[index];
+
+                    if (index >= batches.length || batch === undefined) {
+                        return;
+                    }
+
+                    outcomes[index] = await callOneShard(
+                        namespace,
+                        batch.shardKey,
+                        prepareShardRpc({
+                            args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
+                            functionPath: "__cirrus_admin__:importShard",
+                            headers: request.headers,
+                        }),
+                        perShardTimeoutMs,
+                    );
+                }
+            };
+
+            if (concurrency > 0) {
+                await Promise.all(Array.from({ length: concurrency }, () => worker()));
+            }
+
+            return rollUpImport(outcomes);
+        },
+        registry: options.registry,
+    };
 };

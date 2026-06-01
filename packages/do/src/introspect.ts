@@ -70,6 +70,17 @@ const MAX_PAGE_SIZE = 500;
 /** The physical columns of a canonical Cirrus shard table (user fields live in `__doc__`). */
 const DOC_COLUMN = "__doc__";
 
+/** JSON-parse to a plain object, or `null` when the text isn't a JSON object. */
+const safeParseObject = (text: string): Record<string, unknown> | null => {
+    try {
+        const value = JSON.parse(text) as unknown;
+
+        return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+    } catch {
+        return null;
+    }
+};
+
 /**
  * Expand the JSON-blob storage into per-field columns for display. A canonical
  * Cirrus shard table physically has `id`, `_creationTime` and a `__doc__` JSON
@@ -118,17 +129,6 @@ const expandDocRows = (columns: string[], rows: Record<string, unknown>[]): { co
     return { columns: [...metaColumns, ...docKeys], rows: parsed };
 };
 
-/** JSON-parse to a plain object, or `null` when the text isn't a JSON object. */
-const safeParseObject = (text: string): Record<string, unknown> | null => {
-    try {
-        const value = JSON.parse(text) as unknown;
-
-        return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-    } catch {
-        return null;
-    }
-};
-
 /** Escape LIKE wildcards so a user's literal `%`/`_`/`\` match themselves (paired with `ESCAPE '\'`). */
 const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/g, (character) => `\\${character}`);
 
@@ -172,6 +172,9 @@ export const listTables = (sql: SqlExec): TableInfo[] => {
 
     return tables;
 };
+
+const tableExists = (sql: SqlExec, table: string): boolean =>
+    sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1", table).toArray().length > 0;
 
 /**
  * Read a page of rows from one user table. The table name is validated against
@@ -243,6 +246,3 @@ export const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): Tabl
 
     return withRefs({ ...expanded, total });
 };
-
-const tableExists = (sql: SqlExec, table: string): boolean =>
-    sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1", table).toArray().length > 0;

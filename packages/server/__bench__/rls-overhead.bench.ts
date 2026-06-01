@@ -115,9 +115,7 @@ const buildCtx = (): BenchCtx => {
 // is structural, so a permissive cast is needed in the bench harness to attach
 // it without dragging the full DataModel typing in here. Same pattern the test
 // harness uses (`rlsForTest`).
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const rlsAsAny = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Middleware<any, any> =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (rls as unknown as (p: ReadonlyArray<Policy<Ctx>>) => Middleware<any, any>)(policies);
 
 const baselineHandler = cirrus.query.query(async ({ ctx }) => {

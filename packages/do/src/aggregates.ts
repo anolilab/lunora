@@ -216,86 +216,6 @@ export const planAggregateLookup = (
 };
 
 /**
- * Select the best matching aggregate index for a `count` request — the one
- * whose `where` baseline matches the request (subset semantics: the index's
- * baked-in `where` is implied by the request) and whose `by` set covers every
- * filtered key. Prefers narrower (more-specific) `by` sets so equality on
- * `(userId, status)` beats equality on `(userId)` for a request that filters
- * both.
- */
-export const selectIndexForCount = (
-    indexes: ReadonlyArray<AggregateIndexDefinitionLike>,
-    requestedWhere: Record<string, unknown> | undefined,
-): undefined | { index: AggregateIndexDefinitionLike; key: Record<string, unknown> } => selectIndexForReducer(indexes, "count", undefined, requestedWhere);
-
-/**
- * Generalised version of {@link selectIndexForCount} for non-`count` reducers.
- * The match additionally requires the index's `op` AND `field` agree with the
- * request — `aggregate({ op: "sum", field: "seq" })` needs an
- * `aggregateIndex({ op: "sum", field: "seq" })`. Same `by`-prefer-wider tiebreak.
- */
-export const selectIndexForAggregate = (
-    indexes: ReadonlyArray<AggregateIndexDefinitionLike>,
-    op: AggregateOp,
-    field: string,
-    requestedWhere: Record<string, unknown> | undefined,
-): undefined | { index: AggregateIndexDefinitionLike; key: Record<string, unknown> } => selectIndexForReducer(indexes, op, field, requestedWhere);
-
-/**
- * Match an aggregate index whose `by` shape *exactly* matches the caller's
- * `groupBy.by`. The companion table is keyed by the by-tuple, so a scan of
- * the whole companion table answers `groupBy()` in one pass — no SQL
- * `GROUP BY` needed. The match additionally requires:
- *
- *  - `op` (and `field`, when not `count`) agree with the request,
- *  - the requested `where` keys are a subset of `by` (we filter the
- *    companion by `__key__`); arbitrary predicates fall back to scan,
- *  - the index's static `where` (if any) is satisfied by the request.
- *
- * Returns the index and the partial key the request constrains (may be
- * empty for an unfiltered groupBy — meaning "read every counter row").
- */
-export const selectIndexForGroupBy = (
-    indexes: ReadonlyArray<AggregateIndexDefinitionLike>,
-    op: AggregateOp,
-    field: string | undefined,
-    by: ReadonlyArray<string>,
-    requestedWhere: Record<string, unknown> | undefined,
-): undefined | { index: AggregateIndexDefinitionLike; partial: Record<string, unknown> } => {
-    const requestedFields = new Set(by);
-
-    for (const index of indexes) {
-        if (index.op !== op) {
-            continue;
-        }
-
-        if (op !== "count" && index.field !== field) {
-            continue;
-        }
-
-        const indexBy = index.by ?? [];
-
-        if (indexBy.length !== requestedFields.size) {
-            continue;
-        }
-
-        if (!indexBy.every((key) => requestedFields.has(key))) {
-            continue;
-        }
-
-        const partial = collectPartialKey(index, requestedWhere, requestedFields);
-
-        if (partial === undefined) {
-            continue;
-        }
-
-        return { index, partial };
-    }
-
-    return undefined;
-};
-
-/**
  * Derive the constrained key fragment for a groupBy indexed path. Returns
  * `undefined` when the request is non-routable (boolean combinators,
  * extra-field where, non-`eq` operators, static-where conflict). Unlike
@@ -382,4 +302,84 @@ const selectIndexForReducer = (
     }
 
     return best;
+};
+
+/**
+ * Select the best matching aggregate index for a `count` request — the one
+ * whose `where` baseline matches the request (subset semantics: the index's
+ * baked-in `where` is implied by the request) and whose `by` set covers every
+ * filtered key. Prefers narrower (more-specific) `by` sets so equality on
+ * `(userId, status)` beats equality on `(userId)` for a request that filters
+ * both.
+ */
+export const selectIndexForCount = (
+    indexes: ReadonlyArray<AggregateIndexDefinitionLike>,
+    requestedWhere: Record<string, unknown> | undefined,
+): undefined | { index: AggregateIndexDefinitionLike; key: Record<string, unknown> } => selectIndexForReducer(indexes, "count", undefined, requestedWhere);
+
+/**
+ * Generalised version of {@link selectIndexForCount} for non-`count` reducers.
+ * The match additionally requires the index's `op` AND `field` agree with the
+ * request — `aggregate({ op: "sum", field: "seq" })` needs an
+ * `aggregateIndex({ op: "sum", field: "seq" })`. Same `by`-prefer-wider tiebreak.
+ */
+export const selectIndexForAggregate = (
+    indexes: ReadonlyArray<AggregateIndexDefinitionLike>,
+    op: AggregateOp,
+    field: string,
+    requestedWhere: Record<string, unknown> | undefined,
+): undefined | { index: AggregateIndexDefinitionLike; key: Record<string, unknown> } => selectIndexForReducer(indexes, op, field, requestedWhere);
+
+/**
+ * Match an aggregate index whose `by` shape *exactly* matches the caller's
+ * `groupBy.by`. The companion table is keyed by the by-tuple, so a scan of
+ * the whole companion table answers `groupBy()` in one pass — no SQL
+ * `GROUP BY` needed. The match additionally requires:
+ *
+ *  - `op` (and `field`, when not `count`) agree with the request,
+ *  - the requested `where` keys are a subset of `by` (we filter the
+ *    companion by `__key__`); arbitrary predicates fall back to scan,
+ *  - the index's static `where` (if any) is satisfied by the request.
+ *
+ * Returns the index and the partial key the request constrains (may be
+ * empty for an unfiltered groupBy — meaning "read every counter row").
+ */
+export const selectIndexForGroupBy = (
+    indexes: ReadonlyArray<AggregateIndexDefinitionLike>,
+    op: AggregateOp,
+    field: string | undefined,
+    by: ReadonlyArray<string>,
+    requestedWhere: Record<string, unknown> | undefined,
+): undefined | { index: AggregateIndexDefinitionLike; partial: Record<string, unknown> } => {
+    const requestedFields = new Set(by);
+
+    for (const index of indexes) {
+        if (index.op !== op) {
+            continue;
+        }
+
+        if (op !== "count" && index.field !== field) {
+            continue;
+        }
+
+        const indexBy = index.by ?? [];
+
+        if (indexBy.length !== requestedFields.size) {
+            continue;
+        }
+
+        if (!indexBy.every((key) => requestedFields.has(key))) {
+            continue;
+        }
+
+        const partial = collectPartialKey(index, requestedWhere, requestedFields);
+
+        if (partial === undefined) {
+            continue;
+        }
+
+        return { index, partial };
+    }
+
+    return undefined;
 };

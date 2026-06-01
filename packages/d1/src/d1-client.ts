@@ -47,6 +47,69 @@ export interface D1PreparedStatementLike {
  */
 const STMT_CACHE_CAPACITY = 256;
 
+/** Thin wrapper over a `D1DatabaseSession` exposing bookmark plumbing. */
+export class D1Session {
+    private readonly session: D1SessionLike;
+
+    /** See {@link D1Client.stmtCache}. Scoped per session. */
+    private readonly stmtCache = new Map<string, D1PreparedStatementLike>();
+
+    constructor(session: D1SessionLike) {
+        this.session = session;
+    }
+
+    public prepare(sql: string): D1PreparedStatementLike {
+        const cached = this.stmtCache.get(sql);
+
+        if (cached) {
+            this.stmtCache.delete(sql);
+            this.stmtCache.set(sql, cached);
+
+            return cached;
+        }
+
+        const stmt = this.session.prepare(sql);
+
+        if (this.stmtCache.size >= STMT_CACHE_CAPACITY) {
+            const oldest = this.stmtCache.keys().next().value;
+
+            if (oldest !== undefined) {
+                this.stmtCache.delete(oldest);
+            }
+        }
+
+        this.stmtCache.set(sql, stmt);
+
+        return stmt;
+    }
+
+    public async run<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }> {
+        return this.prepare(sql)
+            .bind(...binds)
+            .run<T>();
+    }
+
+    public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ results: T[]; success: boolean }> {
+        return this.prepare(sql)
+            .bind(...binds)
+            .all<T>();
+    }
+
+    public async first<T = unknown>(sql: string, ...binds: unknown[]): Promise<T | null> {
+        return this.prepare(sql)
+            .bind(...binds)
+            .first<T>();
+    }
+
+    /**
+     * Returns the most recent bookmark known to the session, or `undefined`
+     * when D1 has not issued one yet.
+     */
+    public getBookmark(): string | undefined {
+        return this.session.getBookmark() ?? undefined;
+    }
+}
+
 export class D1Client {
     private readonly db: D1DatabaseLike;
 
@@ -160,68 +223,5 @@ export class D1Client {
     /** Direct access to the underlying binding (advanced use only). */
     public get raw(): D1DatabaseLike {
         return this.db;
-    }
-}
-
-/** Thin wrapper over a `D1DatabaseSession` exposing bookmark plumbing. */
-export class D1Session {
-    private readonly session: D1SessionLike;
-
-    /** See {@link D1Client.stmtCache}. Scoped per session. */
-    private readonly stmtCache = new Map<string, D1PreparedStatementLike>();
-
-    constructor(session: D1SessionLike) {
-        this.session = session;
-    }
-
-    public prepare(sql: string): D1PreparedStatementLike {
-        const cached = this.stmtCache.get(sql);
-
-        if (cached) {
-            this.stmtCache.delete(sql);
-            this.stmtCache.set(sql, cached);
-
-            return cached;
-        }
-
-        const stmt = this.session.prepare(sql);
-
-        if (this.stmtCache.size >= STMT_CACHE_CAPACITY) {
-            const oldest = this.stmtCache.keys().next().value;
-
-            if (oldest !== undefined) {
-                this.stmtCache.delete(oldest);
-            }
-        }
-
-        this.stmtCache.set(sql, stmt);
-
-        return stmt;
-    }
-
-    public async run<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }> {
-        return this.prepare(sql)
-            .bind(...binds)
-            .run<T>();
-    }
-
-    public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ results: T[]; success: boolean }> {
-        return this.prepare(sql)
-            .bind(...binds)
-            .all<T>();
-    }
-
-    public async first<T = unknown>(sql: string, ...binds: unknown[]): Promise<T | null> {
-        return this.prepare(sql)
-            .bind(...binds)
-            .first<T>();
-    }
-
-    /**
-     * Returns the most recent bookmark known to the session, or `undefined`
-     * when D1 has not issued one yet.
-     */
-    public getBookmark(): string | undefined {
-        return this.session.getBookmark() ?? undefined;
     }
 }

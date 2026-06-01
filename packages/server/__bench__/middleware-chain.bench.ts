@@ -23,14 +23,12 @@ const cirrus = initCirrus.dataModel<Record<string, never>>().create();
 // Cast through `Middleware<any, any>` so the chain accepts a passthrough
 // without the builder narrowing ctx to `unknown` at the terminal — same
 // pattern the rls test harness uses.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const passthrough = (async (options: { ctx: unknown; next: () => Promise<unknown> }) => options.next()) as Middleware<any, any>;
 
 const buildHandler = (count: number) => {
     // Each `.use(...)` widens the chain's ctx type; for a passthrough we
     // erase it at the boundary so the terminal stays callable. Real apps
     // type their middleware concretely.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let builder = cirrus.query as any;
 
     for (let index = 0; index < count; index += 1) {

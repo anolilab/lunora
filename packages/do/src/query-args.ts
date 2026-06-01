@@ -153,21 +153,22 @@ export const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): Where
 
     const branches: WhereInput[] = [];
 
-    for (let pivot = 0; pivot < columns.length; pivot += 1) {
+    for (const [pivot, pivotColumn] of columns.entries()) {
         const conditions: WhereInput[] = [];
 
-        for (let prefix = 0; prefix < pivot; prefix += 1) {
-            conditions.push({ [columns[prefix]!.field]: { eq: cursorValues[prefix] } });
+        for (const [prefix, prefixColumn] of columns.slice(0, pivot).entries()) {
+            conditions.push({ [prefixColumn.field]: { eq: cursorValues[prefix] } });
         }
 
-        const pivotColumn = columns[pivot]!;
         const strictOperator = pivotColumn.direction === "desc" ? "lt" : "gt";
 
         conditions.push({ [pivotColumn.field]: { [strictOperator]: cursorValues[pivot] } });
 
         // Wrap multi-condition branches so each disjunct is explicitly grouped
         // rather than leaning on SQL's AND-over-OR precedence.
-        branches.push(conditions.length === 1 ? conditions[0]! : { AND: conditions });
+        const [first] = conditions;
+
+        branches.push(conditions.length === 1 && first !== undefined ? first : { AND: conditions });
     }
 
     return { OR: branches };

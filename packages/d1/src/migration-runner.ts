@@ -29,6 +29,153 @@ export interface MigrationRunnerResult {
 }
 
 /**
+ * Reject a migration whose SQL contains more than one statement. Performs a
+ * quote- and comment-aware scan so semicolons inside `'...'`, `"..."`,
+ * `--`-line comments, and `/* ... *\/` blocks don't trip the check. A trailing
+ * `;` followed only by whitespace and/or comments is allowed (and `;` is
+ * stripped before submission to D1).
+ *
+ * Callers wanting multiple statements per migration should split them into
+ * separate `Migration` entries — `batch()` runs them atomically anyway.
+ */
+const assertSingleStatement = (migration: Migration): void => {
+    const text = migration.sql;
+    let inSingle = false;
+    let inDouble = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+
+    for (let index = 0; index < text.length; index += 1) {
+        const character = text[index];
+        const next = text[index + 1];
+
+        if (inLineComment) {
+            if (character === "\n") {
+                inLineComment = false;
+            }
+
+            continue;
+        }
+
+        if (inBlockComment) {
+            if (character === "*" && next === "/") {
+                inBlockComment = false;
+                index += 1;
+            }
+
+            continue;
+        }
+
+        if (inSingle) {
+            if (character === "'") {
+                // SQL escapes a quote by doubling it.
+                if (next === "'") {
+                    index += 1;
+                } else {
+                    inSingle = false;
+                }
+            }
+
+            continue;
+        }
+
+        if (inDouble) {
+            if (character === '"') {
+                if (next === '"') {
+                    index += 1;
+                } else {
+                    inDouble = false;
+                }
+            }
+
+            continue;
+        }
+
+        if (character === "'") {
+            inSingle = true;
+            continue;
+        }
+
+        if (character === '"') {
+            inDouble = true;
+            continue;
+        }
+
+        if (character === "-" && next === "-") {
+            inLineComment = true;
+            index += 1;
+            continue;
+        }
+
+        if (character === "/" && next === "*") {
+            inBlockComment = true;
+            index += 1;
+            continue;
+        }
+
+        if (character === ";") {
+            // Permit a trailing `;` followed only by whitespace/comments —
+            // resume the lexer past the `;` and require that no further
+            // executable token appears.
+            for (let trailing = index + 1; trailing < text.length; trailing += 1) {
+                const tail = text[trailing];
+                const tailNext = text[trailing + 1];
+
+                if (inLineComment) {
+                    if (tail === "\n") {
+                        inLineComment = false;
+                    }
+
+                    continue;
+                }
+
+                if (inBlockComment) {
+                    if (tail === "*" && tailNext === "/") {
+                        inBlockComment = false;
+                        trailing += 1;
+                    }
+
+                    continue;
+                }
+
+                if (tail === "-" && tailNext === "-") {
+                    inLineComment = true;
+                    trailing += 1;
+                    continue;
+                }
+
+                if (tail === "/" && tailNext === "*") {
+                    inBlockComment = true;
+                    trailing += 1;
+                    continue;
+                }
+
+                // Any whitespace is fine; anything else means a second
+                // statement starts after the `;`.
+                if (tail !== undefined && !/\s/u.test(tail)) {
+                    throw new Error(
+                        `Migration "${migration.name}" (v${migration.version}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
+                    );
+                }
+            }
+
+            return;
+        }
+    }
+};
+
+/**
+ * SHA-256 of the migration SQL, hex-encoded. Available natively in both the
+ * Workers runtime (`crypto.subtle`) and Node 22+, so no platform shim needed.
+ */
+const hashMigration = async (text: string): Promise<string> => {
+    const bytes = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+};
+
+/**
  * Sequentially applies pending migrations against a D1 database via the
  * drizzle-orm/d1 driver. Each migration is hashed (SHA-256 over its SQL
  * text); the hash is stored in `__drizzle_migrations`, so re-applying the
@@ -142,150 +289,3 @@ export class MigrationRunner {
         }
     }
 }
-
-/**
- * Reject a migration whose SQL contains more than one statement. Performs a
- * quote- and comment-aware scan so semicolons inside `'...'`, `"..."`,
- * `--`-line comments, and `/* ... *\/` blocks don't trip the check. A trailing
- * `;` followed only by whitespace and/or comments is allowed (and `;` is
- * stripped before submission to D1).
- *
- * Callers wanting multiple statements per migration should split them into
- * separate `Migration` entries — `batch()` runs them atomically anyway.
- */
-const assertSingleStatement = (migration: Migration): void => {
-    const text = migration.sql;
-    let inSingle = false;
-    let inDouble = false;
-    let inLineComment = false;
-    let inBlockComment = false;
-
-    for (let index = 0; index < text.length; index += 1) {
-        const character = text[index]!;
-        const next = text[index + 1];
-
-        if (inLineComment) {
-            if (character === "\n") {
-                inLineComment = false;
-            }
-
-            continue;
-        }
-
-        if (inBlockComment) {
-            if (character === "*" && next === "/") {
-                inBlockComment = false;
-                index += 1;
-            }
-
-            continue;
-        }
-
-        if (inSingle) {
-            if (character === "'") {
-                // SQL escapes a quote by doubling it.
-                if (next === "'") {
-                    index += 1;
-                } else {
-                    inSingle = false;
-                }
-            }
-
-            continue;
-        }
-
-        if (inDouble) {
-            if (character === '"') {
-                if (next === '"') {
-                    index += 1;
-                } else {
-                    inDouble = false;
-                }
-            }
-
-            continue;
-        }
-
-        if (character === "'") {
-            inSingle = true;
-            continue;
-        }
-
-        if (character === '"') {
-            inDouble = true;
-            continue;
-        }
-
-        if (character === "-" && next === "-") {
-            inLineComment = true;
-            index += 1;
-            continue;
-        }
-
-        if (character === "/" && next === "*") {
-            inBlockComment = true;
-            index += 1;
-            continue;
-        }
-
-        if (character === ";") {
-            // Permit a trailing `;` followed only by whitespace/comments —
-            // resume the lexer past the `;` and require that no further
-            // executable token appears.
-            for (let trailing = index + 1; trailing < text.length; trailing += 1) {
-                const tail = text[trailing]!;
-                const tailNext = text[trailing + 1];
-
-                if (inLineComment) {
-                    if (tail === "\n") {
-                        inLineComment = false;
-                    }
-
-                    continue;
-                }
-
-                if (inBlockComment) {
-                    if (tail === "*" && tailNext === "/") {
-                        inBlockComment = false;
-                        trailing += 1;
-                    }
-
-                    continue;
-                }
-
-                if (tail === "-" && tailNext === "-") {
-                    inLineComment = true;
-                    trailing += 1;
-                    continue;
-                }
-
-                if (tail === "/" && tailNext === "*") {
-                    inBlockComment = true;
-                    trailing += 1;
-                    continue;
-                }
-
-                // Any whitespace is fine; anything else means a second
-                // statement starts after the `;`.
-                if (!/\s/u.test(tail)) {
-                    throw new Error(
-                        `Migration "${migration.name}" (v${migration.version}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
-                    );
-                }
-            }
-
-            return;
-        }
-    }
-};
-
-/**
- * SHA-256 of the migration SQL, hex-encoded. Available natively in both the
- * Workers runtime (`crypto.subtle`) and Node 22+, so no platform shim needed.
- */
-const hashMigration = async (text: string): Promise<string> => {
-    const bytes = new TextEncoder().encode(text);
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-
-    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-};

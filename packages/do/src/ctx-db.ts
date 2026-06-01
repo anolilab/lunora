@@ -531,8 +531,7 @@ const scoreDoc = (text: string, tokens: ReadonlyArray<string>): number => {
 
     let score = 0;
 
-    for (let index = 0; index < tokens.length; index += 1) {
-        const token = tokens[index]!;
+    for (const [index, token] of tokens.entries()) {
         const isLast = index === tokens.length - 1;
         let occurrences = 0;
 
@@ -697,165 +696,6 @@ const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilt
     };
 
     return builder;
-};
-
-const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): TableReaderLike => {
-    const tableDefinition = schema.tables[tableName];
-
-    if (!tableDefinition) {
-        throw new Error(`unknown table: ${tableName}`);
-    }
-
-    const stage: QueryStage = {
-        indexFields: [],
-        indexName: undefined,
-        inMemoryFilters: [],
-        sqlConditions: [],
-    };
-
-    const runSearchFetch = (limit: number | undefined): Array<Record<string, unknown>> => {
-        const search = stage.search!;
-        const filtered = stage.inMemoryFilters.length > 0;
-        const engineLimit = filtered ? undefined : limit;
-        const docs = isFtsAvailable(sql) ? searchViaFts(sql, tableName, search, engineLimit) : searchViaScan(sql, tableName, search, engineLimit);
-
-        if (!filtered) {
-            return docs;
-        }
-
-        const result: Array<Record<string, unknown>> = [];
-
-        for (const doc of docs) {
-            if (stage.inMemoryFilters.every((predicate) => predicate(doc))) {
-                result.push(doc);
-
-                if (typeof limit === "number" && result.length >= limit) {
-                    break;
-                }
-            }
-        }
-
-        return result;
-    };
-
-    const runFetch = (limit: number | undefined): Array<Record<string, unknown>> => {
-        if (stage.search) {
-            return runSearchFetch(limit);
-        }
-
-        const where: string[] = [];
-        const params: unknown[] = [];
-
-        for (const condition of stage.sqlConditions) {
-            where.push(`${jsonPath(condition.field)} ${condition.comparator} ?`);
-            params.push(serializeSqlValue(condition.value));
-        }
-
-        let querySql = `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`;
-
-        if (where.length > 0) {
-            querySql += ` WHERE ${where.join(" AND ")}`;
-        }
-
-        const orderFields = stage.indexFields.length > 0 ? stage.indexFields : ["_creationTime"];
-        const orderClause = orderFields.map((field) => `${jsonPath(field)} ASC`).join(", ");
-
-        querySql += ` ORDER BY ${orderClause}`;
-
-        if (typeof limit === "number" && stage.inMemoryFilters.length === 0) {
-            querySql += ` LIMIT ${Math.max(0, Math.floor(limit))}`;
-        }
-
-        const rows = runSql(sql, querySql, ...params).toArray();
-        const docs: Array<Record<string, unknown>> = [];
-
-        for (const row of rows) {
-            const doc = rowToDoc(row);
-
-            if (!doc) {
-                continue;
-            }
-
-            if (stage.inMemoryFilters.every((predicate) => predicate(doc))) {
-                docs.push(doc);
-
-                if (typeof limit === "number" && docs.length >= limit) {
-                    break;
-                }
-            }
-        }
-
-        return docs;
-    };
-
-    const reader: TableReaderLike = {
-        async collect() {
-            return runFetch(undefined);
-        },
-        async first() {
-            const rows = runFetch(stage.inMemoryFilters.length > 0 ? undefined : 1);
-
-            return rows[0] ?? null;
-        },
-        async paginate(options) {
-            if (stage.search) {
-                throw new Error("pagination is not supported on search queries; use .take(n) or .collect()");
-            }
-
-            return paginateStage(sql, tableName, stage, options);
-        },
-        async take(limit) {
-            return runFetch(limit);
-        },
-        filter(predicate) {
-            stage.inMemoryFilters.push(predicate);
-
-            return reader;
-        },
-        withIndex(indexName, range) {
-            const definition = tableDefinition.indexes.find((index) => index.name === indexName);
-
-            if (!definition) {
-                throw new Error(`unknown index "${indexName}" on table "${tableName}"`);
-            }
-
-            stage.indexName = indexName;
-            stage.indexFields = definition.fields;
-
-            if (range) {
-                range(createRangeBuilder(stage));
-            }
-
-            return reader;
-        },
-        withSearchIndex(indexName, search) {
-            const definition = (tableDefinition.searchIndexes ?? []).find((index) => index.name === indexName);
-
-            if (!definition) {
-                throw new Error(`unknown search index "${indexName}" on table "${tableName}"`);
-            }
-
-            const searchStage: SearchStage = {
-                definition,
-                field: definition.field,
-                filters: [],
-                hasQuery: false,
-                indexName,
-                query: "",
-            };
-
-            stage.search = searchStage;
-            search(createSearchBuilder(searchStage, tableName));
-
-            if (!searchStage.hasQuery) {
-                throw new Error(`search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
-            }
-
-            return reader;
-        },
-    };
-
-    return reader;
 };
 
 const serializeSqlValue = (value: unknown): unknown => {
@@ -1064,6 +904,170 @@ const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, optio
     };
 };
 
+const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): TableReaderLike => {
+    const tableDefinition = schema.tables[tableName];
+
+    if (!tableDefinition) {
+        throw new Error(`unknown table: ${tableName}`);
+    }
+
+    const stage: QueryStage = {
+        indexFields: [],
+        indexName: undefined,
+        inMemoryFilters: [],
+        sqlConditions: [],
+    };
+
+    const runSearchFetch = (limit: number | undefined): Array<Record<string, unknown>> => {
+        const { search } = stage;
+
+        if (!search) {
+            throw new Error("runSearchFetch called without a staged search");
+        }
+
+        const filtered = stage.inMemoryFilters.length > 0;
+        const engineLimit = filtered ? undefined : limit;
+        const docs = isFtsAvailable(sql) ? searchViaFts(sql, tableName, search, engineLimit) : searchViaScan(sql, tableName, search, engineLimit);
+
+        if (!filtered) {
+            return docs;
+        }
+
+        const result: Array<Record<string, unknown>> = [];
+
+        for (const doc of docs) {
+            if (stage.inMemoryFilters.every((predicate) => predicate(doc))) {
+                result.push(doc);
+
+                if (typeof limit === "number" && result.length >= limit) {
+                    break;
+                }
+            }
+        }
+
+        return result;
+    };
+
+    const runFetch = (limit: number | undefined): Array<Record<string, unknown>> => {
+        if (stage.search) {
+            return runSearchFetch(limit);
+        }
+
+        const where: string[] = [];
+        const params: unknown[] = [];
+
+        for (const condition of stage.sqlConditions) {
+            where.push(`${jsonPath(condition.field)} ${condition.comparator} ?`);
+            params.push(serializeSqlValue(condition.value));
+        }
+
+        let querySql = `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`;
+
+        if (where.length > 0) {
+            querySql += ` WHERE ${where.join(" AND ")}`;
+        }
+
+        const orderFields = stage.indexFields.length > 0 ? stage.indexFields : ["_creationTime"];
+        const orderClause = orderFields.map((field) => `${jsonPath(field)} ASC`).join(", ");
+
+        querySql += ` ORDER BY ${orderClause}`;
+
+        if (typeof limit === "number" && stage.inMemoryFilters.length === 0) {
+            querySql += ` LIMIT ${Math.max(0, Math.floor(limit))}`;
+        }
+
+        const rows = runSql(sql, querySql, ...params).toArray();
+        const docs: Array<Record<string, unknown>> = [];
+
+        for (const row of rows) {
+            const doc = rowToDoc(row);
+
+            if (!doc) {
+                continue;
+            }
+
+            if (stage.inMemoryFilters.every((predicate) => predicate(doc))) {
+                docs.push(doc);
+
+                if (typeof limit === "number" && docs.length >= limit) {
+                    break;
+                }
+            }
+        }
+
+        return docs;
+    };
+
+    const reader: TableReaderLike = {
+        async collect() {
+            return runFetch(undefined);
+        },
+        async first() {
+            const rows = runFetch(stage.inMemoryFilters.length > 0 ? undefined : 1);
+
+            return rows[0] ?? null;
+        },
+        async paginate(options) {
+            if (stage.search) {
+                throw new Error("pagination is not supported on search queries; use .take(n) or .collect()");
+            }
+
+            return paginateStage(sql, tableName, stage, options);
+        },
+        async take(limit) {
+            return runFetch(limit);
+        },
+        filter(predicate) {
+            stage.inMemoryFilters.push(predicate);
+
+            return reader;
+        },
+        withIndex(indexName, range) {
+            const definition = tableDefinition.indexes.find((index) => index.name === indexName);
+
+            if (!definition) {
+                throw new Error(`unknown index "${indexName}" on table "${tableName}"`);
+            }
+
+            stage.indexName = indexName;
+            stage.indexFields = definition.fields;
+
+            if (range) {
+                range(createRangeBuilder(stage));
+            }
+
+            return reader;
+        },
+        withSearchIndex(indexName, search) {
+            const definition = (tableDefinition.searchIndexes ?? []).find((index) => index.name === indexName);
+
+            if (!definition) {
+                throw new Error(`unknown search index "${indexName}" on table "${tableName}"`);
+            }
+
+            const searchStage: SearchStage = {
+                definition,
+                field: definition.field,
+                filters: [],
+                hasQuery: false,
+                indexName,
+                query: "",
+            };
+
+            stage.search = searchStage;
+            search(createSearchBuilder(searchStage, tableName));
+
+            if (!searchStage.hasQuery) {
+                throw new Error(`search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
+            }
+
+            return reader;
+        },
+    };
+
+    return reader;
+};
+
 /** A table's fields paired with their column meta, skipping fields that declare none. */
 const tableColumns = (definition: TableDefinitionLike): Array<[string, ColumnMetaLike]> => {
     const columns: Array<[string, ColumnMetaLike]> = [];
@@ -1184,7 +1188,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         // Same backend — return the local writer at call time so we get the
-        // post-construction reference (it's a closure variable).
+        // post-construction reference (it's a closure variable). Forward
+        // reference is safe: this closure only runs while a write is in flight,
+        // long after `writer` is initialized below.
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure read of post-construction `writer`
         return writer;
     };
 
@@ -1220,6 +1227,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         try {
+            // `triggerCtx` is declared after this helper but only read here while
+            // a write is in flight — long after construction wires it up.
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure read of post-construction `triggerCtx`
             await runTriggers({ ctx: triggerCtx, event, op, schema, tableName: event.table, timing });
         } finally {
             triggerDepth -= 1;
@@ -1519,8 +1529,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id).toArray();
 
-            if (rows.length > 0) {
-                const row = rowToDoc(rows[0]);
+            const [firstRow] = rows;
+
+            if (firstRow) {
+                const row = rowToDoc(firstRow);
 
                 if (row) {
                     // Capture the exact stored blob at read time so a
@@ -1528,7 +1540,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // trigger / onDelete cascade) can compare-and-swap on it —
                     // a concurrent write that changed the row flips the blob
                     // and the guarded UPDATE/DELETE matches zero rows.
-                    const rawDoc = rows[0]![DOC_COLUMN];
+                    const rawDoc = firstRow[DOC_COLUMN];
                     const docJson = typeof rawDoc === "string" ? rawDoc : JSON.stringify(rawDoc ?? {});
 
                     return { docJson, row, tableName };
@@ -1733,7 +1745,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         encoded,
                     ).toArray();
 
-                    return row.length === 0 ? 0 : Number(row[0]!.value ?? 0);
+                    return row[0] === undefined ? 0 : Number(row[0].value ?? 0);
                 }
             }
 
@@ -1900,7 +1912,15 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (agg.op === "count") {
                 select.push(`COUNT(*) AS value`);
             } else {
-                select.push(`${aggregateSqlFunction(agg.op)}(${jsonPath(agg.field!)}) AS value`);
+                // `agg.field` is guaranteed present here: the guard above throws
+                // for any non-`count` reducer that omits it.
+                const { field } = agg;
+
+                if (field === undefined) {
+                    throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+                }
+
+                select.push(`${aggregateSqlFunction(agg.op)}(${jsonPath(field)}) AS value`);
             }
 
             let querySql = `SELECT ${select.join(", ")} FROM ${quoteIdentifier(tableName)}`;
@@ -1969,11 +1989,12 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const sortColumnList = sortColumns.map(quoteIdentifier).join(", ");
             const ownRows = runSql(sql, `SELECT "__partition__", ${sortColumnList} FROM ${quoteIdentifier(rankTable)} WHERE "__id__" = ?`, rowId).toArray();
 
-            if (ownRows.length === 0) {
+            const [own] = ownRows;
+
+            if (own === undefined) {
                 return null;
             }
 
-            const own = ownRows[0]!;
             let partitionKey = own["__partition__"] as string;
 
             // If the caller pinned a partition via `where`/`baseWhere`, use it
@@ -2005,15 +2026,16 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
                 const conditions: string[] = [];
 
-                for (let prefix = 0; prefix < pivot; prefix += 1) {
-                    conditions.push(`${quoteIdentifier(sortColumns[prefix]!)} IS ?`);
-                    beforeParams.push(own[sortColumns[prefix]!] as unknown);
+                for (const prefixColumn of sortColumns.slice(0, pivot)) {
+                    conditions.push(`${quoteIdentifier(prefixColumn)} IS ?`);
+                    beforeParams.push(own[prefixColumn] as unknown);
                 }
 
-                if (pivot < sortColumns.length) {
-                    const column = sortColumns[pivot]!;
-                    const { direction } = index.sortBy[pivot]!;
-                    const operator = direction === "desc" ? ">" : "<";
+                const column = sortColumns[pivot];
+                const sortKey = index.sortBy[pivot];
+
+                if (column !== undefined && sortKey !== undefined) {
+                    const operator = sortKey.direction === "desc" ? ">" : "<";
 
                     conditions.push(`${quoteIdentifier(column)} ${operator} ?`);
                     beforeParams.push(own[column] as unknown);
@@ -2023,7 +2045,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     beforeParams.push(rowId);
                 }
 
-                beforeBranches.push(conditions.length === 1 ? conditions[0]! : `(${conditions.join(" AND ")})`);
+                const [firstCondition] = conditions;
+
+                beforeBranches.push(conditions.length === 1 && firstCondition !== undefined ? firstCondition : `(${conditions.join(" AND ")})`);
             }
 
             const beforeWhere = beforeBranches.join(" OR ");
@@ -2072,7 +2096,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const orderClauses: string[] = [`"__partition__" ASC`];
 
             for (const [i, column] of sortColumns.entries()) {
-                orderClauses.push(`${quoteIdentifier(column)} ${index.sortBy[i]!.direction === "desc" ? "DESC" : "ASC"}`);
+                const direction = index.sortBy[i]?.direction;
+
+                orderClauses.push(`${quoteIdentifier(column)} ${direction === "desc" ? "DESC" : "ASC"}`);
             }
 
             orderClauses.push(`${quoteIdentifier(RANK_TIEBREAK)} ASC`);
@@ -2095,7 +2121,7 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     const cols: Array<{ column: string; direction: "asc" | "desc" }> = [{ column: "__partition__", direction: "asc" }];
 
                     for (const [i, column] of sortColumns.entries()) {
-                        cols.push({ column, direction: index.sortBy[i]!.direction });
+                        cols.push({ column, direction: index.sortBy[i]?.direction ?? "asc" });
                     }
 
                     cols.push({ column: RANK_TIEBREAK, direction: "asc" });
@@ -2105,8 +2131,8 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     for (const [pivot, col] of cols.entries()) {
                         const conditions: string[] = [];
 
-                        for (let prefix = 0; prefix < pivot; prefix += 1) {
-                            conditions.push(`${quoteIdentifier(cols[prefix]!.column)} IS ?`);
+                        for (const [prefix, prefixCol] of cols.slice(0, pivot).entries()) {
+                            conditions.push(`${quoteIdentifier(prefixCol.column)} IS ?`);
                             params.push(decoded[prefix]);
                         }
 
@@ -2114,7 +2140,10 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
                         conditions.push(`${quoteIdentifier(col.column)} ${operator} ?`);
                         params.push(decoded[pivot]);
-                        branches.push(conditions.length === 1 ? conditions[0]! : `(${conditions.join(" AND ")})`);
+
+                        const [firstCondition] = conditions;
+
+                        branches.push(conditions.length === 1 && firstCondition !== undefined ? firstCondition : `(${conditions.join(" AND ")})`);
                     }
 
                     whereClauses.push(`(${branches.join(" OR ")})`);
@@ -2148,8 +2177,9 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             let continueCursor: null | string = null;
 
-            if (hasMore) {
-                const last = usable.at(-1)!;
+            const last = usable.at(-1);
+
+            if (hasMore && last !== undefined) {
                 const cursorValues: unknown[] = [last["__partition__"] as unknown];
 
                 for (const column of sortColumns) {
@@ -2243,17 +2273,22 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             const { docJson: existingJson, row: existing, tableName } = located;
+            const tableDefinition = schema.tables[tableName];
+
+            if (!tableDefinition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
 
             onRead(tableName, id);
 
             const merged = { ...existing, ...patch, _id: id };
 
-            applyOnUpdate(schema.tables[tableName]!, patch, merged);
+            applyOnUpdate(tableDefinition, patch, merged);
 
             // Run column refinements on the merged row so a patch that flips a
             // field to an invalid value (e.g. negative amount) is rejected
             // before SQLite sees it.
-            runRowValidators(schema.tables[tableName]!, merged);
+            runRowValidators(tableDefinition, merged);
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
@@ -2312,19 +2347,25 @@ export const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`document not found: ${id}`);
             }
 
+            const tableDefinition = schema.tables[tableName];
+
+            if (!tableDefinition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
             const needsPrevious =
                 hasTrigger(schema, tableName, "update") ||
-                (schema.tables[tableName]?.aggregateIndexes ?? []).length > 0 ||
-                (schema.tables[tableName]?.rankIndexes ?? []).length > 0;
+                (tableDefinition.aggregateIndexes ?? []).length > 0 ||
+                (tableDefinition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? lookupById(id)?.row : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? (document["_creationTime"] as number) : clock();
             const replaced: Record<string, unknown> = { ...document, _id: id, _creationTime: creationTime };
 
-            applyOnUpdate(schema.tables[tableName]!, document, replaced);
+            applyOnUpdate(tableDefinition, document, replaced);
 
             // Refinement checks fire on the post-onUpdate row so a defaulted
             // field still has to satisfy its `.check()` predicate.
-            runRowValidators(schema.tables[tableName]!, replaced);
+            runRowValidators(tableDefinition, replaced);
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });
@@ -2533,7 +2574,9 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
                 const orderedColumns = ['"__partition__" ASC'];
 
                 for (const [i, column] of sortColumns.entries()) {
-                    orderedColumns.push(`${quoteIdentifier(column)} ${index.sortBy[i]!.direction === "desc" ? "DESC" : "ASC"}`);
+                    const direction = index.sortBy[i]?.direction;
+
+                    orderedColumns.push(`${quoteIdentifier(column)} ${direction === "desc" ? "DESC" : "ASC"}`);
                 }
 
                 orderedColumns.push('"__id__" ASC');

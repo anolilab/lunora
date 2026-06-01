@@ -197,6 +197,134 @@ const computeReadBaseWhere = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>, context
     return predicates.length === 1 ? predicates[0] : { OR: predicates };
 };
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Operator keys the JS evaluator recognises. Mirrors `FieldOperators` from the SQL compiler. */
+const OPERATOR_KEYS = ["contains", "eq", "gt", "gte", "in", "isNull", "lt", "lte", "ne", "notIn"] as const;
+
+/**
+ * SQL NULL semantics for ordered comparators: `null`/`undefined` never
+ * compares as less-than/greater-than/contains anything. Without this guard JS
+ * would silently coerce `null` to `0` and let `null < 5` evaluate truthy —
+ * surprising and at odds with the SQL compiler the predicate flows through on
+ * reads.
+ */
+const isOrderable = (value: unknown): value is bigint | number | string => {
+    const type = typeof value;
+
+    return type === "number" || type === "string" || type === "bigint";
+};
+
+/**
+ * JS-side `WhereInput` evaluator. Used by the legacy `query()` wrapper to
+ * push read predicates down as `.filter()`, and by {@link evaluateWrite} to
+ * gate write policies whose `when` returns a `WhereInput` against the
+ * candidate row (insert) or pre-write row (update/delete). Supports the same
+ * operator set as the SQL compiler (`eq`, `ne`, `in`, `notIn`, `lt`, `lte`,
+ * `gt`, `gte`, `isNull`, `contains`) plus `AND`/`OR`/`NOT` composition. The
+ * full compiler stays the single source of truth for SQL-bound predicates;
+ * this evaluator is a deliberate parallel for the in-memory path.
+ */
+const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boolean => {
+    for (const key of Object.keys(where)) {
+        const value = where[key];
+
+        if (key === "AND") {
+            if (!Array.isArray(value) || !value.every((branch) => matchesWhere(document, branch as WhereInput))) {
+                return false;
+            }
+
+            continue;
+        }
+
+        if (key === "OR") {
+            if (!Array.isArray(value) || !value.some((branch) => matchesWhere(document, branch as WhereInput))) {
+                return false;
+            }
+
+            continue;
+        }
+
+        if (key === "NOT") {
+            if (matchesWhere(document, (value ?? {}) as WhereInput)) {
+                return false;
+            }
+
+            continue;
+        }
+
+        const docValue = document[key];
+
+        if (isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k))) {
+            const operators = value as Record<string, unknown>;
+
+            if ("eq" in operators && docValue !== operators["eq"]) {
+                return false;
+            }
+
+            if ("ne" in operators && docValue === operators["ne"]) {
+                return false;
+            }
+
+            if ("in" in operators) {
+                const list = operators["in"];
+
+                if (!Array.isArray(list) || !list.includes(docValue)) {
+                    return false;
+                }
+            }
+
+            if ("notIn" in operators) {
+                const list = operators["notIn"];
+
+                if (Array.isArray(list) && list.includes(docValue)) {
+                    return false;
+                }
+            }
+
+            if ("lt" in operators && (!isOrderable(docValue) || !isOrderable(operators["lt"]) || (docValue as number) >= (operators["lt"] as number))) {
+                return false;
+            }
+
+            if ("lte" in operators && (!isOrderable(docValue) || !isOrderable(operators["lte"]) || (docValue as number) > (operators["lte"] as number))) {
+                return false;
+            }
+
+            if ("gt" in operators && (!isOrderable(docValue) || !isOrderable(operators["gt"]) || (docValue as number) <= (operators["gt"] as number))) {
+                return false;
+            }
+
+            if ("gte" in operators && (!isOrderable(docValue) || !isOrderable(operators["gte"]) || (docValue as number) < (operators["gte"] as number))) {
+                return false;
+            }
+
+            if ("contains" in operators) {
+                const needle = operators["contains"];
+
+                if (typeof docValue !== "string" || typeof needle !== "string" || !docValue.includes(needle)) {
+                    return false;
+                }
+            }
+
+            if ("isNull" in operators) {
+                const expectsNull = operators["isNull"] === true;
+
+                if (expectsNull !== (docValue === null || docValue === undefined)) {
+                    return false;
+                }
+            }
+
+            continue;
+        }
+
+        if (docValue !== value) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
 /**
  * Evaluate write policies for a `(table, op)` pair. Returns `true` to allow
  * the write, `false` to deny. The convention is "every matching write policy
@@ -271,8 +399,6 @@ const evaluateWrite = <Ctx>(
     // Participating table, no matching write policy for this op → deny.
     return sawWritePolicy;
 };
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
  * Coerce `args` into the `QueryArgs` shape. Tolerates `undefined` (no args)
@@ -562,132 +688,6 @@ const wrapDb = <Ctx>(base: RlsDatabase, perTable: Map<string, Array<Policy<Ctx>>
                 }),
             ),
     };
-};
-
-/** Operator keys the JS evaluator recognises. Mirrors `FieldOperators` from the SQL compiler. */
-const OPERATOR_KEYS = ["contains", "eq", "gt", "gte", "in", "isNull", "lt", "lte", "ne", "notIn"] as const;
-
-/**
- * SQL NULL semantics for ordered comparators: `null`/`undefined` never
- * compares as less-than/greater-than/contains anything. Without this guard JS
- * would silently coerce `null` to `0` and let `null < 5` evaluate truthy —
- * surprising and at odds with the SQL compiler the predicate flows through on
- * reads.
- */
-const isOrderable = (value: unknown): value is bigint | number | string => {
-    const type = typeof value;
-
-    return type === "number" || type === "string" || type === "bigint";
-};
-
-/**
- * JS-side `WhereInput` evaluator. Used by the legacy `query()` wrapper to
- * push read predicates down as `.filter()`, and by {@link evaluateWrite} to
- * gate write policies whose `when` returns a `WhereInput` against the
- * candidate row (insert) or pre-write row (update/delete). Supports the same
- * operator set as the SQL compiler (`eq`, `ne`, `in`, `notIn`, `lt`, `lte`,
- * `gt`, `gte`, `isNull`, `contains`) plus `AND`/`OR`/`NOT` composition. The
- * full compiler stays the single source of truth for SQL-bound predicates;
- * this evaluator is a deliberate parallel for the in-memory path.
- */
-const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boolean => {
-    for (const key of Object.keys(where)) {
-        const value = where[key];
-
-        if (key === "AND") {
-            if (!Array.isArray(value) || !value.every((branch) => matchesWhere(document, branch as WhereInput))) {
-                return false;
-            }
-
-            continue;
-        }
-
-        if (key === "OR") {
-            if (!Array.isArray(value) || !value.some((branch) => matchesWhere(document, branch as WhereInput))) {
-                return false;
-            }
-
-            continue;
-        }
-
-        if (key === "NOT") {
-            if (matchesWhere(document, (value ?? {}) as WhereInput)) {
-                return false;
-            }
-
-            continue;
-        }
-
-        const docValue = document[key];
-
-        if (isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k))) {
-            const operators = value as Record<string, unknown>;
-
-            if ("eq" in operators && docValue !== operators["eq"]) {
-                return false;
-            }
-
-            if ("ne" in operators && docValue === operators["ne"]) {
-                return false;
-            }
-
-            if ("in" in operators) {
-                const list = operators["in"];
-
-                if (!Array.isArray(list) || !list.includes(docValue)) {
-                    return false;
-                }
-            }
-
-            if ("notIn" in operators) {
-                const list = operators["notIn"];
-
-                if (Array.isArray(list) && list.includes(docValue)) {
-                    return false;
-                }
-            }
-
-            if ("lt" in operators && (!isOrderable(docValue) || !isOrderable(operators["lt"]) || (docValue as number) >= (operators["lt"] as number))) {
-                return false;
-            }
-
-            if ("lte" in operators && (!isOrderable(docValue) || !isOrderable(operators["lte"]) || (docValue as number) > (operators["lte"] as number))) {
-                return false;
-            }
-
-            if ("gt" in operators && (!isOrderable(docValue) || !isOrderable(operators["gt"]) || (docValue as number) <= (operators["gt"] as number))) {
-                return false;
-            }
-
-            if ("gte" in operators && (!isOrderable(docValue) || !isOrderable(operators["gte"]) || (docValue as number) < (operators["gte"] as number))) {
-                return false;
-            }
-
-            if ("contains" in operators) {
-                const needle = operators["contains"];
-
-                if (typeof docValue !== "string" || typeof needle !== "string" || !docValue.includes(needle)) {
-                    return false;
-                }
-            }
-
-            if ("isNull" in operators) {
-                const expectsNull = operators["isNull"] === true;
-
-                if (expectsNull !== (docValue === null || docValue === undefined)) {
-                    return false;
-                }
-            }
-
-            continue;
-        }
-
-        if (docValue !== value) {
-            return false;
-        }
-    }
-
-    return true;
 };
 
 /**

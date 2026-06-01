@@ -36,7 +36,6 @@ const seedMemoryDb = (): Record<string, unknown[]> => ({
  * Sign in as `email`/`password` and pull the `cookie` header from the
  * response so subsequent endpoint calls can be made "as that user".
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const signInAndCookie = async (auth: any, email: string, password: string): Promise<Headers> => {
     const response = await auth.api.signInEmail({
         body: { email, password },
@@ -61,7 +60,6 @@ describe("admin plugin behaviour", () => {
     // `any` rather than `ReturnType<typeof createAuth>` so the plugin-contributed
     // endpoints are reachable through `auth.api` without re-deriving the full
     // generic chain here.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let auth: any;
     let adminId: string;
     let adminHeaders: Headers;
@@ -98,7 +96,7 @@ describe("admin plugin behaviour", () => {
 
         // Sign up a regular user that the admin will then ban.
         const signUp = await auth.api.signUpEmail({
-            body: { email: "user@example.com", name: "Regular User", password: STRONG_PASSWORD },
+            body: { email: "user@example.com", name: "Regular User", password: STRONG_PASSWORD }, // gitleaks:allow -- test fixture password, not a real secret
         });
         const userId = signUp.user.id;
 
@@ -107,7 +105,7 @@ describe("admin plugin behaviour", () => {
             headers: adminHeaders,
         });
 
-        const userRow = memoryDb["user"]?.find((row) => (row as { id: string }).id === userId) as { banReason?: string; banned?: boolean } | undefined;
+        const userRow = memoryDb["user"]?.find((row) => (row as { id: string }).id === userId) as { banned?: boolean; banReason?: string } | undefined;
 
         expect(userRow?.banned).toBe(true);
         expect(userRow?.banReason).toBe("spam");
@@ -148,7 +146,6 @@ describe("organization plugin behaviour", () => {
     // `any` rather than `ReturnType<typeof createAuth>` so the plugin-contributed
     // endpoints are reachable through `auth.api` without re-deriving the full
     // generic chain here.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let auth: any;
 
     beforeEach(() => {

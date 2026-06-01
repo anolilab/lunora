@@ -70,6 +70,34 @@ const jsonResponse = (status: number, body: unknown): Response =>
     });
 
 /**
+ * Parse + validate the `{table, shardKey}` body shared by register/unregister.
+ * Returns either the validated value or a ready-to-return error response.
+ */
+const readTableShardBody = async (
+    request: Request,
+): Promise<{ kind: "error"; response: Response } | { kind: "ok"; value: { shardKey: string; table: string } }> => {
+    let body: { shardKey?: unknown; table?: unknown };
+
+    try {
+        body = (await request.json()) as typeof body;
+    } catch {
+        return { kind: "error", response: jsonResponse(400, { error: { code: "BAD_REQUEST", message: "invalid JSON body" } }) };
+    }
+
+    const table = typeof body.table === "string" ? body.table.trim() : "";
+    const shardKey = typeof body.shardKey === "string" ? body.shardKey.trim() : "";
+
+    if (!table || !shardKey) {
+        return {
+            kind: "error",
+            response: jsonResponse(400, { error: { code: "BAD_REQUEST", message: "table and shardKey required" } }),
+        };
+    }
+
+    return { kind: "ok", value: { shardKey, table } };
+};
+
+/**
  * Concrete (not abstract) DO class. Apps register this binding in their
  * `wrangler.jsonc` as `SHARD_REGISTRY` (or any name) — no subclassing
  * required. The runtime's `createDynamicShardRegistry` takes the namespace
@@ -245,31 +273,3 @@ export class ShardRegistryDO {
         await this.state.storage.put(STORAGE_KEY, out);
     }
 }
-
-/**
- * Parse + validate the `{table, shardKey}` body shared by register/unregister.
- * Returns either the validated value or a ready-to-return error response.
- */
-const readTableShardBody = async (
-    request: Request,
-): Promise<{ kind: "error"; response: Response } | { kind: "ok"; value: { shardKey: string; table: string } }> => {
-    let body: { shardKey?: unknown; table?: unknown };
-
-    try {
-        body = (await request.json()) as typeof body;
-    } catch {
-        return { kind: "error", response: jsonResponse(400, { error: { code: "BAD_REQUEST", message: "invalid JSON body" } }) };
-    }
-
-    const table = typeof body.table === "string" ? body.table.trim() : "";
-    const shardKey = typeof body.shardKey === "string" ? body.shardKey.trim() : "";
-
-    if (!table || !shardKey) {
-        return {
-            kind: "error",
-            response: jsonResponse(400, { error: { code: "BAD_REQUEST", message: "table and shardKey required" } }),
-        };
-    }
-
-    return { kind: "ok", value: { shardKey, table } };
-};

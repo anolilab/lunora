@@ -20,9 +20,7 @@ import { CirrusError, definePolicies, definePolicy, defineRole, initCirrus, rls 
  * Pin a permissive cast once here so each test reads cleanly without
  * scattering `as unknown as Middleware<…>` at every call site.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const rlsForTest = <Ctx>(policies: ReadonlyArray<Policy<Ctx>>): Middleware<any, any> =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (rls as unknown as (p: ReadonlyArray<Policy<Ctx>>) => Middleware<any, any>)(policies);
 
 /* -------------------------------------------------------------------------

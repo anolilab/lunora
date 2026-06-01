@@ -142,7 +142,7 @@ export function useInfiniteQuery<F extends FunctionReference>(
     useEffect(() => {
         const cache = queryClient.getQueryCache();
         const unsubscribe = cache.subscribe((event) => {
-            const hash = serializeQueryKey(event.query.queryKey);
+            const hash = serializeQueryKey(event.query.queryKey as QueryKey);
 
             if (pageEntries.some(({ key }) => serializeQueryKey(key) === hash)) {
                 forceRender();

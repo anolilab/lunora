@@ -57,7 +57,6 @@ describe("withAuthPlugins", () => {
     // `any` rather than `ReturnType<typeof createAuth>` so the plugin-contributed
     // endpoints (`createOrganization`, `banUser`, …) are reachable through
     // `auth.api` without re-deriving the full generic chain here.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let auth: any;
 
     beforeEach(() => {

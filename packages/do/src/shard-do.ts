@@ -183,6 +183,171 @@ export const ROOT_SHARD_NAME = "__root__";
 const ADMIN_WILDCARD = "*";
 
 /**
+ * Defensive WS backpressure helper. When the runtime exposes
+ * `bufferedAmount` on the socket, pause iteration whenever the outbound
+ * buffer is past 1 MiB; otherwise treat the socket as drained. Capped at
+ * 100 sleeps of 20 ms (≈ 2 s total) so a permanently-stuck buffer can't
+ * pin the iterator forever — past that we drop through and let the next
+ * `ws.send` surface the failure.
+ */
+const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
+    let attempts = 0;
+
+    while (attempts < 100) {
+        attempts += 1;
+
+        const buffered = (ws as { bufferedAmount?: unknown }).bufferedAmount;
+
+        if (typeof buffered !== "number" || buffered < 1_048_576) {
+            return;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+};
+
+/** True when `a` and `b` share at least one element. */
+const setsIntersect = (a: Set<string>, b: Set<string>): boolean => {
+    // Iterate the smaller set for fewer lookups.
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+
+    for (const value of small) {
+        if (large.has(value)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Coerce the loosely-typed `runMigration` admin args into a typed shape.
+ * `id` is required; `direction` defaults to `"up"` and only flips to `"down"`
+ * on an exact match; numeric limits pass through when present.
+ */
+const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigrationArgs => {
+    const id = typeof args["id"] === "string" ? args["id"] : "";
+
+    if (id.trim() === "") {
+        throw Object.assign(new Error("runMigration: `id` is required"), { name: "CirrusError", code: "MIGRATION_ID_REQUIRED", status: 400 });
+    }
+
+    return {
+        batchSize: typeof args["batchSize"] === "number" ? args["batchSize"] : undefined,
+        direction: args["direction"] === "down" ? "down" : "up",
+        dryRun: args["dryRun"] === true,
+        id,
+        maxBatches: typeof args["maxBatches"] === "number" ? args["maxBatches"] : undefined,
+    };
+};
+
+/**
+ * Validate the `__cirrus_admin__:writeRow` payload. Enforces that `id` is
+ * present for ops that target an existing row and that `doc` is present for ops
+ * that carry one, throwing a 400 `CirrusError` otherwise — the writer would
+ * reject these too, but failing here keeps the error shape uniform.
+ */
+const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => {
+    const { op } = args;
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+
+    if (op !== "insert" && op !== "patch" && op !== "replace" && op !== "delete") {
+        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (table.trim() === "") {
+        throw Object.assign(new Error("writeRow: `table` is required"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    const id = typeof args["id"] === "string" ? args["id"] : undefined;
+    const doc = typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
+
+    if (op !== "insert" && (id === undefined || id === "")) {
+        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (op !== "delete" && doc === undefined) {
+        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
+    }
+
+    return { doc, id, op, table };
+};
+
+const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+
+    if (bookmark) {
+        headers["x-d1-bookmark"] = bookmark;
+    }
+
+    return Response.json(body, { status, headers });
+};
+
+/**
+ * Decode the JSON envelope shipped on the `x-cirrus-identity` header.
+ * Malformed payloads collapse to `undefined` rather than throwing — the
+ * shard should still serve requests whose identity claims didn't round-trip.
+ */
+const parseIdentityHeader = (raw: string | null): Record<string, unknown> | undefined => {
+    if (!raw) {
+        return undefined;
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as unknown;
+
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            return parsed as Record<string, unknown>;
+        }
+    } catch {
+        // fall through to undefined
+    }
+
+    return undefined;
+};
+
+const extractBearerToken = (authorization: string | null): string | undefined => {
+    if (!authorization) {
+        return undefined;
+    }
+
+    const [scheme, ...rest] = authorization.split(" ");
+
+    if (scheme?.toLowerCase() !== "bearer") {
+        return undefined;
+    }
+
+    const value = rest.join(" ").trim();
+
+    return value.length > 0 ? value : undefined;
+};
+
+/**
+ * Constant-time string equality. Compares full length (capped at the longer
+ * input) so a shorter candidate can't short-circuit the loop. The
+ * `lengthDiff` term folds a length mismatch into the result so unequal-length
+ * strings still take the same number of XOR ops as equal-length ones.
+ *
+ * Keep in sync with `packages/runtime/src/create-worker.ts` constantTimeEqual —
+ * the two packages don't import from each other to avoid a circular dep.
+ */
+const constantTimeEqual = (a: string, b: string): boolean => {
+    const max = Math.max(a.length, b.length);
+    let diff = a.length ^ b.length;
+
+    for (let index = 0; index < max; index += 1) {
+        // charCodeAt returns NaN past the end of the string; coerce to 0
+        // so the XOR still folds into `diff` without poisoning it.
+        const ca = index < a.length ? a.charCodeAt(index) : 0;
+        const cb = index < b.length ? b.charCodeAt(index) : 0;
+
+        diff |= ca ^ cb;
+    }
+
+    return diff === 0;
+};
+
+/**
  * Base class for shard Durable Objects.
  *
  * Concrete subclasses implement {@link handleRpc} and may emit deltas via
@@ -1491,11 +1656,13 @@ export abstract class ShardDO {
 
                 cursor += 1;
 
-                if (index >= sockets.length) {
+                const socket = sockets[index];
+
+                if (socket === undefined) {
                     return;
                 }
 
-                await refreshOne(sockets[index]!);
+                await refreshOne(socket);
             }
         };
 
@@ -1653,168 +1820,3 @@ export abstract class ShardDO {
         return { subs: {} };
     }
 }
-
-/**
- * Defensive WS backpressure helper. When the runtime exposes
- * `bufferedAmount` on the socket, pause iteration whenever the outbound
- * buffer is past 1 MiB; otherwise treat the socket as drained. Capped at
- * 100 sleeps of 20 ms (≈ 2 s total) so a permanently-stuck buffer can't
- * pin the iterator forever — past that we drop through and let the next
- * `ws.send` surface the failure.
- */
-const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
-    let attempts = 0;
-
-    while (attempts < 100) {
-        attempts += 1;
-
-        const buffered = (ws as { bufferedAmount?: unknown }).bufferedAmount;
-
-        if (typeof buffered !== "number" || buffered < 1_048_576) {
-            return;
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-};
-
-/** True when `a` and `b` share at least one element. */
-const setsIntersect = (a: Set<string>, b: Set<string>): boolean => {
-    // Iterate the smaller set for fewer lookups.
-    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
-
-    for (const value of small) {
-        if (large.has(value)) {
-            return true;
-        }
-    }
-
-    return false;
-};
-
-/**
- * Coerce the loosely-typed `runMigration` admin args into a typed shape.
- * `id` is required; `direction` defaults to `"up"` and only flips to `"down"`
- * on an exact match; numeric limits pass through when present.
- */
-const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigrationArgs => {
-    const id = typeof args["id"] === "string" ? args["id"] : "";
-
-    if (id.trim() === "") {
-        throw Object.assign(new Error("runMigration: `id` is required"), { name: "CirrusError", code: "MIGRATION_ID_REQUIRED", status: 400 });
-    }
-
-    return {
-        batchSize: typeof args["batchSize"] === "number" ? args["batchSize"] : undefined,
-        direction: args["direction"] === "down" ? "down" : "up",
-        dryRun: args["dryRun"] === true,
-        id,
-        maxBatches: typeof args["maxBatches"] === "number" ? args["maxBatches"] : undefined,
-    };
-};
-
-/**
- * Validate the `__cirrus_admin__:writeRow` payload. Enforces that `id` is
- * present for ops that target an existing row and that `doc` is present for ops
- * that carry one, throwing a 400 `CirrusError` otherwise — the writer would
- * reject these too, but failing here keeps the error shape uniform.
- */
-const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => {
-    const { op } = args;
-    const table = typeof args["table"] === "string" ? args["table"] : "";
-
-    if (op !== "insert" && op !== "patch" && op !== "replace" && op !== "delete") {
-        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (table.trim() === "") {
-        throw Object.assign(new Error("writeRow: `table` is required"), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
-    }
-
-    const id = typeof args["id"] === "string" ? args["id"] : undefined;
-    const doc = typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
-
-    if (op !== "insert" && (id === undefined || id === "")) {
-        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (op !== "delete" && doc === undefined) {
-        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { name: "CirrusError", code: "BAD_REQUEST", status: 400 });
-    }
-
-    return { doc, id, op, table };
-};
-
-const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
-    const headers: Record<string, string> = { "content-type": "application/json" };
-
-    if (bookmark) {
-        headers["x-d1-bookmark"] = bookmark;
-    }
-
-    return Response.json(body, { status, headers });
-};
-
-/**
- * Decode the JSON envelope shipped on the `x-cirrus-identity` header.
- * Malformed payloads collapse to `undefined` rather than throwing — the
- * shard should still serve requests whose identity claims didn't round-trip.
- */
-const parseIdentityHeader = (raw: string | null): Record<string, unknown> | undefined => {
-    if (!raw) {
-        return undefined;
-    }
-
-    try {
-        const parsed = JSON.parse(raw) as unknown;
-
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            return parsed as Record<string, unknown>;
-        }
-    } catch {
-        // fall through to undefined
-    }
-
-    return undefined;
-};
-
-const extractBearerToken = (authorization: string | null): string | undefined => {
-    if (!authorization) {
-        return undefined;
-    }
-
-    const [scheme, ...rest] = authorization.split(" ");
-
-    if (scheme?.toLowerCase() !== "bearer") {
-        return undefined;
-    }
-
-    const value = rest.join(" ").trim();
-
-    return value.length > 0 ? value : undefined;
-};
-
-/**
- * Constant-time string equality. Compares full length (capped at the longer
- * input) so a shorter candidate can't short-circuit the loop. The
- * `lengthDiff` term folds a length mismatch into the result so unequal-length
- * strings still take the same number of XOR ops as equal-length ones.
- *
- * Keep in sync with `packages/runtime/src/create-worker.ts` constantTimeEqual —
- * the two packages don't import from each other to avoid a circular dep.
- */
-const constantTimeEqual = (a: string, b: string): boolean => {
-    const max = Math.max(a.length, b.length);
-    let diff = a.length ^ b.length;
-
-    for (let index = 0; index < max; index += 1) {
-        // charCodeAt returns NaN past the end of the string; coerce to 0
-        // so the XOR still folds into `diff` without poisoning it.
-        const ca = index < a.length ? a.charCodeAt(index) : 0;
-        const cb = index < b.length ? b.charCodeAt(index) : 0;
-
-        diff |= ca ^ cb;
-    }
-
-    return diff === 0;
-};

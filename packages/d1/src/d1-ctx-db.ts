@@ -456,7 +456,14 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             return false;
         }
 
-        const definition = schema.tables[tableName]!;
+        const definition = schema.tables[tableName];
+
+        if (!definition) {
+            backfilled.set(cacheKey, false);
+
+            return false;
+        }
+
         const by = index.by ?? [];
         const tallies = new Map<string, number>();
         const BATCH_SIZE = 500;
@@ -604,7 +611,14 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             return false;
         }
 
-        const definition = schema.tables[tableName]!;
+        const definition = schema.tables[tableName];
+
+        if (!definition) {
+            rankBackfilled.set(cacheKey, false);
+
+            return false;
+        }
+
         const rankTable = rankTableName(tableName, index.name);
 
         await exec.run(`DELETE FROM ${quoteIdentifier(rankTable)}`, []);
@@ -732,6 +746,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
     const hasMatchingTrigger = (tableName: string, timing: TriggerTimingLike, op: TriggerOpLike): boolean =>
         triggerMatchers.has(`${tableName} ${timing} ${op}`);
 
+    // Forward-declared here so `fireTriggers` (defined below) can close over it;
+    // assigned only after `writer` is built. It is read solely while a write is
+    // in flight — long after construction finishes — so the binding is always
+    // initialized by the time a trigger fires.
+    let triggerCtx: TriggerContextLike;
+
     /** Fire matching triggers with a depth guard against runaway self-triggering. */
     const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
         triggerDepth += 1;
@@ -743,6 +763,10 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         }
 
         try {
+            // `triggerCtx` is declared after `writer` (further below) but is only
+            // read here, while a write is in flight — long after construction has
+            // initialized the binding. Referencing it lazily keeps `fireTriggers`
+            // defined before `writer` without a forward use-before-define.
             await runTriggers({ ctx: triggerCtx, event, op, schema, tableName: event.table, timing });
         } finally {
             triggerDepth -= 1;
@@ -875,7 +899,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                         const aggTable = aggregateTableName(tableName, planned.index.name);
                         const rows = await exec.all(`SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [encoded]);
 
-                        return rows.length === 0 ? 0 : Number(rows[0]!["value"] ?? 0);
+                        return Number(rows[0]?.["value"] ?? 0);
                     }
                 }
             }
@@ -1021,7 +1045,14 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             if (agg.op === "count") {
                 select.push(`COUNT(*) AS value`);
             } else {
-                select.push(`${aggregateSqlFunction(agg.op)}(${columnRef(agg.field!)}) AS value`);
+                // `agg.field` is asserted present for non-count reducers by the
+                // guard above; re-check locally so the column ref stays typed
+                // without a non-null assertion.
+                if (!agg.field) {
+                    throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+                }
+
+                select.push(`${aggregateSqlFunction(agg.op)}(${columnRef(agg.field)}) AS value`);
             }
 
             let querySql = `SELECT ${select.join(", ")} FROM ${quoteIdentifier(tableName)}`;
@@ -1093,11 +1124,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 [rowId],
             );
 
-            if (ownRows.length === 0) {
+            const own = ownRows[0];
+
+            if (!own) {
                 return null;
             }
 
-            const own = ownRows[0]!;
             let partitionKey = own["__partition__"] as string;
 
             const effective = mergeWhere(rankOptions.baseWhere, rankOptions.where);
@@ -1120,14 +1152,21 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 const conditions: string[] = [];
 
                 for (let prefix = 0; prefix < pivot; prefix += 1) {
-                    conditions.push(`${quoteIdentifier(sortColumns[prefix]!)} IS ?`);
-                    beforeParams.push(own[sortColumns[prefix]!] as unknown);
+                    const prefixColumn = sortColumns[prefix];
+
+                    if (prefixColumn === undefined) {
+                        continue;
+                    }
+
+                    conditions.push(`${quoteIdentifier(prefixColumn)} IS ?`);
+                    beforeParams.push(own[prefixColumn] as unknown);
                 }
 
-                if (pivot < sortColumns.length) {
-                    const column = sortColumns[pivot]!;
-                    const { direction } = index.sortBy[pivot]!;
-                    const operator = direction === "desc" ? ">" : "<";
+                const column = sortColumns[pivot];
+                const sortKey = index.sortBy[pivot];
+
+                if (pivot < sortColumns.length && column !== undefined && sortKey !== undefined) {
+                    const operator = sortKey.direction === "desc" ? ">" : "<";
 
                     conditions.push(`${quoteIdentifier(column)} ${operator} ?`);
                     beforeParams.push(own[column] as unknown);
@@ -1136,7 +1175,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                     beforeParams.push(rowId);
                 }
 
-                beforeBranches.push(conditions.length === 1 ? conditions[0]! : `(${conditions.join(" AND ")})`);
+                beforeBranches.push(conditions.length === 1 ? conditions.join(" AND ") : `(${conditions.join(" AND ")})`);
             }
 
             const beforeRows = await exec.all(
@@ -1175,8 +1214,8 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             const orderClauses: string[] = [`"__partition__" ASC`];
 
-            for (const [i, column] of sortColumns.entries()) {
-                orderClauses.push(`${quoteIdentifier(column)} ${index.sortBy[i]!.direction === "desc" ? "DESC" : "ASC"}`);
+            for (const [i, sortKey] of index.sortBy.entries()) {
+                orderClauses.push(`${quoteIdentifier(sortColumnName(i))} ${sortKey.direction === "desc" ? "DESC" : "ASC"}`);
             }
 
             orderClauses.push(`${quoteIdentifier(RANK_TIEBREAK)} ASC`);
@@ -1196,8 +1235,8 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 if (decoded.length === expectedLength) {
                     const cols: Array<{ column: string; direction: "asc" | "desc" }> = [{ column: "__partition__", direction: "asc" }];
 
-                    for (const [i, column] of sortColumns.entries()) {
-                        cols.push({ column, direction: index.sortBy[i]!.direction });
+                    for (const [i, sortKey] of index.sortBy.entries()) {
+                        cols.push({ column: sortColumnName(i), direction: sortKey.direction });
                     }
 
                     cols.push({ column: RANK_TIEBREAK, direction: "asc" });
@@ -1208,7 +1247,13 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                         const conditions: string[] = [];
 
                         for (let prefix = 0; prefix < pivot; prefix += 1) {
-                            conditions.push(`${quoteIdentifier(cols[prefix]!.column)} IS ?`);
+                            const prefixCol = cols[prefix];
+
+                            if (prefixCol === undefined) {
+                                continue;
+                            }
+
+                            conditions.push(`${quoteIdentifier(prefixCol.column)} IS ?`);
                             params.push(decoded[prefix]);
                         }
 
@@ -1216,7 +1261,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
                         conditions.push(`${quoteIdentifier(col.column)} ${operator} ?`);
                         params.push(decoded[pivot]);
-                        branches.push(conditions.length === 1 ? conditions[0]! : `(${conditions.join(" AND ")})`);
+                        branches.push(conditions.length === 1 ? conditions.join(" AND ") : `(${conditions.join(" AND ")})`);
                     }
 
                     whereClauses.push(`(${branches.join(" OR ")})`);
@@ -1276,8 +1321,9 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
 
             let continueCursor: null | string = null;
 
-            if (hasMore) {
-                const last = usable.at(-1)!;
+            const last = usable.at(-1);
+
+            if (hasMore && last !== undefined) {
                 const cursorValues: unknown[] = [last["__partition__"] as unknown];
 
                 for (const column of sortColumns) {
@@ -1311,7 +1357,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
             // physical delete, mirroring the DO path. Snapshot the RAW stored
             // row up front so the optimistic-concurrency CAS below compares
             // stored-value to stored-value across the cascade `await` window.
-            const definition = schema.tables[tableName]!;
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                return;
+            }
+
             const snapshot = await rawRow(tableName, id);
             const existing = decodeRow(definition, snapshot);
 
@@ -1458,9 +1509,15 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 return null;
             }
 
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                return null;
+            }
+
             const rows = await exec.all(`SELECT * FROM ${quoteIdentifier(tableName)} WHERE "id" = ?`, [id]);
 
-            return decodeRow(schema.tables[tableName]!, rows[0]);
+            return decodeRow(definition, rows[0]);
         },
 
         /**
@@ -1534,7 +1591,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`document not found: ${id}`);
             }
 
-            const definition = schema.tables[tableName]!;
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`document not found: ${id}`);
+            }
+
             // Capture the RAW stored row alongside the decoded `existing` — the
             // raw values seed the optimistic-concurrency CAS below, before the
             // before-update trigger's `await` window can let a concurrent write
@@ -1586,7 +1648,12 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`document not found: ${id}`);
             }
 
-            const definition = schema.tables[tableName]!;
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`document not found: ${id}`);
+            }
+
             // Always snapshot the RAW stored row — it seeds the optimistic-
             // concurrency CAS below. `previous` (the decoded prior doc) is only
             // needed when a trigger or an aggregate/rank index has to step the
@@ -1632,10 +1699,7 @@ export const createD1CtxDb = (options: D1CtxDbOptions): DatabaseWriterLike => {
         },
     };
 
-    // Declared after `writer` but closed over by `fireTriggers` (defined above):
-    // safe because `fireTriggers` only runs while a write is in flight, long
-    // after construction has initialized this binding.
-    const triggerCtx: TriggerContextLike = { db: writer, scheduler };
+    triggerCtx = { db: writer, scheduler };
 
     return writer;
 };
@@ -1702,8 +1766,8 @@ export const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Pro
 
             const orderedColumns = ['"__partition__" ASC'];
 
-            for (const [i, column] of sortColumns.entries()) {
-                orderedColumns.push(`${quoteIdentifier(column)} ${index.sortBy[i]!.direction === "desc" ? "DESC" : "ASC"}`);
+            for (const [i, sortKey] of index.sortBy.entries()) {
+                orderedColumns.push(`${quoteIdentifier(sortColumnName(i))} ${sortKey.direction === "desc" ? "DESC" : "ASC"}`);
             }
 
             orderedColumns.push('"__id__" ASC');
