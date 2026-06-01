@@ -38,20 +38,20 @@ describe("handleAuthRequest", () => {
         secret: "s".repeat(32),
     });
 
-    it("returns null for paths outside the auth base path", async () => {
+    it("returns undefined for paths outside the auth base path", async () => {
         expect.assertions(1);
 
         const response = await handleAuthRequest(auth, new Request("https://app.test/api/other/thing"));
 
-        expect(response).toBeNull();
+        expect(response).toBeUndefined();
     });
 
-    it("returns null for the runtime's RPC path", async () => {
+    it("returns undefined for the runtime's RPC path", async () => {
         expect.assertions(1);
 
         const response = await handleAuthRequest(auth, new Request("https://app.test/_cirrus/rpc"));
 
-        expect(response).toBeNull();
+        expect(response).toBeUndefined();
     });
 
     it("delegates to auth.handler for /api/auth/* paths", async () => {

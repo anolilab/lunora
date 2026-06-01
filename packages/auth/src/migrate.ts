@@ -32,7 +32,9 @@ export const ensureMigrated = async (auth: CirrusAuth | { options: CirrusAuthOpt
     const inFlight = migrating.get(options);
 
     if (inFlight) {
-        return inFlight;
+        await inFlight;
+
+        return;
     }
 
     const run = (async (): Promise<void> => {

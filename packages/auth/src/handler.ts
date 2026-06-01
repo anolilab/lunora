@@ -14,11 +14,11 @@ export const DEFAULT_AUTH_BASE_PATH: string = "/api/auth";
  * `/api/auth/callback/github`, …), so we use prefix matching instead of the
  * exact-path map `createWorker` consumes for top-level routes.
  */
-export const handleAuthRequest = async (auth: CirrusAuth, request: Request, basePath: string = DEFAULT_AUTH_BASE_PATH): Promise<Response | null> => {
+export const handleAuthRequest = async (auth: CirrusAuth, request: Request, basePath: string = DEFAULT_AUTH_BASE_PATH): Promise<Response | undefined> => {
     const url = new URL(request.url);
 
     if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
-        return null;
+        return undefined;
     }
 
     return auth.handler(request);
