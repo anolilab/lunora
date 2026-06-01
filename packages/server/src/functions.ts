@@ -19,7 +19,7 @@ import type {
  * Exported so the procedure builder (`./builder`) reuses one validator
  * implementation rather than forking the arg-parsing logic.
  */
-export const validateArgs = <A extends ArgsValidator>(validators: A, args: Record<string, unknown>): InferArgs<A> => {
+const validateArgs = <A extends ArgsValidator>(validators: A, args: Record<string, unknown>): InferArgs<A> => {
     const out: Record<string, unknown> = {};
 
     for (const key of Object.keys(validators)) {
@@ -53,17 +53,17 @@ export const validateArgs = <A extends ArgsValidator>(validators: A, args: Recor
     return out as InferArgs<A>;
 };
 
-export interface QueryDefinition<A extends ArgsValidator, R> {
+interface QueryDefinition<A extends ArgsValidator, R> {
     args: A;
     handler: (context: QueryContext, args: InferArgs<A>) => Promise<R> | R;
 }
 
-export interface MutationDefinition<A extends ArgsValidator, R> {
+interface MutationDefinition<A extends ArgsValidator, R> {
     args: A;
     handler: (context: MutationContext, args: InferArgs<A>) => Promise<R> | R;
 }
 
-export interface ActionDefinition<A extends ArgsValidator, R> {
+interface ActionDefinition<A extends ArgsValidator, R> {
     args: A;
     handler: (context: ActionContext, args: InferArgs<A>) => Promise<R> | R;
 }
@@ -88,21 +88,25 @@ const wrap = <A extends ArgsValidator, R, Kind extends "action" | "mutation" | "
 };
 
 /** Register a query function reachable from clients via the generated `api`. */
-export const query = <A extends ArgsValidator, R>(definition: QueryDefinition<A, R>): RegisteredQuery<A, R> => wrap("query", definition);
+const query = <A extends ArgsValidator, R>(definition: QueryDefinition<A, R>): RegisteredQuery<A, R> => wrap("query", definition);
 
 /** Register a mutation function reachable from clients via the generated `api`. */
-export const mutation = <A extends ArgsValidator, R>(definition: MutationDefinition<A, R>): RegisteredMutation<A, R> => wrap("mutation", definition);
+const mutation = <A extends ArgsValidator, R>(definition: MutationDefinition<A, R>): RegisteredMutation<A, R> => wrap("mutation", definition);
 
 /** Register an action function (HTTP/external side effects allowed) reachable from clients via the generated `api`. */
-export const action = <A extends ArgsValidator, R>(definition: ActionDefinition<A, R>): RegisteredAction<A, R> => wrap("action", definition);
+const action = <A extends ArgsValidator, R>(definition: ActionDefinition<A, R>): RegisteredAction<A, R> => wrap("action", definition);
 
 /** Register an internal query — callable only server-side via `ctx.runQuery`, never from a client. */
-export const internalQuery = <A extends ArgsValidator, R>(definition: QueryDefinition<A, R>): RegisteredQuery<A, R> => wrap("query", definition, "internal");
+const internalQuery = <A extends ArgsValidator, R>(definition: QueryDefinition<A, R>): RegisteredQuery<A, R> => wrap("query", definition, "internal");
 
 /** Register an internal mutation — callable only server-side via `ctx.runMutation`, never from a client. */
-export const internalMutation = <A extends ArgsValidator, R>(definition: MutationDefinition<A, R>): RegisteredMutation<A, R> =>
+const internalMutation = <A extends ArgsValidator, R>(definition: MutationDefinition<A, R>): RegisteredMutation<A, R> =>
     wrap("mutation", definition, "internal");
 
 /** Register an internal action — callable only server-side via `ctx.runAction`, never from a client. */
-export const internalAction = <A extends ArgsValidator, R>(definition: ActionDefinition<A, R>): RegisteredAction<A, R> =>
+const internalAction = <A extends ArgsValidator, R>(definition: ActionDefinition<A, R>): RegisteredAction<A, R> =>
     wrap("action", definition, "internal");
+
+export { action, internalAction, internalMutation, internalQuery, mutation, query, validateArgs };
+
+export type { ActionDefinition, MutationDefinition, QueryDefinition };

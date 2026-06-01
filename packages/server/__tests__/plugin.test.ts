@@ -87,7 +87,7 @@ describe("mergeSchemaExtension", () => {
 
         const merged = mergeSchemaExtension(base, extension);
 
-        expect(Object.keys(merged.tables).toSorted()).toEqual(["auth_users", "todos"]);
+        expect(Object.keys(merged.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["auth_users", "todos"]);
         // Non-mutating — the base must still only have its original tables.
         expect(Object.keys(base.tables)).toEqual(["todos"]);
     });
@@ -127,7 +127,7 @@ describe("defineSchema(...).extend(...)", () => {
 
         const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(ratelimit.extension!);
 
-        expect(Object.keys(schema.tables).toSorted()).toEqual(["ratelimit_buckets", "todos"]);
+        expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
     });
 
     it("chains multiple extensions", () => {
@@ -140,7 +140,7 @@ describe("defineSchema(...).extend(...)", () => {
             .extend(a)
             .extend(b);
 
-        expect(Object.keys(schema.tables).toSorted()).toEqual(["a_one", "b_two", "base"]);
+        expect(Object.keys(schema.tables).toSorted((left, right) => left.localeCompare(right))).toEqual(["a_one", "b_two", "base"]);
     });
 
     it("a chained call's collision is reported under the offending extension's key", () => {

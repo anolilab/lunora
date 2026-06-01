@@ -106,7 +106,7 @@ interface DatabaseWriterLike {
  * and structural matching keeps this module free of an `@cirrus/do`-typed
  * `ctx`.
  */
-export type RlsDatabase = DatabaseWriterLike;
+type RlsDatabase = DatabaseWriterLike;
 
 /** Roles list source on the context. Tolerant of older auth states. */
 type AuthLike = {
@@ -214,6 +214,117 @@ const isOrderable = (value: unknown): value is bigint | number | string => {
 };
 
 /**
+ * Evaluate the ordered comparators (`lt`/`lte`/`gt`/`gte`) of an operator bag.
+ * SQL NULL semantics gate every comparison via {@link isOrderable}, so a
+ * non-orderable operand (null/undefined/object) fails rather than coercing.
+ * Returns `true` when the value satisfies all present ordered comparators.
+ */
+const matchesOrderedOperators = (documentValue: unknown, operators: Record<string, unknown>): boolean => {
+    if ("lt" in operators && (!isOrderable(documentValue) || !isOrderable(operators["lt"]) || (documentValue as number) >= (operators["lt"] as number))) {
+        return false;
+    }
+
+    if ("lte" in operators && (!isOrderable(documentValue) || !isOrderable(operators["lte"]) || (documentValue as number) > (operators["lte"] as number))) {
+        return false;
+    }
+
+    if ("gt" in operators && (!isOrderable(documentValue) || !isOrderable(operators["gt"]) || (documentValue as number) <= (operators["gt"] as number))) {
+        return false;
+    }
+
+    if ("gte" in operators && (!isOrderable(documentValue) || !isOrderable(operators["gte"]) || (documentValue as number) < (operators["gte"] as number))) {
+        return false;
+    }
+
+    return true;
+};
+
+/**
+ * Evaluate the membership + text comparators (`in`/`notIn`/`contains`/`isNull`)
+ * of an operator bag. Returns `true` when the value satisfies all present ones.
+ */
+const matchesMembershipOperators = (documentValue: unknown, operators: Record<string, unknown>): boolean => {
+    if ("in" in operators) {
+        const list = operators["in"];
+
+        if (!Array.isArray(list) || !list.includes(documentValue)) {
+            return false;
+        }
+    }
+
+    if ("notIn" in operators) {
+        const list = operators["notIn"];
+
+        if (Array.isArray(list) && list.includes(documentValue)) {
+            return false;
+        }
+    }
+
+    if ("contains" in operators) {
+        const needle = operators["contains"];
+
+        if (typeof documentValue !== "string" || typeof needle !== "string" || !documentValue.includes(needle)) {
+            return false;
+        }
+    }
+
+    if ("isNull" in operators) {
+        const expectsNull = operators["isNull"] === true;
+
+        if (expectsNull !== (documentValue === null || documentValue === undefined)) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
+/**
+ * Evaluate an operator bag (`{ eq, ne, in, … }`) against a single document
+ * value. Mirrors the SQL compiler's operator set; SQL NULL semantics gate the
+ * ordered comparators via {@link isOrderable}. Returns `true` when the value
+ * satisfies every operator in the bag.
+ */
+const matchesOperators = (documentValue: unknown, operators: Record<string, unknown>): boolean => {
+    if ("eq" in operators && documentValue !== operators["eq"]) {
+        return false;
+    }
+
+    if ("ne" in operators && documentValue === operators["ne"]) {
+        return false;
+    }
+
+    return matchesMembershipOperators(documentValue, operators) && matchesOrderedOperators(documentValue, operators);
+};
+
+/**
+ * Evaluate one `AND`/`OR`/`NOT` combinator clause. `recurse` is the top-level
+ * {@link matchesWhere} (injected to dodge the mutual-reference ordering), so
+ * each branch is itself a full `WhereInput`.
+ */
+const matchesCombinator = (
+    document: Record<string, unknown>,
+    key: "AND" | "NOT" | "OR",
+    value: unknown,
+    recurse: (document: Record<string, unknown>, where: WhereInput) => boolean,
+): boolean => {
+    if (key === "AND") {
+        return Array.isArray(value) && value.every((branch) => recurse(document, branch as WhereInput));
+    }
+
+    if (key === "OR") {
+        return Array.isArray(value) && value.some((branch) => recurse(document, branch as WhereInput));
+    }
+
+    return !recurse(document, (value ?? {}) as WhereInput);
+};
+
+const isCombinatorKey = (key: string): key is "AND" | "NOT" | "OR" => key === "AND" || key === "OR" || key === "NOT";
+
+const isOperatorBag = (value: unknown): value is Record<string, unknown> =>
+    (isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k)));
+
+/**
  * JS-side `WhereInput` evaluator. Used by the legacy `query()` wrapper to
  * push read predicates down as `.filter()`, and by {@link evaluateWrite} to
  * gate write policies whose `when` returns a `WhereInput` against the
@@ -227,24 +338,8 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
     for (const key of Object.keys(where)) {
         const value = where[key];
 
-        if (key === "AND") {
-            if (!Array.isArray(value) || !value.every((branch) => matchesWhere(document, branch as WhereInput))) {
-                return false;
-            }
-
-            continue;
-        }
-
-        if (key === "OR") {
-            if (!Array.isArray(value) || !value.some((branch) => matchesWhere(document, branch as WhereInput))) {
-                return false;
-            }
-
-            continue;
-        }
-
-        if (key === "NOT") {
-            if (matchesWhere(document, (value ?? {}) as WhereInput)) {
+        if (isCombinatorKey(key)) {
+            if (!matchesCombinator(document, key, value, matchesWhere)) {
                 return false;
             }
 
@@ -253,63 +348,9 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
 
         const documentValue = document[key];
 
-        if (isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k))) {
-            const operators = value;
-
-            if ("eq" in operators && documentValue !== operators["eq"]) {
+        if (isOperatorBag(value)) {
+            if (!matchesOperators(documentValue, value)) {
                 return false;
-            }
-
-            if ("ne" in operators && documentValue === operators["ne"]) {
-                return false;
-            }
-
-            if ("in" in operators) {
-                const list = operators["in"];
-
-                if (!Array.isArray(list) || !list.includes(documentValue)) {
-                    return false;
-                }
-            }
-
-            if ("notIn" in operators) {
-                const list = operators["notIn"];
-
-                if (Array.isArray(list) && list.includes(documentValue)) {
-                    return false;
-                }
-            }
-
-            if ("lt" in operators && (!isOrderable(documentValue) || !isOrderable(operators["lt"]) || (documentValue as number) >= (operators["lt"] as number))) {
-                return false;
-            }
-
-            if ("lte" in operators && (!isOrderable(documentValue) || !isOrderable(operators["lte"]) || (documentValue as number) > (operators["lte"] as number))) {
-                return false;
-            }
-
-            if ("gt" in operators && (!isOrderable(documentValue) || !isOrderable(operators["gt"]) || (documentValue as number) <= (operators["gt"] as number))) {
-                return false;
-            }
-
-            if ("gte" in operators && (!isOrderable(documentValue) || !isOrderable(operators["gte"]) || (documentValue as number) < (operators["gte"] as number))) {
-                return false;
-            }
-
-            if ("contains" in operators) {
-                const needle = operators["contains"];
-
-                if (typeof documentValue !== "string" || typeof needle !== "string" || !documentValue.includes(needle)) {
-                    return false;
-                }
-            }
-
-            if ("isNull" in operators) {
-                const expectsNull = operators["isNull"] === true;
-
-                if (expectsNull !== (documentValue === null || documentValue === undefined)) {
-                    return false;
-                }
             }
 
             continue;
@@ -492,11 +533,11 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             [...perTable.keys()].map(async (tableName) => {
                 const probe = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
 
-                return probe?.["_id"] === id ? tableName : null;
+                return probe?.["_id"] === id ? tableName : undefined;
             }),
         );
 
-        const tableName = probes.find((entry): entry is string => entry !== null);
+        const tableName = probes.find((entry): entry is string => entry !== undefined);
 
         // The row exists but isn't in any policy-gated table — fall through
         // unrestricted by returning `undefined` (no policy applies).
@@ -556,7 +597,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             return base.count(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args.baseWhere, baseWhere),
-                restrictsCounts: args.restrictsCounts || restricts,
+                restrictsCounts: (args.restrictsCounts ?? false) || restricts,
             });
         },
 
@@ -584,6 +625,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             const row = await base.get(id);
 
             if (!row) {
+                // eslint-disable-next-line unicorn/no-null -- RlsDatabase.get structurally mirrors @cirrus/do's writer, which returns `null` for an absent row
                 return null;
             }
 
@@ -600,7 +642,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
                     const membership = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
 
                     if (membership?.["_id"] !== id) {
-                        return null;
+                        return undefined;
                     }
 
                     const { baseWhere, restricts } = readBase(tableName);
@@ -611,12 +653,15 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
 
                     const allowed = await base.findFirst(tableName, { baseWhere, limit: 1, where: { _id: id } });
 
+                    // `allowed: null` is the policy verdict ("denied"), distinct from
+                    // the `undefined` "this row isn't in this table" probe sentinel.
+                    // eslint-disable-next-line unicorn/no-null -- null is the deliberate "denied" verdict surfaced by get(), mirroring @cirrus/do
                     return { allowed: allowed?.["_id"] === id ? allowed : null };
                 }),
             );
 
             // Ids are globally unique, so at most one probe matches.
-            const hit = probes.find((entry): entry is { allowed: null | Record<string, unknown> } => entry !== null);
+            const hit = probes.find((entry): entry is { allowed: null | Record<string, unknown> } => entry !== undefined);
 
             // Row exists but isn't in any policy-gated table → unrestricted.
             if (!hit) {
@@ -699,7 +744,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
  * chain includes this middleware — opt-in, never global. This is the
  * `PLAN2 §3.2` invariant.
  */
-export const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>): Middleware<Context, Context> => {
+const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>): Middleware<Context, Context> => {
     const perTable = indexByTable(policies);
 
     return async ({ ctx, next }) => {
@@ -708,11 +753,13 @@ export const rls = <Context extends RlsContextIn = RlsContextIn>(policies: Reado
         // branch on claims (`ctx.auth.identity.email` etc.) without each
         // policy paying for its own `getIdentity()` call. `null` covers both
         // the anonymous case and the no-resolver case (older auth states).
+        // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.identity is a public type carrying `null` for the anonymous/no-resolver case
         const identity = await auth.getIdentity?.() ?? null;
         const policyContext: PolicyContext<Context> = {
             auth: {
                 identity,
                 roles: auth.roles ?? [],
+                // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.userId is a public `null | string` type
                 userId: auth.userId ?? null,
             },
             ctx,
@@ -729,3 +776,7 @@ export const rls = <Context extends RlsContextIn = RlsContextIn>(policies: Reado
         return next({ ctx: extension });
     };
 };
+
+export { rls };
+
+export type { RlsDatabase };

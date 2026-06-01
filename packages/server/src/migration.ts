@@ -23,6 +23,7 @@ export type MigrationDocument = Record<string, unknown>;
  * runner always preserves the original `_id` and `_creationTime`, so the
  * returned document neither needs to nor should change row identity.
  */
+// eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- public API: `void` lets a transform with no return statement type-check; `undefined` alone wouldn't accept a `(): void` arrow
 export type MigrationTransform = (document: MigrationDocument) => MigrationDocument | undefined | void;
 
 export interface MigrationDefinition {

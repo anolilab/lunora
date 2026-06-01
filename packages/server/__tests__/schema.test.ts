@@ -254,7 +254,7 @@ describe("defineSchema", () => {
                     dimensions: 1024,
                     embed,
                     metric: "cosine",
-                    source: { select: (row) => `${row.title}\n\n${row.body}`, table: "docs" },
+                    source: { select: (row) => `${String(row.title)}\n\n${String(row.body)}`, table: "docs" },
                 }),
             },
         );

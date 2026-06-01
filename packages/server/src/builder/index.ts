@@ -17,22 +17,6 @@ import type {
     QueryBuilder,
 } from "./types.js";
 
-export type {
-    ActionBuilder,
-    CirrusBuilders,
-    CreateOptions,
-    DataModelInit,
-    EmptyArgs,
-    InternalActionBuilder,
-    InternalMutationBuilder,
-    InternalQueryBuilder,
-    Middleware,
-    MiddlewareNext,
-    MutationBuilder,
-    QueryBuilder,
-    TerminalKind,
-} from "./types.js";
-
 /** Accumulated builder state threaded through `.input()` / `.use()` / `.output()`. */
 interface BuilderState {
     args: ArgsValidator;
@@ -89,8 +73,8 @@ const makeHandler
     ) =>
         async (context: unknown, rawArgs: InferArgs<Args>): Promise<Awaited<R>> => {
             const parsed = validateArgs(args, rawArgs as Record<string, unknown>);
-            const context_ = await runMiddleware(middlewares, context);
-            const result = await userHandler({ args: parsed, ctx: context_ });
+            const resolvedContext = await runMiddleware(middlewares, context);
+            const result = await userHandler({ args: parsed, ctx: resolvedContext });
 
             return (output ? output.parse(result) : result) as Awaited<R>;
         };
@@ -117,8 +101,8 @@ const makeStreamHandler
             // caller before returning an iterable — defer the chain to the first
             // `next()` pump by wrapping the iterator with an outer async generator.
             return (async function* drive(): AsyncGenerator<R, void, void> {
-                const context_ = await runMiddleware(middlewares, context);
-                const iterator = userHandler({ args: parsed, ctx: context_, signal });
+                const resolvedContext = await runMiddleware(middlewares, context);
+                const iterator = userHandler({ args: parsed, ctx: resolvedContext, signal });
 
                 for await (const chunk of iterator) {
                     yield chunk;
@@ -188,7 +172,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
  * `DataModel` (phantom for now), and `.create()` yields the public root builders
  * plus their `internal*` counterparts.
  */
-export const initCirrus = {
+const initCirrus = {
     dataModel: <DataModel>(): DataModelInit<DataModel> => {
         return {
             create: (_options?: CreateOptions): CirrusBuilders => {
@@ -207,3 +191,21 @@ export const initCirrus = {
         };
     },
 };
+
+export { initCirrus };
+
+export type {
+    ActionBuilder,
+    CirrusBuilders,
+    CreateOptions,
+    DataModelInit,
+    EmptyArgs,
+    InternalActionBuilder,
+    InternalMutationBuilder,
+    InternalQueryBuilder,
+    Middleware,
+    MiddlewareNext,
+    MutationBuilder,
+    QueryBuilder,
+    TerminalKind,
+} from "./types.js";

@@ -8,19 +8,20 @@ import { CirrusError } from "./error.js";
 import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types.js";
 
 /** HTTP verbs the typed {@link httpRoute} builder can bind to. */
-export type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT";
+type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT";
 
 /**
- * Context handed to an HTTP action handler. A narrower view of {@link ActionCtx}:
+ * Context handed to an HTTP action handler. A narrower view of {@link ActionContext}:
  * HTTP actions run in the worker (the "action runtime"), separate from the
  * transactional store, so there is no direct `db` / `vectors` / `scheduler` /
  * `storage` surface — reach the data layer through `runQuery` / `runMutation` /
  * `runAction`, which forward to the owning shard.
  */
-export type HttpActionCtx = Pick<ActionContext, "auth" | "fetch" | "runAction" | "runMutation" | "runQuery">;
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
+type HttpActionCtx = Pick<ActionContext, "auth" | "fetch" | "runAction" | "runMutation" | "runQuery">;
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
-export type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;
+type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;
 
 /**
  * The hono {@link https://hono.dev | Hono} environment used by {@link httpRouter}.
@@ -28,16 +29,16 @@ export type HttpActionHandler = (context: HttpActionCtx, request: Request) => Pr
  * `__cirrusCtx` binding; the router's lifting middleware promotes it to
  * `c.var.cirrus` so handlers can read it as a typed variable.
  */
-export interface CirrusHttpEnv {
+interface CirrusHttpEnv {
     Bindings: Record<string, unknown> & { __cirrusCtx?: HttpActionCtx };
     Variables: { cirrus: HttpActionCtx };
 }
 
 /** The hono app type {@link httpRouter} returns. */
-export type CirrusHttpApp = Hono<CirrusHttpEnv>;
+type CirrusHttpApp = Hono<CirrusHttpEnv>;
 
 /** A compiled route handler: a hono handler that resolves to a raw {@link Response}. */
-export type CirrusRouteHandler = (c: Context<CirrusHttpEnv>) => Promise<Response>;
+type CirrusRouteHandler = (c: Context<CirrusHttpEnv>) => Promise<Response>;
 
 /**
  * Wrap a `(ctx, request) => Response` handler as a hono handler. The raw escape
@@ -45,7 +46,7 @@ export type CirrusRouteHandler = (c: Context<CirrusHttpEnv>) => Promise<Response
  * runtime-injected {@link HttpActionCtx} lifted into `c.var.cirrus` by
  * {@link httpRouter}; `request` is the underlying `c.req.raw`.
  */
-export const httpAction
+const httpAction
     = (handler: HttpActionHandler): CirrusRouteHandler =>
         async (c) =>
             handler(c.get("cirrus"), c.req.raw);
@@ -69,7 +70,7 @@ export const httpAction
  * outside the runtime — a misconfiguration we surface loudly rather than let
  * `c.var.cirrus` be silently `undefined` despite its non-optional type.
  */
-export const httpRouter = (): CirrusHttpApp => {
+const httpRouter = (): CirrusHttpApp => {
     const app = new Hono<CirrusHttpEnv>();
 
     app.use("*", async (c, next) => {
@@ -91,7 +92,7 @@ export const httpRouter = (): CirrusHttpApp => {
 };
 
 /** The `{ ctx, searchParams, body, params }` a typed route handler receives. */
-export interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator> {
+interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator> {
     body: InferArgs<Body>;
     ctx: HttpActionCtx;
     params: InferArgs<Params>;
@@ -104,7 +105,7 @@ export interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Bod
  * the raw `request` is exposed if a handler needs to read the body itself.
  * `signal` is tripped when the client disconnects.
  */
-export interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params extends ArgsValidator> {
+interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params extends ArgsValidator> {
     ctx: HttpActionCtx;
     params: InferArgs<Params>;
     request: Request;
@@ -126,7 +127,7 @@ export interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Pa
  * The terminal `.handler()` yields a {@link CirrusRouteHandler} — mount it
  * directly with `app.get(path, route)`.
  */
-export interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator, Output = undefined> {
+interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator, Output = undefined> {
     body: <B extends ArgsValidator>(validators: B) => HttpRouteBuilder<SearchParams, B & Body, Params, Output>;
     handler: [Output] extends [undefined]
         ? <R>(handler: (options: HttpRouteHandlerOptions<SearchParams, Body, Params>) => Promise<R> | R) => CirrusRouteHandler
@@ -148,10 +149,10 @@ export interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body exten
 }
 
 /** Opens a fresh {@link HttpRouteBuilder}. The `path` documents intent; hono owns the actual routing at mount. */
-export type HttpRouteFactory = (path: string) => HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
+type HttpRouteFactory = (path: string) => HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
 
 /** The verb-keyed entry point: `httpRoute.get("/api/todos")…`. */
-export interface HttpRoute {
+interface HttpRoute {
     delete: HttpRouteFactory;
     get: HttpRouteFactory;
     head: HttpRouteFactory;
@@ -178,7 +179,7 @@ interface ValidatorWithMeta extends Validator {
 
 /** Peel a single `v.optional()` layer so coercion keys off the underlying kind. */
 const unwrapOptional = (validator: Validator): Validator =>
-    validator.kind === "optional" ? ((validator as ValidatorWithMeta)._meta?.inner ?? validator) : validator;
+    (validator.kind === "optional" ? ((validator as ValidatorWithMeta)._meta?.inner ?? validator) : validator);
 
 /**
  * Query-string values arrive as strings, but `@cirrus/values` validators are
@@ -386,6 +387,7 @@ const buildRouteHandler
                 const result = await userHandler({ body, ctx: context, params, searchParams });
                 const payload = state.output ? applyOutput(state.output, result) : result;
 
+                // eslint-disable-next-line unicorn/no-null -- Response body must be `null` for an empty 204 (the Fetch API rejects `undefined`)
                 return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
             } catch (error: unknown) {
                 return errorResponse(error);
@@ -552,7 +554,7 @@ const makeRouteFactory
  * app.get("/api/todos/:id", getTodo);
  * ```
  */
-export const httpRoute: HttpRoute = {
+const httpRoute: HttpRoute = {
     delete: makeRouteFactory("DELETE"),
     get: makeRouteFactory("GET"),
     head: makeRouteFactory("HEAD"),
@@ -560,4 +562,20 @@ export const httpRoute: HttpRoute = {
     patch: makeRouteFactory("PATCH"),
     post: makeRouteFactory("POST"),
     put: makeRouteFactory("PUT"),
+};
+
+export { httpAction, httpRoute, httpRouter };
+
+export type {
+    CirrusHttpApp,
+    CirrusHttpEnv,
+    CirrusRouteHandler,
+    HttpActionCtx,
+    HttpActionHandler,
+    HttpMethod,
+    HttpRoute,
+    HttpRouteBuilder,
+    HttpRouteFactory,
+    HttpRouteHandlerOptions,
+    HttpStreamHandlerOptions,
 };

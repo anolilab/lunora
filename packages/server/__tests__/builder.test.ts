@@ -77,7 +77,7 @@ describe("builder input accumulation", () => {
             .input({ b: v.string() })
             .query(() => null);
 
-        expect(Object.keys(function_.args).sort()).toEqual(["a", "b"]);
+        expect(Object.keys(function_.args).toSorted((a, b) => a.localeCompare(b))).toEqual(["a", "b"]);
     });
 
     it("a later .input() wins on key collision", () => {

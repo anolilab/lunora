@@ -27,7 +27,7 @@ import type {
 } from "./types.js";
 
 /** Options for `.vectorize(field, opts)` (DSL Shape A). */
-export interface VectorizeOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
+interface VectorizeOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
     dimensions: number;
     embed: VectorEmbedder;
     /** Logical index name; must match a `[[vectorize]]` binding in wrangler. */
@@ -38,19 +38,19 @@ export interface VectorizeOptions<Shape extends Record<string, Validator> = Reco
 }
 
 /** A `one` (many-to-one) relation descriptor; phantom `Target` carries the target table name. */
-export interface OneRelation<Target extends string = string> extends RelationDefinition {
+interface OneRelation<Target extends string = string> extends RelationDefinition {
     readonly __target?: Target;
     readonly kind: "one";
 }
 
 /** A `many` (one-to-many) relation descriptor; phantom `Target` carries the target table name. */
-export interface ManyRelation<Target extends string = string> extends RelationDefinition {
+interface ManyRelation<Target extends string = string> extends RelationDefinition {
     readonly __target?: Target;
     readonly kind: "many";
 }
 
 /** The `r` argument passed to `.relations((r) => …)`. */
-export interface RelationBuilder {
+interface RelationBuilder {
     /** One-to-many: the FK `field` lives on the target table, matching this table's `references` (default `_id`). */
     many: <Target extends string>(table: Target, options: { field: string; references?: string }) => ManyRelation<Target>;
     /** Many-to-one: the FK `field` lives on this table, pointing at `table`.`references` (default `_id`). */
@@ -62,7 +62,7 @@ export interface RelationBuilder {
  * `count` so `aggregateIndex("byUser", { by: ["userId"] })` is a single-line
  * `COUNT(*) GROUP BY userId` accelerator.
  */
-export interface InlineAggregateIndexOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
+interface InlineAggregateIndexOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
     /** Group keys; counter rows are one per distinct tuple. Omitted = single-row aggregate over the whole table. */
     by?: ReadonlyArray<keyof Shape & string>;
     /** The column the reducer applies to. Required for `sum`/`min`/`max`/`avg`; ignored for `count`. */
@@ -79,7 +79,7 @@ export interface InlineAggregateIndexOptions<Shape extends Record<string, Valida
  * `["field"]` (asc) / `{ field: "desc" }` map entries. `partitionBy` scopes the
  * rank — omitted ⇒ one global rank over the whole table.
  */
-export interface InlineRankIndexOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
+interface InlineRankIndexOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
     /** Columns that scope each ranking; omitted ⇒ one global rank. */
     partitionBy?: ReadonlyArray<keyof Shape & string>;
     /** Ordered sort keys driving the rank. Required. */
@@ -88,7 +88,7 @@ export interface InlineRankIndexOptions<Shape extends Record<string, Validator> 
     where?: Record<string, unknown>;
 }
 
-export interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
+interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     /** Declare an aggregate (counter/sum/…) maintained by triggers for O(1) reads. */
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
     /** Mark this table as global (D1-backed, cross-shard). */
@@ -146,7 +146,7 @@ const createTriggerBuilder = <Shape extends Record<string, Validator>>(): Trigge
 };
 
 /** Options for `defineVectorIndex(...)` (DSL Shape B). */
-export interface VectorIndexOptions {
+interface VectorIndexOptions {
     dimensions: number;
     embed: VectorEmbedder;
     /** Optional projection of the source row into Vectorize metadata. */
@@ -160,7 +160,7 @@ export interface VectorIndexOptions {
  * Build a table definition. Returned object is both the table definition (for
  * `defineSchema`) and a fluent builder for indexes + sharding metadata.
  */
-export const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): TableBuilder<Shape> => {
+const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): TableBuilder<Shape> => {
     const aggregateIndexes: AggregateIndexDefinition[] = [];
     const indexes: IndexDefinition[] = [];
     const rankIndexes: RankIndexDefinition[] = [];
@@ -210,6 +210,7 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
             return indexes;
         },
         rankIndex(name, options) {
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `sortBy` is typed required but untyped JS callers can omit it
             if (!options.sortBy || options.sortBy.length === 0) {
                 throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
             }
@@ -294,7 +295,7 @@ export const defineTable = <Shape extends Record<string, Validator>>(shape: Shap
  * the `vectorIndexes` map of {@link defineSchema} when the source is derived
  * from multiple fields or a computation rather than a single column.
  */
-export const defineVectorIndex = (options: VectorIndexOptions): VectorIndexDefinition => {
+const defineVectorIndex = (options: VectorIndexOptions): VectorIndexDefinition => {
     return {
         dimensions: options.dimensions,
         embed: options.embed,
@@ -312,7 +313,7 @@ export const defineVectorIndex = (options: VectorIndexOptions): VectorIndexDefin
  * the owning table explicitly via `on` — handy when a single counter wants to
  * live next to the schema map rather than inside a table chain.
  */
-export interface AggregateIndexOptions {
+interface AggregateIndexOptions {
     by?: ReadonlyArray<string>;
     field?: string;
     on: string;
@@ -326,7 +327,7 @@ export interface AggregateIndexOptions {
  * the schema attaches it to `tables[on].aggregateIndexes` so runtime consumers
  * (DO + D1) read every index uniformly off the table definition.
  */
-export const defineAggregateIndex = (name: string, options: AggregateIndexOptions): AggregateIndexDefinition => {
+const defineAggregateIndex = (name: string, options: AggregateIndexOptions): AggregateIndexDefinition => {
     const op: AggregateOp = options.op ?? "count";
 
     if (op !== "count" && !options.field) {
@@ -341,7 +342,7 @@ export const defineAggregateIndex = (name: string, options: AggregateIndexOption
  * Mirrors the inline `.rankIndex(...)` builder but takes the owning table via
  * `table` so it can sit next to the schema map.
  */
-export interface RankIndexOptions {
+interface RankIndexOptions {
     partitionBy?: ReadonlyArray<string>;
     sortBy: ReadonlyArray<{ direction?: "asc" | "desc"; field: string }>;
     table: string;
@@ -353,7 +354,8 @@ export interface RankIndexOptions {
  * `defineSchema(tables, vectorIndexes, aggregateIndexes, rankIndexes)` keyed
  * by index name — the schema attaches it to `tables[on].rankIndexes`.
  */
-export const defineRankIndex = (name: string, options: RankIndexOptions): RankIndexDefinition => {
+const defineRankIndex = (name: string, options: RankIndexOptions): RankIndexDefinition => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `sortBy` is typed required but untyped JS callers can omit it
     if (!options.sortBy || options.sortBy.length === 0) {
         throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
     }
@@ -386,7 +388,7 @@ export const defineRankIndex = (name: string, options: RankIndexOptions): RankIn
  * the merged tables. Chains: `defineSchema(...).extend(a).extend(b)` is the
  * typed equivalent of merging `a`'s tables then `b`'s.
  */
-export type ExtendableSchema<T extends Record<string, TableDefinition>> = Schema<T> & {
+type ExtendableSchema<T extends Record<string, TableDefinition>> = Schema<T> & {
     extend: <X extends Record<string, TableDefinition>>(extension: SchemaExtension<X>) => ExtendableSchema<T & X>;
 };
 
@@ -399,15 +401,12 @@ const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>
     };
 };
 
-export const defineSchema = <T extends Record<string, TableDefinition>>(
-    tables: T,
-    vectorIndexes: Record<string, VectorIndexDefinition> = {},
-    aggregateIndexes: Record<string, AggregateIndexDefinition> = {},
-    rankIndexes: Record<string, RankIndexDefinition> = {},
-): ExtendableSchema<T> => {
-    // Fill in the `on` field for every inline `.aggregateIndex(...)` /
-    // `.rankIndex(...)` decl — the builder stashes `""` because it doesn't
-    // know its own table name.
+/**
+ * Fill in the `on` field for every inline `.aggregateIndex(...)` /
+ * `.rankIndex(...)` decl — the builder stashes `""` because it doesn't
+ * know its own table name.
+ */
+const fillIndexTableNames = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
         for (const index of table.aggregateIndexes) {
             if (index.on === "") {
@@ -421,11 +420,19 @@ export const defineSchema = <T extends Record<string, TableDefinition>>(
             }
         }
     }
+};
 
-    // Fold standalone decls onto their owning table so the runtime can read
-    // every aggregate / rank index uniformly off `tables[name].*Indexes`.
+/**
+ * Fold standalone aggregate / rank index decls onto their owning table so the
+ * runtime can read every index uniformly off `tables[name].*Indexes`.
+ */
+const attachStandaloneIndexes = (
+    tables: Record<string, TableDefinition>,
+    aggregateIndexes: Record<string, AggregateIndexDefinition>,
+    rankIndexes: Record<string, RankIndexDefinition>,
+): void => {
     for (const index of Object.values(aggregateIndexes)) {
-        const table = (tables as Record<string, TableDefinition>)[index.on];
+        const table = tables[index.on];
 
         if (!table) {
             throw new Error(`defineAggregateIndex "${index.name}": unknown table "${index.on}"`);
@@ -435,7 +442,7 @@ export const defineSchema = <T extends Record<string, TableDefinition>>(
     }
 
     for (const index of Object.values(rankIndexes)) {
-        const table = (tables as Record<string, TableDefinition>)[index.on];
+        const table = tables[index.on];
 
         if (!table) {
             throw new Error(`defineRankIndex "${index.name}": unknown table "${index.on}"`);
@@ -443,6 +450,32 @@ export const defineSchema = <T extends Record<string, TableDefinition>>(
 
         (table.rankIndexes as RankIndexDefinition[]).push(index);
     }
+};
+
+const defineSchema = <T extends Record<string, TableDefinition>>(
+    tables: T,
+    vectorIndexes: Record<string, VectorIndexDefinition> = {},
+    aggregateIndexes: Record<string, AggregateIndexDefinition> = {},
+    rankIndexes: Record<string, RankIndexDefinition> = {},
+): ExtendableSchema<T> => {
+    fillIndexTableNames(tables);
+    attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
 
     return withExtend({ tables, vectorIndexes });
+};
+
+export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex };
+
+export type {
+    AggregateIndexOptions,
+    ExtendableSchema,
+    InlineAggregateIndexOptions,
+    InlineRankIndexOptions,
+    ManyRelation,
+    OneRelation,
+    RankIndexOptions,
+    RelationBuilder,
+    TableBuilder,
+    VectorIndexOptions,
+    VectorizeOptions,
 };

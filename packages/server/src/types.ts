@@ -1,30 +1,36 @@
 import type { Id, Infer, Validator } from "@cirrus/values";
 
+// Cache the namespace proxies and the per-function reference objects so that
+// `api.foo.bar` returns the *same* object on every access. React hooks
+// (`useMutation`, `useQuery`) put the reference in dependency arrays; a fresh
+// identity per render would re-run effects every render and loop forever.
+const namespaceCache = new Map<PropertyKey, Record<string, unknown>>();
+
 /** Map of validators describing a function's args record. */
-export type ArgsValidator = Record<string, Validator>;
+type ArgsValidator = Record<string, Validator>;
 
 /** Infer the args object type from an {@link ArgsValidator}. */
-export type InferArgs<A extends ArgsValidator> = {
+type InferArgs<A extends ArgsValidator> = {
     [K in keyof A as undefined extends Infer<A[K]> ? K : never]?: Infer<A[K]>;
 } & { [K in keyof A as undefined extends Infer<A[K]> ? never : K]: Infer<A[K]> };
 
 /** How a table is routed at runtime. */
-export type ShardMode = { kind: "global" } | { field: string; kind: "shardBy" } | { kind: "root" };
+type ShardMode = { kind: "global" } | { field: string; kind: "shardBy" } | { kind: "root" };
 
-export interface IndexDefinition {
+interface IndexDefinition {
     fields: ReadonlyArray<string>;
     name: string;
     unique?: boolean;
 }
 
-export interface SearchIndexDefinition {
+interface SearchIndexDefinition {
     field: string;
     filterFields?: ReadonlyArray<string>;
     name: string;
 }
 
 /** Reducer applied by an aggregate index. */
-export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
+type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
 
 /**
  * Declared aggregate index — the schema-level seam that lets the runtime keep
@@ -39,7 +45,7 @@ export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
  * - `where` — optional static predicate baked into the counter (only the rows
  * matching it ever land in the counter).
  */
-export interface AggregateIndexDefinition {
+interface AggregateIndexDefinition {
     by?: ReadonlyArray<string>;
     field?: string;
     name: string;
@@ -53,7 +59,7 @@ export interface AggregateIndexDefinition {
  * direction. The runtime breaks ties on the row's `_id` ASC so the order is
  * total and `rank()` always returns a deterministic 1-based position.
  */
-export interface RankSortKey {
+interface RankSortKey {
     direction: "asc" | "desc";
     field: string;
 }
@@ -76,7 +82,7 @@ export interface RankSortKey {
  * to rank within a channel). Omitted ⇒ one global rank across the table.
  * - `where` — static predicate baked into the index; only matching rows enter.
  */
-export interface RankIndexDefinition {
+interface RankIndexDefinition {
     name: string;
     on: string;
     partitionBy?: ReadonlyArray<string>;
@@ -85,7 +91,7 @@ export interface RankIndexDefinition {
 }
 
 /** FK behavior when a referenced parent row is deleted (mirrors SQL `ON DELETE`). */
-export type OnDeleteAction = "cascade" | "restrict" | "set null";
+type OnDeleteAction = "cascade" | "restrict" | "set null";
 
 /**
  * A declared relation between two tables, recorded by `.relations((r) => …)`.
@@ -98,7 +104,7 @@ export type OnDeleteAction = "cascade" | "restrict" | "set null";
  * `onDelete` is meaningful only on `one`: it is the action applied to the
  * holder rows when the referenced parent row is deleted.
  */
-export interface RelationDefinition {
+interface RelationDefinition {
     field: string;
     kind: "many" | "one";
     onDelete?: OnDeleteAction;
@@ -107,20 +113,20 @@ export interface RelationDefinition {
 }
 
 /** Distance metric used by a Vectorize index. */
-export type VectorMetric = "cosine" | "dot-product" | "euclidean";
+type VectorMetric = "cosine" | "dot-product" | "euclidean";
 
 /**
  * Bring-your-own-embedder: a user-supplied fn turning a source string into a
  * numeric vector. The runtime calls it at upsert/query time so the framework
  * never couples to a single embedding provider.
  */
-export type VectorEmbedder = (input: string) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
+type VectorEmbedder = (input: string) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
 
 /**
  * Vector index declared inline on a table via `.vectorize(field, opts)`
  * (DSL Shape A). The source is always a single column on the owning table.
  */
-export interface TableVectorIndex {
+interface TableVectorIndex {
     dimensions: number;
     embed: VectorEmbedder;
     field: string;
@@ -129,7 +135,7 @@ export interface TableVectorIndex {
     name: string;
 }
 
-export interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
+interface TableDefinition<Shape extends Record<string, Validator> = Record<string, Validator>> {
     /**
      * Aggregate indexes declared via `.aggregateIndex(name, opts)`. The runtime
      * maintains a counter row per `by` group via the trigger seam, so reads
@@ -173,7 +179,7 @@ export interface TableDefinition<Shape extends Record<string, Validator> = Recor
  * Unlike {@link TableVectorIndex}, the source is a `select` function so it can
  * derive the embedded text from any computation (e.g. `title + body`).
  */
-export interface VectorIndexDefinition {
+interface VectorIndexDefinition {
     readonly dimensions: number;
     readonly embed: VectorEmbedder;
     readonly kind: "vectorIndex";
@@ -183,14 +189,14 @@ export interface VectorIndexDefinition {
     readonly table: string;
 }
 
-export interface Schema<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
+interface Schema<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
     readonly tables: T;
     readonly vectorIndexes: Record<string, VectorIndexDefinition>;
 }
 
 // --- Function registration ---------------------------------------------------
 
-export type FunctionKind = "action" | "mutation" | "query" | "stream";
+type FunctionKind = "action" | "mutation" | "query" | "stream";
 
 /**
  * Call surface a function is exposed on. `public` functions are reachable from
@@ -199,18 +205,18 @@ export type FunctionKind = "action" | "mutation" | "query" | "stream";
  * by the DO's external RPC path. Absence is treated as `public` for
  * back-compat with functions registered before visibility existed.
  */
-export type FunctionVisibility = "internal" | "public";
+type FunctionVisibility = "internal" | "public";
 
-export interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
+interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
     readonly args: A;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly visibility?: FunctionVisibility;
 }
 
-export type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
-export type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
-export type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
+type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
+type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
+type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
 
 /**
  * A streaming query registration. Unlike {@link RegisteredFunction} the handler
@@ -220,7 +226,7 @@ export type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A,
  * can stop early — break out of the loop or check `signal.aborted` between
  * yields.
  */
-export interface RegisteredStream<A extends ArgsValidator, R> {
+interface RegisteredStream<A extends ArgsValidator, R> {
     readonly args: A;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
@@ -233,13 +239,13 @@ export interface RegisteredStream<A extends ArgsValidator, R> {
  * Read-only handle bound to a table. Used by `query`/`mutation`/`action`. The
  * actual SQL implementation lives in `@cirrus/do`; these are signatures only.
  */
-export interface DatabaseReader {
+interface DatabaseReader {
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
     query: (tableName: string) => TableReader;
 }
 
 /** Options for {@link TableReader.paginate} — Convex-compatible page request. */
-export interface PaginationOptions {
+interface PaginationOptions {
     /** Opaque cursor from the prior page's `continueCursor`; `null`/omitted starts at the first page. */
     cursor?: null | string;
     /** Maximum rows to return for this page. */
@@ -247,7 +253,7 @@ export interface PaginationOptions {
 }
 
 /** One page of a keyset-paginated query. */
-export interface PaginationResult<T = Record<string, unknown>> {
+interface PaginationResult<T = Record<string, unknown>> {
     /** Cursor to pass back for the next page, or `null` once `isDone`. */
     continueCursor: null | string;
     /** `true` when this page is the last one. */
@@ -255,7 +261,7 @@ export interface PaginationResult<T = Record<string, unknown>> {
     page: T[];
 }
 
-export interface TableReader {
+interface TableReader {
     collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReader;
     first: () => Promise<Record<string, unknown> | null>;
@@ -273,7 +279,7 @@ export interface TableReader {
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader;
 }
 
-export interface IndexRangeBuilder {
+interface IndexRangeBuilder {
     eq: (field: string, value: unknown) => IndexRangeBuilder;
     gt: (field: string, value: unknown) => IndexRangeBuilder;
     gte: (field: string, value: unknown) => IndexRangeBuilder;
@@ -282,14 +288,14 @@ export interface IndexRangeBuilder {
 }
 
 /** Builder passed to {@link TableReader.withSearchIndex}; mirrors Convex's search query. */
-export interface SearchFilterBuilder {
+interface SearchFilterBuilder {
     /** Narrow by a declared filter field (exact match). */
     eq: (field: string, value: unknown) => SearchFilterBuilder;
     /** Full-text match `query` against the index's searchable `field`. Call exactly once. */
     search: (field: string, query: string) => SearchFilterBuilder;
 }
 
-export interface DatabaseWriter extends DatabaseReader {
+interface DatabaseWriter extends DatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
     insert: <T extends string>(tableName: T, document: Record<string, unknown>) => Promise<Id<T>>;
     patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
@@ -297,12 +303,12 @@ export interface DatabaseWriter extends DatabaseReader {
 }
 
 /** Authenticated identity surfaced into every context. */
-export interface AuthState {
+interface AuthState {
     getIdentity: () => Promise<Record<string, unknown> | null>;
     readonly userId: string | null;
 }
 
-export interface Scheduler {
+interface Scheduler {
     runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
     runAt: (timestampMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
 }
@@ -310,17 +316,17 @@ export interface Scheduler {
 // --- Lifecycle triggers ------------------------------------------------------
 
 /** Lifecycle phase relative to the SQL write. */
-export type TriggerTiming = "after" | "before";
+type TriggerTiming = "after" | "before";
 
 /** The CRUD operation a trigger reacts to. `patch` and `replace` both map to `update`. */
-export type TriggerOp = "delete" | "insert" | "update";
+type TriggerOp = "delete" | "insert" | "update";
 
 /**
  * A row as observed by a trigger handler: the table's `Shape` (with the same
  * optionality rules as {@link InferArgs}) plus the system columns every stored
  * doc carries.
  */
-export type TriggerRow<Shape extends Record<string, Validator>> = { [K in keyof Shape as undefined extends Infer<Shape[K]> ? K : never]?: Infer<Shape[K]> } & {
+type TriggerRow<Shape extends Record<string, Validator>> = { [K in keyof Shape as undefined extends Infer<Shape[K]> ? K : never]?: Infer<Shape[K]> } & {
     [K in keyof Shape as undefined extends Infer<Shape[K]> ? never : K]: Infer<Shape[K]>;
 } & {
     readonly _creationTime: number;
@@ -328,7 +334,7 @@ export type TriggerRow<Shape extends Record<string, Validator>> = { [K in keyof 
 };
 
 /** What an `insert` trigger observes: the freshly written row. */
-export interface TriggerInsertEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
+interface TriggerInsertEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
     readonly doc: TriggerRow<Shape>;
     readonly id: string;
     readonly op: "insert";
@@ -341,7 +347,7 @@ export interface TriggerInsertEvent<Shape extends Record<string, Validator> = Re
  * runtime supplies it best-effort and only omits it in the unreachable
  * row-vanished-mid-write case.
  */
-export interface TriggerUpdateEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
+interface TriggerUpdateEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
     readonly doc: TriggerRow<Shape>;
     readonly id: string;
     readonly op: "update";
@@ -354,7 +360,7 @@ export interface TriggerUpdateEvent<Shape extends Record<string, Validator> = Re
  * `previous` is typed as always present; the runtime supplies it best-effort
  * and only omits it in the unreachable row-vanished-mid-write case.
  */
-export interface TriggerDeleteEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
+interface TriggerDeleteEvent<Shape extends Record<string, Validator> = Record<string, Validator>> {
     readonly id: string;
     readonly op: "delete";
     readonly previous: TriggerRow<Shape>;
@@ -362,17 +368,17 @@ export interface TriggerDeleteEvent<Shape extends Record<string, Validator> = Re
 }
 
 /** Union of every trigger event, with the table `Shape` erased (as stored in `triggerMap`). */
-export type TriggerEvent = TriggerDeleteEvent | TriggerInsertEvent | TriggerUpdateEvent;
+type TriggerEvent = TriggerDeleteEvent | TriggerInsertEvent | TriggerUpdateEvent;
 
 /** Page returned by {@link TriggerDatabase.findMany}; mirrors `@cirrus/do`'s `QueryPage`. */
-export interface TriggerQueryPage {
+interface TriggerQueryPage {
     continueCursor: null | string;
     isDone: boolean;
     page: Record<string, unknown>[];
 }
 
 /** Args accepted by {@link TriggerDatabase} reads; mirrors `@cirrus/do`'s `QueryArgs`. */
-export interface TriggerQueryArgs {
+interface TriggerQueryArgs {
     cursor?: null | string;
     limit?: number;
     orderBy?: ReadonlyArray<unknown>;
@@ -385,7 +391,7 @@ export interface TriggerQueryArgs {
  * `@cirrus/do`'s `AggregateOptions`, kept local so trigger handlers in
  * `@cirrus/server` don't take a hard dep on the DO runtime.
  */
-export interface TriggerAggregateOptions {
+interface TriggerAggregateOptions {
     baseWhere?: Record<string, unknown>;
     field?: string;
     op: AggregateOp;
@@ -394,7 +400,7 @@ export interface TriggerAggregateOptions {
 }
 
 /** Args accepted by {@link TriggerDatabase.groupBy}. */
-export interface TriggerGroupByOptions {
+interface TriggerGroupByOptions {
     agg?: { field?: string; op: AggregateOp };
     baseWhere?: Record<string, unknown>;
     by: ReadonlyArray<string>;
@@ -403,13 +409,13 @@ export interface TriggerGroupByOptions {
 }
 
 /** One entry returned by {@link TriggerDatabase.groupBy}. */
-export interface TriggerGroupByEntry {
+interface TriggerGroupByEntry {
     key: Record<string, unknown>;
     value: null | number;
 }
 
 /** Args accepted by {@link TriggerDatabase.rank}. */
-export interface TriggerRankOptions {
+interface TriggerRankOptions {
     baseWhere?: Record<string, unknown>;
     restrictsCounts?: boolean;
     /** Either the row id or the full row document. */
@@ -418,13 +424,13 @@ export interface TriggerRankOptions {
 }
 
 /** Result of {@link TriggerDatabase.rank} — 1-based position + partition total. */
-export interface TriggerRankResult {
+interface TriggerRankResult {
     position: number;
     total: number;
 }
 
 /** Args accepted by {@link TriggerDatabase.rankPage}. */
-export interface TriggerRankPageOptions {
+interface TriggerRankPageOptions {
     baseWhere?: Record<string, unknown>;
     cursor?: null | string;
     take?: number;
@@ -443,7 +449,7 @@ export interface TriggerRankPageOptions {
  * within the same DO transaction (the counter step happens before the trigger
  * fires).
  */
-export interface TriggerDatabase {
+interface TriggerDatabase {
     aggregate: (tableName: string, options: TriggerAggregateOptions) => Promise<null | number>;
     count: (tableName: string, where?: Record<string, unknown>) => Promise<number>;
     delete: (id: string) => Promise<void>;
@@ -463,13 +469,14 @@ export interface TriggerDatabase {
  * `scheduler` enqueues async / cross-shard follow-up work (cross-shard work is
  * **not** transactional with the firing write).
  */
-export interface TriggerCtx {
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
+interface TriggerCtx {
     readonly db: TriggerDatabase;
     readonly scheduler: Scheduler;
 }
 
 /** A user-declared trigger handler. Throwing from a `before*` handler aborts the write. */
-export type TriggerHandler<Event> = (context: TriggerCtx, event: Event) => Promise<void> | void;
+type TriggerHandler<Event> = (context: TriggerCtx, event: Event) => Promise<void> | void;
 
 /**
  * A single declared trigger, as stored in {@link TableDefinition.triggerMap}.
@@ -477,7 +484,7 @@ export type TriggerHandler<Event> = (context: TriggerCtx, event: Event) => Promi
  * per-op {@link TriggerBuilder} methods recover the precise event type for
  * authors.
  */
-export interface TriggerDefinition {
+interface TriggerDefinition {
     readonly handler: TriggerHandler<TriggerEvent>;
     readonly op: TriggerOp;
     readonly timing: TriggerTiming;
@@ -487,7 +494,7 @@ export interface TriggerDefinition {
  * The `t` argument passed to `.triggers((t) => …)`. Each method binds a handler
  * to one `timing`+`op` pair, typing the event against the table's `Shape`.
  */
-export interface TriggerBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> {
+interface TriggerBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> {
     afterDelete: (handler: TriggerHandler<TriggerDeleteEvent<Shape>>) => TriggerDefinition;
     afterInsert: (handler: TriggerHandler<TriggerInsertEvent<Shape>>) => TriggerDefinition;
     afterUpdate: (handler: TriggerHandler<TriggerUpdateEvent<Shape>>) => TriggerDefinition;
@@ -506,7 +513,7 @@ export interface TriggerBuilder<Shape extends Record<string, Validator> = Record
  * trip), so the read-only surface keeps `download` and `getSignedUrl`. The
  * full {@link Storage} surface stays on `ActionCtx`.
  */
-export interface ReadOnlyStorage {
+interface ReadOnlyStorage {
     /** Fetch the body of an existing object. Returns `null` when absent. */
     download: (key: string) => Promise<ReadableStream | null>;
     /** Resolve a short-lived signed URL for an existing object. */
@@ -515,22 +522,22 @@ export interface ReadOnlyStorage {
     getUrl: (key: string) => string;
 }
 
-export interface Storage extends ReadOnlyStorage {
+interface Storage extends ReadOnlyStorage {
     delete: (key: string) => Promise<void>;
 }
 
-export interface VectorMatch {
+interface VectorMatch {
     id: string;
     metadata?: Record<string, unknown>;
     score: number;
 }
 
-export interface VectorMatches {
+interface VectorMatches {
     count: number;
     matches: ReadonlyArray<VectorMatch>;
 }
 
-export interface VectorQueryInput {
+interface VectorQueryInput {
     /** Embedder used when `input` is supplied instead of a precomputed `vector`. */
     embed?: VectorEmbedder;
     filter?: Record<string, unknown>;
@@ -542,7 +549,7 @@ export interface VectorQueryInput {
     vector?: ReadonlyArray<number>;
 }
 
-export interface VectorUpsertInput {
+interface VectorUpsertInput {
     embed: VectorEmbedder;
     id: string;
     input: string;
@@ -550,7 +557,7 @@ export interface VectorUpsertInput {
     namespace?: string;
 }
 
-export interface VectorRecord {
+interface VectorRecord {
     id: string;
     metadata?: Record<string, unknown>;
     values: ReadonlyArray<number>;
@@ -560,7 +567,7 @@ export interface VectorRecord {
  * Read-only vector surface exposed on {@link QueryCtx}. Mirrors the read half
  * of `@cirrus/vectors`' `CirrusVectors` so the live adapter is assignable.
  */
-export interface VectorSearchReader {
+interface VectorSearchReader {
     getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
     query: (indexName: string, input: VectorQueryInput) => Promise<VectorMatches>;
 }
@@ -570,20 +577,22 @@ export interface VectorSearchReader {
  * is queued post-commit by default; `upsertNow` forces a synchronous write.
  * `db.delete` on a vectorized table auto-propagates the matching `deleteByIds`.
  */
-export interface VectorSearch extends VectorSearchReader {
+interface VectorSearch extends VectorSearchReader {
     deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<void>;
     upsert: (indexName: string, input: VectorUpsertInput) => Promise<void>;
     upsertNow: (indexName: string, input: VectorUpsertInput) => Promise<void>;
 }
 
-export interface QueryCtx {
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
+interface QueryCtx {
     readonly auth: AuthState;
     readonly db: DatabaseReader;
     readonly storage: ReadOnlyStorage;
     readonly vectors: VectorSearchReader;
 }
 
-export interface MutationCtx {
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
+interface MutationCtx {
     readonly auth: AuthState;
     readonly db: DatabaseWriter;
     readonly scheduler: Scheduler;
@@ -591,7 +600,8 @@ export interface MutationCtx {
     readonly vectors: VectorSearch;
 }
 
-export interface ActionCtx {
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
+interface ActionCtx {
     readonly auth: AuthState;
     readonly db: DatabaseWriter;
     readonly fetch: typeof globalThis.fetch;
@@ -609,15 +619,9 @@ export interface ActionCtx {
  * Stand-in returned by codegen so projects can `import { api } from "./_generated/api"`.
  * The runtime value is opaque; the types are filled in by generated declarations.
  */
-export type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValidator, unknown, FunctionKind>>>;
+type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValidator, unknown, FunctionKind>>>;
 
-// Cache the namespace proxies and the per-function reference objects so that
-// `api.foo.bar` returns the *same* object on every access. React hooks
-// (`useMutation`, `useQuery`) put the reference in dependency arrays; a fresh
-// identity per render would re-run effects every render and loop forever.
-const namespaceCache = new Map<PropertyKey, Record<string, unknown>>();
-
-export const anyApi: AnyApi = new Proxy(
+const anyApi: AnyApi = new Proxy(
     {},
     {
         get(_target, namespace: PropertyKey) {
@@ -653,3 +657,74 @@ export const anyApi: AnyApi = new Proxy(
         },
     },
 );
+
+export { anyApi };
+
+export type {
+    ActionCtx,
+    AggregateIndexDefinition,
+    AggregateOp,
+    AnyApi,
+    ArgsValidator,
+    AuthState,
+    DatabaseReader,
+    DatabaseWriter,
+    FunctionKind,
+    FunctionVisibility,
+    IndexDefinition,
+    IndexRangeBuilder,
+    InferArgs,
+    MutationCtx,
+    OnDeleteAction,
+    PaginationOptions,
+    PaginationResult,
+    QueryCtx,
+    RankIndexDefinition,
+    RankSortKey,
+    ReadOnlyStorage,
+    RegisteredAction,
+    RegisteredFunction,
+    RegisteredMutation,
+    RegisteredQuery,
+    RegisteredStream,
+    RelationDefinition,
+    Scheduler,
+    Schema,
+    SearchFilterBuilder,
+    SearchIndexDefinition,
+    ShardMode,
+    Storage,
+    TableDefinition,
+    TableReader,
+    TableVectorIndex,
+    TriggerAggregateOptions,
+    TriggerBuilder,
+    TriggerCtx,
+    TriggerDatabase,
+    TriggerDefinition,
+    TriggerDeleteEvent,
+    TriggerEvent,
+    TriggerGroupByEntry,
+    TriggerGroupByOptions,
+    TriggerHandler,
+    TriggerInsertEvent,
+    TriggerOp,
+    TriggerQueryArgs,
+    TriggerQueryPage,
+    TriggerRankOptions,
+    TriggerRankPageOptions,
+    TriggerRankResult,
+    TriggerRow,
+    TriggerTiming,
+    TriggerUpdateEvent,
+    VectorEmbedder,
+    VectorIndexDefinition,
+    VectorMatch,
+    VectorMatches,
+    VectorMetric,
+    VectorQueryInput,
+    VectorRecord,
+    VectorSearch,
+    VectorSearchReader,
+    VectorUpsertInput,
+};

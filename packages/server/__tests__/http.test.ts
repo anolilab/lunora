@@ -62,8 +62,13 @@ describe("httpRouter", () => {
             httpAction(() => new Response("POST")),
         );
 
-        await expect((await app.fetch(new Request("https://x/r"), { __cirrusCtx: context })).text()).resolves.toBe("GET");
-        await expect((await app.fetch(new Request("https://x/r", { method: "POST" }), { __cirrusCtx: context })).text()).resolves.toBe("POST");
+        const getResponse = await app.fetch(new Request("https://x/r"), { __cirrusCtx: context });
+
+        await expect(getResponse.text()).resolves.toBe("GET");
+
+        const postResponse = await app.fetch(new Request("https://x/r", { method: "POST" }), { __cirrusCtx: context });
+
+        await expect(postResponse.text()).resolves.toBe("POST");
     });
 
     it("returns hono's 404 for an unmatched path", async () => {
@@ -76,7 +81,9 @@ describe("httpRouter", () => {
             httpAction(() => new Response("ok")),
         );
 
-        expect((await app.fetch(new Request("https://x/unknown"), { __cirrusCtx: context })).status).toBe(404);
+        const response = await app.fetch(new Request("https://x/unknown"), { __cirrusCtx: context });
+
+        expect(response.status).toBe(404);
     });
 
     it("a path-match with the wrong verb is a 404", async () => {
@@ -89,7 +96,9 @@ describe("httpRouter", () => {
             httpAction(() => new Response("ok")),
         );
 
-        expect((await app.fetch(new Request("https://x/thing", { method: "POST" }), { __cirrusCtx: context })).status).toBe(404);
+        const response = await app.fetch(new Request("https://x/thing", { method: "POST" }), { __cirrusCtx: context });
+
+        expect(response.status).toBe(404);
     });
 
     it("errors when the action context was not injected (router used outside the runtime)", async () => {
@@ -102,6 +111,8 @@ describe("httpRouter", () => {
             httpAction(() => new Response("ok")),
         );
 
-        expect((await app.fetch(new Request("https://x/known"), {})).status).toBe(500);
+        const response = await app.fetch(new Request("https://x/known"), {});
+
+        expect(response.status).toBe(500);
     });
 });

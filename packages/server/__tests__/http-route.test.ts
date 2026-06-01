@@ -56,8 +56,13 @@ describe("httpRoute searchParams", () => {
                 return { keys: Object.keys(searchParams), value: searchParams.q ?? null };
             });
 
-        await expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items"))).json()).resolves.toEqual({ keys: [], value: null });
-        await expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?q=hi"))).json()).resolves.toEqual({
+        const emptyResponse = await dispatch(route, "GET", "/api/items", new Request("https://x/api/items"));
+
+        await expect(emptyResponse.json()).resolves.toEqual({ keys: [], value: null });
+
+        const queryResponse = await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?q=hi"));
+
+        await expect(queryResponse.json()).resolves.toEqual({
             keys: ["q"],
             value: "hi",
         });
@@ -71,7 +76,9 @@ describe("httpRoute searchParams", () => {
             .searchParams({ tag: v.array(v.string()) })
             .handler(({ searchParams }) => searchParams.tag);
 
-        await expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?tag=a&tag=b"))).json()).resolves.toEqual(["a", "b"]);
+        const response = await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?tag=a&tag=b"));
+
+        await expect(response.json()).resolves.toEqual(["a", "b"]);
     });
 
     it("a malformed scalar fails with a 400 naming the field", async () => {
@@ -96,7 +103,9 @@ describe("httpRoute searchParams", () => {
             .searchParams({ limit: v.number() })
             .handler(({ searchParams }) => searchParams);
 
-        expect((await dispatch(route, "GET", "/api/items", new Request("https://x/api/items"))).status).toBe(400);
+        const response = await dispatch(route, "GET", "/api/items", new Request("https://x/api/items"));
+
+        expect(response.status).toBe(400);
     });
 });
 
@@ -197,7 +206,9 @@ describe("httpRoute output", () => {
             .output(v.object({ id: v.string() }))
             .handler(() => ({ id: "u1", secret: "leaked" }) as { id: string });
 
-        await expect((await dispatch(route, "GET", "/api/me", new Request("https://x/api/me"))).json()).resolves.toEqual({ id: "u1" });
+        const response = await dispatch(route, "GET", "/api/me", new Request("https://x/api/me"));
+
+        await expect(response.json()).resolves.toEqual({ id: "u1" });
     });
 
     it("a result that violates .output() surfaces as a 500, not a 400", async () => {
