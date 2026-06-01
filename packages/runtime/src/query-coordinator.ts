@@ -4,15 +4,15 @@
  * Lights up when a `.shardBy(...)` table needs an aggregate read — `list`,
  * `search`, `count`, or a "look this up everywhere" call. The coordinator:
  *
- *   1. Asks a {@link ShardRegistry} which shard keys are live for the table.
- *   2. Fans the RPC out to each shard via the same DO namespace the
- *      single-shard path uses (bounded by `maxConcurrency`).
- *   3. Applies a per-shard timeout so one slow shard cannot stall the
- *      aggregate response — slow shards return a {@link ShardError} and the
- *      merge step decides whether that's fatal.
- *   4. Merges results via a {@link MergeStrategy} — `concat`, `sum`,
- *      `topK`, or `first`. All four are serializable from the wire so the
- *      client (or codegen) can describe the merge without sending closures.
+ * 1. Asks a {@link ShardRegistry} which shard keys are live for the table.
+ * 2. Fans the RPC out to each shard via the same DO namespace the
+ * single-shard path uses (bounded by `maxConcurrency`).
+ * 3. Applies a per-shard timeout so one slow shard cannot stall the
+ * aggregate response — slow shards return a {@link ShardError} and the
+ * merge step decides whether that's fatal.
+ * 4. Merges results via a {@link MergeStrategy} — `concat`, `sum`,
+ * `topK`, or `first`. All four are serializable from the wire so the
+ * client (or codegen) can describe the merge without sending closures.
  *
  * The DO-storage-backed routing table the plan describes is hidden behind
  * the {@link ShardRegistry} interface — we ship a static implementation
@@ -51,12 +51,12 @@ const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, Readon
  * Aggregate-friendly variants for cross-shard `count` / `aggregate` /
  * `groupBy` fan-outs:
  *
- *   - `sum` — `count(*)`, `aggregate({ op: "sum" })` (sums numeric per-shard payloads).
- *   - `max` — `aggregate({ op: "max" })`.
- *   - `min` — `aggregate({ op: "min" })`.
- *   - `groupBy` — per-shard `GroupByEntry[]` payloads, reduced into one
- *     entry per distinct key tuple. `op` controls how values combine across
- *     shards: `sum` (default — works for `COUNT(*)` and `SUM`), `max`, `min`.
+ * - `sum` — `count(*)`, `aggregate({ op: "sum" })` (sums numeric per-shard payloads).
+ * - `max` — `aggregate({ op: "max" })`.
+ * - `min` — `aggregate({ op: "min" })`.
+ * - `groupBy` — per-shard `GroupByEntry[]` payloads, reduced into one
+ * entry per distinct key tuple. `op` controls how values combine across
+ * shards: `sum` (default — works for `COUNT(*)` and `SUM`), `max`, `min`.
  *
  * `avg` is intentionally absent in v1 — a correct cross-shard average
  * requires shipping `(sum, count)` per shard, not the post-shard mean.
@@ -80,7 +80,7 @@ type MergeStrategy
  * - `count` → `sum`.
  * - `aggregate({ op })` → `sum`/`max`/`min` (or throws for `avg`).
  * - `groupBy({ by, agg })` → `groupBy({ op })` (defaults to `sum` since
- *   `groupBy`'s default reducer is `count`).
+ * `groupBy`'s default reducer is `count`).
  */
 const mergeStrategyForAggregate = (
     input:
@@ -334,12 +334,10 @@ const DEFAULT_CONCURRENCY = 16;
 const DEFAULT_TIMEOUT_MS = 5000;
 
 /** Admin RPCs wrap their payload in `{ result }`; peel it so callers see the runner's value. */
-function unwrapResult(value: unknown): unknown {
-    return value !== null && typeof value === "object" && "result" in value ? value.result : value;
-}
+const unwrapResult = (value: unknown): unknown => (value !== null && typeof value === "object" && "result" in value ? value.result : value);
 
 /** Numeric counts + status read defensively off a `MigrationRunResult`-shaped payload. */
-function readRunCounts(payload: unknown): { changed: number; processed: number; status: string | undefined } {
+const readRunCounts = (payload: unknown): { changed: number; processed: number; status: string | undefined } => {
     const run = (payload ?? {}) as { changed?: unknown; processed?: unknown; status?: unknown };
 
     return {
@@ -347,10 +345,10 @@ function readRunCounts(payload: unknown): { changed: number; processed: number; 
         processed: typeof run.processed === "number" ? run.processed : 0,
         status: typeof run.status === "string" ? run.status : undefined,
     };
-}
+};
 
 /** `"failed"` dominates, then incompleteness; an all-clean run reports `"completed"`. */
-function rollUpStatus(anyFailed: boolean, incomplete: boolean): MigrationFanOutResult["status"] {
+const rollUpStatus = (anyFailed: boolean, incomplete: boolean): MigrationFanOutResult["status"] => {
     if (anyFailed) {
         return "failed";
     }
@@ -360,7 +358,7 @@ function rollUpStatus(anyFailed: boolean, incomplete: boolean): MigrationFanOutR
     }
 
     return "completed";
-}
+};
 
 /**
  * Fold per-shard RPC outcomes into a {@link MigrationFanOutResult}: sum the
@@ -368,7 +366,7 @@ function rollUpStatus(anyFailed: boolean, incomplete: boolean): MigrationFanOutR
  * statuses up so a single failed shard reports `"failed"` and an incomplete or
  * unreachable shard reports `"in_progress"`.
  */
-function rollUpMigration(results: ReadonlyArray<ShardRpcOutcome>): MigrationFanOutResult {
+const rollUpMigration = (results: ReadonlyArray<ShardRpcOutcome>): MigrationFanOutResult => {
     const shards: ShardMigrationOutcome[] = [];
     let ok = 0;
     let failed = 0;
@@ -398,7 +396,7 @@ function rollUpMigration(results: ReadonlyArray<ShardRpcOutcome>): MigrationFanO
     }
 
     return { changed, failed, ok, processed, shards, status: rollUpStatus(anyFailed, anyInProgress || failed > 0) };
-}
+};
 
 /**
  * Roll per-shard export outcomes into a flat list. The DO admin handler
@@ -406,7 +404,7 @@ function rollUpMigration(results: ReadonlyArray<ShardRpcOutcome>): MigrationFanO
  * project the inner `rows` array; an error surfaces an empty `rows` so the
  * caller can write the failed-shard entries without a special case.
  */
-function rollUpExport(results: ReadonlyArray<ShardRpcOutcome>): ExportFanOutResult {
+const rollUpExport = (results: ReadonlyArray<ShardRpcOutcome>): ExportFanOutResult => {
     const shards: ShardExportOutcome[] = [];
     let ok = 0;
     let failed = 0;
@@ -421,16 +419,17 @@ function rollUpExport(results: ReadonlyArray<ShardRpcOutcome>): ExportFanOutResu
         ok += 1;
 
         const payload = unwrapResult(result.value) as { rows?: ReadonlyArray<{ doc: Record<string, unknown>; table: string }> };
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- payload is an untrusted unwrapped RPC value cast to a shape; guard the null/undefined case
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
 
         shards.push({ rows, shardKey: result.shardKey });
     }
 
     return { failed, ok, shards };
-}
+};
 
 /** Sum the per-shard import counts/errors into a single roll-up. */
-function rollUpImport(results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResult {
+const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResult => {
     const shards: ShardImportOutcome[] = [];
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
@@ -447,11 +446,13 @@ function rollUpImport(results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
 
         ok += 1;
 
-        const payload = unwrapResult(result.value) as {
-            conflicts?: number;
-            errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
-            inserted?: Record<string, number>;
-        };
+        const payload = unwrapResult(result.value) as
+            | undefined
+            | {
+                  conflicts?: number;
+                  errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
+                  inserted?: Record<string, number>;
+              };
         const shardInserted = payload?.inserted ?? {};
 
         for (const [table, count] of Object.entries(shardInserted)) {
@@ -477,7 +478,7 @@ function rollUpImport(results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
     }
 
     return { conflicts, errors, failed, inserted, ok, shards };
-}
+};
 
 interface ShardRpcOk {
     kind: "ok";
@@ -507,14 +508,14 @@ interface PreparedShardRpc {
     readonly headers: Record<string, string>;
 }
 
-function prepareShardRpc(request: ShardRpcRequest): PreparedShardRpc {
+const prepareShardRpc = (request: ShardRpcRequest): PreparedShardRpc => {
     return {
         body: JSON.stringify({ args: request.args ?? {}, functionPath: request.functionPath }),
         headers: { "content-type": "application/json", ...request.headers },
     };
-}
+};
 
-async function callOneShard(namespace: ShardNamespaceLike, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> {
+const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
     const stub = resolveShard(namespace, shardKey);
 
     // AbortController lets the timeout branch tear the in-flight fetch down
@@ -570,15 +571,15 @@ async function callOneShard(namespace: ShardNamespaceLike, shardKey: string, pre
             clearTimeout(timeoutId);
         }
     }
-}
+};
 
-async function runBoundedFanOut(
+const runBoundedFanOut = async (
     namespace: ShardNamespaceLike,
     keys: ReadonlyArray<string>,
     request: ShardRpcRequest,
     maxConcurrency: number,
     timeoutMs: number,
-): Promise<ReadonlyArray<ShardRpcOutcome>> {
+): Promise<ReadonlyArray<ShardRpcOutcome>> => {
     if (keys.length === 0) {
         return [];
     }
@@ -588,6 +589,7 @@ async function runBoundedFanOut(
     let cursor = 0;
 
     const worker = async (): Promise<void> => {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
         while (true) {
             const index = cursor;
 
@@ -599,6 +601,7 @@ async function runBoundedFanOut(
                 return;
             }
 
+            // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
             outcomes[index] = await callOneShard(namespace, shardKey, prepared, timeoutMs);
         }
     };
@@ -608,38 +611,179 @@ async function runBoundedFanOut(
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
 
     return outcomes;
-}
+};
 
 /**
  * Canonical-JSON encoding of a key tuple — same shape the aggregate counter
  * uses to stay stable across runs. Lets two shards file the same `{ a, b }`
  * group under the same merged bucket regardless of property order.
  */
-function canonicalJson(record: Record<string, unknown>): string {
+// Code-unit ordering (NOT locale-aware) is load-bearing: it must match the
+// aggregate counter's canonical key order across shards, so a localeCompare
+// comparator would risk bucketing the same key tuple differently per shard.
+const compareCodeUnits = (a: string, b: string): number => {
+    if (a < b) {
+        return -1;
+    }
+
+    return a > b ? 1 : 0;
+};
+
+const canonicalJson = (record: Record<string, unknown>): string => {
     const ordered: Record<string, unknown> = {};
 
-    // Code-unit ordering (NOT locale-aware) is load-bearing: it must match the
-    // aggregate counter's canonical key order across shards, so a localeCompare
-    // comparator would risk bucketing the same key tuple differently per shard.
-    for (const key of Object.keys(record).toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+    for (const key of Object.keys(record).toSorted(compareCodeUnits)) {
+        // eslint-disable-next-line unicorn/no-null -- the JSON canonical key encoding must serialize missing fields as `null` to stay byte-stable with the aggregate counter across shards
         ordered[key] = record[key] ?? null;
     }
 
     return JSON.stringify(ordered);
-}
+};
 
-function mergeShardResults(values: ReadonlyArray<unknown>, strategy: MergeStrategy): unknown {
-    switch (strategy.kind) {
-        case "concat": {
-            const out: unknown[] = [];
+const mergeConcat = (values: ReadonlyArray<unknown>): unknown[] => {
+    const out: unknown[] = [];
 
-            for (const v of values) {
-                if (Array.isArray(v)) {
-                    out.push(...(v as ReadonlyArray<unknown>));
-                }
+    for (const v of values) {
+        if (Array.isArray(v)) {
+            out.push(...(v as ReadonlyArray<unknown>));
+        }
+    }
+
+    return out;
+};
+
+type GroupByMergeOp = "max" | "min" | "sum";
+
+type GroupByMergedValue = null | number;
+
+const combineGroupByValue = (current: number, incoming: number, op: GroupByMergeOp): number => {
+    switch (op) {
+        case "max": {
+            return Math.max(current, incoming);
+        }
+
+        case "min": {
+            return Math.min(current, incoming);
+        }
+
+        case "sum": {
+            return current + incoming;
+        }
+
+        default: {
+            // Compile-time exhaustiveness guard (no runtime effect).
+            op satisfies never;
+
+            return current;
+        }
+    }
+};
+
+const accumulateGroupByEntry = (merged: Map<string, { key: Record<string, unknown>; value: GroupByMergedValue }>, entry: unknown, op: GroupByMergeOp): void => {
+    if (entry === null || typeof entry !== "object") {
+        return;
+    }
+
+    const entryKey = (entry as { key?: Record<string, unknown> }).key ?? {};
+    // eslint-disable-next-line unicorn/no-null -- the per-shard `value` is `null` for a missing aggregate; this `null` is serialized into the merged wire response
+    const entryValue = (entry as { value?: GroupByMergedValue }).value ?? null;
+    const stableKey = canonicalJson(entryKey);
+    const existing = merged.get(stableKey);
+
+    if (!existing) {
+        merged.set(stableKey, { key: entryKey, value: entryValue });
+
+        return;
+    }
+
+    if (existing.value === null) {
+        existing.value = entryValue;
+
+        return;
+    }
+
+    if (entryValue === null) {
+        return;
+    }
+
+    existing.value = combineGroupByValue(existing.value, entryValue, op);
+};
+
+const mergeGroupBy = (values: ReadonlyArray<unknown>, op: GroupByMergeOp): ReadonlyArray<{ key: Record<string, unknown>; value: GroupByMergedValue }> => {
+    // Reduce per-shard `GroupByEntry[]` payloads into one entry per
+    // distinct key tuple. Empty / non-array payloads are skipped — a
+    // failed shard already reported through `errors[]`.
+    const merged = new Map<string, { key: Record<string, unknown>; value: GroupByMergedValue }>();
+
+    for (const v of values) {
+        if (!Array.isArray(v)) {
+            continue;
+        }
+
+        for (const entry of v) {
+            accumulateGroupByEntry(merged, entry, op);
+        }
+    }
+
+    return [...merged.values()];
+};
+
+const mergeNumeric = (values: ReadonlyArray<unknown>, pick: (best: number, candidate: number) => number): GroupByMergedValue => {
+    // eslint-disable-next-line unicorn/no-null -- numeric merge returns `null` when no shard reported a finite value; this `null` is the wire response
+    let best: GroupByMergedValue = null;
+
+    for (const v of values) {
+        if (typeof v === "number" && Number.isFinite(v)) {
+            best = best === null ? v : pick(best, v);
+        }
+    }
+
+    return best;
+};
+
+const mergeSum = (values: ReadonlyArray<unknown>): number => {
+    let total = 0;
+
+    for (const v of values) {
+        if (typeof v === "number" && Number.isFinite(v)) {
+            total += v;
+        }
+    }
+
+    return total;
+};
+
+const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direction?: "asc" | "desc"; k: number }): ReadonlyArray<Record<string, unknown>> => {
+    const collected: { row: Record<string, unknown>; score: number }[] = [];
+
+    for (const v of values) {
+        if (!Array.isArray(v)) {
+            continue;
+        }
+
+        for (const row of v) {
+            if (row === null || typeof row !== "object") {
+                continue;
             }
 
-            return out;
+            const raw = (row as Record<string, unknown>)[strategy.by];
+            const score = typeof raw === "number" && Number.isFinite(raw) ? raw : Number.NEGATIVE_INFINITY;
+
+            collected.push({ row: row as Record<string, unknown>, score });
+        }
+    }
+
+    const direction = strategy.direction ?? "desc";
+
+    collected.sort((a, b) => (direction === "asc" ? a.score - b.score : b.score - a.score));
+
+    return collected.slice(0, strategy.k).map((entry) => entry.row);
+};
+
+const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrategy): unknown => {
+    switch (strategy.kind) {
+        case "concat": {
+            return mergeConcat(values);
         }
 
         case "first": {
@@ -647,133 +791,23 @@ function mergeShardResults(values: ReadonlyArray<unknown>, strategy: MergeStrate
         }
 
         case "groupBy": {
-            // Reduce per-shard `GroupByEntry[]` payloads into one entry per
-            // distinct key tuple. Empty / non-array payloads are skipped — a
-            // failed shard already reported through `errors[]`.
-            const op = strategy.op ?? "sum";
-            const merged = new Map<string, { key: Record<string, unknown>; value: null | number }>();
-
-            for (const v of values) {
-                if (!Array.isArray(v)) {
-                    continue;
-                }
-
-                for (const entry of v) {
-                    if (entry === null || typeof entry !== "object") {
-                        continue;
-                    }
-
-                    const entryKey = (entry as { key?: Record<string, unknown> }).key ?? {};
-                    const entryValue = (entry as { value?: null | number }).value ?? null;
-                    const stableKey = canonicalJson(entryKey);
-                    const existing = merged.get(stableKey);
-
-                    if (!existing) {
-                        merged.set(stableKey, { key: entryKey, value: entryValue });
-
-                        continue;
-                    }
-
-                    if (existing.value === null) {
-                        existing.value = entryValue;
-
-                        continue;
-                    }
-
-                    if (entryValue === null) {
-                        continue;
-                    }
-
-                    switch (op) {
-                        case "max": {
-                            existing.value = Math.max(existing.value, entryValue);
-                            break;
-                        }
-
-                        case "min": {
-                            existing.value = Math.min(existing.value, entryValue);
-                            break;
-                        }
-
-                        case "sum": {
-                            existing.value += entryValue;
-                            break;
-                        }
-
-                        default: {
-                            // Compile-time exhaustiveness guard (no runtime effect).
-                            op satisfies never;
-
-                            break;
-                        }
-                    }
-                }
-            }
-
-            return [...merged.values()];
+            return mergeGroupBy(values, strategy.op ?? "sum");
         }
 
         case "max": {
-            let best: null | number = null;
-
-            for (const v of values) {
-                if (typeof v === "number" && Number.isFinite(v)) {
-                    best = best === null || v > best ? v : best;
-                }
-            }
-
-            return best;
+            return mergeNumeric(values, (best, candidate) => Math.max(best, candidate));
         }
 
         case "min": {
-            let best: null | number = null;
-
-            for (const v of values) {
-                if (typeof v === "number" && Number.isFinite(v)) {
-                    best = best === null || v < best ? v : best;
-                }
-            }
-
-            return best;
+            return mergeNumeric(values, (best, candidate) => Math.min(best, candidate));
         }
 
         case "sum": {
-            let total = 0;
-
-            for (const v of values) {
-                if (typeof v === "number" && Number.isFinite(v)) {
-                    total += v;
-                }
-            }
-
-            return total;
+            return mergeSum(values);
         }
 
         case "topK": {
-            const collected: { row: Record<string, unknown>; score: number }[] = [];
-
-            for (const v of values) {
-                if (!Array.isArray(v)) {
-                    continue;
-                }
-
-                for (const row of v) {
-                    if (row === null || typeof row !== "object") {
-                        continue;
-                    }
-
-                    const raw = (row as Record<string, unknown>)[strategy.by];
-                    const score = typeof raw === "number" && Number.isFinite(raw) ? raw : Number.NEGATIVE_INFINITY;
-
-                    collected.push({ row: row as Record<string, unknown>, score });
-                }
-            }
-
-            const direction = strategy.direction ?? "desc";
-
-            collected.sort((a, b) => (direction === "asc" ? a.score - b.score : b.score - a.score));
-
-            return collected.slice(0, strategy.k).map((entry) => entry.row);
+            return mergeTopK(values, strategy);
         }
 
         default: {
@@ -785,7 +819,7 @@ function mergeShardResults(values: ReadonlyArray<unknown>, strategy: MergeStrate
             return values;
         }
     }
-}
+};
 
 const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordinator => {
     const maxConcurrency = options.maxConcurrency ?? DEFAULT_CONCURRENCY;
@@ -828,10 +862,9 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // an export of `["users","messages"]` reaches every shard that
             // holds either table. Skip globals — they live in D1, not a DO.
             const union = new Set<string>();
+            const perTableKeys = await Promise.all(request.tables.map(async (table) => options.registry.listShardKeys(table)));
 
-            for (const table of request.tables) {
-                const keys = await options.registry.listShardKeys(table);
-
+            for (const keys of perTableKeys) {
                 for (const key of keys) {
                     union.add(key);
                 }
@@ -864,6 +897,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             const concurrency = Math.min(maxConcurrency, batches.length);
 
             const worker = async (): Promise<void> => {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
                 while (true) {
                     const index = cursor;
 
@@ -875,6 +909,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                         return;
                     }
 
+                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes batches sequentially while `concurrency` workers run in parallel
                     outcomes[index] = await callOneShard(
                         namespace,
                         batch.shardKey,

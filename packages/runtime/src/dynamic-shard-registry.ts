@@ -9,21 +9,21 @@
  * # Wiring
  *
  * 1. Bind the `ShardRegistryDO` class in `wrangler.jsonc` as `SHARD_REGISTRY`
- *    (or any name; the namespace binding is passed in).
+ * (or any name; the namespace binding is passed in).
  * 2. Construct the client once per worker request:
  *
- *    ```ts
- *    const registry = createDynamicShardRegistry({ namespace: env.SHARD_REGISTRY });
- *    const coordinator = createQueryCoordinator({ registry });
- *    ```
+ * ```ts
+ * const registry = createDynamicShardRegistry({ namespace: env.SHARD_REGISTRY });
+ * const coordinator = createQueryCoordinator({ registry });
+ * ```
  *
  * 3. Register shard keys when they first see a write. The recommended hook
- *    is the worker's `onWrite` callback fired through `ctx.waitUntil` so
- *    the user-facing write doesn't pay the registry round-trip:
+ * is the worker's `onWrite` callback fired through `ctx.waitUntil` so
+ * the user-facing write doesn't pay the registry round-trip:
  *
- *    ```ts
- *    ctx.waitUntil(registry.register("messages", shardKey));
- *    ```
+ * ```ts
+ * ctx.waitUntil(registry.register("messages", shardKey));
+ * ```
  *
  * # Cache
  *
@@ -117,9 +117,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
     // `idFromName` + `namespace.get` cost on every `register`/`list`/`unregister`.
     let cachedStub: ReturnType<ShardNamespaceLike["get"]> | undefined;
     const stub = (): ReturnType<ShardNamespaceLike["get"]> => {
-        if (!cachedStub) {
-            cachedStub = options.namespace.get(options.namespace.idFromName(instanceName));
-        }
+        cachedStub ??= options.namespace.get(options.namespace.idFromName(instanceName));
 
         return cachedStub;
     };

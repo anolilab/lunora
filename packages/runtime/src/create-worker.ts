@@ -235,8 +235,8 @@ interface WorkerOptions {
     /**
      * Acknowledge — explicitly — that sharded and fan-out access may be
      * exercised by any caller (including unauthenticated ones) because no
-     * authorization callback is configured. When neither {@link authorizeShard}
-     * nor {@link authorizeFanOut} is set, naming a non-default shard or sending
+     * authorization callback is configured. When neither {@link WorkerOptions.authorizeShard}
+     * nor {@link WorkerOptions.authorizeFanOut} is set, naming a non-default shard or sending
      * a fan-out envelope is authorization-open: this is the historical posture,
      * preserved for backward compatibility. The runtime emits a single loud
      * `console.warn` the first time such a request is seen so the gap is
@@ -260,7 +260,7 @@ interface WorkerOptions {
      * Called after `resolveIdentity` and before `coordinator.fanOut` walks
      * the registry. Returning `false` rejects the request with 403
      * `FORBIDDEN_FANOUT`. When unset, fan-out is denied by default
-     * whenever {@link authorizeShard} is configured — fan-out is a
+     * whenever {@link WorkerOptions.authorizeShard} is configured — fan-out is a
      * privileged operation (it dispatches the caller's function across
      * every live shard for the table) and a per-shard gate is not
      * sufficient to authorize it. Apps that need client-driven fan-out
@@ -280,7 +280,7 @@ interface WorkerOptions {
      *
      * Note: this callback does NOT gate fan-out envelopes — fan-out
      * targets every live shard for a table and must be authorized at the
-     * table level via {@link authorizeFanOut}. Configuring this callback
+     * table level via {@link WorkerOptions.authorizeFanOut}. Configuring this callback
      * without `authorizeFanOut` causes fan-out envelopes to be denied by
      * default.
      */
@@ -446,18 +446,22 @@ const readBodyTextWithLimit = async (request: Request, limit: number = MAX_BODY_
     let total = 0;
     let text = "";
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- drain the body stream until the reader signals `done`
     while (true) {
+        // eslint-disable-next-line no-await-in-loop -- stream reads are inherently sequential; each chunk depends on the prior read
         const { done, value } = await reader.read();
 
         if (done) {
             break;
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- a stream read can yield `done: false` with an undefined `value`; guard before reading byteLength
         if (value) {
             total += value.byteLength;
 
             if (total > limit) {
                 // Stop pulling more bytes; release the underlying stream.
+                // eslint-disable-next-line no-await-in-loop -- one-shot cleanup on the over-budget abort path before throwing
                 await reader.cancel().catch(() => {});
 
                 throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
@@ -559,12 +563,14 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     }
 
     if (!resolveIdentity) {
+        // eslint-disable-next-line unicorn/no-null -- `claims`/`identity`/`userId` feed the public HttpActionContext + authorize* callback contracts, whose anonymous sentinel is `null`
         return { claims: null, headers, identity: null, userId: null };
     }
 
     const identity = await resolveIdentity(request, env);
 
     if (!identity || typeof identity.userId !== "string" || identity.userId.length === 0) {
+        // eslint-disable-next-line unicorn/no-null -- `claims`/`identity`/`userId` feed the public HttpActionContext + authorize* callback contracts, whose anonymous sentinel is `null`
         return { claims: null, headers, identity: null, userId: null };
     }
 
@@ -574,6 +580,7 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     // (claims like email/name/roles) is JSON-encoded so handlers can read it
     // via `ctx.auth.getIdentity()`.
     const { userId, ...extra } = identity;
+    // eslint-disable-next-line unicorn/no-null -- `claims` is surfaced via the public HttpActionContext `getIdentity()` whose empty sentinel is `null`
     const claims = Object.keys(extra).length > 0 ? extra : null;
 
     if (claims) {
@@ -717,28 +724,86 @@ interface AdminBatch {
     startLine: number;
 }
 
-/**
- * Stream the inbound NDJSON body, bucket rows per shard, and forward them to
- * the coordinator's import fan-out. Globals are siphoned off and handed to the
- * `importGlobals` callback (if present) so the two storage planes can run in
- * parallel.
- */
-const streamingImport = async (
-    request: Request,
-    options: WorkerOptions,
-    forwardedHeaders: Record<string, string>,
-): Promise<{
-    conflicts: number;
-    errors: { code: string; line: number; message: string; table: string }[];
-    inserted: Record<string, number>;
-}> => {
-    const defaultShard = options.defaultShardKey ?? "__root__";
+type ImportRowError = { code: string; line: number; message: string; table: string };
 
+type ParsedImportRow = { error: ImportRowError; ok: false } | { doc: Record<string, unknown>; ok: true; table: string };
+
+/**
+ * Validate one NDJSON import line into a `{ table, doc }` row, or an
+ * `ImportRowError` describing why the line was rejected. Pure — the caller
+ * owns line numbering and accumulation.
+ */
+const parseImportRow = (trimmed: string, lineNumber: number): ParsedImportRow => {
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(trimmed);
+    } catch {
+        return { error: { code: "BAD_ROW", line: lineNumber, message: "line is not valid JSON", table: "" }, ok: false };
+    }
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { error: { code: "BAD_ROW", line: lineNumber, message: "row must be a JSON object", table: "" }, ok: false };
+    }
+
+    const candidate = parsed as { doc?: unknown; table?: unknown };
+
+    if (typeof candidate.table !== "string" || candidate.table.length === 0) {
+        return { error: { code: "BAD_ROW", line: lineNumber, message: "row is missing `table`", table: "" }, ok: false };
+    }
+
+    if (!candidate.doc || typeof candidate.doc !== "object" || Array.isArray(candidate.doc)) {
+        return { error: { code: "BAD_ROW", line: lineNumber, message: "row is missing or malformed `doc`", table: candidate.table }, ok: false };
+    }
+
+    return { doc: candidate.doc as Record<string, unknown>, ok: true, table: candidate.table };
+};
+
+type ResolvedImportShardKey = { error: ImportRowError; ok: false } | { ok: true; shardKey: string };
+
+/**
+ * Resolve the shard key a shard-local import row routes to. Returns the key, or
+ * an `ImportRowError` when a `shardBy` table is missing its shard field.
+ */
+const resolveImportShardKey = (
+    documentRow: Record<string, unknown>,
+    table: string,
+    info: ShardingInfo | undefined,
+    defaultShard: string,
+    lineNumber: number,
+): ResolvedImportShardKey => {
+    if (info?.mode.kind === "shardBy" && typeof info.mode.field === "string") {
+        const raw = documentRow[info.mode.field];
+
+        if (raw === undefined || raw === null) {
+            return { error: { code: "BAD_ROW", line: lineNumber, message: `row missing shard field "${info.mode.field}" for table "${table}"`, table }, ok: false };
+        }
+
+        return { ok: true, shardKey: typeof raw === "string" ? raw : JSON.stringify(raw) };
+    }
+
+    return { ok: true, shardKey: defaultShard };
+};
+
+interface BucketedImport {
+    errors: ImportRowError[];
+    globalLineMap: number[];
+    globalRows: { doc: Record<string, unknown>; table: string }[];
+    perShard: Map<string, AdminBatch>;
+}
+
+/**
+ * Drain the inbound NDJSON body line-by-line (enforcing the byte budget as
+ * bytes arrive), validating + bucketing each row into the per-shard batches,
+ * the global-rows list, or the per-row error list. Pure routing — the caller
+ * fans the buckets out to their storage planes.
+ */
+const bucketImportStream = async (request: Request, options: WorkerOptions, defaultShard: string): Promise<BucketedImport> => {
     if (!request.body) {
         throw new CirrusError("Import endpoint requires a request body", { code: "BAD_REQUEST", status: 400 });
     }
 
-    const errors: { code: string; line: number; message: string; table: string }[] = [];
+    const errors: ImportRowError[] = [];
     const globalRows: { doc: Record<string, unknown>; table: string }[] = [];
     const globalLineMap: number[] = [];
     const perShard = new Map<string, AdminBatch>();
@@ -761,42 +826,19 @@ const streamingImport = async (
 
         lineNumber += 1;
 
-        let parsed: unknown;
+        const row = parseImportRow(trimmed, lineNumber);
 
-        try {
-            parsed = JSON.parse(trimmed);
-        } catch {
-            errors.push({ code: "BAD_ROW", line: lineNumber, message: "line is not valid JSON", table: "" });
+        if (!row.ok) {
+            errors.push(row.error);
 
             return;
         }
 
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            errors.push({ code: "BAD_ROW", line: lineNumber, message: "row must be a JSON object", table: "" });
-
-            return;
-        }
-
-        const candidate = parsed as { doc?: unknown; table?: unknown };
-
-        if (typeof candidate.table !== "string" || candidate.table.length === 0) {
-            errors.push({ code: "BAD_ROW", line: lineNumber, message: "row is missing `table`", table: "" });
-
-            return;
-        }
-
-        if (!candidate.doc || typeof candidate.doc !== "object" || Array.isArray(candidate.doc)) {
-            errors.push({ code: "BAD_ROW", line: lineNumber, message: "row is missing or malformed `doc`", table: candidate.table });
-
-            return;
-        }
-
-        const { table } = candidate;
-        const document_ = candidate.doc as Record<string, unknown>;
+        const { doc: documentRow, table } = row;
         const info = options.resolveTableSharding?.(table);
 
         if (info?.mode.kind === "global") {
-            globalRows.push({ doc: document_, table });
+            globalRows.push({ doc: documentRow, table });
             globalLineMap.push(lineNumber);
 
             return;
@@ -804,45 +846,38 @@ const streamingImport = async (
 
         // Shard-local routing: shardBy(field) picks the value of `doc[field]`;
         // root/undefined modes route to the default shard.
-        let shardKey = defaultShard;
+        const resolved = resolveImportShardKey(documentRow, table, info, defaultShard, lineNumber);
 
-        if (info?.mode.kind === "shardBy" && typeof info.mode.field === "string") {
-            const raw = document_[info.mode.field];
+        if (!resolved.ok) {
+            errors.push(resolved.error);
 
-            if (raw === undefined || raw === null) {
-                errors.push({
-                    code: "BAD_ROW",
-                    line: lineNumber,
-                    message: `row missing shard field "${info.mode.field}" for table "${table}"`,
-                    table,
-                });
-
-                return;
-            }
-
-            shardKey = typeof raw === "string" ? raw : JSON.stringify(raw);
+            return;
         }
 
-        const existing = perShard.get(shardKey);
+        const existing = perShard.get(resolved.shardKey);
 
         if (existing) {
-            existing.rows.push({ doc: document_, table });
+            existing.rows.push({ doc: documentRow, table });
         } else {
-            perShard.set(shardKey, { rows: [{ doc: document_, table }], shardKey, startLine: lineNumber });
+            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, table }], shardKey: resolved.shardKey, startLine: lineNumber });
         }
     };
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- drain the NDJSON body stream until the reader signals `done`
     while (true) {
+        // eslint-disable-next-line no-await-in-loop -- stream reads are inherently sequential; each chunk depends on the prior read
         const { done, value } = await reader.read();
 
         if (done) {
             break;
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- a stream read can yield `done: false` with an undefined `value`; guard before reading byteLength
         if (value) {
             totalBytes += value.byteLength;
 
             if (totalBytes > MAX_BODY_BYTES) {
+                // eslint-disable-next-line no-await-in-loop -- one-shot cleanup on the over-budget abort path before throwing
                 await reader.cancel().catch(() => {});
 
                 throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
@@ -866,8 +901,54 @@ const streamingImport = async (
         handleLine(buffer);
     }
 
-    const inserted: Record<string, number> = {};
-    let conflicts = 0;
+    return { errors, globalLineMap, globalRows, perShard };
+};
+
+interface ImportTotals {
+    conflicts: number;
+    errors: ImportRowError[];
+    inserted: Record<string, number>;
+}
+
+/**
+ * Fold a per-plane insert result (`{ inserted, errors, conflicts }`) into the
+ * running totals, mutating them in place. `totals` is an accumulator the caller
+ * owns — by design it threads one mutable record through both storage planes.
+ */
+const mergeImportResult = (totals: ImportTotals, result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> }): void => {
+    for (const [table, count] of Object.entries(result.inserted)) {
+        // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
+        totals.inserted[table] = (totals.inserted[table] ?? 0) + count;
+    }
+
+    for (const rowError of result.errors) {
+        totals.errors.push({ ...rowError });
+    }
+
+    // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
+    totals.conflicts += result.conflicts;
+};
+
+/**
+ * Stream the inbound NDJSON body, bucket rows per shard, and forward them to
+ * the coordinator's import fan-out. Globals are siphoned off and handed to the
+ * `importGlobals` callback (if present) so the two storage planes can run in
+ * parallel.
+ */
+const streamingImport = async (
+    request: Request,
+    options: WorkerOptions,
+    forwardedHeaders: Record<string, string>,
+): Promise<{
+    conflicts: number;
+    errors: ImportRowError[];
+    inserted: Record<string, number>;
+}> => {
+    const defaultShard = options.defaultShardKey ?? "__root__";
+
+    const { errors, globalLineMap, globalRows, perShard } = await bucketImportStream(request, options, defaultShard);
+
+    const totals: ImportTotals = { conflicts: 0, errors, inserted: {} };
 
     // Fan shard-local batches out via the coordinator. The order of batches
     // is insertion order so error line numbers reflect the source NDJSON.
@@ -883,15 +964,7 @@ const streamingImport = async (
             headers: forwardedHeaders,
         });
 
-        for (const [table, count] of Object.entries(result.inserted)) {
-            inserted[table] = (inserted[table] ?? 0) + count;
-        }
-
-        for (const e of result.errors) {
-            errors.push({ ...e });
-        }
-
-        conflicts += result.conflicts;
+        mergeImportResult(totals, result);
     }
 
     // Run global imports through the user-supplied helper.
@@ -900,18 +973,10 @@ const streamingImport = async (
             const startLine = globalLineMap[0] ?? 1;
             const result = await options.importGlobals({ rows: globalRows, startLine });
 
-            for (const [table, count] of Object.entries(result.inserted)) {
-                inserted[table] = (inserted[table] ?? 0) + count;
-            }
-
-            for (const e of result.errors) {
-                errors.push({ ...e });
-            }
-
-            conflicts += result.conflicts;
+            mergeImportResult(totals, result);
         } else {
             for (const [index, globalRow] of globalRows.entries()) {
-                errors.push({
+                totals.errors.push({
                     code: "GLOBAL_NOT_CONFIGURED",
                     line: globalLineMap[index] ?? 1,
                     message: `row targets global table "${globalRow.table}" but no \`importGlobals\` is configured`,
@@ -921,7 +986,7 @@ const streamingImport = async (
         }
     }
 
-    return { conflicts, errors, inserted };
+    return { conflicts: totals.conflicts, errors: totals.errors, inserted: totals.inserted };
 };
 
 /**
@@ -945,11 +1010,11 @@ const constantTimeEqual = (expected: string, supplied: string): boolean => {
     let diff = expected.length ^ supplied.length;
 
     for (let index = 0; index < max; index += 1) {
-        const ca = index < expected.length ? expected.charCodeAt(index) : 0;
-        const callback = index < supplied.length ? supplied.charCodeAt(index) : 0;
+        const expectedCode = index < expected.length ? (expected.codePointAt(index) ?? 0) : 0;
+        const suppliedCode = index < supplied.length ? (supplied.codePointAt(index) ?? 0) : 0;
 
         // eslint-disable-next-line no-bitwise
-        diff |= ca ^ callback;
+        diff |= expectedCode ^ suppliedCode;
     }
 
     return diff === 0;
@@ -1151,6 +1216,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         // `null` identity — the host's callback decides whether system-initiated
         // dispatch is permitted for the shard.
         if (options.authorizeShard) {
+            // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`; system dispatch has no end-user identity
             const allowed = await options.authorizeShard(null, shardKey);
 
             if (!allowed) {
@@ -1206,6 +1272,55 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         const wantGlobals = body.tables === undefined || globalTables.length > 0;
         const exportGlobalsFunction = options.exportGlobals;
 
+        type WriteRow = (row: { doc: Record<string, unknown>; table: string }) => void;
+
+        // Shard-local: fan the export out via the coordinator and write each
+        // successful shard's rows. A failed shard is skipped (its error was
+        // already surfaced through the fan-out roll-up).
+        const writeShardLocalRows = async (writeRow: WriteRow): Promise<void> => {
+            if (body.tables !== undefined && shardLocalTables.length === 0) {
+                return;
+            }
+
+            const exportTables = body.tables === undefined ? [] : shardLocalTables;
+            // When tables is undefined the per-shard exporter visits every
+            // shard-local table, but we still need a table list to seed the
+            // registry probe. Fall back to `resolveTableSharding`'s keys if the
+            // caller passed none — best effort; a project without the resolver
+            // will simply not fan out automatically.
+            const probeFallback = body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
+            const probeTables = exportTables.length > 0 ? exportTables : probeFallback;
+
+            const result = await coordinator.orchestrateExport(options.shardDO, {
+                args: { tables: exportTables },
+                headers: forwardedHeaders,
+                tables: probeTables,
+            });
+
+            for (const shard of result.shards) {
+                if (shard.error) {
+                    continue;
+                }
+
+                for (const row of shard.rows ?? []) {
+                    writeRow(row);
+                }
+            }
+        };
+
+        // Globals: stream rows from the D1 helper when configured.
+        const writeGlobalRows = async (writeRow: WriteRow): Promise<void> => {
+            if (!wantGlobals || !exportGlobalsFunction) {
+                return;
+            }
+
+            const tablesArgument = body.tables === undefined ? [] : globalTables;
+
+            for await (const row of exportGlobalsFunction({ tables: tablesArgument })) {
+                writeRow(row);
+            }
+        };
+
         // Stream NDJSON: shard-local rows first (from `orchestrateExport`'s
         // collected envelopes), then global rows (from the D1 helper). The
         // shard fan-out is materialised because each shard returns a single
@@ -1214,50 +1329,13 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
                 const encoder = new TextEncoder();
-                const writeRow = (row: { doc: Record<string, unknown>; table: string }): void => {
+                const writeRow: WriteRow = (row) => {
                     controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
                 };
 
                 try {
-                    // Shard-local: only fan out when caller wants any of them.
-                    if (body.tables === undefined || shardLocalTables.length > 0) {
-                        const exportTables = body.tables === undefined ? [] : shardLocalTables;
-                        // When tables is undefined the per-shard exporter
-                        // visits every shard-local table, but we still need a
-                        // table list to seed the registry probe. Fall back to
-                        // `resolveTableSharding`'s keys if the caller passed
-                        // none — best effort; a project without the resolver
-                        // will simply not fan out automatically.
-                        const probeTables
-                            = exportTables.length > 0 ? exportTables : body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
-
-                        const result = await coordinator.orchestrateExport(options.shardDO, {
-                            args: { tables: exportTables },
-                            headers: forwardedHeaders,
-                            tables: probeTables,
-                        });
-
-                        for (const shard of result.shards) {
-                            if (shard.error) {
-                                continue;
-                            }
-
-                            for (const row of shard.rows ?? []) {
-                                writeRow(row);
-                            }
-                        }
-                    }
-
-                    // Globals: stream rows from the D1 helper when configured.
-                    if (wantGlobals && exportGlobalsFunction) {
-                        const tablesArgument = body.tables === undefined ? [] : globalTables;
-                        const iter = exportGlobalsFunction({ tables: tablesArgument });
-
-                        for await (const row of iter) {
-                            writeRow(row);
-                        }
-                    }
-
+                    await writeShardLocalRows(writeRow);
+                    await writeGlobalRows(writeRow);
                     controller.close();
                 } catch (error: unknown) {
                     controller.error(error);
@@ -1397,7 +1475,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         }
 
         const stub = resolveSchedulerStub(request);
-        const body = (await request.json().catch(() => null)) as { id?: unknown } | null;
+        const body = (await request.json().catch(() => undefined)) as { id?: unknown } | undefined;
 
         if (typeof body?.id !== "string" || body.id === "") {
             throw new CirrusError("Scheduled-cancel requires a string `id`", { code: "BAD_REQUEST", status: 400 });
@@ -1557,9 +1635,9 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         };
     };
 
-    const dispatchHttpRoute = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<null | Response> => {
+    const dispatchHttpRoute = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response | undefined> => {
         if (!options.httpRouter) {
-            return null;
+            return undefined;
         }
 
         // Build the action context up front and inject it on a private env
@@ -1570,123 +1648,112 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         return options.httpRouter.fetch(request, { ...(env as object), __cirrusCtx: httpContext }, context);
     };
 
-    const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
-        const url = new URL(request.url);
-
-        // Fast-path reject on a declared `Content-Length` over the cap — cheap
-        // (a header read, no body materialization) but NOT authoritative:
-        // `Content-Length` is forgeable. A chunked body omits it and a
-        // non-numeric value parses to `NaN`, so a missing/unparseable length is
-        // treated as "unknown" (let the request through here) — the real
-        // enforcement happens in `readBodyTextWithLimit` / the streaming import
-        // reader, which abort with 413 once cumulative bytes exceed the cap.
-        if (request.method === "POST" || request.method === "PUT") {
-            const length_ = Number(request.headers.get("content-length") ?? "");
-
-            if (Number.isFinite(length_) && length_ > MAX_BODY_BYTES) {
-                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
-            }
+    const handleWebSocketUpgrade = async (request: Request, env: unknown, url: URL): Promise<Response> => {
+        if (request.headers.get("Upgrade") !== "websocket") {
+            throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
         }
 
-        // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
-        // We also accept legacy pathname-only keys for ad-hoc handlers.
-        const methodAndPath = `${request.method} ${url.pathname}`;
-        const route = options.routes?.[methodAndPath] ?? options.routes?.[url.pathname];
+        const shardKey = url.searchParams.get("shard") ?? defaultShard;
 
-        if (route) {
-            return route(request, env, context);
+        // Resolve the calling identity (if any) and run the per-shard
+        // authorization callback before forwarding. The WS path doesn't
+        // need the rest of the forward context — only the identity for
+        // the authorization decision.
+        if (options.authorizeShard) {
+            // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`
+            const identity = options.resolveIdentity ? (await options.resolveIdentity(request, env)) ?? null : null;
+            const allowed = await options.authorizeShard(identity, shardKey);
+
+            if (!allowed) {
+                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+            }
+        } else if (shardKey !== defaultShard) {
+            warnUnauthenticatedShardAccessOnce("shard");
         }
 
-        if (url.pathname === WS_PATH) {
-            if (request.headers.get("Upgrade") !== "websocket") {
-                throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
-            }
+        return forwardToShard(options.shardDO, shardKey, request);
+    };
 
-            const shardKey = url.searchParams.get("shard") ?? defaultShard;
-
-            // Resolve the calling identity (if any) and run the per-shard
-            // authorization callback before forwarding. The WS path doesn't
-            // need the rest of the forward context — only the identity for
-            // the authorization decision.
-            if (options.authorizeShard) {
-                const identity = options.resolveIdentity ? await options.resolveIdentity(request, env) ?? null : null;
-                const allowed = await options.authorizeShard(identity, shardKey);
+    /**
+     * Run the per-shard / fan-out authorization gate for an RPC envelope. Throws
+     * a 403 `CirrusError` when the caller is not authorized. Fan-out is a
+     * privileged op: when `authorizeShard` is set but `authorizeFanOut` is not,
+     * fan-out is default-denied rather than silently allowed.
+     */
+    const authorizeRpcEnvelope = async (envelope: RpcEnvelope, identity: ResolvedIdentity | null): Promise<void> => {
+        // Per-shard authorization runs after identity resolution and before
+        // the request is forwarded. Fan-out envelopes target every
+        // live shard for the table (no client-named shardKey), so the
+        // per-shard gate cannot authorize them — `authorizeFanOut`
+        // gates fan-out at the table level. Single-shard dispatch
+        // goes through `authorizeShard`.
+        if (envelope.fanOut) {
+            if (options.authorizeFanOut) {
+                const allowed = await options.authorizeFanOut(identity, envelope.fanOut.table, envelope.functionPath);
 
                 if (!allowed) {
-                    throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
-                }
-            } else if (shardKey !== defaultShard) {
-                warnUnauthenticatedShardAccessOnce("shard");
-            }
-
-            return forwardToShard(options.shardDO, shardKey, request);
-        }
-
-        if (url.pathname === RPC_PATH) {
-            if (request.method !== "POST") {
-                throw new CirrusError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-            }
-
-            const envelope = await parseEnvelope(request);
-
-            if (envelope.fanOut && envelope.shardKey) {
-                throw new CirrusError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
-            }
-
-            // Refuse fan-out envelopes that arrive without a coordinator
-            // configured BEFORE we invoke `resolveIdentity` — otherwise the
-            // hook would be called for a request that's already destined for
-            // a 400, wasting any DB/IO it performs to look up the user.
-            if (envelope.fanOut && !options.queryCoordinator) {
-                throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
-                    code: "BAD_REQUEST",
-                    status: 400,
-                });
-            }
-
-            // Forward selected headers from the inbound request so the DO can
-            // honour auth, sessions, and D1 read-your-writes consistency.
-            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-            // Per-shard authorization runs after identity resolution and before
-            // the request is forwarded. Fan-out envelopes target every
-            // live shard for the table (no client-named shardKey), so the
-            // per-shard gate cannot authorize them — `authorizeFanOut`
-            // gates fan-out at the table level. Single-shard dispatch
-            // goes through `authorizeShard`.
-            if (envelope.fanOut) {
-                if (options.authorizeFanOut) {
-                    const allowed = await options.authorizeFanOut(identity, envelope.fanOut.table, envelope.functionPath);
-
-                    if (!allowed) {
-                        throw new CirrusError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
-                    }
-                } else if (options.authorizeShard) {
-                    // `authorizeShard` is configured but `authorizeFanOut`
-                    // is not. Fan-out is a privileged op (it bypasses the
-                    // per-shard gate by design), so default-deny instead
-                    // of silently letting any authenticated caller
-                    // enumerate every shard for the table.
-                    throw new CirrusError("Fan-out requires `authorizeFanOut` to be configured on the worker when `authorizeShard` is set", {
-                        code: "FORBIDDEN_FANOUT",
-                        status: 403,
-                    });
-                } else {
-                    // Neither callback configured: fan-out is authorization-open.
-                    warnUnauthenticatedShardAccessOnce("fan-out");
+                    throw new CirrusError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
                 }
             } else if (options.authorizeShard) {
-                const shardKeyForAuth = envelope.shardKey ?? defaultShard;
-                const allowed = await options.authorizeShard(identity, shardKeyForAuth);
-
-                if (!allowed) {
-                    throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
-                }
-            } else if (envelope.shardKey !== undefined && envelope.shardKey !== defaultShard) {
-                // No per-shard gate and the caller named a non-default shard.
-                warnUnauthenticatedShardAccessOnce("shard");
+                // `authorizeShard` is configured but `authorizeFanOut`
+                // is not. Fan-out is a privileged op (it bypasses the
+                // per-shard gate by design), so default-deny instead
+                // of silently letting any authenticated caller
+                // enumerate every shard for the table.
+                throw new CirrusError("Fan-out requires `authorizeFanOut` to be configured on the worker when `authorizeShard` is set", {
+                    code: "FORBIDDEN_FANOUT",
+                    status: 403,
+                });
+            } else {
+                // Neither callback configured: fan-out is authorization-open.
+                warnUnauthenticatedShardAccessOnce("fan-out");
             }
 
+            return;
+        }
+
+        if (options.authorizeShard) {
+            const shardKeyForAuth = envelope.shardKey ?? defaultShard;
+            const allowed = await options.authorizeShard(identity, shardKeyForAuth);
+
+            if (!allowed) {
+                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+            }
+        } else if (envelope.shardKey !== undefined && envelope.shardKey !== defaultShard) {
+            // No per-shard gate and the caller named a non-default shard.
+            warnUnauthenticatedShardAccessOnce("shard");
+        }
+    };
+
+    const handleRpc = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const envelope = await parseEnvelope(request);
+
+        if (envelope.fanOut && envelope.shardKey) {
+            throw new CirrusError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        // Refuse fan-out envelopes that arrive without a coordinator
+        // configured BEFORE we invoke `resolveIdentity` — otherwise the
+        // hook would be called for a request that's already destined for
+        // a 400, wasting any DB/IO it performs to look up the user.
+        if (envelope.fanOut && !options.queryCoordinator) {
+            throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
+                code: "BAD_REQUEST",
+                status: 400,
+            });
+        }
+
+        // Forward selected headers from the inbound request so the DO can
+        // honour auth, sessions, and D1 read-your-writes consistency.
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        await authorizeRpcEnvelope(envelope, identity);
+
+        {
             // Timing wraps the dispatch only — envelope parse + coordinator
             // gate + identity resolution happen above and are not part of
             // the user-observable RPC duration we report.
@@ -1778,57 +1845,63 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
                 throw error;
             }
         }
+    };
 
-        if (url.pathname === SCHEDULER_DISPATCH_PATH) {
-            return handleSchedulerDispatch(request, env);
+    // Internal endpoint dispatch table. Keyed by pathname; each handler takes
+    // the request (and, where needed, env/url) and returns the response.
+    type InternalRoute = (request: Request, env: unknown, url: URL) => Promise<Response> | Response;
+    const internalRoutes: Record<string, InternalRoute> = {
+        [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
+        [RPC_PATH]: (request, env) => handleRpc(request, env),
+        [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
+        [MIGRATE_PATH]: (request, env) => handleMigrate(request, env),
+        [EXPORT_PATH]: (request, env) => handleExport(request, env),
+        [IMPORT_PATH]: (request, env) => handleImport(request, env),
+        [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
+        [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
+        [SCHEDULED_PATH]: (request) => handleScheduledList(request),
+        [STORAGE_PATH]: (request) => handleStorageList(request),
+        [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
+        [GLOBAL_TABLES_PATH]: (request) => handleGlobalTables(request),
+        [GLOBAL_TABLE_PATH]: (request) => handleGlobalTablePage(request),
+        [AUTH_USERS_PATH]: (request) => handleAuthUsers(request),
+        [AUTH_SESSIONS_PATH]: (request) => handleAuthSessions(request),
+    };
+
+    const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
+        const url = new URL(request.url);
+
+        // Fast-path reject on a declared `Content-Length` over the cap — cheap
+        // (a header read, no body materialization) but NOT authoritative:
+        // `Content-Length` is forgeable. A chunked body omits it and a
+        // non-numeric value parses to `NaN`, so a missing/unparseable length is
+        // treated as "unknown" (let the request through here) — the real
+        // enforcement happens in `readBodyTextWithLimit` / the streaming import
+        // reader, which abort with 413 once cumulative bytes exceed the cap.
+        if (request.method === "POST" || request.method === "PUT") {
+            const contentLength = Number(request.headers.get("content-length") ?? "");
+
+            if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+            }
         }
 
-        if (url.pathname === MIGRATE_PATH) {
-            return handleMigrate(request, env);
+        // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
+        // We also accept legacy pathname-only keys for ad-hoc handlers.
+        const methodAndPath = `${request.method} ${url.pathname}`;
+        const route = options.routes?.[methodAndPath] ?? options.routes?.[url.pathname];
+
+        if (route) {
+            return route(request, env, context);
         }
 
-        if (url.pathname === EXPORT_PATH) {
-            return handleExport(request, env);
-        }
+        // Internal `/_cirrus/*` endpoints, keyed by pathname. Each entry adapts
+        // to the shared `(request, env, url) => Promise<Response>` shape so the
+        // dispatch stays a single table lookup rather than a long if-chain.
+        const internalRoute = internalRoutes[url.pathname];
 
-        if (url.pathname === IMPORT_PATH) {
-            return handleImport(request, env);
-        }
-
-        if (url.pathname === SCHEDULED_WS_PATH) {
-            return handleScheduledWebSocket(request);
-        }
-
-        if (url.pathname === SCHEDULED_CANCEL_PATH) {
-            return handleScheduledCancel(request);
-        }
-
-        if (url.pathname === SCHEDULED_PATH) {
-            return handleScheduledList(request);
-        }
-
-        if (url.pathname === STORAGE_PATH) {
-            return handleStorageList(request);
-        }
-
-        if (url.pathname === FUNCTIONS_PATH) {
-            return handleFunctionsList(request);
-        }
-
-        if (url.pathname === GLOBAL_TABLES_PATH) {
-            return handleGlobalTables(request);
-        }
-
-        if (url.pathname === GLOBAL_TABLE_PATH) {
-            return handleGlobalTablePage(request);
-        }
-
-        if (url.pathname === AUTH_USERS_PATH) {
-            return handleAuthUsers(request);
-        }
-
-        if (url.pathname === AUTH_SESSIONS_PATH) {
-            return handleAuthSessions(request);
+        if (internalRoute) {
+            return internalRoute(request, env, url);
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the

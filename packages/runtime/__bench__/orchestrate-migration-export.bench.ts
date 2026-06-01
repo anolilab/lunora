@@ -9,10 +9,10 @@ import type { ShardNamespaceLike } from "../src/resolve-shard.js";
  * as `orchestrateImport` and `fanOut`, but each handles a different admin
  * payload. We bench both at N=4 and N=16 shards so:
  *
- *  - regressions in the bounded-fanout helper are visible across all three
- *    orchestrate* paths (they share the runner), and
- *  - the per-orchestrator overhead (admin-payload shape, roll-up shape) is
- *    isolated.
+ * - regressions in the bounded-fanout helper are visible across all three
+ * orchestrate* paths (they share the runner), and
+ * - the per-orchestrator overhead (admin-payload shape, roll-up shape) is
+ * isolated.
  *
  * In-process shard stubs return instantly so the bench isolates
  * orchestration cost, not network IO.

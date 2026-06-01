@@ -7,7 +7,7 @@ import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 /**
  * Cross-shard aggregate merge — `count` / `aggregate({sum/max/min})` /
  * `groupBy` fan-outs collapse per-shard payloads via the
- * {@link MergeStrategy} so the coordinator can serve a global answer over a
+ * `MergeStrategy` so the coordinator can serve a global answer over a
  * shardBy table. `avg` is explicitly unsupported in v1 and surfaces a
  * `CirrusError`.
  */
@@ -122,7 +122,7 @@ describe("cross-shard merge — groupBy", () => {
             buildRequest({ fanOut: { merge: { kind: "groupBy" }, table: "messages" } }),
         );
 
-        const sorted = [...result.data].sort((left, right) => String(left.key["channelId"]).localeCompare(String(right.key["channelId"])));
+        const sorted = result.data.toSorted((left, right) => String(left.key["channelId"]).localeCompare(String(right.key["channelId"])));
 
         expect(sorted).toEqual([
             { key: { channelId: "c1" }, value: 11 },

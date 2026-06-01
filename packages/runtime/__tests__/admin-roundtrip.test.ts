@@ -74,6 +74,7 @@ const buildSqliteSql = (): { close: () => void; sql: ShardDOState["storage"]["sq
 };
 
 class TestShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; this test never dispatches an RPC through it
     public override async handleRpc(): Promise<unknown> {
         throw new Error("handleRpc not used in this test");
     }

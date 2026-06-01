@@ -10,9 +10,9 @@ import type { ShardNamespaceLike } from "../src/resolve-shard.js";
  * `writer.insert(...)` loop, which the bench substitutes with an
  * instant-return stub so we isolate orchestration.
  *
- *  - **1 shard × 1000 rows** — single round-trip; the lower bound.
- *  - **4 shards × 250 rows** — typical multi-tenant fan-out.
- *  - **16 shards × 62 rows** — sharded-channel fan-out at higher N.
+ * - **1 shard × 1000 rows** — single round-trip; the lower bound.
+ * - **4 shards × 250 rows** — typical multi-tenant fan-out.
+ * - **16 shards × 62 rows** — sharded-channel fan-out at higher N.
  *
  * Total payload is 1 000 rows in every case so the comparison is "shard
  * count vs. throughput" rather than "more work per call".

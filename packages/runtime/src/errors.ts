@@ -14,11 +14,11 @@ class CirrusError extends Error {
 
     public readonly status: number;
 
-    public constructor(message: string, options: { cause?: unknown; code: string; status?: number } = { code: "INTERNAL" }) {
-        super(message, { cause: options.cause });
+    public constructor(message: string, options?: { cause?: unknown; code?: string; status?: number }) {
+        super(message, { cause: options?.cause });
         this.name = "CirrusError";
-        this.code = options.code;
-        this.status = options.status ?? 500;
+        this.code = options?.code ?? "INTERNAL";
+        this.status = options?.status ?? 500;
     }
 
     public toResponse(): Response {

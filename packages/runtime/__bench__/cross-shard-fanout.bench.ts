@@ -6,15 +6,15 @@ import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
 /**
  * `fanOut` orchestrates a cross-shard read: dispatch in parallel, collect
- * per-shard payloads, collapse via the {@link MergeStrategy}. The interesting
+ * per-shard payloads, collapse via the `MergeStrategy`. The interesting
  * scaling factor is **N shards** — the bench fans out against in-memory
  * stubs that return instantly so the readout isolates the orchestration
  * + merge cost, not network IO.
  *
- *  - **sum** — scalar reduce over N numbers. The cheapest merge.
- *  - **topK** — keep the K largest from N×50 candidates. Allocates a sort.
- *  - **groupBy(sum)** — group-by reduce. Canonical-JSON key normalization
- *    runs per entry, so this is the priciest of the three.
+ * - **sum** — scalar reduce over N numbers. The cheapest merge.
+ * - **topK** — keep the K largest from N×50 candidates. Allocates a sort.
+ * - **groupBy(sum)** — group-by reduce. Canonical-JSON key normalization
+ * runs per entry, so this is the priciest of the three.
  *
  * Bench N at 4 (typical multi-tenant root) and 64 (sharded-channel scale).
  * Per the §3.1 plan, `avg` is deliberately unsupported and not benched.

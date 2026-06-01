@@ -284,7 +284,7 @@ describe("createWorker — admin import endpoint", () => {
         // 3 buckets: __root__ (users), c1 (m1), c2 (m2).
         expect(captured!.batches).toHaveLength(3);
 
-        const shardKeys = captured!.batches.map((b) => b.shardKey).sort();
+        const shardKeys = captured!.batches.map((batch) => batch.shardKey).toSorted((a, b) => a.localeCompare(b));
 
         expect(shardKeys).toEqual(["__root__", "c1", "c2"]);
     });
@@ -451,7 +451,7 @@ describe("import streaming — large body", () => {
         const lines: string[] = [];
 
         for (let index = 0; index < 10_000; index += 1) {
-            lines.push(JSON.stringify({ doc: { _id: `u${index}`, email: `u${index}@x.io` }, table: "users" }));
+            lines.push(JSON.stringify({ doc: { _id: `u${String(index)}`, email: `u${String(index)}@x.io` }, table: "users" }));
         }
 
         const response = await worker.fetch(
@@ -475,7 +475,7 @@ describe("import streaming — large body", () => {
         const rows: { doc: Record<string, unknown>; table: string }[] = [];
 
         for (let index = 0; index < 10_000; index += 1) {
-            rows.push({ doc: { _id: `u${index}`, email: `u${index}@x.io` }, table: "users" });
+            rows.push({ doc: { _id: `u${String(index)}`, email: `u${String(index)}@x.io` }, table: "users" });
         }
 
         const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
@@ -534,9 +534,8 @@ describe("import streaming — large body", () => {
             }
         }
 
-        if (buffer.trim().length > 0) {
-            lineCount += 1;
-        }
+        // Count any trailing (newline-less) final line without an `if`.
+        lineCount += Number(buffer.trim().length > 0);
 
         expect(lineCount).toBe(10_000);
     });

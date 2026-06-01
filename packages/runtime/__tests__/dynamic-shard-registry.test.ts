@@ -93,7 +93,7 @@ describe("createDynamicShardRegistry", () => {
 
         const result = await registry.listShardKeys("messages");
 
-        expect([...result].toSorted()).toEqual(["a", "b", "c"]);
+        expect([...result].toSorted((a, b) => a.localeCompare(b))).toEqual(["a", "b", "c"]);
     });
 
     it("uses SHARD_REGISTRY_DO_NAME by default for the DO instance", async () => {
@@ -177,7 +177,7 @@ describe("createDynamicShardRegistry", () => {
 
         const result = await registry.listShardKeys("messages");
 
-        expect([...result].toSorted()).toEqual(["a", "b"]);
+        expect([...result].toSorted((a, b) => a.localeCompare(b))).toEqual(["a", "b"]);
         expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(2);
     });
 
@@ -258,7 +258,7 @@ describe("createDynamicShardRegistry", () => {
         const snap = await registry.snapshot();
 
         expect(snap["messages"]).toEqual(["a"]);
-        expect([...snap["tasks"]!].toSorted()).toEqual(["x", "y"]);
+        expect([...snap["tasks"]!].toSorted((a, b) => a.localeCompare(b))).toEqual(["x", "y"]);
     });
 
     it("listShardKeys throws when the DO returns non-2xx", async () => {

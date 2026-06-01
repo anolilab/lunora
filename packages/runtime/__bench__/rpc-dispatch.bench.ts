@@ -12,13 +12,13 @@ import type { ShardNamespaceLike } from "../src/resolve-shard.js";
  * (header build, RPC re-emit, shard lookup, response stitch) — not the
  * handler runtime, which is the DO's domain.
  *
- *  - **no auth** — bare envelope, no `resolveIdentity`. The dispatch floor.
- *  - **+ resolveIdentity (userId only)** — adds the auth claim resolution
- *    pass that builds `x-cirrus-userid`. One extra await + header set.
- *  - **+ resolveIdentity (userId + claims)** — same path but with richer
- *    claims that JSON-encode into `x-cirrus-identity`.
- *  - **with shardKey** — envelope picks a specific shard rather than
- *    the default `__root__`. Same path; different shard lookup.
+ * - **no auth** — bare envelope, no `resolveIdentity`. The dispatch floor.
+ * - **+ resolveIdentity (userId only)** — adds the auth claim resolution
+ * pass that builds `x-cirrus-userid`. One extra await + header set.
+ * - **+ resolveIdentity (userId + claims)** — same path but with richer
+ * claims that JSON-encode into `x-cirrus-identity`.
+ * - **with shardKey** — envelope picks a specific shard rather than
+ * the default `__root__`. Same path; different shard lookup.
  */
 
 const fakeContext: ExecutionContextLike = {

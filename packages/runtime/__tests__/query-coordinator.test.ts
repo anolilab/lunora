@@ -462,7 +462,7 @@ describe("concurrency", () => {
         let inFlight = 0;
         let highWater = 0;
 
-        const registry = createStaticShardRegistry({ messages: Array.from({ length: 10 }, (_, i) => `s${i}`) });
+        const registry = createStaticShardRegistry({ messages: Array.from({ length: 10 }, (_, i) => `s${String(i)}`) });
         const coordinator = createQueryCoordinator({ maxConcurrency: 3, registry });
 
         const spy = createShardSpy(async () => {
@@ -504,7 +504,7 @@ describe("concurrency", () => {
 
         const result = await coordinator.fanOut(spy.namespace, buildRequest());
 
-        expect(spy.calls.map((c) => c.shardKey).sort()).toEqual(["x", "y"]);
+        expect(spy.calls.map((call) => call.shardKey).toSorted((a, b) => a.localeCompare(b))).toEqual(["x", "y"]);
         expect(result.ok).toBe(2);
     });
 });
