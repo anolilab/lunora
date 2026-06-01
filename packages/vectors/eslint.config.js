@@ -60,6 +60,12 @@ export default createConfig(
         files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
         rules: {
             "@stylistic/no-tabs": "off",
+            "max-classes-per-file": "off",
+            "@typescript-eslint/no-empty-object-type": "off",
+            "unicorn/no-object-as-default-parameter": "off",
+            "no-confusing-arrow": "off",
+            "sonarjs/no-nested-conditional": "off",
+            "no-underscore-dangle": "off",
             "unused-imports/no-unused-vars": "off",
             "no-await-in-loop": "off",
             "import/prefer-default-export": "off",
