@@ -104,19 +104,4 @@ const routeOutputMismatch = httpRoute
 
 type Check13 = Assert<Equal<typeof routeOutputMismatch, CirrusRouteHandler>>;
 
-export type {
-    Check1,
-    Check2,
-    Check3,
-    Check4,
-    Check5,
-    Check6,
-    Check7,
-    Check8,
-    Check9,
-    Check10,
-    Check11,
-    Check11b,
-    Check12,
-    Check13,
-};
+export type { Check1, Check2, Check3, Check4, Check5, Check6, Check7, Check8, Check9, Check10, Check11, Check11b, Check12, Check13 };
