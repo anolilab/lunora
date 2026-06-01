@@ -14,11 +14,31 @@ import { ShardDO } from "@cirrus/do";
 import { createWorker } from "@cirrus/runtime";
 import { DurableObject } from "cloudflare:workers";
 
-export interface Env {
+interface Env {
     SHARD: DurableObjectNamespace<TestShardDO>;
 }
 
-export class TestShardDO extends DurableObject<Env> {
+class ConcreteShard extends ShardDO {
+    public constructor(
+        state: ShardDOState,
+        env: unknown,
+        private readonly outer: TestShardDO,
+    ) {
+        super(state, env);
+    }
+
+    public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        this.outer.lastRpcCall = { args, functionPath };
+
+        return this.outer.rpcResult;
+    }
+
+    public override broadcastDelta(delta: MutationDelta): void {
+        super["broadcastDelta"](delta);
+    }
+}
+
+class TestShardDO extends DurableObject<Env> {
     public rpcResult: unknown = null;
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
@@ -47,30 +67,14 @@ export class TestShardDO extends DurableObject<Env> {
     }
 }
 
-class ConcreteShard extends ShardDO {
-    public constructor(
-        state: ShardDOState,
-        env: unknown,
-        private readonly outer: TestShardDO,
-    ) {
-        super(state, env);
-    }
-
-    public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-        this.outer.lastRpcCall = { args, functionPath };
-
-        return this.outer.rpcResult;
-    }
-
-    public override broadcastDelta(delta: MutationDelta): void {
-        super["broadcastDelta"](delta);
-    }
-}
-
-export default {
+const worker = {
     async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
         const runtime = createWorker({ shardDO: env.SHARD as never });
 
         return runtime.fetch(request, env, context);
     },
 };
+
+export default worker;
+export { TestShardDO };
+export type { Env };

@@ -75,7 +75,7 @@ class SelfWebSocket {
                     this.onerror?.({});
                     this.onclose?.({});
 
-                    return;
+                    return false;
                 }
 
                 this.socket = ws;
@@ -97,6 +97,8 @@ class SelfWebSocket {
                 this.pendingSends = [];
 
                 this.onopen?.({});
+
+                return true;
             })
             .catch(() => {
                 this.onerror?.({});
@@ -117,10 +119,12 @@ const waitFor = async (predicate: () => boolean | Promise<boolean>, { intervalMs
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
+        // eslint-disable-next-line no-await-in-loop -- polling loop: each predicate check must resolve before the next interval
         if (await predicate()) {
             return;
         }
 
+        // eslint-disable-next-line no-await-in-loop -- polling loop: wait out the interval before re-checking
         await new Promise((resolve) => {
             setTimeout(resolve, intervalMs);
         });
@@ -170,7 +174,15 @@ describe("cirrusClient (workerd integration)", () => {
             return SELF.fetch(input as never, init as never).then((response: Response) => {
                 const headers = new Headers(response.headers);
 
-                const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+                let requestUrl: string;
+
+                if (typeof input === "string") {
+                    requestUrl = input;
+                } else if (input instanceof URL) {
+                    requestUrl = input.href;
+                } else {
+                    requestUrl = (input as Request).url;
+                }
 
                 if (!headers.has("x-d1-bookmark") && new URL(requestUrl).pathname === "/_cirrus/rpc") {
                     headers.set("x-d1-bookmark", "bk-42");

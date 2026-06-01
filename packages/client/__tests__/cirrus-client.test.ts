@@ -106,7 +106,7 @@ const latestSocket = (): MockSocket => {
     return last;
 };
 
-const function_ = (ref: string): FunctionReference => {
+const fnRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };
 };
 
@@ -140,7 +140,7 @@ describe("cirrusClient", () => {
                 WebSocket: createMockWebSocket(),
             });
 
-            const value = await client.query(function_("posts:list"), { limit: 10 });
+            const value = await client.query(fnRef("posts:list"), { limit: 10 });
 
             expect(value).toEqual({ hello: "world" });
             expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -167,7 +167,7 @@ describe("cirrusClient", () => {
                 WebSocket: createMockWebSocket(),
             });
 
-            await expect(client.query(function_("posts:get"), { id: "abc" })).rejects.toMatchObject({
+            await expect(client.query(fnRef("posts:get"), { id: "abc" })).rejects.toMatchObject({
                 code: "NOT_FOUND",
                 message: "missing",
             });
@@ -206,8 +206,8 @@ describe("cirrusClient", () => {
                 WebSocket: createMockWebSocket(),
             });
 
-            await client.mutation(function_("posts:create"), { title: "hi" });
-            await client.query(function_("posts:list"), {});
+            await client.mutation(fnRef("posts:create"), { title: "hi" });
+            await client.query(fnRef("posts:list"), {});
 
             const headers = (fetchMock as unknown as { lastHeaders: Record<string, string> }).lastHeaders;
 
@@ -226,7 +226,7 @@ describe("cirrusClient", () => {
             });
 
             client.setAuthToken("tkn");
-            await client.query(function_("any:thing"), {});
+            await client.query(fnRef("any:thing"), {});
 
             const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1];
             const headers = init.headers as Record<string, string>;
@@ -250,7 +250,7 @@ describe("cirrusClient", () => {
             });
 
             const received: unknown[] = [];
-            const unsubscribe = client.subscribe(function_("messages:list"), {}, (d) => received.push(d));
+            const unsubscribe = client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
 
             const socket = latestSocket();
 
@@ -286,7 +286,7 @@ describe("cirrusClient", () => {
                 wsToken: "admin tok/en",
             });
 
-            client.subscribe(function_("__cirrus_admin__:getMetrics"), {}, () => undefined);
+            client.subscribe(fnRef("__cirrus_admin__:getMetrics"), {}, () => undefined);
 
             const { url } = latestSocket();
 
@@ -307,7 +307,7 @@ describe("cirrusClient", () => {
             const errors: { message: string }[] = [];
             const data: unknown[] = [];
 
-            client.subscribe(function_("__cirrus_admin__:getMetrics"), {}, (d) => data.push(d), { onError: (error) => errors.push(error) });
+            client.subscribe(fnRef("__cirrus_admin__:getMetrics"), {}, (d) => data.push(d), { onError: (error) => errors.push(error) });
 
             const socket = latestSocket();
 
@@ -331,7 +331,7 @@ describe("cirrusClient", () => {
                 wsToken: "adm1n",
             });
 
-            client.subscribe(function_("__cirrus_admin__:getMetrics"), {}, () => undefined);
+            client.subscribe(fnRef("__cirrus_admin__:getMetrics"), {}, () => undefined);
 
             const first = latestSocket();
 
@@ -364,7 +364,7 @@ describe("cirrusClient", () => {
                 WebSocket: createMockWebSocket(),
             });
 
-            client.subscribe(function_("a:b"), { x: 1 }, () => undefined);
+            client.subscribe(fnRef("a:b"), { x: 1 }, () => undefined);
             const first = latestSocket();
 
             first.open();
@@ -402,8 +402,8 @@ describe("cirrusClient", () => {
             const aReceived: unknown[] = [];
             const bReceived: unknown[] = [];
 
-            const unsubA = client.subscribe(function_("rooms:list"), { roomId: "r1" }, (d) => aReceived.push(d));
-            const unsubB = client.subscribe(function_("rooms:list"), { roomId: "r1" }, (d) => bReceived.push(d));
+            const unsubA = client.subscribe(fnRef("rooms:list"), { roomId: "r1" }, (d) => aReceived.push(d));
+            const unsubB = client.subscribe(fnRef("rooms:list"), { roomId: "r1" }, (d) => bReceived.push(d));
 
             const socket = latestSocket();
 
@@ -447,7 +447,7 @@ describe("cirrusClient", () => {
             });
 
             // First, open a real socket so the client considers itself "online".
-            client.subscribe(function_("posts:list"), {}, () => undefined);
+            client.subscribe(fnRef("posts:list"), {}, () => undefined);
             const first = latestSocket();
 
             first.open();
@@ -456,7 +456,7 @@ describe("cirrusClient", () => {
             first.triggerClose();
 
             // Mutation while offline should be queued, not sent.
-            const pending = client.mutation(function_("posts:create"), { title: "queued" });
+            const pending = client.mutation(fnRef("posts:create"), { title: "queued" });
 
             expect(fetchMock).not.toHaveBeenCalled();
 
@@ -554,11 +554,11 @@ describe("cirrusClient", () => {
             });
 
             // Get online, then drop the socket so the next mutation is queued.
-            client.subscribe(function_("posts:list"), {}, () => undefined);
+            client.subscribe(fnRef("posts:list"), {}, () => undefined);
             latestSocket().open();
             latestSocket().triggerClose();
 
-            const pending = client.mutation(function_("posts:create"), { title: "queued" });
+            const pending = client.mutation(fnRef("posts:create"), { title: "queued" });
 
             await vi.advanceTimersByTimeAsync(0);
 
@@ -591,7 +591,7 @@ describe("cirrusClient", () => {
 
             const received: unknown[] = [];
 
-            client.subscribe(function_("counter:get"), {}, (d) => received.push(d));
+            client.subscribe(fnRef("counter:get"), {}, (d) => received.push(d));
             const socket = latestSocket();
 
             socket.open();
@@ -605,7 +605,7 @@ describe("cirrusClient", () => {
 
             await expect(
                 client.mutation(
-                    function_("counter:get"),
+                    fnRef("counter:get"),
                     {},
                     {
                         optimistic: (current) => (typeof current === "number" ? current + 1 : 1),
@@ -629,13 +629,13 @@ describe("cirrusClient", () => {
 
             const received: unknown[] = [];
 
-            client.subscribe(function_("c:get"), {}, (d) => received.push(d));
+            client.subscribe(fnRef("c:get"), {}, (d) => received.push(d));
             latestSocket().open();
             const subId = JSON.parse(latestSocket().sent[0]!).id as string;
 
             latestSocket().receive({ delta: 0, id: subId, type: "delta" });
 
-            await client.mutation(function_("c:get"), {}, { optimistic: () => 9 });
+            await client.mutation(fnRef("c:get"), {}, { optimistic: () => 9 });
 
             expect(received).toEqual([0, 9]);
         });
@@ -926,7 +926,7 @@ describe("cirrusClient", () => {
             expect(client.connectionStatus()).toBe("idle");
 
             // Opening a subscription creates a socket → connecting.
-            client.subscribe(function_("a:b"), {}, () => undefined);
+            client.subscribe(fnRef("a:b"), {}, () => undefined);
 
             expect(client.connectionStatus()).toBe("connecting");
 
@@ -959,7 +959,7 @@ describe("cirrusClient", () => {
             const unsubscribe = client.onConnectionStatus((status) => seen.push(status));
 
             unsubscribe();
-            client.subscribe(function_("a:b"), {}, () => undefined);
+            client.subscribe(fnRef("a:b"), {}, () => undefined);
 
             // Only the immediate idle callback landed before unsubscribe.
             expect(seen).toEqual(["idle"]);

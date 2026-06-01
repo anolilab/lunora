@@ -95,7 +95,7 @@ const latestSocket = (): MockSocket => {
     return last;
 };
 
-const function_ = <T = unknown>(reference: string): FunctionReference<"stream", Record<string, never>, T> => {
+const fnRef = <T = unknown>(reference: string): FunctionReference<"stream", Record<string, never>, T> => {
     return { __cirrusRef: reference };
 };
 
@@ -235,7 +235,7 @@ describe("stream", () => {
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-            const iterable = client.stream(function_<{ tick: number }>("metrics:tick"), {});
+            const iterable = client.stream(fnRef<{ tick: number }>("metrics:tick"), {});
 
             // Drive the socket to "open" so the stream frame flushes.
             latestSocket().open();
@@ -272,7 +272,7 @@ describe("stream", () => {
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-            const iterable = client.stream(function_<number>("metrics:loop"), {});
+            const iterable = client.stream(fnRef<number>("metrics:loop"), {});
 
             latestSocket().open();
             const sent = latestSocket().sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
@@ -307,7 +307,7 @@ describe("stream", () => {
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-            const iterable = client.stream(function_<number>("metrics:boom"), {});
+            const iterable = client.stream(fnRef<number>("metrics:boom"), {});
 
             latestSocket().open();
             const id = (JSON.parse(latestSocket().sent[0] as string) as Record<string, unknown>).id as string;
@@ -326,7 +326,7 @@ describe("stream", () => {
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
-            const iterable = client.stream(function_<number>("metrics:keepalive"), {});
+            const iterable = client.stream(fnRef<number>("metrics:keepalive"), {});
 
             latestSocket().open();
 
@@ -341,7 +341,7 @@ describe("stream", () => {
             expect.assertions(2);
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
-            const iterable = client.stream(function_<number>("metrics:tick"), {});
+            const iterable = client.stream(fnRef<number>("metrics:tick"), {});
 
             // Before open: nothing has gone over the wire yet.
             expect(latestSocket().sent).toHaveLength(0);
