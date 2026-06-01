@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useStream } from "../src/use-stream.js";
 
-const function_ = (reference: string): FunctionReference => {
+const makeRef = (reference: string): FunctionReference => {
     return { __cirrusRef: reference };
 };
 
@@ -47,7 +47,7 @@ const buildClientWithStream = (): { client: CirrusClient; opened: MockEntry[]; o
 };
 
 const Display = ({ args = {} }: { args?: Record<string, unknown> | "skip" } = {}): ReactElement => {
-    const { chunks, error, status } = useStream(function_("metrics:tick"), args);
+    const { chunks, error, status } = useStream(makeRef("metrics:tick"), args);
 
     return (
         <div>

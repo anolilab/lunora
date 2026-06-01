@@ -7,7 +7,7 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import { usePaginatedQuery } from "../src/use-paginated-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const function_ = (ref: string): FunctionReference => {
+const makeRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };
 };
 
@@ -31,7 +31,7 @@ interface HarnessProps {
 }
 
 const Harness = ({ initialNumItems: initialNumberItems = 2, onLoadMore, skip = false }: HarnessProps): ReactElement => {
-    const { isLoading, loadMore, results, status } = usePaginatedQuery(function_("items:list"), skip ? "skip" : {}, { initialNumItems: initialNumberItems });
+    const { isLoading, loadMore, results, status } = usePaginatedQuery(makeRef("items:list"), skip ? "skip" : {}, { initialNumItems: initialNumberItems });
 
     onLoadMore?.(loadMore);
 

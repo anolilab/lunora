@@ -1,7 +1,7 @@
 import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/client";
 import { vi } from "vitest";
 
-export interface MockClientHooks {
+interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
     asClient: CirrusClient;
     close: ReturnType<typeof vi.fn>;
@@ -20,18 +20,18 @@ interface SubEntry {
     ref: string;
 }
 
-export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): MockClientHooks => {
+const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): MockClientHooks => {
     const subs = new Set<SubEntry>();
     let authToken: string | null = null;
 
-    const queryFunction = vi.fn<(function_: FunctionReference, args: unknown) => Promise<unknown>>(async (function_: FunctionReference, args: unknown) =>
-        queryImpl ? queryImpl(function_.__cirrusRef, args) : undefined,
+    const queryFunction = vi.fn<(reference: FunctionReference, args: unknown) => Promise<unknown>>(async (reference: FunctionReference, args: unknown) =>
+        queryImpl ? queryImpl(reference.__cirrusRef, args) : undefined,
     );
     const mutationFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
     const actionFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
-    const subscribeFunction = vi.fn<(function_: FunctionReference, args: unknown, callback: (value: unknown) => void) => Unsubscribe>(
-        (function_: FunctionReference, _args: unknown, callback: (value: unknown) => void): Unsubscribe => {
-            const entry: SubEntry = { callback, ref: function_.__cirrusRef };
+    const subscribeFunction = vi.fn<(reference: FunctionReference, args: unknown, callback: (value: unknown) => void) => Unsubscribe>(
+        (reference: FunctionReference, _args: unknown, callback: (value: unknown) => void): Unsubscribe => {
+            const entry: SubEntry = { callback, ref: reference.__cirrusRef };
 
             subs.add(entry);
 
@@ -96,3 +96,6 @@ export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unk
         subscribe: subscribeFunction,
     };
 };
+
+export { createMockClient };
+export type { MockClientHooks };

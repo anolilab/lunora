@@ -7,7 +7,7 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import useSubscription from "../src/use-subscription.js";
 import { createMockClient } from "./mock-client.js";
 
-const function_ = (ref: string): FunctionReference => {
+const makeRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };
 };
 
@@ -16,7 +16,7 @@ const function_ = (ref: string): FunctionReference => {
 const EMPTY_ARGS: Record<string, unknown> = {};
 
 const Display = ({ args = EMPTY_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
-    const { data, error } = useSubscription(function_("messages:list"), args);
+    const { data, error } = useSubscription(makeRef("messages:list"), args);
 
     if (error) {
         return <div data-testid="display">error: {error.message}</div>;

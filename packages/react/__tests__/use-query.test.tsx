@@ -7,7 +7,7 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import useQuery from "../src/use-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const function_ = (ref: string): FunctionReference => {
+const makeRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };
 };
 
@@ -15,7 +15,7 @@ const DEFAULT_ARGS: Record<string, unknown> = {};
 const SHARED_ARGS: Record<string, unknown> = { a: 1 };
 
 const Display = ({ args = DEFAULT_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
-    const data = useQuery(function_("posts:list"), args);
+    const data = useQuery(makeRef("posts:list"), args);
 
     return <div data-testid="display">{data === undefined ? "loading" : JSON.stringify(data)}</div>;
 };

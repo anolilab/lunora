@@ -7,7 +7,7 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useMutation } from "../src/use-mutation.js";
 import { createMockClient } from "./mock-client.js";
 
-const function_ = (ref: string): FunctionReference => {
+const makeRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };
 };
 
@@ -16,7 +16,7 @@ interface HarnessProps {
 }
 
 const Harness = ({ onCall }: HarnessProps): ReactElement => {
-    const { mutate, pending } = useMutation(function_("posts:create"));
+    const { mutate, pending } = useMutation(makeRef("posts:create"));
 
     onCall(
         () => mutate({ title: "hello" }),
@@ -59,6 +59,8 @@ describe("useMutation", () => {
         act(() => {
             inFlight = trigger().then((value) => {
                 resolved = value;
+
+                return value;
             });
         });
 
@@ -85,7 +87,7 @@ describe("useMutation", () => {
 
         const optimistic = vi.fn<() => number>(() => 5);
         const Probe = (): ReactElement => {
-            const { mutate } = useMutation(function_("counter:inc"));
+            const { mutate } = useMutation(makeRef("counter:inc"));
 
             return (
                 <button
@@ -93,7 +95,7 @@ describe("useMutation", () => {
                     data-testid="btn"
                     // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-only click handler; stable identity is irrelevant for a single fireEvent.
                     onClick={() => {
-                        void mutate({}, { optimistic });
+                        mutate({}, { optimistic }).catch(() => {});
                     }}
                     type="button"
                 />

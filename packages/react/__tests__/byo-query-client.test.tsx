@@ -8,12 +8,12 @@ import { CirrusProvider } from "../src/cirrus-provider.js";
 import useQuery from "../src/use-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const function_ = (reference: string): FunctionReference => {
+const makeRef = (reference: string): FunctionReference => {
     return { __cirrusRef: reference };
 };
 
 const Display = (): ReactElement => {
-    const value = useQuery(function_("posts:list"), {});
+    const value = useQuery(makeRef("posts:list"), {});
     const qc = useQueryClient();
 
     // We expose the queryClient identity via a data-* attribute so we can
