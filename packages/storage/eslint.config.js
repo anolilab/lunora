@@ -60,6 +60,7 @@ export default createConfig(
         files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
         rules: {
             "@stylistic/no-tabs": "off",
+            "unused-imports/no-unused-vars": "off",
             "no-await-in-loop": "off",
             "import/prefer-default-export": "off",
             "@typescript-eslint/unbound-method": "off",
