@@ -8,12 +8,14 @@ import type { PersistedMutation, PersistenceAdapter } from "./types.js";
  */
 export const createInMemoryPersistence = (): PersistenceAdapter => {
     const entries = new Map<string, PersistedMutation>();
-    const clone = (mutation: PersistedMutation): PersistedMutation => ({
+    const clone = (mutation: PersistedMutation): PersistedMutation => {
+ return {
         args: { ...mutation.args },
         functionPath: mutation.functionPath,
         id: mutation.id,
         shardKey: mutation.shardKey,
-    });
+    };
+};
 
     return {
         append: (mutation) => {
@@ -26,7 +28,7 @@ export const createInMemoryPersistence = (): PersistenceAdapter => {
 
             return Promise.resolve();
         },
-        load: () => Promise.resolve([...entries.values()].map(clone)),
+        load: () => Promise.resolve([...entries.values()].map((mutation) => clone(mutation))),
         remove: (id) => {
             entries.delete(id);
 

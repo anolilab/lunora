@@ -19,6 +19,7 @@ export interface StreamHandle<T = unknown> {
     readonly complete: () => void;
     /** Surface an error to any pending consumer; subsequent pushes are dropped. */
     readonly fail: (error: Error) => void;
+
     /**
      * Push one chunk. Silent no-op once the stream is `complete`, `fail`-ed,
      * or `cancel`-ed. When the buffer is already at `maxBuffer`, the stream
@@ -126,7 +127,7 @@ export const createStream = <T>(options: { maxBuffer?: number; onCancel: () => v
 
             if (buffer.length >= maxBuffer) {
                 handle.fail(
-                    Object.assign(new Error(`stream buffer overflow (max=${maxBuffer}); the consumer cannot keep up with the producer`), {
+                    Object.assign(new Error(`stream buffer overflow (max=${maxBuffer.toString()}); the consumer cannot keep up with the producer`), {
                         code: "STREAM_BACKPRESSURE",
                     }),
                 );

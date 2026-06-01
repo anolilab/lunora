@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CirrusClient } from "../src/cirrus-client.js";
 import { createStream, DEFAULT_MAX_BUFFER } from "../src/stream.js";
@@ -38,11 +38,11 @@ const createMockWebSocket = (): typeof WebSocket => {
 
         public onerror: ((event?: unknown) => void) | null = null;
 
-        private readonly listeners = new Map<string, Array<(event?: unknown) => void>>();
+        private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
 
         public constructor(url: string) {
             this.url = url;
-            sockets.push(this as unknown as MockSocket);
+            sockets.push(this);
         }
 
         public addEventListener(type: string, listener: (event?: unknown) => void): void {
@@ -95,8 +95,7 @@ const latestSocket = (): MockSocket => {
     return last;
 };
 
-const fn = <T = unknown>(reference: string): FunctionReference<"stream", Record<string, never>, T> =>
-    ({ __cirrusRef: reference }) as FunctionReference<"stream", Record<string, never>, T>;
+const fn = <T = unknown>(reference: string): FunctionReference<"stream", Record<string, never>, T> => { return { __cirrusRef: reference }; };
 
 describe("stream", () => {
     beforeEach(() => {
@@ -110,7 +109,7 @@ describe("stream", () => {
     // --- createStream unit tests ------------------------------------------------
 
     describe("createStream", () => {
-        test("delivers pushed values to consumers in order", async () => {
+        it("delivers pushed values to consumers in order", async () => {
             expect.assertions(3);
 
             const { handle, iterable } = createStream<number>({ onCancel: () => {} });
@@ -129,7 +128,7 @@ describe("stream", () => {
             await expect(iter.next()).resolves.toEqual({ done: true, value: undefined });
         });
 
-        test("pending consumer resolves when a value is pushed later", async () => {
+        it("pending consumer resolves when a value is pushed later", async () => {
             expect.assertions(1);
 
             const { handle, iterable } = createStream<string>({ onCancel: () => {} });
@@ -145,7 +144,7 @@ describe("stream", () => {
             await expect(promise).resolves.toEqual({ done: false, value: "delivered" });
         });
 
-        test("error surfaces as a rejection on the next pull", async () => {
+        it("error surfaces as a rejection on the next pull", async () => {
             expect.assertions(1);
 
             const { handle, iterable } = createStream<number>({ onCancel: () => {} });
@@ -157,7 +156,7 @@ describe("stream", () => {
             await expect(iter.next()).rejects.toThrow("boom");
         });
 
-        test("cancel() invokes onCancel exactly once and closes the iterator", async () => {
+        it("cancel() invokes onCancel exactly once and closes the iterator", async () => {
             expect.assertions(2);
 
             const onCancel = vi.fn<() => void>();
@@ -173,7 +172,7 @@ describe("stream", () => {
             await expect(iter.next()).resolves.toEqual({ done: true, value: undefined });
         });
 
-        test("backpressure overflow surfaces a STREAM_BACKPRESSURE error", async () => {
+        it("backpressure overflow surfaces a STREAM_BACKPRESSURE error", async () => {
             expect.assertions(1);
 
             const { handle, iterable } = createStream<number>({ maxBuffer: 2, onCancel: () => {} });
@@ -188,13 +187,13 @@ describe("stream", () => {
             await expect(iter.next()).rejects.toMatchObject({ code: "STREAM_BACKPRESSURE" });
         });
 
-        test("default buffer is at least 64 chunks", () => {
+        it("default buffer is at least 64 chunks", () => {
             expect.assertions(1);
 
             expect(DEFAULT_MAX_BUFFER).toBeGreaterThanOrEqual(64);
         });
 
-        test("delivers `undefined` chunks without dropping them", async () => {
+        it("delivers `undefined` chunks without dropping them", async () => {
             expect.assertions(4);
 
             const { handle, iterable } = createStream<undefined | { ok: boolean }>({ onCancel: () => {} });
@@ -229,7 +228,7 @@ describe("stream", () => {
     // --- CirrusClient.stream() integration tests --------------------------------
 
     describe("cirrusClient.stream()", () => {
-        test("opens a WS, sends a stream frame, and yields chunks until complete", async () => {
+        it("opens a WS, sends a stream frame, and yields chunks until complete", async () => {
             expect.assertions(3);
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
@@ -266,7 +265,7 @@ describe("stream", () => {
             client.close();
         });
 
-        test("cancel() sends an unsubscribe frame and resolves the iterator", async () => {
+        it("cancel() sends an unsubscribe frame and resolves the iterator", async () => {
             expect.assertions(2);
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
@@ -302,7 +301,7 @@ describe("stream", () => {
             client.close();
         });
 
-        test("server-side error surfaces as a rejection on the consumer", async () => {
+        it("server-side error surfaces as a rejection on the consumer", async () => {
             expect.assertions(1);
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
@@ -325,7 +324,7 @@ describe("stream", () => {
             client.close();
         });
 
-        test("client.close() fails any in-flight streams", async () => {
+        it("client.close() fails any in-flight streams", async () => {
             expect.assertions(1);
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
@@ -345,7 +344,7 @@ describe("stream", () => {
             await expect(consumer).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
         });
 
-        test("buffers the start frame while the socket is connecting and flushes it on open", async () => {
+        it("buffers the start frame while the socket is connecting and flushes it on open", async () => {
             expect.assertions(2);
 
             const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });

@@ -11,7 +11,7 @@ import type { PaginationResult, PaginationStatus, UsePaginatedQueryOptions, UseP
 export type PaginatedArgs<F> = Omit<ArgsOf<F>, "paginationOpts">;
 
 /** The element type of the `page` array a paginated query returns. */
-export type PageItemOf<F> = ReturnOf<F> extends { page: Array<infer T> } ? T : unknown;
+export type PageItemOf<F> = ReturnOf<F> extends { page: (infer T)[] } ? T : unknown;
 
 interface PageRequest {
     cursor: null | string;
@@ -173,7 +173,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
         return unsubscribe;
     }, [queryClient, pageKeysHash]);
 
-    const pageResults: Array<PaginationResult<PageItemOf<F>> | undefined> = skipped
+    const pageResults: (PaginationResult<PageItemOf<F>> | undefined)[] = skipped
         ? []
         : pageEntries.map(({ key }) => queryClient.getQueryData<PaginationResult<PageItemOf<F>>>(key));
 

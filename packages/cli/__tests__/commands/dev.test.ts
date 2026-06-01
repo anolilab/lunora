@@ -2,18 +2,20 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { planDevCommand, runDevCommand } from "../../src/commands/dev.js";
 import type { Logger } from "../../src/util/logger.js";
 import { createRecordingSpawner } from "../../src/util/spawn.js";
 
-const silentLogger = (): Logger => ({
+const silentLogger = (): Logger => {
+ return {
     error: () => {},
     info: () => {},
     success: () => {},
     warn: () => {},
-});
+};
+};
 
 let workdir: string;
 
@@ -27,7 +29,7 @@ describe("cirrus dev", () => {
     });
 
     describe("cirrus dev", () => {
-        test("plans `vite` when vite.config.ts is present (no wrangler config)", () => {
+        it("plans `vite` when vite.config.ts is present (no wrangler config)", () => {
             expect.assertions(3);
 
             writeFileSync(join(workdir, "vite.config.ts"), "export default {};", "utf8");
@@ -39,7 +41,7 @@ describe("cirrus dev", () => {
             expect(plan.descriptors[0]?.args.join(" ")).toContain("vite");
         });
 
-        test("plans `concurrent` when both vite.config.ts and wrangler.jsonc are present", () => {
+        it("plans `concurrent` when both vite.config.ts and wrangler.jsonc are present", () => {
             expect.assertions(7);
 
             writeFileSync(join(workdir, "vite.config.ts"), "export default {};", "utf8");
@@ -56,7 +58,7 @@ describe("cirrus dev", () => {
             expect(plan.descriptors[1]?.args.join(" ")).toContain("dev");
         });
 
-        test("--no-vite overrides concurrent mode to standalone even when both configs exist", () => {
+        it("--no-vite overrides concurrent mode to standalone even when both configs exist", () => {
             expect.assertions(2);
 
             writeFileSync(join(workdir, "vite.config.ts"), "export default {};", "utf8");
@@ -68,7 +70,7 @@ describe("cirrus dev", () => {
             expect(plan.descriptors).toHaveLength(1);
         });
 
-        test("plans `standalone` when --no-vite is passed even with vite.config.ts", () => {
+        it("plans `standalone` when --no-vite is passed even with vite.config.ts", () => {
             expect.assertions(3);
 
             writeFileSync(join(workdir, "vite.config.ts"), "export default {};", "utf8");
@@ -80,7 +82,7 @@ describe("cirrus dev", () => {
             expect(plan.descriptors[0]?.args.join(" ")).toContain("dev");
         });
 
-        test("plans `standalone` when no vite config exists", () => {
+        it("plans `standalone` when no vite config exists", () => {
             expect.assertions(1);
 
             const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
@@ -88,7 +90,7 @@ describe("cirrus dev", () => {
             expect(plan.mode).toBe("standalone");
         });
 
-        test("propagates --port to the spawned process", () => {
+        it("propagates --port to the spawned process", () => {
             expect.assertions(2);
 
             writeFileSync(join(workdir, "vite.config.ts"), "export default {};", "utf8");
@@ -99,7 +101,7 @@ describe("cirrus dev", () => {
             expect(plan.descriptors[0]?.args).toContain("5179");
         });
 
-        test("runDevCommand calls the injected spawner with the planned descriptor", async () => {
+        it("runDevCommand calls the injected spawner with the planned descriptor", async () => {
             expect.assertions(4);
 
             writeFileSync(join(workdir, "vite.config.ts"), "export default {};", "utf8");

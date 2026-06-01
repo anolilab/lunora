@@ -1,13 +1,13 @@
 import type { FunctionReference } from "@cirrus/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { usePaginatedQuery } from "../src/use-paginated-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (ref: string): FunctionReference => ({ __cirrusRef: ref });
+const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
 
 /** Keyset-style backend over a fixed list, cursor = next offset as a string. */
 const makePaginator =
@@ -29,7 +29,7 @@ interface HarnessProps {
 }
 
 const Harness = ({ initialNumItems = 2, onLoadMore, skip = false }: HarnessProps): ReactElement => {
-    const { isLoading, loadMore, results, status } = usePaginatedQuery(fn("items:list"), skip ? "skip" : ({} as Record<string, unknown>), { initialNumItems });
+    const { isLoading, loadMore, results, status } = usePaginatedQuery(fn("items:list"), skip ? "skip" : ({}), { initialNumItems });
 
     onLoadMore?.(loadMore);
 
@@ -43,7 +43,7 @@ const Harness = ({ initialNumItems = 2, onLoadMore, skip = false }: HarnessProps
 };
 
 describe("usePaginatedQuery", () => {
-    test("loads the first page and reports CanLoadMore when more remain", async () => {
+    it("loads the first page and reports CanLoadMore when more remain", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
@@ -65,7 +65,7 @@ describe("usePaginatedQuery", () => {
         expect(screen.getByTestId("loading").textContent).toBe("false");
     });
 
-    test("loadMore appends pages and reaches Exhausted on the final page", async () => {
+    it("loadMore appends pages and reaches Exhausted on the final page", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
@@ -108,7 +108,7 @@ describe("usePaginatedQuery", () => {
         expect(screen.getByTestId("loading").textContent).toBe("false");
     });
 
-    test("loadMore is a no-op once Exhausted", async () => {
+    it("loadMore is a no-op once Exhausted", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b"]));
@@ -140,7 +140,7 @@ describe("usePaginatedQuery", () => {
         expect(screen.getByTestId("results").textContent).toBe("a,b");
     });
 
-    test('"skip" short-circuits — no query and stays LoadingFirstPage', () => {
+    it('"skip" short-circuits — no query and stays LoadingFirstPage', () => {
         expect.assertions(4);
 
         const mock = createMockClient(makePaginator(["a", "b"]));
@@ -157,7 +157,7 @@ describe("usePaginatedQuery", () => {
         expect(screen.getByTestId("loading").textContent).toBe("false");
     });
 
-    test("a WS delta replaces a loaded page in place", async () => {
+    it("a WS delta replaces a loaded page in place", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient(makePaginator(["a", "b"]));

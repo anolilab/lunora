@@ -3,17 +3,19 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runInitCommand } from "../../src/commands/init.js";
 import type { Logger } from "../../src/util/logger.js";
 
-const silentLogger = (): Logger => ({
+const silentLogger = (): Logger => {
+ return {
     error: () => {},
     info: () => {},
     success: () => {},
     warn: () => {},
-});
+};
+};
 
 // __tests__/commands/ -> package root -> monorepo root -> templates/
 const testDirectory = dirname(fileURLToPath(import.meta.url));
@@ -31,7 +33,7 @@ describe("cirrus init", () => {
     });
 
     describe("cirrus init", () => {
-        test("vite template scaffolds expected files", async () => {
+        it("vite template scaffolds expected files", async () => {
             expect.assertions(10);
 
             const result = await runInitCommand({
@@ -57,7 +59,7 @@ describe("cirrus init", () => {
             expect(existsSync(join(target, "README.md"))).toBe(true);
         });
 
-        test("substitutes {{name}} placeholders", async () => {
+        it("substitutes {{name}} placeholders", async () => {
             expect.assertions(3);
 
             await runInitCommand({
@@ -77,7 +79,7 @@ describe("cirrus init", () => {
             expect(main).toContain("rainbow");
         });
 
-        test("vite template package.json references all cirrus packages", async () => {
+        it("vite template package.json references all cirrus packages", async () => {
             expect.assertions(7);
 
             await runInitCommand({
@@ -99,7 +101,7 @@ describe("cirrus init", () => {
             expect(pkg).toContain("wrangler");
         });
 
-        test("standalone template has no frontend files", async () => {
+        it("standalone template has no frontend files", async () => {
             expect.assertions(5);
 
             const result = await runInitCommand({
@@ -120,7 +122,7 @@ describe("cirrus init", () => {
             expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
         });
 
-        test("tanstack-start template scaffolds router + ssr entries", async () => {
+        it("tanstack-start template scaffolds router + ssr entries", async () => {
             expect.assertions(14);
 
             const result = await runInitCommand({
@@ -153,7 +155,7 @@ describe("cirrus init", () => {
             expect(pkg).toContain('"name": "starter"');
         });
 
-        test("next template is not yet available", async () => {
+        it("next template is not yet available", async () => {
             expect.assertions(2);
 
             const warnings: string[] = [];
@@ -170,7 +172,7 @@ describe("cirrus init", () => {
             expect(warnings.join("\n")).toContain("not yet available");
         });
 
-        test("refuses to scaffold into a non-empty target", async () => {
+        it("refuses to scaffold into a non-empty target", async () => {
             expect.assertions(2);
 
             await runInitCommand({
@@ -195,7 +197,7 @@ describe("cirrus init", () => {
             expect(errors.join("\n")).toContain("not empty");
         });
 
-        test("--from with missing template reports a helpful error", async () => {
+        it("--from with missing template reports a helpful error", async () => {
             expect.assertions(2);
 
             const errors: string[] = [];

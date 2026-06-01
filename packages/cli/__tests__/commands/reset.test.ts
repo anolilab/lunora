@@ -2,17 +2,19 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runResetCommand } from "../../src/commands/reset.js";
 import type { Logger } from "../../src/util/logger.js";
 
-const silentLogger = (): Logger => ({
+const silentLogger = (): Logger => {
+ return {
     error: () => {},
     info: () => {},
     success: () => {},
     warn: () => {},
-});
+};
+};
 
 let workdir: string;
 
@@ -26,7 +28,7 @@ describe("cirrus reset", () => {
     });
 
     describe("cirrus reset", () => {
-        test("removes .wrangler/state if present", async () => {
+        it("removes .wrangler/state if present", async () => {
             expect.assertions(2);
 
             const stateDir = join(workdir, ".wrangler", "state");
@@ -40,7 +42,7 @@ describe("cirrus reset", () => {
             expect(result.removed).toContain(stateDir);
         });
 
-        test("--all also removes .cirrus-cache", async () => {
+        it("--all also removes .cirrus-cache", async () => {
             expect.assertions(4);
 
             const stateDir = join(workdir, ".wrangler", "state");
@@ -57,7 +59,7 @@ describe("cirrus reset", () => {
             expect(result.removed).toContain(cacheDir);
         });
 
-        test("no-ops cleanly when target is absent", async () => {
+        it("no-ops cleanly when target is absent", async () => {
             expect.assertions(2);
 
             const infos: string[] = [];
@@ -72,7 +74,7 @@ describe("cirrus reset", () => {
             expect(infos.some((line) => line.includes("skipped"))).toBe(true);
         });
 
-        test("aborts via injected confirmer when neither --yes nor TTY", async () => {
+        it("aborts via injected confirmer when neither --yes nor TTY", async () => {
             expect.assertions(3);
 
             const stateDir = join(workdir, ".wrangler", "state");
@@ -90,7 +92,7 @@ describe("cirrus reset", () => {
             expect(existsSync(stateDir)).toBe(true);
         });
 
-        test("refuses without --yes when stdin is not a TTY", async () => {
+        it("refuses without --yes when stdin is not a TTY", async () => {
             expect.assertions(3);
 
             const errors: string[] = [];

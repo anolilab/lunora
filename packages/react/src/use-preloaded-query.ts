@@ -25,7 +25,7 @@ export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
     const queryClient = useQueryClient();
 
     const { args, functionPath, shardKey, value } = preloaded;
-    const fn = useMemo<FunctionReference>(() => ({ __cirrusRef: functionPath }), [functionPath]);
+    const fn = useMemo<FunctionReference>(() => { return { __cirrusRef: functionPath }; }, [functionPath]);
     const queryKey = useMemo(() => cirrusQueryKey(fn, args, shardKey), [fn.__cirrusRef, JSON.stringify(args), shardKey]);
 
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.

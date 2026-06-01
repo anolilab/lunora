@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runVerifyCommand } from "../../src/commands/verify.js";
 import type { Logger } from "../../src/util/logger.js";
@@ -57,7 +57,7 @@ describe("cirrus verify", () => {
     });
 
     describe("cirrus verify", () => {
-        test("returns 0 and writes nothing when wrangler + codegen are both valid", () => {
+        it("returns 0 and writes nothing when wrangler + codegen are both valid", () => {
             expect.assertions(4);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
@@ -72,7 +72,7 @@ describe("cirrus verify", () => {
             expect(existsSync(join(workdir, "cirrus", "_generated"))).toBe(false);
         });
 
-        test("returns 1 and surfaces wrangler errors", () => {
+        it("returns 1 and surfaces wrangler errors", () => {
             expect.assertions(3);
 
             writeFileSync(
@@ -93,7 +93,7 @@ describe("cirrus verify", () => {
             expect(recorded.errors.join("\n")).toContain("errors:");
         });
 
-        test("returns 1 when codegen discovery fails (broken schema)", () => {
+        it("returns 1 when codegen discovery fails (broken schema)", () => {
             expect.assertions(2);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
@@ -106,7 +106,7 @@ describe("cirrus verify", () => {
             expect(result.errors.some((error) => error.includes("codegen failed"))).toBe(true);
         });
 
-        test("returns 1 when wrangler.jsonc is missing", () => {
+        it("returns 1 when wrangler.jsonc is missing", () => {
             expect.assertions(3);
 
             const { logger } = recordingLogger();

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runViewCommand } from "../../src/commands/view.js";
 import type { Logger } from "../../src/util/logger.js";
@@ -51,7 +51,7 @@ describe("cirrus view", () => {
     });
 
     describe("cirrus view", () => {
-        test("defaults to localhost:8787/_cirrus/dashboard", async () => {
+        it("defaults to localhost:8787/_cirrus/dashboard", async () => {
             expect.assertions(2);
 
             const { logger } = recordingLogger();
@@ -63,7 +63,7 @@ describe("cirrus view", () => {
             expect(openedUrls).toEqual(["http://localhost:8787/_cirrus/dashboard"]);
         });
 
-        test("honours wrangler.dev.port for the local dashboard", async () => {
+        it("honours wrangler.dev.port for the local dashboard", async () => {
             expect.assertions(1);
 
             writeFileSync(
@@ -83,7 +83,7 @@ describe("cirrus view", () => {
             expect(openedUrls).toEqual(["http://localhost:9091/_cirrus/dashboard"]);
         });
 
-        test("--remote builds a URL from wrangler.routes when present", async () => {
+        it("--remote builds a URL from wrangler.routes when present", async () => {
             expect.assertions(1);
 
             writeFileSync(
@@ -103,7 +103,7 @@ describe("cirrus view", () => {
             expect(openedUrls).toEqual(["https://api.example.com/_cirrus/dashboard"]);
         });
 
-        test("--remote falls back to <name>.workers.dev when no routes are set", async () => {
+        it("--remote falls back to <name>.workers.dev when no routes are set", async () => {
             expect.assertions(1);
 
             writeFileSync(
@@ -122,7 +122,7 @@ describe("cirrus view", () => {
             expect(openedUrls).toEqual(["https://my-worker.workers.dev/_cirrus/dashboard"]);
         });
 
-        test("--remote without wrangler returns 1", async () => {
+        it("--remote without wrangler returns 1", async () => {
             expect.assertions(3);
 
             const { logger, recorded } = recordingLogger();

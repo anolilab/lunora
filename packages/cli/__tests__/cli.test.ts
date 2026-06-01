@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { COMMANDS, runCli } from "../src/cli.js";
 
@@ -38,7 +38,7 @@ describe("cirrus CLI entry", () => {
         writeStderrSpy.mockRestore();
     });
 
-    test("`cirrus --help` prints help and exits 0", async () => {
+    it("`cirrus --help` prints help and exits 0", async () => {
         expect.hasAssertions();
 
         const code = await runCli({ argv: ["--help"] });
@@ -51,7 +51,7 @@ describe("cirrus CLI entry", () => {
         }
     });
 
-    test("no args prints help", async () => {
+    it("no args prints help", async () => {
         expect.assertions(2);
 
         const code = await runCli({ argv: [] });
@@ -60,7 +60,7 @@ describe("cirrus CLI entry", () => {
         expect(stdout).toContain("Usage: cirrus");
     });
 
-    test("`--version` prints a version", async () => {
+    it("`--version` prints a version", async () => {
         expect.assertions(2);
 
         const code = await runCli({ argv: ["--version"] });
@@ -69,7 +69,7 @@ describe("cirrus CLI entry", () => {
         expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/u);
     });
 
-    test("unknown command exits non-zero", async () => {
+    it("unknown command exits non-zero", async () => {
         expect.assertions(2);
 
         const code = await runCli({ argv: ["zzz-not-real"] });
@@ -93,7 +93,7 @@ describe("cirrus CLI entry", () => {
             rmSync(workdir, { force: true, recursive: true });
         });
 
-        test("`init <name> -t standalone` selects the standalone template", async () => {
+        it("`init <name> -t standalone` selects the standalone template", async () => {
             expect.assertions(3);
 
             const code = await runCli({
@@ -110,7 +110,7 @@ describe("cirrus CLI entry", () => {
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
         });
 
-        test("`init <name> --template standalone` (long-form) selects the standalone template", async () => {
+        it("`init <name> --template standalone` (long-form) selects the standalone template", async () => {
             expect.assertions(2);
 
             const code = await runCli({
@@ -125,7 +125,7 @@ describe("cirrus CLI entry", () => {
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
         });
 
-        test("`init <name> --template=standalone` (equals form) selects the standalone template", async () => {
+        it("`init <name> --template=standalone` (equals form) selects the standalone template", async () => {
             expect.assertions(2);
 
             const code = await runCli({
@@ -140,7 +140,7 @@ describe("cirrus CLI entry", () => {
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
         });
 
-        test("default template (no `-t` flag) is vite", async () => {
+        it("default template (no `-t` flag) is vite", async () => {
             expect.assertions(2);
 
             const code = await runCli({

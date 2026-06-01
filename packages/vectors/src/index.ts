@@ -1,4 +1,4 @@
-export { createCtxVectors, createVectorSyncHook } from "./ctx.js";
+export { createVectors } from "./create-vectors.js";
 export type {
     SchemaLike,
     TableDefinitionLike,
@@ -14,7 +14,7 @@ export type {
     WriteEvent,
     WriteHook,
 } from "./ctx.js";
-export { createVectors } from "./create-vectors.js";
+export { createCtxVectors, createVectorSyncHook } from "./ctx.js";
 export type {
     CirrusVectors,
     CirrusVectorsOptions,

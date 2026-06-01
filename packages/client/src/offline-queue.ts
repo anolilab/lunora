@@ -88,7 +88,7 @@ export class OfflineQueue {
      * Returns the distinct shard keys of the restored writes so the caller can
      * open their sockets to trigger a flush.
      */
-    public async hydrate(): Promise<Array<string | undefined>> {
+    public async hydrate(): Promise<(string | undefined)[]> {
         if (!this.persistence) {
             return [];
         }

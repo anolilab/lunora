@@ -5,42 +5,42 @@
  * https://developers.cloudflare.com/vectorize/reference/client-api/.
  */
 export interface VectorizeIndexLike {
-    upsert(vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
-    insert(vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
-    query(vector: ReadonlyArray<number>, options?: VectorizeQueryOptions): Promise<VectorizeMatches>;
-    getByIds(ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>>;
-    deleteByIds(ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation>;
-    describe?(): Promise<VectorizeIndexDetails>;
+    deleteByIds: (ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
+    describe?: () => Promise<VectorizeIndexDetails>;
+    getByIds: (ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
+    insert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
+    query: (vector: ReadonlyArray<number>, options?: VectorizeQueryOptions) => Promise<VectorizeMatches>;
+    upsert: (vectors: ReadonlyArray<VectorizeVector>) => Promise<VectorizeUpsertMutation>;
 }
 
 export type VectorMetric = "cosine" | "euclidean" | "dot-product";
 
 export interface VectorizeVector {
     id: string;
-    values: ReadonlyArray<number>;
     metadata?: Record<string, unknown>;
     namespace?: string;
+    values: ReadonlyArray<number>;
 }
 
 export interface VectorizeQueryOptions {
-    topK?: number;
-    returnValues?: boolean;
-    returnMetadata?: "none" | "indexed" | "all";
-    namespace?: string;
     filter?: Record<string, unknown>;
+    namespace?: string;
+    returnMetadata?: "none" | "indexed" | "all";
+    returnValues?: boolean;
+    topK?: number;
 }
 
 export interface VectorizeMatch {
     id: string;
-    score: number;
-    values?: ReadonlyArray<number>;
     metadata?: Record<string, unknown>;
     namespace?: string;
+    score: number;
+    values?: ReadonlyArray<number>;
 }
 
 export interface VectorizeMatches {
-    matches: ReadonlyArray<VectorizeMatch>;
     count: number;
+    matches: ReadonlyArray<VectorizeMatch>;
 }
 
 export interface VectorizeUpsertMutation {
@@ -48,15 +48,15 @@ export interface VectorizeUpsertMutation {
 }
 
 export interface VectorizeDeleteMutation {
-    mutationId: string;
     count?: number;
+    mutationId: string;
 }
 
 export interface VectorizeIndexDetails {
     dimensions: number;
-    vectorsCount: number;
-    processedUpToMutation?: string;
     processedUpToDatetime?: string;
+    processedUpToMutation?: string;
+    vectorsCount: number;
 }
 
 /**
@@ -76,30 +76,30 @@ export interface CirrusVectorsOptions {
 }
 
 export interface UpsertInput<TInput = unknown> {
+    embed: EmbedFn<TInput>;
     id: string;
     input: TInput;
-    embed: EmbedFn<TInput>;
     metadata?: Record<string, unknown>;
     namespace?: string;
 }
 
 export interface QueryInput<TInput = unknown> {
+    embed?: EmbedFn<TInput>;
+    filter?: Record<string, unknown>;
+    input?: TInput;
+    namespace?: string;
+    returnMetadata?: "none" | "indexed" | "all";
+    returnValues?: boolean;
+    topK?: number;
     /** Either a precomputed vector or a value to embed via `embed`. */
     vector?: ReadonlyArray<number>;
-    input?: TInput;
-    embed?: EmbedFn<TInput>;
-    topK?: number;
-    returnValues?: boolean;
-    returnMetadata?: "none" | "indexed" | "all";
-    namespace?: string;
-    filter?: Record<string, unknown>;
 }
 
 export interface CirrusVectors {
-    upsert<TInput>(indexName: string, input: UpsertInput<TInput>): Promise<VectorizeUpsertMutation>;
-    upsertMany<TInput>(indexName: string, inputs: ReadonlyArray<UpsertInput<TInput>>): Promise<VectorizeUpsertMutation>;
-    query<TInput>(indexName: string, input: QueryInput<TInput>): Promise<VectorizeMatches>;
-    getByIds(indexName: string, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>>;
-    deleteByIds(indexName: string, ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation>;
-    describe(indexName: string): Promise<VectorizeIndexDetails>;
+    deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
+    describe: (indexName: string) => Promise<VectorizeIndexDetails>;
+    getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;
+    query: <TInput>(indexName: string, input: QueryInput<TInput>) => Promise<VectorizeMatches>;
+    upsert: <TInput>(indexName: string, input: UpsertInput<TInput>) => Promise<VectorizeUpsertMutation>;
+    upsertMany: <TInput>(indexName: string, inputs: ReadonlyArray<UpsertInput<TInput>>) => Promise<VectorizeUpsertMutation>;
 }

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runDeployCommand } from "../../src/commands/deploy.js";
 import type { Logger } from "../../src/util/logger.js";
@@ -51,7 +51,7 @@ describe("cirrus deploy", () => {
     });
 
     describe("cirrus deploy", () => {
-        test("runs codegen, validates wrangler, then spawns `pnpm exec wrangler deploy`", async () => {
+        it("runs codegen, validates wrangler, then spawns `pnpm exec wrangler deploy`", async () => {
             expect.assertions(5);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
@@ -71,7 +71,7 @@ describe("cirrus deploy", () => {
             expect(args).toContain("deploy");
         });
 
-        test("forwards --env to wrangler", async () => {
+        it("forwards --env to wrangler", async () => {
             expect.assertions(2);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
@@ -87,7 +87,7 @@ describe("cirrus deploy", () => {
             expect(args).toContain("production");
         });
 
-        test("aborts when wrangler.jsonc is missing required bindings", async () => {
+        it("aborts when wrangler.jsonc is missing required bindings", async () => {
             expect.assertions(3);
 
             writeFileSync(

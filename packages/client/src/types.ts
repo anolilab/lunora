@@ -4,7 +4,7 @@ export type FunctionKind = "action" | "mutation" | "query" | "stream";
 /**
  * Opaque reference to a registered function emitted by `@cirrus/codegen`.
  *
- * At runtime it carries the `<file>:<function>` identifier in `__cirrusRef`.
+ * At runtime it carries the `&lt;file>:&lt;function>` identifier in `__cirrusRef`.
  * Generated declarations decorate this with phantom type parameters so the
  * client can infer args / return values per call site.
  */
@@ -51,6 +51,7 @@ export interface ReconnectOptions {
 
 export interface OfflineQueueOptions {
     maxItems?: number;
+
     /**
      * Queue mutations issued before a shard's first successful WebSocket
      * connect (defaults to `false`). The standard behaviour ({@link CirrusClient}'s
@@ -105,6 +106,7 @@ export interface CirrusClientOptions {
     reconnect?: ReconnectOptions;
     url: string;
     WebSocket?: typeof WebSocket;
+
     /**
      * Token appended to the WebSocket URL as `?token=…`. The server matches it
      * against `CIRRUS_WS_BEARER` (to clear the upgrade gate) and/or
@@ -235,7 +237,7 @@ export interface StorageListPage {
 
 /**
  * One registered function, as returned by the worker's
- * `GET /_cirrus/admin/functions` endpoint: its `<file>:<function>` path and
+ * `GET /_cirrus/admin/functions` endpoint: its `&lt;file>:&lt;function>` path and
  * which client method (`query` / `mutation` / `action`) invokes it.
  */
 export interface FunctionDescriptor {

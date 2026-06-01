@@ -3,6 +3,8 @@ import type { Logger } from "./logger.js";
 /** Hosts we treat as local — the admin bearer may transit cleartext to these. */
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
 
+const TRAILING_SLASH = /\/$/u;
+
 /**
  * Normalize a `--url` value to a base URL and refuse to send the full-access
  * admin bearer in cleartext to a non-loopback host (a network MITM would gain
@@ -28,5 +30,5 @@ export const resolveAdminBaseUrl = (rawUrl: string | undefined, logger: Logger):
         return null;
     }
 
-    return candidate.replace(/\/$/u, "");
+    return candidate.replace(TRAILING_SLASH, "");
 };

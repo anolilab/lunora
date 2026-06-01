@@ -5,23 +5,27 @@ import type { SchemaLike, VectorSearchLike } from "../src/ctx.js";
 import { createCtxVectors, createVectorSyncHook } from "../src/ctx.js";
 import type { VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
 
-const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => ({
-    upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `upsert-${vectors.length}` })),
-    insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `insert-${vectors.length}` })),
+const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => {
+ return {
+    upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => { return { mutationId: `upsert-${vectors.length}` }; }),
+    insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => { return { mutationId: `insert-${vectors.length}` }; }),
     query: vi.fn<VectorizeIndexLike["query"]>(
-        async (): Promise<VectorizeMatches> => ({
+        async (): Promise<VectorizeMatches> => {
+ return {
             matches: [{ id: "row-1", score: 0.9, values: [0.1], metadata: { title: "Hi" } }],
             count: 1,
-        }),
+        };
+},
     ),
     getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
-        async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => ids.map((id) => ({ id, values: [1, 2], metadata: { k: id } })),
+        async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => ids.map((id) => { return { id, values: [1, 2], metadata: { k: id } }; }),
     ),
     deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(
-        async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => ({ mutationId: `delete-${ids.length}`, count: ids.length }),
+        async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => { return { mutationId: `delete-${ids.length}`, count: ids.length }; },
     ),
     ...overrides,
-});
+};
+};
 
 describe("createCtxVectors", () => {
     it("upsert + upsertNow both call cirrus.upsert inline and return void", async () => {
@@ -87,9 +91,9 @@ describe("createCtxVectors", () => {
     });
 });
 
-const fakeVectorSearch = (): VectorSearchLike & { deletes: Array<[string, ReadonlyArray<string>]>; upserts: Array<[string, unknown]> } => {
-    const upserts: Array<[string, unknown]> = [];
-    const deletes: Array<[string, ReadonlyArray<string>]> = [];
+const fakeVectorSearch = (): VectorSearchLike & { deletes: [string, ReadonlyArray<string>][]; upserts: [string, unknown][] } => {
+    const upserts: [string, unknown][] = [];
+    const deletes: [string, ReadonlyArray<string>][] = [];
 
     return {
         upserts,
@@ -103,7 +107,7 @@ const fakeVectorSearch = (): VectorSearchLike & { deletes: Array<[string, Readon
         deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => {
             deletes.push([indexName, ids]);
         }),
-        query: vi.fn<VectorSearchLike["query"]>(async () => ({ count: 0, matches: [] })),
+        query: vi.fn<VectorSearchLike["query"]>(async () => { return { count: 0, matches: [] }; }),
         getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
     };
 };
@@ -139,7 +143,7 @@ describe("createVectorSyncHook", () => {
                     table: "docs",
                     embed,
                     select: (row) => `${row.title as string} ${row.body as string}`,
-                    metadata: (row) => ({ title: row.title }),
+                    metadata: (row) => { return { title: row.title }; },
                 },
             },
         };

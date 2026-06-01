@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CirrusClient } from "../src/cirrus-client.js";
 import { createInMemoryPersistence } from "../src/persistence.js";
@@ -42,11 +42,11 @@ const createMockWebSocket = (): typeof WebSocket => {
 
         public onerror: ((event?: unknown) => void) | null = null;
 
-        private readonly listeners = new Map<string, Array<(event?: unknown) => void>>();
+        private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
 
         public constructor(url: string) {
             this.url = url;
-            sockets.push(this as unknown as MockSocket);
+            sockets.push(this);
         }
 
         public addEventListener(type: string, listener: (event?: unknown) => void): void {
@@ -103,15 +103,13 @@ const latestSocket = (): MockSocket => {
     return last;
 };
 
-const fn = (ref: string): FunctionReference => ({ __cirrusRef: ref });
+const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
 
-const jsonResponse = (body: unknown, init: ResponseInit = {}): Response => {
-    return Response.json(body, {
+const jsonResponse = (body: unknown, init: ResponseInit = {}): Response => Response.json(body, {
         status: 200,
         headers: { "content-type": "application/json" },
         ...init,
     });
-};
 
 describe("cirrusClient", () => {
     beforeEach(() => {
@@ -125,14 +123,14 @@ describe("cirrusClient", () => {
     // --- RPC --------------------------------------------------------------------
 
     describe("cirrusClient — queries & mutations", () => {
-        test("query roundtrips through POST /_cirrus/rpc and unwraps the result", async () => {
+        it("query roundtrips through POST /_cirrus/rpc and unwraps the result", async () => {
             expect.assertions(5);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { hello: "world" } }));
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -152,14 +150,14 @@ describe("cirrusClient", () => {
             });
         });
 
-        test("query surfaces server errors as thrown Error objects", async () => {
+        it("query surfaces server errors as thrown Error objects", async () => {
             expect.assertions(1);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "NOT_FOUND", message: "missing" } }, { status: 404 }));
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -169,7 +167,7 @@ describe("cirrusClient", () => {
             });
         });
 
-        test("mutation captures x-d1-bookmark and replays it on the next query", async () => {
+        it("mutation captures x-d1-bookmark and replays it on the next query", async () => {
             expect.assertions(1);
 
             let call = 0;
@@ -210,14 +208,14 @@ describe("cirrusClient", () => {
             expect(headers["x-d1-bookmark"]).toBe("bm-123");
         });
 
-        test("authorization header is attached when token is set", async () => {
+        it("authorization header is attached when token is set", async () => {
             expect.assertions(2);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: null }));
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -235,13 +233,13 @@ describe("cirrusClient", () => {
     // --- Subscriptions ----------------------------------------------------------
 
     describe("cirrusClient — subscriptions", () => {
-        test("subscribe sends a subscribe envelope and delivers delta payloads", async () => {
+        it("subscribe sends a subscribe envelope and delivers delta payloads", async () => {
             expect.assertions(5);
 
             const fetchMock = vi.fn<typeof fetch>();
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -272,12 +270,12 @@ describe("cirrusClient", () => {
             expect(last).toEqual({ type: "unsubscribe", id: sub.id });
         });
 
-        test("appends wsToken to the WebSocket URL so the upgrade can authorize it", () => {
+        it("appends wsToken to the WebSocket URL so the upgrade can authorize it", () => {
             expect.assertions(2);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: vi.fn<typeof fetch>() as unknown as typeof fetch,
+                fetch: vi.fn<typeof fetch>(),
                 WebSocket: createMockWebSocket(),
                 wsToken: "admin tok/en",
             });
@@ -291,12 +289,12 @@ describe("cirrusClient", () => {
             expect(url).toContain("/_cirrus/ws");
         });
 
-        test("surfaces a server subscription error to the onError callback", () => {
+        it("surfaces a server subscription error to the onError callback", () => {
             expect.assertions(2);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: vi.fn<typeof fetch>() as unknown as typeof fetch,
+                fetch: vi.fn<typeof fetch>(),
                 WebSocket: createMockWebSocket(),
             });
 
@@ -314,14 +312,14 @@ describe("cirrusClient", () => {
             expect(data).toHaveLength(0);
         });
 
-        test("re-sends an admin subscription with its token on reconnect", () => {
+        it("re-sends an admin subscription with its token on reconnect", () => {
             expect.assertions(3);
 
             vi.useFakeTimers();
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({ result: null }),
                 WebSocket: createMockWebSocket(),
                 wsToken: "adm1n",
                 reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
@@ -349,13 +347,13 @@ describe("cirrusClient", () => {
             vi.useRealTimers();
         });
 
-        test("on reconnect, all active subscriptions are re-sent", async () => {
+        it("on reconnect, all active subscriptions are re-sent", async () => {
             expect.assertions(6);
 
             vi.useFakeTimers();
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({ result: null }),
                 WebSocket: createMockWebSocket(),
                 reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
             });
@@ -386,12 +384,12 @@ describe("cirrusClient", () => {
             expect(env.query.args).toEqual({ x: 1 });
         });
 
-        test("duplicate subscribe calls share a single server-side subscription", () => {
+        it("duplicate subscribe calls share a single server-side subscription", () => {
             expect.assertions(5);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({ result: null }),
                 WebSocket: createMockWebSocket(),
             });
 
@@ -430,14 +428,14 @@ describe("cirrusClient", () => {
     // --- Offline queue ----------------------------------------------------------
 
     describe("cirrusClient — offline queue", () => {
-        test("mutation issued while the socket is offline is queued and replayed on reconnect", async () => {
+        it("mutation issued while the socket is offline is queued and replayed on reconnect", async () => {
             expect.assertions(3);
 
             vi.useFakeTimers();
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { id: "1" } }));
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
                 reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
             });
@@ -474,7 +472,7 @@ describe("cirrusClient", () => {
     // --- Durable offline queue --------------------------------------------------
 
     describe("cirrusClient — durable offline queue", () => {
-        test("hydrates persisted mutations on construct and flushes them once the socket opens", async () => {
+        it("hydrates persisted mutations on construct and flushes them once the socket opens", async () => {
             expect.assertions(3);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
@@ -485,7 +483,7 @@ describe("cirrusClient", () => {
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
                 persistence,
             });
@@ -508,7 +506,7 @@ describe("cirrusClient", () => {
             client.close();
         });
 
-        test("un-persists a replayed mutation even when the server rejects it", async () => {
+        it("un-persists a replayed mutation even when the server rejects it", async () => {
             expect.assertions(2);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }, { status: 500 }));
@@ -518,7 +516,7 @@ describe("cirrusClient", () => {
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
                 persistence,
             });
@@ -535,7 +533,7 @@ describe("cirrusClient", () => {
             client.close();
         });
 
-        test("a live mutation queued while offline is persisted and removed after replay", async () => {
+        it("a live mutation queued while offline is persisted and removed after replay", async () => {
             expect.assertions(3);
 
             vi.useFakeTimers();
@@ -543,7 +541,7 @@ describe("cirrusClient", () => {
             const persistence = createInMemoryPersistence();
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
                 persistence,
                 reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
@@ -575,13 +573,13 @@ describe("cirrusClient", () => {
     // --- Optimistic updates -----------------------------------------------------
 
     describe("cirrusClient — optimistic updates", () => {
-        test("applies optimistic value immediately and rolls back on error", async () => {
+        it("applies optimistic value immediately and rolls back on error", async () => {
             expect.assertions(3);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }, { status: 500 }));
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -604,9 +602,7 @@ describe("cirrusClient", () => {
                     fn("counter:get"),
                     {},
                     {
-                        optimistic: (current) => {
-                            return typeof current === "number" ? current + 1 : 1;
-                        },
+                        optimistic: (current) => (typeof current === "number" ? current + 1 : 1),
                     },
                 ),
             ).rejects.toMatchObject({ message: "fail" });
@@ -615,13 +611,13 @@ describe("cirrusClient", () => {
             expect(received).toEqual([5, 6, 5]);
         });
 
-        test("optimistic value is preserved on success", async () => {
+        it("optimistic value is preserved on success", async () => {
             expect.assertions(1);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -642,7 +638,7 @@ describe("cirrusClient", () => {
     // --- Scheduler admin --------------------------------------------------------
 
     describe("cirrusClient — scheduler admin", () => {
-        test("listScheduledJobs GETs the admin endpoint with the bearer and unwraps records", async () => {
+        it("listScheduledJobs GETs the admin endpoint with the bearer and unwraps records", async () => {
             expect.assertions(4);
 
             const records = [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "j1", scheduledFor: 2000 }];
@@ -650,7 +646,7 @@ describe("cirrusClient", () => {
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -667,26 +663,26 @@ describe("cirrusClient", () => {
             expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer tkn");
         });
 
-        test("listScheduledJobs defaults to an empty array when records are absent", async () => {
+        it("listScheduledJobs defaults to an empty array when records are absent", async () => {
             expect.assertions(1);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({})) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({}),
                 WebSocket: createMockWebSocket(),
             });
 
             await expect(client.listScheduledJobs()).resolves.toEqual([]);
         });
 
-        test("cancelScheduledJob POSTs the id and normalises the result", async () => {
+        it("cancelScheduledJob POSTs the id and normalises the result", async () => {
             expect.assertions(4);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ cancelled: true }));
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -701,12 +697,12 @@ describe("cirrusClient", () => {
             expect(JSON.parse(init.body as string)).toEqual({ id: "j1" });
         });
 
-        test("scheduler admin surfaces the worker error envelope as a coded Error", async () => {
+        it("scheduler admin surfaces the worker error envelope as a coded Error", async () => {
             expect.assertions(1);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "nope" } }, { status: 403 })) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "nope" } }, { status: 403 }),
                 WebSocket: createMockWebSocket(),
             });
 
@@ -717,7 +713,7 @@ describe("cirrusClient", () => {
     // --- Storage admin ----------------------------------------------------------
 
     describe("cirrusClient — storage admin", () => {
-        test("listStorageObjects GETs the admin endpoint and unwraps the page", async () => {
+        it("listStorageObjects GETs the admin endpoint and unwraps the page", async () => {
             expect.assertions(3);
 
             const page = { cursor: "c1", objects: [{ etag: "e1", key: "a.png", size: 10 }] };
@@ -725,7 +721,7 @@ describe("cirrusClient", () => {
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -739,14 +735,14 @@ describe("cirrusClient", () => {
             expect(init.method).toBe("GET");
         });
 
-        test("listStorageObjects encodes prefix / cursor / limit as query params", async () => {
+        it("listStorageObjects encodes prefix / cursor / limit as query params", async () => {
             expect.assertions(4);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ objects: [] }));
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -761,12 +757,12 @@ describe("cirrusClient", () => {
             expect(parsed.searchParams.get("limit")).toBe("25");
         });
 
-        test("listStorageObjects defaults objects to an empty array", async () => {
+        it("listStorageObjects defaults objects to an empty array", async () => {
             expect.assertions(1);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({})) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({}),
                 WebSocket: createMockWebSocket(),
             });
 
@@ -777,7 +773,7 @@ describe("cirrusClient", () => {
     // --- Functions admin --------------------------------------------------------
 
     describe("cirrusClient — functions admin", () => {
-        test("listFunctions GETs the admin endpoint and unwraps the list", async () => {
+        it("listFunctions GETs the admin endpoint and unwraps the list", async () => {
             expect.assertions(3);
 
             const functions = [
@@ -788,7 +784,7 @@ describe("cirrusClient", () => {
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -800,12 +796,12 @@ describe("cirrusClient", () => {
             expect(init.method).toBe("GET");
         });
 
-        test("listFunctions defaults to an empty array when functions are absent", async () => {
+        it("listFunctions defaults to an empty array when functions are absent", async () => {
             expect.assertions(1);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({})) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({}),
                 WebSocket: createMockWebSocket(),
             });
 
@@ -816,7 +812,7 @@ describe("cirrusClient", () => {
     // --- Global (D1) tables admin -----------------------------------------------
 
     describe("cirrusClient — global tables admin", () => {
-        test("listGlobalTables GETs the admin endpoint", async () => {
+        it("listGlobalTables GETs the admin endpoint", async () => {
             expect.assertions(3);
 
             const tables = [{ name: "organizations", rowCount: 2 }];
@@ -824,7 +820,7 @@ describe("cirrusClient", () => {
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -836,7 +832,7 @@ describe("cirrusClient", () => {
             expect(init.method).toBe("GET");
         });
 
-        test("readGlobalTablePage encodes table / limit / offset as query params", async () => {
+        it("readGlobalTablePage encodes table / limit / offset as query params", async () => {
             expect.assertions(5);
 
             const page = { columns: ["_id"], rows: [{ _id: "o1" }], total: 1 };
@@ -844,7 +840,7 @@ describe("cirrusClient", () => {
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -861,7 +857,7 @@ describe("cirrusClient", () => {
     });
 
     describe("cirrusClient — auth admin", () => {
-        test("listAuthUsers GETs the users endpoint with paging", async () => {
+        it("listAuthUsers GETs the users endpoint with paging", async () => {
             expect.assertions(4);
 
             const page = { rows: [{ id: "u1" }], total: 1 };
@@ -869,7 +865,7 @@ describe("cirrusClient", () => {
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -883,14 +879,14 @@ describe("cirrusClient", () => {
             expect(parsed.searchParams.get("offset")).toBe("5");
         });
 
-        test("listAuthSessions encodes userId + paging", async () => {
+        it("listAuthSessions encodes userId + paging", async () => {
             expect.assertions(3);
 
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ rows: [], total: 0 }));
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: fetchMock as unknown as typeof fetch,
+                fetch: fetchMock,
                 WebSocket: createMockWebSocket(),
             });
 
@@ -906,12 +902,12 @@ describe("cirrusClient", () => {
     });
 
     describe("cirrusClient — connection status", () => {
-        test("reports idle before any socket, then connecting/connected/offline across the socket lifecycle", () => {
+        it("reports idle before any socket, then connecting/connected/offline across the socket lifecycle", () => {
             expect.assertions(6);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({ result: null }),
                 WebSocket: createMockWebSocket(),
                 reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },
             });
@@ -944,12 +940,12 @@ describe("cirrusClient", () => {
             unsubscribe();
         });
 
-        test("stops notifying after unsubscribe", () => {
+        it("stops notifying after unsubscribe", () => {
             expect.assertions(1);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({ result: null }),
                 WebSocket: createMockWebSocket(),
             });
 
@@ -965,12 +961,12 @@ describe("cirrusClient", () => {
     });
 
     describe("cirrusClient — scheduled-jobs subscription", () => {
-        test("opens the scheduler admin WS with the token and delivers pushed job lists", () => {
+        it("opens the scheduler admin WS with the token and delivers pushed job lists", () => {
             expect.assertions(4);
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({ result: null }),
                 WebSocket: createMockWebSocket(),
                 wsToken: "adm1n",
             });
@@ -997,14 +993,14 @@ describe("cirrusClient", () => {
             unsubscribe();
         });
 
-        test("reconnects after the socket drops", () => {
+        it("reconnects after the socket drops", () => {
             expect.assertions(2);
 
             vi.useFakeTimers();
 
             const client = new CirrusClient({
                 url: "https://app.example",
-                fetch: (async () => jsonResponse({ result: null })) as unknown as typeof fetch,
+                fetch: async () => jsonResponse({ result: null }),
                 WebSocket: createMockWebSocket(),
                 wsToken: "adm1n",
                 reconnect: { initialDelayMs: 10, maxDelayMs: 10, jitter: false },

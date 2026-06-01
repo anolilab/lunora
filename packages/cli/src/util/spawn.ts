@@ -5,6 +5,7 @@ export interface SpawnDescriptor {
     command: string;
     cwd?: string;
     env?: Readonly<Record<string, string>>;
+
     /**
      * Pipe this string into the child's stdin and close it. Used to feed
      * `wrangler secret put` its value without exposing it on the command
@@ -23,8 +24,7 @@ export interface SpawnResult {
  */
 export type Spawner = (descriptor: SpawnDescriptor) => Promise<SpawnResult>;
 
-export const defaultSpawner: Spawner = (descriptor) => {
-    return new Promise<SpawnResult>((resolve, reject) => {
+export const defaultSpawner: Spawner = (descriptor) => new Promise<SpawnResult>((resolve, reject) => {
         const hasInput = typeof descriptor.input === "string";
         const child = nodeSpawn(descriptor.command, [...descriptor.args], {
             cwd: descriptor.cwd ?? process.cwd(),
@@ -50,7 +50,6 @@ export const defaultSpawner: Spawner = (descriptor) => {
             child.stdin.end(descriptor.input);
         }
     });
-};
 
 export interface RecordedSpawn {
     descriptor: SpawnDescriptor;

@@ -11,23 +11,25 @@
  *   3. `client.subscribe()` delivers a real `delta` over a real WebSocket.
  */
 import { env, runInDurableObject, SELF } from "cloudflare:test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { CirrusClient } from "../../src/cirrus-client.js";
 import type { FunctionReference } from "../../src/types.js";
 import type { TestShardDO } from "./test-worker.js";
 
-const ref = <Args = unknown, Return = unknown>(name: string): FunctionReference<"query" | "mutation", Args, Return> => ({
+const ref = <Args = unknown, Return = unknown>(name: string): FunctionReference<"query" | "mutation", Args, Return> => {
+ return {
     __cirrusRef: name,
-});
+};
+};
 
 const rootStub = (): DurableObjectStub<TestShardDO> => {
     const id = env.SHARD.idFromName("__root__");
 
-    return env.SHARD.get(id) as DurableObjectStub<TestShardDO>;
+    return env.SHARD.get(id);
 };
 
-const fetchViaSelf: typeof fetch = (...arguments_) => SELF.fetch(...(arguments_ as Parameters<typeof SELF.fetch>)) as unknown as Promise<Response>;
+const fetchViaSelf: typeof fetch = (...arguments_) => SELF.fetch(...(arguments_ as Parameters<typeof SELF.fetch>));
 
 /**
  * `CirrusClient` wants a `new WebSocket(url)` constructor. workerd doesn't
@@ -66,7 +68,7 @@ class SelfWebSocket {
 
                 this.socket = ws;
                 ws.addEventListener("message", (event) => {
-                    this.onmessage?.(event as unknown as { data: unknown });
+                    this.onmessage?.(event);
                 });
                 ws.addEventListener("close", (event) => {
                     this.onclose?.(event);
@@ -126,7 +128,7 @@ const waitFor = async (predicate: () => boolean | Promise<boolean>, { timeoutMs 
 };
 
 describe("cirrusClient (workerd integration)", () => {
-    test("query round-trips through /_cirrus/rpc", async () => {
+    it("query round-trips through /_cirrus/rpc", async () => {
         expect.hasAssertions();
 
         await runInDurableObject(rootStub(), async (instance) => {
@@ -148,7 +150,7 @@ describe("cirrusClient (workerd integration)", () => {
         }
     });
 
-    test("mutation captures x-d1-bookmark and replays it on the next query", async () => {
+    it("mutation captures x-d1-bookmark and replays it on the next query", async () => {
         expect.assertions(3);
 
         // Replace `fetch` with a wrapper that watches outbound headers — we
@@ -156,7 +158,7 @@ describe("cirrusClient (workerd integration)", () => {
         const requestHeaders: Headers[] = [];
 
         const trackingFetch: typeof fetch = (input, init) => {
-            requestHeaders.push(new Headers(init?.headers as HeadersInit));
+            requestHeaders.push(new Headers(init?.headers));
 
             // Have the worker echo a synthetic bookmark on the mutation response.
             // The shard sets the response bookmark via `setOutboundBookmark`,
@@ -170,7 +172,7 @@ describe("cirrusClient (workerd integration)", () => {
                 }
 
                 return new Response(response.body, { headers, status: response.status });
-            }) as unknown as Promise<Response>;
+            });
         };
 
         await runInDurableObject(rootStub(), async (instance) => {
@@ -196,7 +198,7 @@ describe("cirrusClient (workerd integration)", () => {
         }
     });
 
-    test("subscribe receives a broadcast delta over a real WebSocket", async () => {
+    it("subscribe receives a broadcast delta over a real WebSocket", async () => {
         expect.assertions(1);
 
         const client = makeClient();

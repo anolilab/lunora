@@ -1,12 +1,14 @@
 import type { CirrusClient } from "@cirrus/client";
 import { QueryClient, QueryClientContext, QueryClientProvider } from "@tanstack/react-query";
-import { createContext, type ReactElement, type ReactNode, use, useState } from "react";
+import type { ReactElement, ReactNode } from "react";
+import { createContext, use, useState } from "react";
 
 const CirrusContext = createContext<CirrusClient | null>(null);
 
 export interface CirrusProviderProps {
     children: ReactNode;
     client: CirrusClient;
+
     /**
      * Bring-your-own QueryClient. When omitted, the provider creates one with
      * defaults tuned for Cirrus's push-driven model:
@@ -14,7 +16,7 @@ export interface CirrusProviderProps {
      *  - `retry: 0` — failures route through the offline queue on the client.
      *  - `gcTime: 5min` — keep results around for a short return-to-view window.
      *
-     * If a parent `<QueryClientProvider>` is already mounted, the provider
+     * If a parent `&lt;QueryClientProvider>` is already mounted, the provider
      * uses *that* client and does NOT install an inner one (so apps with their
      * own setup don't double-wrap).
      */
@@ -78,7 +80,7 @@ export const CirrusProvider = ({ children, client, queryClient }: CirrusProvider
 };
 
 /**
- * Read the {@link CirrusClient} from the nearest `<CirrusProvider>`.
+ * Read the {@link CirrusClient} from the nearest `&lt;CirrusProvider>`.
  *
  * eslint-disable-next-line react-refresh/only-export-components — kept colocated with the provider for back-compat.
  */

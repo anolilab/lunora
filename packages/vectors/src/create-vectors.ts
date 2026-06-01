@@ -99,7 +99,7 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
         const index = resolveIndex(options.indexes, indexName);
 
         if (inputs.length > MAX_UPSERT_BATCH) {
-            throw new RangeError(`@cirrus/vectors: upsertMany batch exceeds ${MAX_UPSERT_BATCH} (got ${inputs.length}) — split across calls`);
+            throw new RangeError(`@cirrus/vectors: upsertMany batch exceeds ${String(MAX_UPSERT_BATCH)} (got ${String(inputs.length)}) — split across calls`);
         }
 
         // Bound the parallel embedder fan-out so a 1000-vector batch doesn't
@@ -114,7 +114,7 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
         const index = resolveIndex(options.indexes, indexName);
 
         if (input.topK !== undefined && (!Number.isInteger(input.topK) || input.topK < 1 || input.topK > MAX_TOP_K)) {
-            throw new RangeError(`@cirrus/vectors: topK must be an integer in [1, ${MAX_TOP_K}] (got ${input.topK})`);
+            throw new RangeError(`@cirrus/vectors: topK must be an integer in [1, ${String(MAX_TOP_K)}] (got ${String(input.topK)})`);
         }
 
         let values: ReadonlyArray<number>;
@@ -142,7 +142,7 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
         const index = resolveIndex(options.indexes, indexName);
 
         if (ids.length > MAX_ID_BATCH) {
-            throw new RangeError(`@cirrus/vectors: getByIds accepts at most ${MAX_ID_BATCH} ids (got ${ids.length})`);
+            throw new RangeError(`@cirrus/vectors: getByIds accepts at most ${String(MAX_ID_BATCH)} ids (got ${String(ids.length)})`);
         }
 
         return index.getByIds(ids);
@@ -152,7 +152,7 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
         const index = resolveIndex(options.indexes, indexName);
 
         if (ids.length > MAX_ID_BATCH) {
-            throw new RangeError(`@cirrus/vectors: deleteByIds accepts at most ${MAX_ID_BATCH} ids (got ${ids.length})`);
+            throw new RangeError(`@cirrus/vectors: deleteByIds accepts at most ${String(MAX_ID_BATCH)} ids (got ${String(ids.length)})`);
         }
 
         return index.deleteByIds(ids);

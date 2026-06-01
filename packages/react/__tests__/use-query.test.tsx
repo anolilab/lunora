@@ -1,28 +1,28 @@
 import type { FunctionReference } from "@cirrus/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useQuery } from "../src/use-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (ref: string): FunctionReference => ({ __cirrusRef: ref });
+const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
 
 const DEFAULT_ARGS: Record<string, unknown> = {};
 const SHARED_ARGS: Record<string, unknown> = { a: 1 };
 
 const Display = ({ args = DEFAULT_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
-    const data = useQuery(fn("posts:list"), args as Record<string, unknown> | "skip");
+    const data = useQuery(fn("posts:list"), args);
 
     return <div data-testid="display">{data === undefined ? "loading" : JSON.stringify(data)}</div>;
 };
 
 describe("useQuery", () => {
-    test("returns undefined initially, then the resolved value", async () => {
+    it("returns undefined initially, then the resolved value", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient(() => ({ count: 1 }));
+        const mock = createMockClient(() => { return { count: 1 }; });
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -39,10 +39,10 @@ describe("useQuery", () => {
         expect(mock.query).toHaveBeenCalledTimes(1);
     });
 
-    test('"skip" short-circuits the query — no client call', () => {
+    it('"skip" short-circuits the query — no client call', () => {
         expect.assertions(3);
 
-        const mock = createMockClient(() => ({ count: 1 }));
+        const mock = createMockClient(() => { return { count: 1 }; });
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -55,10 +55,10 @@ describe("useQuery", () => {
         expect(mock.subscribe).not.toHaveBeenCalled();
     });
 
-    test("two components sharing args share a single network call", async () => {
+    it("two components sharing args share a single network call", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient(() => ({ count: 2 }));
+        const mock = createMockClient(() => { return { count: 2 }; });
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -81,7 +81,7 @@ describe("useQuery", () => {
         expect(mock.subscribe).toHaveBeenCalledTimes(1);
     });
 
-    test("wS deltas update the displayed value", async () => {
+    it("wS deltas update the displayed value", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient(() => 0);

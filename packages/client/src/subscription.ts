@@ -21,6 +21,7 @@ export interface SubscriptionState {
     readonly id: string;
     /** Last known value, used to short-circuit `useQuery`-style consumers. */
     lastValue: unknown;
+
     /**
      * Monotonic counter incremented on every server-pushed delta or data.
      * Used by optimistic-update rollback to detect whether the server has

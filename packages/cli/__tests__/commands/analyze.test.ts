@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runAnalyzeCommand } from "../../src/commands/analyze.js";
 import type { Logger } from "../../src/util/logger.js";
@@ -49,7 +49,7 @@ describe("cirrus analyze", () => {
     });
 
     describe("cirrus analyze", () => {
-        test("walks the supplied outdir and reports sizes + _generated files", async () => {
+        it("walks the supplied outdir and reports sizes + _generated files", async () => {
             expect.hasAssertions();
 
             const { logger } = recordingLogger();
@@ -63,7 +63,7 @@ describe("cirrus analyze", () => {
             expect(result.report?.generatedFiles.map((f) => f.path)).toEqual([join("cirrus", "_generated", "api.ts")]);
         });
 
-        test("--json emits a machine-readable report on stdout (jq-pipeable)", async () => {
+        it("--json emits a machine-readable report on stdout (jq-pipeable)", async () => {
             expect.assertions(3);
 
             const { logger } = recordingLogger();
@@ -72,7 +72,7 @@ describe("cirrus analyze", () => {
                 written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
 
                 return true;
-            }) as typeof process.stdout.write);
+            }));
 
             try {
                 const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, json: true, logger });
@@ -90,7 +90,7 @@ describe("cirrus analyze", () => {
             }
         });
 
-        test("invokes wrangler dry-run with --outdir when no inspectOnly is given", async () => {
+        it("invokes wrangler dry-run with --outdir when no inspectOnly is given", async () => {
             expect.assertions(6);
 
             const { logger } = recordingLogger();

@@ -2,18 +2,20 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { StreamingFetchLike } from "../../src/commands/data-transfer.js";
 import { runExportCommand, runImportCommand } from "../../src/commands/data-transfer.js";
 import type { Logger } from "../../src/util/logger.js";
 
-const silentLogger = (): Logger => ({
+const silentLogger = (): Logger => {
+ return {
     error: () => {},
     info: () => {},
     success: () => {},
     warn: () => {},
-});
+};
+};
 
 let workDir: string;
 
@@ -39,7 +41,7 @@ describe("cirrus data-transfer", () => {
     };
 
     describe("runExportCommand", () => {
-        test("fails when no admin token is provided", async () => {
+        it("fails when no admin token is provided", async () => {
             expect.hasAssertions();
 
             const previous = process.env["CIRRUS_ADMIN_TOKEN"];
@@ -57,7 +59,7 @@ describe("cirrus data-transfer", () => {
             }
         });
 
-        test("streams NDJSON into the --out file when configured", async () => {
+        it("streams NDJSON into the --out file when configured", async () => {
             expect.assertions(5);
 
             const calls: { body: unknown; headers?: Record<string, string>; url: string }[] = [];
@@ -92,7 +94,7 @@ describe("cirrus data-transfer", () => {
             expect(readFileSync(outPath, "utf8")).toBe(ndjson);
         });
 
-        test("forwards --tables to the request body", async () => {
+        it("forwards --tables to the request body", async () => {
             expect.assertions(1);
 
             const calls: { body: { tables?: unknown } }[] = [];
@@ -120,7 +122,7 @@ describe("cirrus data-transfer", () => {
             expect(calls[0]!.body.tables).toEqual(["users", "messages"]);
         });
 
-        test("refuses to target localhost with --prod", async () => {
+        it("refuses to target localhost with --prod", async () => {
             expect.assertions(1);
 
             const result = await runExportCommand({
@@ -134,7 +136,7 @@ describe("cirrus data-transfer", () => {
     });
 
     describe("runImportCommand", () => {
-        test("fails when the file does not exist", async () => {
+        it("fails when the file does not exist", async () => {
             expect.assertions(1);
 
             const result = await runImportCommand({
@@ -146,7 +148,7 @@ describe("cirrus data-transfer", () => {
             expect(result.code).toBe(1);
         });
 
-        test("pOSTs batches and aggregates the inserted counts", async () => {
+        it("pOSTs batches and aggregates the inserted counts", async () => {
             expect.assertions(4);
 
             const file = join(workDir, "in.ndjson");
@@ -170,7 +172,7 @@ describe("cirrus data-transfer", () => {
 
                 return {
                     body: null,
-                    json: async () => ({ conflicts: 0, errors: [], inserted: { users: rows.length } }),
+                    json: async () => { return { conflicts: 0, errors: [], inserted: { users: rows.length } }; },
                     ok: true,
                     status: 200,
                     text: async () => "",
@@ -192,7 +194,7 @@ describe("cirrus data-transfer", () => {
             expect(calls[0]!.url).toBe("http://localhost:8787/_cirrus/admin/import");
         });
 
-        test("wraps bare docs with `--table` into `{table,doc}` envelopes", async () => {
+        it("wraps bare docs with `--table` into `{table,doc}` envelopes", async () => {
             expect.assertions(1);
 
             const file = join(workDir, "users-bare.ndjson");
@@ -206,7 +208,7 @@ describe("cirrus data-transfer", () => {
 
                 return {
                     body: null,
-                    json: async () => ({ conflicts: 0, errors: [], inserted: { users: 2 } }),
+                    json: async () => { return { conflicts: 0, errors: [], inserted: { users: 2 } }; },
                     ok: true,
                     status: 200,
                     text: async () => "",
@@ -226,24 +228,28 @@ describe("cirrus data-transfer", () => {
             expect(JSON.parse(line_!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
         });
 
-        test("returns a non-zero exit code when the server reports errors", async () => {
+        it("returns a non-zero exit code when the server reports errors", async () => {
             expect.assertions(1);
 
             const file = join(workDir, "in.ndjson");
 
             writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
 
-            const fetchImpl: StreamingFetchLike = async () => ({
+            const fetchImpl: StreamingFetchLike = async () => {
+ return {
                 body: null,
-                json: async () => ({
+                json: async () => {
+ return {
                     conflicts: 0,
                     errors: [{ code: "VALIDATION_ERROR", line: 1, message: "bad", table: "users" }],
                     inserted: {},
-                }),
+                };
+},
                 ok: true,
                 status: 200,
                 text: async () => "",
-            });
+            };
+};
 
             const result = await runImportCommand({
                 fetchImpl,

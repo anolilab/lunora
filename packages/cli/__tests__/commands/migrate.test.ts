@@ -2,18 +2,20 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "../../src/commands/migrate.js";
 import type { FetchLike } from "../../src/commands/run.js";
 import type { Logger } from "../../src/util/logger.js";
 
-const silentLogger = (): Logger => ({
+const silentLogger = (): Logger => {
+ return {
     error: () => {},
     info: () => {},
     success: () => {},
     warn: () => {},
-});
+};
+};
 
 let workdir: string;
 
@@ -36,7 +38,7 @@ describe("cirrus migrate", () => {
     const fixedNow = (): Date => new Date("2024-04-01T12:34:56.000Z");
 
     describe("cirrus migrate generate", () => {
-        test("errors when schema.ts is missing", () => {
+        it("errors when schema.ts is missing", () => {
             expect.assertions(3);
 
             const errors: string[] = [];
@@ -53,7 +55,7 @@ describe("cirrus migrate", () => {
             expect(message).toContain("vis generate cirrus-table --name=<name>");
         });
 
-        test("first run on a global table emits CREATE TABLE", () => {
+        it("first run on a global table emits CREATE TABLE", () => {
             expect.assertions(8);
 
             writeSchema(
@@ -94,7 +96,7 @@ export const schema = defineSchema({
             expect(Object.keys(snapshot.tables)).toEqual(["users"]);
         });
 
-        test("ignores sharded (non-global) tables", () => {
+        it("ignores sharded (non-global) tables", () => {
             expect.assertions(3);
 
             writeSchema(
@@ -120,7 +122,7 @@ export const schema = defineSchema({
             expect(result.migrationFile).toBe("");
         });
 
-        test("second run on identical schema is a no-op", () => {
+        it("second run on identical schema is a no-op", () => {
             expect.assertions(4);
 
             writeSchema(
@@ -148,7 +150,7 @@ export const schema = defineSchema({
             expect(second.empty).toBe(true);
         });
 
-        test("adding a column produces ALTER TABLE ADD COLUMN", () => {
+        it("adding a column produces ALTER TABLE ADD COLUMN", () => {
             expect.assertions(4);
 
             writeSchema(
@@ -190,7 +192,7 @@ export const schema = defineSchema({
             expect(sql).not.toContain("NOT NULL"); // v.optional → nullable
         });
 
-        test("removed table produces DROP TABLE", () => {
+        it("removed table produces DROP TABLE", () => {
             expect.assertions(2);
 
             writeSchema(
@@ -225,7 +227,7 @@ export const schema = defineSchema({});
             expect(sql).toContain('DROP TABLE IF EXISTS "sessions"');
         });
 
-        test("emits a manual-SQL comment block for unsupported diffs (drop column)", () => {
+        it("emits a manual-SQL comment block for unsupported diffs (drop column)", () => {
             expect.assertions(4);
 
             writeSchema(
@@ -280,7 +282,7 @@ export const schema = defineSchema({
     const migrationsFile = (): string => join(workdir, "cirrus", "migrations.ts");
 
     describe("cirrus migrate create", () => {
-        test("scaffolds cirrus/migrations.ts with a defineMigration block", () => {
+        it("scaffolds cirrus/migrations.ts with a defineMigration block", () => {
             expect.assertions(7);
 
             const result = runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "Backfill Read By", table: "messages" });
@@ -297,7 +299,7 @@ export const schema = defineSchema({
             expect(content).toContain("up: (document) => document,");
         });
 
-        test("appends a second migration without duplicating the import", () => {
+        it("appends a second migration without duplicating the import", () => {
             expect.hasAssertions();
 
             runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "first", table: "a" });
@@ -312,7 +314,7 @@ export const schema = defineSchema({
             expect(content).toContain("export const second = defineMigration({");
         });
 
-        test("refuses to clobber an existing migration of the same id", () => {
+        it("refuses to clobber an existing migration of the same id", () => {
             expect.assertions(2);
 
             runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "dupe", table: "a" });
@@ -324,7 +326,7 @@ export const schema = defineSchema({
             expect(errors.join("\n")).toContain("already exists");
         });
 
-        test("rejects a name with no alphanumeric characters", () => {
+        it("rejects a name with no alphanumeric characters", () => {
             expect.assertions(2);
 
             const errors: string[] = [];
@@ -334,7 +336,7 @@ export const schema = defineSchema({
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
-        test("warns and writes a TODO placeholder when --table is omitted", () => {
+        it("warns and writes a TODO placeholder when --table is omitted", () => {
             expect.assertions(3);
 
             const warnings: string[] = [];
@@ -361,26 +363,26 @@ export const backfillReadBy = defineMigration({
         url: string;
     }
 
-    const captureFetch = (calls: CapturedCall[], response: { json: () => Promise<unknown>; ok: boolean; status: number }): FetchLike => {
-        return async (url, init) => {
+    const captureFetch = (calls: CapturedCall[], response: { json: () => Promise<unknown>; ok: boolean; status: number }): FetchLike => async (url, init) => {
             calls.push({ body: init?.body ? (JSON.parse(init.body) as CapturedCall["body"]) : ({} as CapturedCall["body"]), headers: init?.headers, url });
 
             return { json: response.json, ok: response.ok, status: response.status, text: async () => "" };
         };
-    };
 
-    const okResponse = (body: unknown = { ok: 1 }): { json: () => Promise<unknown>; ok: boolean; status: number } => ({
+    const okResponse = (body: unknown = { ok: 1 }): { json: () => Promise<unknown>; ok: boolean; status: number } => {
+ return {
         json: async () => body,
         ok: true,
         status: 200,
-    });
+    };
+};
 
     describe("cirrus migrate up/down/status", () => {
         beforeEach(() => {
             writeMigrations(MIGRATIONS_SOURCE);
         });
 
-        test("up POSTs a runMigration admin RPC to /_cirrus/migrate with the resolved table and bearer", async () => {
+        it("up POSTs a runMigration admin RPC to /_cirrus/migrate with the resolved table and bearer", async () => {
             expect.assertions(5);
 
             const calls: CapturedCall[] = [];
@@ -406,7 +408,7 @@ export const backfillReadBy = defineMigration({
             expect(calls[0]?.headers?.authorization).toBe("Bearer s3cret");
         });
 
-        test("forwards --dry-run, --batch-size and --steps into the runner args", async () => {
+        it("forwards --dry-run, --batch-size and --steps into the runner args", async () => {
             expect.assertions(1);
 
             const calls: CapturedCall[] = [];
@@ -426,7 +428,7 @@ export const backfillReadBy = defineMigration({
             expect(calls[0]?.body.args).toEqual({ batchSize: 250, direction: "up", dryRun: true, id: "backfill-read-by", maxBatches: 3 });
         });
 
-        test("down sets direction to down", async () => {
+        it("down sets direction to down", async () => {
             expect.assertions(1);
 
             const calls: CapturedCall[] = [];
@@ -443,7 +445,7 @@ export const backfillReadBy = defineMigration({
             expect(calls[0]?.body.args.direction).toBe("down");
         });
 
-        test("status sends migrationStatus with no direction", async () => {
+        it("status sends migrationStatus with no direction", async () => {
             expect.assertions(2);
 
             const calls: CapturedCall[] = [];
@@ -461,7 +463,7 @@ export const backfillReadBy = defineMigration({
             expect(calls[0]?.body.args).toEqual({ id: "backfill-read-by" });
         });
 
-        test("falls back to CIRRUS_ADMIN_TOKEN when --token is omitted", async () => {
+        it("falls back to CIRRUS_ADMIN_TOKEN when --token is omitted", async () => {
             expect.hasAssertions();
 
             const calls: CapturedCall[] = [];
@@ -488,7 +490,7 @@ export const backfillReadBy = defineMigration({
             expect(calls[0]?.headers?.authorization).toBe("Bearer from-env");
         });
 
-        test("errors when no admin token is available", async () => {
+        it("errors when no admin token is available", async () => {
             expect.hasAssertions();
 
             const errors: string[] = [];
@@ -515,7 +517,7 @@ export const backfillReadBy = defineMigration({
             expect(errors.join("\n")).toContain("admin token required");
         });
 
-        test("errors when the migration id is not declared under cirrus/", async () => {
+        it("errors when the migration id is not declared under cirrus/", async () => {
             expect.assertions(2);
 
             const errors: string[] = [];
@@ -533,7 +535,7 @@ export const backfillReadBy = defineMigration({
             expect(errors.join("\n")).toContain('"ghost" not found');
         });
 
-        test("--prod without --url is refused before any request", async () => {
+        it("--prod without --url is refused before any request", async () => {
             expect.assertions(3);
 
             const calls: CapturedCall[] = [];
@@ -554,12 +556,12 @@ export const backfillReadBy = defineMigration({
             expect(errors.join("\n")).toContain("--prod requires an explicit --url");
         });
 
-        test("returns non-zero on an HTTP error response", async () => {
+        it("returns non-zero on an HTTP error response", async () => {
             expect.assertions(1);
 
             const result = await runMigrateDataCommand({
                 cwd: workdir,
-                fetchImpl: captureFetch([], { json: async () => ({ error: { code: "ADMIN_FORBIDDEN" } }), ok: false, status: 403 }),
+                fetchImpl: captureFetch([], { json: async () => { return { error: { code: "ADMIN_FORBIDDEN" } }; }, ok: false, status: 403 }),
                 id: "backfill-read-by",
                 logger: silentLogger(),
                 subcommand: "up",

@@ -1,20 +1,20 @@
 import type { FunctionReference } from "@cirrus/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useSubscription } from "../src/use-subscription.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (ref: string): FunctionReference => ({ __cirrusRef: ref });
+const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
 
 // Module-level stable default so it isn't recreated as an inline `as` expression
 // on every render (react-x/no-unstable-default-props).
 const EMPTY_ARGS: Record<string, unknown> = {};
 
 const Display = ({ args = EMPTY_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
-    const { data, error } = useSubscription(fn("messages:list"), args as Record<string, unknown> | "skip");
+    const { data, error } = useSubscription(fn("messages:list"), args);
 
     if (error) {
         return <div data-testid="display">error: {error.message}</div>;
@@ -24,7 +24,7 @@ const Display = ({ args = EMPTY_ARGS }: { args?: Record<string, unknown> | "skip
 };
 
 describe("useSubscription", () => {
-    test("opens a subscription on mount and renders pushed values", async () => {
+    it("opens a subscription on mount and renders pushed values", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient();
@@ -51,7 +51,7 @@ describe("useSubscription", () => {
         expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 7 }));
     });
 
-    test('"skip" short-circuits — no subscribe call', () => {
+    it('"skip" short-circuits — no subscribe call', () => {
         expect.assertions(2);
 
         const mock = createMockClient();
@@ -66,7 +66,7 @@ describe("useSubscription", () => {
         expect(screen.getByTestId("display").textContent).toBe("pending");
     });
 
-    test("unmount releases the subscription", async () => {
+    it("unmount releases the subscription", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient();
@@ -103,7 +103,7 @@ describe("useSubscription", () => {
         expect(unsubscribeSpy).toHaveBeenCalledTimes(1);
     });
 
-    test("surfaces a thrown subscribe error", async () => {
+    it("surfaces a thrown subscribe error", async () => {
         expect.hasAssertions();
 
         const mock = createMockClient();

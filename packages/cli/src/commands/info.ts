@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { discoverSchema, type SchemaIR } from "@cirrus/codegen";
+import type { SchemaIR } from "@cirrus/codegen";
+import { discoverSchema } from "@cirrus/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
@@ -159,7 +160,7 @@ const collectCirrusPackages = (projectRoot: string): ReadonlyArray<CirrusPackage
         }
     }
 
-    return [...seen.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, version]) => ({ name, version }));
+    return [...seen.entries()].toSorted(([a], [b]) => a.localeCompare(b)).map(([name, version]) => { return { name, version }; });
 };
 
 export const collectInfo = (projectRoot: string): InfoSnapshot => {
@@ -233,10 +234,10 @@ const renderText = (snapshot: InfoSnapshot, logger: Logger): void => {
     if (snapshot.schemaError !== undefined) {
         logger.warn(`schema: parse error — ${snapshot.schemaError}`);
     } else if (snapshot.schema) {
-        logger.info(`schema: ${snapshot.schema.tables.length} table(s), ${snapshot.schema.vectorIndexes} vector index(es)`);
+        logger.info(`schema: ${String(snapshot.schema.tables.length)} table(s), ${String(snapshot.schema.vectorIndexes)} vector index(es)`);
 
         for (const table of snapshot.schema.tables) {
-            logger.info(`  ${table.name}  [${table.shard}, ${table.indexes} index(es)]`);
+            logger.info(`  ${table.name}  [${table.shard}, ${String(table.indexes)} index(es)]`);
         }
     } else {
         logger.info("schema: (no cirrus/schema.ts)");

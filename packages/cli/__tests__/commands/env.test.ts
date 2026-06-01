@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runEnvCommand } from "../../src/commands/env.js";
 import type { Logger } from "../../src/util/logger.js";
@@ -41,7 +41,7 @@ describe("cirrus env", () => {
     });
 
     describe("cirrus env", () => {
-        test("list on a missing .dev.vars reports empty without erroring", async () => {
+        it("list on a missing .dev.vars reports empty without erroring", async () => {
             expect.assertions(2);
 
             const { logger, recorded } = recordingLogger();
@@ -52,7 +52,7 @@ describe("cirrus env", () => {
             expect(recorded.infos.join("\n")).toContain("(empty)");
         });
 
-        test("set then list redacts values and persists across calls", async () => {
+        it("set then list redacts values and persists across calls", async () => {
             expect.assertions(4);
 
             const { logger, recorded } = recordingLogger();
@@ -74,7 +74,7 @@ describe("cirrus env", () => {
             expect(listed).not.toContain("supersecret-value");
         });
 
-        test("get prints the full value to stdout", async () => {
+        it("get prints the full value to stdout", async () => {
             expect.assertions(2);
 
             const { logger } = recordingLogger();
@@ -86,7 +86,7 @@ describe("cirrus env", () => {
                 written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
 
                 return true;
-            }) as typeof process.stdout.write);
+            }));
 
             try {
                 const result = await runEnvCommand({ cwd: workdir, key: "TOKEN", logger, subcommand: "get" });
@@ -98,7 +98,7 @@ describe("cirrus env", () => {
             }
         });
 
-        test("get on a missing key returns 1", async () => {
+        it("get on a missing key returns 1", async () => {
             expect.assertions(2);
 
             const { logger, recorded } = recordingLogger();
@@ -111,7 +111,7 @@ describe("cirrus env", () => {
             expect(recorded.errors.join("\n")).toContain("MISSING");
         });
 
-        test("unset removes a key and is idempotent", async () => {
+        it("unset removes a key and is idempotent", async () => {
             expect.assertions(4);
 
             const { logger, recorded } = recordingLogger();
@@ -132,7 +132,7 @@ describe("cirrus env", () => {
             expect(recorded.warnings.join("\n")).toContain("A");
         });
 
-        test("push without --yes is refused", async () => {
+        it("push without --yes is refused", async () => {
             expect.assertions(3);
 
             const { logger, recorded } = recordingLogger();
@@ -148,7 +148,7 @@ describe("cirrus env", () => {
             expect(recorded.errors.join("\n")).toContain("--yes");
         });
 
-        test("push with --yes invokes wrangler secret put per key (sequentially, value via env)", async () => {
+        it("push with --yes invokes wrangler secret put per key (sequentially, value via env)", async () => {
             expect.assertions(7);
 
             const { logger } = recordingLogger();
@@ -170,7 +170,7 @@ describe("cirrus env", () => {
             expect(calls[0]?.descriptor.env).toBeUndefined();
         });
 
-        test("push --prod adds --env production", async () => {
+        it("push --prod adds --env production", async () => {
             expect.assertions(2);
 
             const { logger } = recordingLogger();
@@ -185,7 +185,7 @@ describe("cirrus env", () => {
             expect(calls[0]?.descriptor.args).toContain("production");
         });
 
-        test("push aborts immediately on first wrangler failure", async () => {
+        it("push aborts immediately on first wrangler failure", async () => {
             expect.assertions(2);
 
             const { logger } = recordingLogger();
@@ -201,7 +201,7 @@ describe("cirrus env", () => {
             expect(calls).toHaveLength(1);
         });
 
-        test("set rejects invalid keys (cannot start with digit)", async () => {
+        it("set rejects invalid keys (cannot start with digit)", async () => {
             expect.assertions(3);
 
             const { logger, recorded } = recordingLogger();

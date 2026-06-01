@@ -152,7 +152,7 @@ export function useInfiniteQuery<F extends FunctionReference>(
         return unsubscribe;
     }, [queryClient, pageKeysHash]);
 
-    const pageResults: Array<PaginationResult<PageItemOf<F>> | undefined> = skipped
+    const pageResults: (PaginationResult<PageItemOf<F>> | undefined)[] = skipped
         ? []
         : pageEntries.map(({ key }) => queryClient.getQueryData<PaginationResult<PageItemOf<F>>>(key));
 

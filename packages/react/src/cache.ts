@@ -119,9 +119,7 @@ export class CirrusSubscriptionRegistry {
  * TanStack hashes for dedup. The `"cirrus"` literal namespaces our entries so
  * an app's own queries can't collide with ours.
  */
-export const cirrusQueryKey = (fn: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => {
-    return ["cirrus", fn.__cirrusRef, args, shardKey ?? null];
-};
+export const cirrusQueryKey = (fn: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => ["cirrus", fn.__cirrusRef, args, shardKey ?? null];
 
 /**
  * Stringify a queryKey for use in a React effect's dep list. TanStack hashes

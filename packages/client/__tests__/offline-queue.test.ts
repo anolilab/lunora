@@ -1,10 +1,10 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { OfflineQueue } from "../src/offline-queue.js";
 import { createInMemoryPersistence } from "../src/persistence.js";
 
 describe("offlineQueue", () => {
-    test("fIFO drain order", () => {
+    it("fIFO drain order", () => {
         expect.assertions(2);
 
         const queue = new OfflineQueue();
@@ -25,7 +25,7 @@ describe("offlineQueue", () => {
         expect(queue.size).toBe(0);
     });
 
-    test("bounded by maxItems — oldest entry is rejected on overflow", () => {
+    it("bounded by maxItems — oldest entry is rejected on overflow", () => {
         expect.assertions(4);
 
         const queue = new OfflineQueue({ maxItems: 2 });
@@ -52,7 +52,7 @@ describe("offlineQueue", () => {
         expect(drained.map((d) => d.functionPath)).toEqual(["mid", "new"]);
     });
 
-    test("clear() rejects pending mutations with CLIENT_CLOSED and empties the queue", () => {
+    it("clear() rejects pending mutations with CLIENT_CLOSED and empties the queue", () => {
         expect.assertions(4);
 
         const queue = new OfflineQueue();
@@ -72,7 +72,7 @@ describe("offlineQueue", () => {
 });
 
 describe("offlineQueue — persistence", () => {
-    test("enqueue mirrors the mutation to durable storage with an assigned id", async () => {
+    it("enqueue mirrors the mutation to durable storage with an assigned id", async () => {
         expect.assertions(4);
 
         const persistence = createInMemoryPersistence();
@@ -92,7 +92,7 @@ describe("offlineQueue — persistence", () => {
         expect(persisted[0]?.id).not.toBe("");
     });
 
-    test("overflow un-persists the dropped (oldest) entry", async () => {
+    it("overflow un-persists the dropped (oldest) entry", async () => {
         expect.assertions(1);
 
         const persistence = createInMemoryPersistence();
@@ -106,7 +106,7 @@ describe("offlineQueue — persistence", () => {
         expect(persisted.map((m) => m.functionPath)).toEqual(["new"]);
     });
 
-    test("hydrate restores persisted mutations in FIFO order and reports distinct shard keys", async () => {
+    it("hydrate restores persisted mutations in FIFO order and reports distinct shard keys", async () => {
         expect.assertions(3);
 
         const persistence = createInMemoryPersistence();
@@ -126,7 +126,7 @@ describe("offlineQueue — persistence", () => {
         expect(drained.map((d) => d.functionPath)).toEqual(["a", "b", "c"]);
     });
 
-    test("hydrate re-appends nothing and skips ids already queued", async () => {
+    it("hydrate re-appends nothing and skips ids already queued", async () => {
         expect.assertions(1);
 
         const persistence = createInMemoryPersistence();
@@ -143,7 +143,7 @@ describe("offlineQueue — persistence", () => {
         expect(queue.size).toBe(1);
     });
 
-    test("restored mutations carry no-op resolve/reject so replay can settle them", async () => {
+    it("restored mutations carry no-op resolve/reject so replay can settle them", async () => {
         expect.assertions(1);
 
         const persistence = createInMemoryPersistence();
@@ -162,7 +162,7 @@ describe("offlineQueue — persistence", () => {
         }).not.toThrow();
     });
 
-    test("clear() leaves durable storage intact so a future session can restore it", async () => {
+    it("clear() leaves durable storage intact so a future session can restore it", async () => {
         expect.assertions(2);
 
         const persistence = createInMemoryPersistence();

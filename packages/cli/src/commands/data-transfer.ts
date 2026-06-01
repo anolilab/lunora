@@ -121,7 +121,7 @@ export const runExportCommand = async (options: ExportCommandOptions): Promise<E
     if (!response.ok) {
         const errorText = await response.text();
 
-        options.logger.error(`export failed: HTTP ${response.status}: ${errorText}`);
+        options.logger.error(`export failed: HTTP ${String(response.status)}: ${errorText}`);
 
         return { bytes: 0, code: 1, rows: 0 };
     }
@@ -207,8 +207,9 @@ export interface ImportCommandOptions {
     file: string;
     logger: Logger;
     prod?: boolean;
+
     /**
-     * Wrap each line as `{table:<name>,doc:<line>}`. Use when the source NDJSON
+     * Wrap each line as `{table:&lt;name>,doc:&lt;line>}`. Use when the source NDJSON
      * is bare docs from a single table — Convex's `convex import --table users`
      * shape.
      */
@@ -359,7 +360,7 @@ export const runImportCommand = async (options: ImportCommandOptions): Promise<I
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
 
-            throw new Error(`invalid JSON on line ${String(lineNumber)}: ${message}`);
+            throw new Error(`invalid JSON on line ${String(lineNumber)}: ${message}`, { cause: error });
         }
 
         batch.push(JSON.stringify({ doc, table: options.table }));

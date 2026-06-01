@@ -60,7 +60,7 @@ const walk = (root: string): ReadonlyArray<AnalyzeFileEntry> => {
 
 const formatBytes = (bytes: number): string => {
     if (bytes < 1024) {
-        return `${bytes} B`;
+        return `${String(bytes)} B`;
     }
 
     if (bytes < 1024 * 1024) {
@@ -72,7 +72,7 @@ const formatBytes = (bytes: number): string => {
 
 const buildReport = (outdir: string): AnalyzeReport => {
     const all = walk(outdir);
-    const sorted = [...all].sort((a, b) => b.sizeBytes - a.sizeBytes);
+    const sorted = all.toSorted((a, b) => b.sizeBytes - a.sizeBytes);
     const totalBytes = all.reduce((sum, entry) => sum + entry.sizeBytes, 0);
     const generatedFiles = all.filter((entry) => entry.path.includes("_generated"));
 
@@ -87,7 +87,7 @@ const buildReport = (outdir: string): AnalyzeReport => {
 
 const renderText = (report: AnalyzeReport, logger: Logger): void => {
     logger.info(`outdir: ${report.outdir}`);
-    logger.info(`total:  ${report.totalFiles} files, ${formatBytes(report.totalBytes)}`);
+    logger.info(`total:  ${String(report.totalFiles)} files, ${formatBytes(report.totalBytes)}`);
 
     if (report.topModules.length > 0) {
         logger.info("");
@@ -100,7 +100,7 @@ const renderText = (report: AnalyzeReport, logger: Logger): void => {
 
     if (report.generatedFiles.length > 0) {
         logger.info("");
-        logger.info(`_generated/ files: ${report.generatedFiles.length}`);
+        logger.info(`_generated/ files: ${String(report.generatedFiles.length)}`);
 
         for (const entry of report.generatedFiles) {
             logger.info(`  ${formatBytes(entry.sizeBytes).padStart(10, " ")}  ${entry.path}`);
@@ -109,10 +109,10 @@ const renderText = (report: AnalyzeReport, logger: Logger): void => {
 };
 
 /**
- * Build the worker via `wrangler deploy --dry-run --outdir <tmp>` and report
+ * Build the worker via `wrangler deploy --dry-run --outdir &lt;tmp>` and report
  * total size, top modules, and the `_generated/` footprint.
  *
- * Tests inject `inspectOnly: <path>` to skip the wrangler invocation and
+ * Tests inject `inspectOnly: &lt;path>` to skip the wrangler invocation and
  * walk a pre-built directory directly.
  */
 export const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<AnalyzeCommandResult> => {
@@ -140,7 +140,7 @@ export const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise
         const spawned = await spawner(descriptor);
 
         if (spawned.code !== 0) {
-            logger.error(`analyze: wrangler dry-run failed (exit ${spawned.code})`);
+            logger.error(`analyze: wrangler dry-run failed (exit ${String(spawned.code)})`);
 
             if (temporary) {
                 rmSync(outdir, { force: true, recursive: true });

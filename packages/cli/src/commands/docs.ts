@@ -1,5 +1,6 @@
 import type { Logger } from "../util/logger.js";
-import { openUrl, type OpenUrlOptions } from "../util/open-url.js";
+import type { OpenUrlOptions } from "../util/open-url.js";
+import { openUrl } from "../util/open-url.js";
 
 export interface DocsCommandOptions {
     logger: Logger;
@@ -16,12 +17,15 @@ export interface DocsCommandResult {
 
 const DEFAULT_DOCS_URL = "https://cirrus.anolilab.dev/docs";
 
+const LEADING_SLASHES = /^\/+/u;
+const TRAILING_SLASHES = /\/+$/u;
+
 const buildUrl = (section: string | undefined): string => {
     if (!section || section.length === 0) {
         return DEFAULT_DOCS_URL;
     }
 
-    const trimmed = section.replace(/^\/+/u, "").replace(/\/+$/u, "");
+    const trimmed = section.replace(LEADING_SLASHES, "").replace(TRAILING_SLASHES, "");
 
     if (trimmed.length === 0) {
         return DEFAULT_DOCS_URL;

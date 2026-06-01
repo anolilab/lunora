@@ -46,14 +46,10 @@ export default createConfig(
             "@stylistic/no-extra-parens": "off",
             "@stylistic/operator-linebreak": "off",
             "@stylistic/quotes": "off",
-            "@typescript-eslint/array-type": "off",
-            "@typescript-eslint/explicit-member-accessibility": "off",
-            "@typescript-eslint/member-ordering": "off",
             "@typescript-eslint/method-signature-style": "warn",
             "@typescript-eslint/naming-convention": "warn",
             "@typescript-eslint/no-base-to-string": "error",
             "@typescript-eslint/no-confusing-void-expression": "warn",
-            "@typescript-eslint/no-empty-object-type": "off",
             "@typescript-eslint/no-import-type-side-effects": "warn",
             "@typescript-eslint/no-misused-promises": "warn",
             "@typescript-eslint/no-explicit-any": "error",
@@ -62,6 +58,12 @@ export default createConfig(
             "@typescript-eslint/no-shadow": "warn",
             "@typescript-eslint/no-this-alias": "error",
             "@typescript-eslint/no-unnecessary-condition": "off",
+            // Kept off: reordering CirrusClient members (public API methods +
+            // private field initializers) risks disturbing field-initializer
+            // evaluation order; large churn on a 1400-line class with no runtime
+            // benefit. Member order here is intentional (auth → connection →
+            // queries → internals).
+            "@typescript-eslint/member-ordering": "off",
             "@typescript-eslint/no-unnecessary-type-arguments": "warn",
             "@typescript-eslint/no-unnecessary-type-assertion": "error",
             "@typescript-eslint/no-unnecessary-type-conversion": "error",
@@ -75,55 +77,56 @@ export default createConfig(
             "@typescript-eslint/prefer-nullish-coalescing": "warn",
             "@typescript-eslint/prefer-optional-chain": "warn",
             "@typescript-eslint/prefer-promise-reject-errors": "warn",
-            "@typescript-eslint/require-await": "off",
             "@typescript-eslint/restrict-plus-operands": "warn",
-            "@typescript-eslint/restrict-template-expressions": "off",
             "@typescript-eslint/unbound-method": "warn",
             "@typescript-eslint/use-unknown-in-catch-callback-variable": "warn",
-            "arrow-body-style": "off",
+            // Kept off: connectionKey/sendOn (CirrusClient) and key()
+            // (SubscriptionRegistry) don't read `this`, but they're cohesive
+            // members of their class's API (called as this.x / registry.x).
+            // Making them static would churn every call site for no benefit.
             "class-methods-use-this": "off",
-            "compat/compat": "off",
             "consistent-return": "warn",
-            "e18e/prefer-static-regex": "off",
-            "func-style": "off",
-            "import/consistent-type-specifier-style": "off",
+            // Kept off: persistence.ts / offline-queue.ts / stream.ts are
+            // organized literately — each public export sits next to its JSDoc
+            // and supporting consts/types. Hoisting all exports to the file end
+            // would break that locality.
             "import/exports-last": "off",
-            "import/no-commonjs": "off",
-            "import/no-named-as-default-member": "off",
-            "import/no-namespace": "off",
             "import/no-unresolved": "off",
             "import/prefer-default-export": "off",
+            // Kept off: {@link} references to other module exports (CirrusClient,
+            // createIndexedDbPersistence, etc.) and option-bag fields can't be
+            // resolved by the jsdoc plugin across module boundaries; the links
+            // are still correct for editors/docs.
             "jsdoc/check-indentation": "off",
-            "jsdoc/escape-inline-tags": "off",
-            "jsdoc/lines-before-block": "off",
-            "jsdoc/match-description": "off",
             "jsdoc/no-undefined-types": "off",
-            "jsdoc/require-param-type": "off",
-            "jsdoc/text-escaping": "off",
-            "markdown/heading-increment": "off",
-            "max-classes-per-file": "off",
+            // Kept off: identityFingerprint() computes an FNV-1a hash that relies
+            // on XOR / Math.imul / `>>> 0` folding; rewriting without bitwise ops
+            // would change the hash and the queued-identity stamps.
+            "no-bitwise": "off",
             "n/no-unsupported-features/es-builtins": "off",
             "n/no-unsupported-features/es-syntax": "off",
             "n/no-unsupported-features/node-builtins": "off",
             "no-alert": "warn",
             "no-await-in-loop": "warn",
-            "no-bitwise": "off",
-            "no-confusing-arrow": "off",
             "no-dupe-keys": "warn",
             "no-empty-pattern": "warn",
+            // Kept off: the reconnect/teardown helpers mutate properties of the
+            // passed-in ShardConnection (conn.socket, conn.wsState,
+            // conn.reconnectTimer) by design — the connection object IS the
+            // shared per-shard state. Cloning it would break reconnect/offline.
             "no-param-reassign": "off",
-            "no-promise-executor-return": "off",
             "no-restricted-syntax": "warn",
             "no-secrets/no-secrets": "warn",
             "no-underscore-dangle": "off",
             "no-useless-assignment": "warn",
+            // Kept off: `void promise` is the deliberate floating-promise marker
+            // on fire-and-forget calls (hydratePersistedQueue, persistence
+            // cleanup, reconnect kicks) that already attach their own .catch().
             "no-void": "off",
             "perfectionist/sort-exports": "warn",
             "perfectionist/sort-interfaces": "warn",
-            "perfectionist/sort-jsx-props": "off",
             "perfectionist/sort-object-types": "warn",
             "perfectionist/sort-objects": "off",
-            "preserve-caught-error": "off",
             "promise/always-return": "warn",
             "promise/catch-or-return": "warn",
             "promise/param-names": "warn",
@@ -135,40 +138,23 @@ export default createConfig(
             "sonarjs/cognitive-complexity": "warn",
             "sonarjs/deprecation": "error",
             "sonarjs/function-return-type": "warn",
-            "sonarjs/no-alphabetical-sort": "off",
             "sonarjs/no-extra-arguments": "warn",
             "sonarjs/no-hardcoded-passwords": "warn",
             "sonarjs/no-nested-conditional": "warn",
-            "sonarjs/no-nested-functions": "off",
             "sonarjs/no-unused-vars": "warn",
             "sonarjs/prefer-read-only-props": "warn",
-            "sonarjs/pseudo-random": "off",
             "sonarjs/slow-regex": "warn",
-            "sonarjs/void-use": "off",
             "unicorn/catch-error-name": "warn",
-            "unicorn/filename-case": "off",
-            "unicorn/no-anonymous-default-export": "off",
-            "unicorn/no-array-callback-reference": "off",
-            "unicorn/no-array-reduce": "off",
-            "unicorn/no-array-sort": "off",
-            "unicorn/no-await-expression-member": "off",
             "unicorn/no-immediate-mutation": "warn",
             "unicorn/no-null": "off",
             "unicorn/no-object-as-default-parameter": "warn",
-            "unicorn/no-process-exit": "off",
-            "unicorn/no-this-assignment": "off",
             "unicorn/number-literal-case": "warn",
             "unicorn/numeric-separators-style": "warn",
             "unicorn/prefer-add-event-listener": "warn",
             "unicorn/prefer-code-point": "warn",
-            "unicorn/prefer-global-this": "off",
-            "unicorn/prefer-top-level-await": "off",
             "unicorn/prevent-abbreviations": "off",
             "unused-imports/no-unused-vars": "warn",
-            "vars-on-top": "off",
-            "vitest/consistent-test-it": "off",
             "vitest/expect-expect": "warn",
-            "vitest/require-to-throw-message": "off",
         },
     },
     // Fixtures: allow `any` and loose typing.
@@ -188,6 +174,11 @@ export default createConfig(
         files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
         rules: {
             "@stylistic/no-tabs": "off",
+            "@typescript-eslint/member-ordering": "off",
+            // Mock socket/worker bridges (env.d.ts Cloudflare.Env merge) declare
+            // empty interfaces and stringify Request/URL test inputs freely.
+            "@typescript-eslint/no-base-to-string": "off",
+            "@typescript-eslint/no-empty-object-type": "off",
             "@typescript-eslint/no-explicit-any": "off",
             "@typescript-eslint/no-floating-promises": "off",
             "@typescript-eslint/no-non-null-assertion": "off",
@@ -199,15 +190,32 @@ export default createConfig(
             "@typescript-eslint/no-unsafe-return": "off",
             "@typescript-eslint/no-use-before-define": "off",
             "@typescript-eslint/require-await": "off",
+            // Test assertions interpolate numbers/booleans into messages freely.
+            "@typescript-eslint/restrict-template-expressions": "off",
+            "class-methods-use-this": "off",
             "compat/compat": "off",
             "e18e/ban-dependencies": "off",
+            // Test helpers compile regex literals inline for readability.
+            "e18e/prefer-static-regex": "off",
             "import/no-extraneous-dependencies": "off",
+            // Test workers / mock DOs interleave exports with their classes.
+            "import/exports-last": "off",
+            "jsdoc/check-indentation": "off",
+            // Mock worker entrypoints colocate 2 small bridge classes per file.
+            "max-classes-per-file": "off",
             "n/no-unsupported-features/node-builtins": "off",
+            // Mock socket/worker handlers mutate properties of injected instances.
+            "no-param-reassign": "off",
+            // `new Promise((resolve) => resolve(...))` test scaffolding.
+            "no-promise-executor-return": "off",
             "perfectionist/sort-objects": "off",
             "promise/always-return": "off",
             "sonarjs/deprecation": "off",
+            // Tests sort plain string arrays for stable assertions.
+            "sonarjs/no-alphabetical-sort": "off",
             "sonarjs/no-control-regex": "off",
             "sonarjs/no-nested-functions": "off",
+            "unicorn/no-array-sort": "off",
             "unicorn/no-null": "off",
             "vitest/no-conditional-expect": "off",
             "vitest/prefer-strict-equal": "off",

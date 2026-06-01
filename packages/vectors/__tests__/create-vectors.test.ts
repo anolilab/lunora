@@ -3,23 +3,27 @@ import { describe, expect, it, vi } from "vitest";
 import { createVectors } from "../src/create-vectors.js";
 import type { EmbedFn, VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
 
-const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => ({
-    upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `upsert-${vectors.length}` })),
-    insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => ({ mutationId: `insert-${vectors.length}` })),
+const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => {
+ return {
+    upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => { return { mutationId: `upsert-${vectors.length}` }; }),
+    insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => { return { mutationId: `insert-${vectors.length}` }; }),
     query: vi.fn<VectorizeIndexLike["query"]>(
-        async (): Promise<VectorizeMatches> => ({
+        async (): Promise<VectorizeMatches> => {
+ return {
             matches: [{ id: "row-1", score: 0.9 }],
             count: 1,
-        }),
+        };
+},
     ),
     getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
-        async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => ids.map((id) => ({ id, values: [0, 0, 0] })),
+        async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => ids.map((id) => { return { id, values: [0, 0, 0] }; }),
     ),
     deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(
-        async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => ({ mutationId: `delete-${ids.length}`, count: ids.length }),
+        async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => { return { mutationId: `delete-${ids.length}`, count: ids.length }; },
     ),
     ...overrides,
-});
+};
+};
 
 describe("createVectors", () => {
     it("rejects construction without any index bindings", () => {
@@ -151,7 +155,7 @@ describe("createVectors", () => {
         expect.assertions(1);
 
         const index = fakeIndex({
-            describe: vi.fn<NonNullable<VectorizeIndexLike["describe"]>>(async () => ({ dimensions: 1024, vectorsCount: 99 })),
+            describe: vi.fn<NonNullable<VectorizeIndexLike["describe"]>>(async () => { return { dimensions: 1024, vectorsCount: 99 }; }),
         });
         const vectors = createVectors({ indexes: { docs: index } });
 

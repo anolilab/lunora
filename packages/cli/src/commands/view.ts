@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 
 import type { Logger } from "../util/logger.js";
-import { openUrl, type OpenUrlOptions } from "../util/open-url.js";
+import type { OpenUrlOptions } from "../util/open-url.js";
+import { openUrl } from "../util/open-url.js";
 
 export interface ViewCommandOptions {
     cwd?: string;
@@ -119,7 +120,7 @@ export const runViewCommand = async (options: ViewCommandOptions): Promise<ViewC
             return { code: 1, url: undefined };
         }
     } else {
-        url = `http://localhost:${resolveDevPort(wrangler)}${DASHBOARD_PATH}`;
+        url = `http://localhost:${String(resolveDevPort(wrangler))}${DASHBOARD_PATH}`;
     }
 
     logger.info(`opening ${url}`);

@@ -1,13 +1,13 @@
 import type { FunctionReference } from "@cirrus/client";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useMutation } from "../src/use-mutation.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (ref: string): FunctionReference => ({ __cirrusRef: ref });
+const fn = (ref: string): FunctionReference => { return { __cirrusRef: ref }; };
 
 interface HarnessProps {
     onCall: (call: () => Promise<unknown>, pending: () => boolean) => void;
@@ -17,7 +17,7 @@ const Harness = ({ onCall }: HarnessProps): ReactElement => {
     const { mutate, pending } = useMutation(fn("posts:create"));
 
     onCall(
-        () => mutate({ title: "hello" } as Record<string, unknown>),
+        () => mutate({ title: "hello" }),
         () => pending,
     );
 
@@ -25,7 +25,7 @@ const Harness = ({ onCall }: HarnessProps): ReactElement => {
 };
 
 describe("useMutation", () => {
-    test("invokes client.mutation and flips `pending` while in-flight", async () => {
+    it("invokes client.mutation and flips `pending` while in-flight", async () => {
         expect.hasAssertions();
 
         let resolve: (value: unknown) => void = () => undefined;
@@ -73,7 +73,7 @@ describe("useMutation", () => {
         expect(screen.getByTestId("pending").textContent).toBe("no");
     });
 
-    test("forwards optimistic callback to the client", async () => {
+    it("forwards optimistic callback to the client", async () => {
         expect.assertions(1);
 
         const mock = createMockClient();
@@ -88,10 +88,10 @@ describe("useMutation", () => {
                 <button
                     aria-label="increment"
                     data-testid="btn"
-                    type="button"
                     onClick={() => {
-                        void mutate({} as Record<string, unknown>, { optimistic });
+                        void mutate({}, { optimistic });
                     }}
+                    type="button"
                 />
             );
         };

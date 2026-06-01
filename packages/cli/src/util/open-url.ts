@@ -43,8 +43,7 @@ const escapeForCmd = (url: string): string =>
         .replaceAll('"', "%22")
         .replaceAll("!", "%21");
 
-const platformOpener = (url: string): Promise<void> => {
-    return new Promise<void>((resolveOpen, rejectOpen) => {
+const platformOpener = (url: string): Promise<void> => new Promise<void>((resolveOpen, rejectOpen) => {
         const { args, command } = platformCommand();
         const safeUrl = platform() === "win32" ? escapeForCmd(url) : url;
         const child = spawn(command, [...args, safeUrl], { detached: true, stdio: "ignore" });
@@ -59,7 +58,6 @@ const platformOpener = (url: string): Promise<void> => {
             resolveOpen();
         });
     });
-};
 
 /**
  * Open a URL in the user's default browser. Cross-platform: uses `open`,

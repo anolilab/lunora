@@ -5,6 +5,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 export interface UseRateLimitOptions {
     /** Clock injection for tests. Defaults to `Date.now`. */
     now?: () => number;
+
     /**
      * Re-render cadence in milliseconds while throttled, so `retryAfter` ticks
      * down and `disabled` flips back automatically. Defaults to `1000`.

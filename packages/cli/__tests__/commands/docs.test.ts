@@ -1,14 +1,16 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { runDocsCommand } from "../../src/commands/docs.js";
 import type { Logger } from "../../src/util/logger.js";
 
-const silentLogger = (): Logger => ({
+const silentLogger = (): Logger => {
+ return {
     error: () => {},
     info: () => {},
     success: () => {},
     warn: () => {},
-});
+};
+};
 
 const recordingOpener = (): { openedUrls: string[]; opener: (url: string) => Promise<void> } => {
     const openedUrls: string[] = [];
@@ -22,7 +24,7 @@ const recordingOpener = (): { openedUrls: string[]; opener: (url: string) => Pro
 };
 
 describe("cirrus docs", () => {
-    test("opens the default docs URL when no section is given", async () => {
+    it("opens the default docs URL when no section is given", async () => {
         expect.assertions(2);
 
         const { openedUrls, opener } = recordingOpener();
@@ -33,7 +35,7 @@ describe("cirrus docs", () => {
         expect(openedUrls).toEqual(["https://cirrus.anolilab.dev/docs"]);
     });
 
-    test("appends the section path", async () => {
+    it("appends the section path", async () => {
         expect.assertions(1);
 
         const { openedUrls, opener } = recordingOpener();
@@ -43,7 +45,7 @@ describe("cirrus docs", () => {
         expect(openedUrls).toEqual(["https://cirrus.anolilab.dev/docs/addons/dashboard"]);
     });
 
-    test("normalises leading + trailing slashes", async () => {
+    it("normalises leading + trailing slashes", async () => {
         expect.assertions(1);
 
         const { openedUrls, opener } = recordingOpener();
@@ -53,7 +55,7 @@ describe("cirrus docs", () => {
         expect(openedUrls).toEqual(["https://cirrus.anolilab.dev/docs/migrating/from-convex"]);
     });
 
-    test("reports opener failures", async () => {
+    it("reports opener failures", async () => {
         expect.assertions(2);
 
         const errors: string[] = [];

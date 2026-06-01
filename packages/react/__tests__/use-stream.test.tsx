@@ -2,12 +2,12 @@ import type { CirrusClient, FunctionReference, StreamHandle, StreamIterable } fr
 import { createStream } from "@cirrus/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useStream } from "../src/use-stream.js";
 
-const fn = (reference: string): FunctionReference => ({ __cirrusRef: reference });
+const fn = (reference: string): FunctionReference => { return { __cirrusRef: reference }; };
 
 interface MockEntry {
     handle: StreamHandle;
@@ -44,8 +44,8 @@ const buildClientWithStream = (): { client: CirrusClient; opened: MockEntry[]; o
     };
 };
 
-const Display = ({ args = {} as Record<string, unknown> }: { args?: Record<string, unknown> | "skip" } = {}): ReactElement => {
-    const { chunks, error, status } = useStream(fn("metrics:tick"), args as Record<string, unknown> | "skip");
+const Display = ({ args = {} }: { args?: Record<string, unknown> | "skip" } = {}): ReactElement => {
+    const { chunks, error, status } = useStream(fn("metrics:tick"), args);
 
     return (
         <div>
@@ -57,7 +57,7 @@ const Display = ({ args = {} as Record<string, unknown> }: { args?: Record<strin
 };
 
 describe("useStream", () => {
-    test("opens a stream on mount and appends chunks as they arrive", async () => {
+    it("opens a stream on mount and appends chunks as they arrive", async () => {
         expect.hasAssertions();
 
         const { client, openStream } = buildClientWithStream();
@@ -97,7 +97,7 @@ describe("useStream", () => {
         });
     });
 
-    test('"skip" leaves the stream un-opened', () => {
+    it('"skip" leaves the stream un-opened', () => {
         expect.assertions(2);
 
         const { client, opened } = buildClientWithStream();
@@ -112,7 +112,7 @@ describe("useStream", () => {
         expect(screen.getByTestId("status").textContent).toBe("idle");
     });
 
-    test("unmount cancels the in-flight stream", async () => {
+    it("unmount cancels the in-flight stream", async () => {
         expect.hasAssertions();
 
         const { client, openStream } = buildClientWithStream();
@@ -132,7 +132,7 @@ describe("useStream", () => {
         expect(openStream().onCancel).toHaveBeenCalledWith();
     });
 
-    test("server error transitions status to 'error' and surfaces the error", async () => {
+    it("server error transitions status to 'error' and surfaces the error", async () => {
         expect.hasAssertions();
 
         const { client, openStream } = buildClientWithStream();

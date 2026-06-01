@@ -24,11 +24,9 @@ export const createMockClient = (queryImpl?: (ref: string, args: unknown) => unk
     const subs = new Set<SubEntry>();
     let authToken: string | null = null;
 
-    const queryFn = vi.fn<(fn: FunctionReference, args: unknown) => Promise<unknown>>(async (fn: FunctionReference, args: unknown) => {
-        return queryImpl ? queryImpl(fn.__cirrusRef, args) : undefined;
-    });
-    const mutationFn = vi.fn<() => Promise<unknown>>(async () => undefined as unknown);
-    const actionFn = vi.fn<() => Promise<unknown>>(async () => undefined as unknown);
+    const queryFn = vi.fn<(fn: FunctionReference, args: unknown) => Promise<unknown>>(async (fn: FunctionReference, args: unknown) => (queryImpl ? queryImpl(fn.__cirrusRef, args) : undefined));
+    const mutationFn = vi.fn<() => Promise<unknown>>(async () => undefined);
+    const actionFn = vi.fn<() => Promise<unknown>>(async () => undefined);
     const subscribeFn = vi.fn<(fn: FunctionReference, args: unknown, cb: (value: unknown) => void) => Unsubscribe>(
         (fn: FunctionReference, _args: unknown, cb: (value: unknown) => void): Unsubscribe => {
             const entry: SubEntry = { ref: fn.__cirrusRef, callback: cb };

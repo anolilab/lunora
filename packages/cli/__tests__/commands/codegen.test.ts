@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runCodegenCommand } from "../../src/commands/codegen.js";
 import type { Logger } from "../../src/util/logger.js";
@@ -12,12 +12,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 // Reuse the same fixture that @cirrus/codegen uses for its own tests.
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
 
-const silentLogger = (): Logger => ({
+const silentLogger = (): Logger => {
+ return {
     error: () => {},
     info: () => {},
     success: () => {},
     warn: () => {},
-});
+};
+};
 
 let workdir: string;
 
@@ -32,7 +34,7 @@ describe("cirrus codegen", () => {
     });
 
     describe("cirrus codegen", () => {
-        test("writes the three generated files", () => {
+        it("writes the three generated files", () => {
             expect.assertions(3);
 
             runCodegenCommand({ cwd: workdir, logger: silentLogger() });
@@ -44,7 +46,7 @@ describe("cirrus codegen", () => {
             expect(existsSync(join(generated, "server.ts"))).toBe(true);
         });
 
-        test("logs success once codegen completes", () => {
+        it("logs success once codegen completes", () => {
             expect.assertions(2);
 
             const success: string[] = [];

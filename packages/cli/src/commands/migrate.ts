@@ -39,17 +39,19 @@ export interface MigrateGenerateCommandResult {
 
 const SNAPSHOT_FILENAME = ".snapshot.json";
 
+const EMPTY_STRING = /^$/u;
+
 const slugify = (input: string): string =>
     input
         .toLowerCase()
         .replaceAll(/[^\da-z]+/gu, "_")
         .replaceAll(/^_+|_+$/gu, "")
-        .replace(/^$/u, "auto");
+        .replace(EMPTY_STRING, "auto");
 
 const formatTimestamp = (now: Date): string => {
     const pad = (n: number, w = 2): string => n.toString().padStart(w, "0");
 
-    return `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(
+    return `${String(now.getUTCFullYear())}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(
         now.getUTCMinutes(),
     )}${pad(now.getUTCSeconds())}`;
 };
@@ -71,7 +73,7 @@ const loadSnapshot = (path: string): SchemaSnapshot | undefined => {
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        throw new Error(`failed to read ${path}: ${message}`);
+        throw new Error(`failed to read ${path}: ${message}`, { cause: error });
     }
 };
 
@@ -128,13 +130,14 @@ export const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions
     options.logger.success(`wrote ${migrationFile}`);
 
     if (diff.unsupported.length > 0) {
-        options.logger.warn(`${diff.unsupported.length} unsupported diff(s) — see the comment block in ${filename} and write the SQL manually`);
+        options.logger.warn(`${String(diff.unsupported.length)} unsupported diff(s) — see the comment block in ${filename} and write the SQL manually`);
     }
 
     return { code: 0, empty: false, migrationFile };
 };
 
 const DATA_MIGRATIONS_FILENAME = "migrations.ts";
+const IDENTIFIER_PATTERN = /^[A-Za-z_]\w*$/u;
 const DEFINE_MIGRATION_IMPORT = `import { defineMigration } from "@cirrus/server";`;
 const RUN_MIGRATION_OP = "__cirrus_admin__:runMigration";
 const MIGRATION_STATUS_OP = "__cirrus_admin__:migrationStatus";
@@ -172,7 +175,7 @@ export interface MigrateCreateCommandResult {
 }
 
 /**
- * `cirrus migrate create <name>` — scaffold a `defineMigration({...})` block in
+ * `cirrus migrate create &lt;name>` — scaffold a `defineMigration({...})` block in
  * `cirrus/migrations.ts`, appending to the file (and creating it with the
  * import) when it already exists. Refuses to clobber an existing migration of
  * the same id or export name.
@@ -193,7 +196,7 @@ export const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): M
     // `table` is written verbatim into generated TypeScript (`table: "..."`),
     // so it must be a bare identifier — otherwise a crafted `--table` value can
     // inject arbitrary source into cirrus/migrations.ts.
-    if (!/^[A-Za-z_]\w*$/u.test(table)) {
+    if (!IDENTIFIER_PATTERN.test(table)) {
         options.logger.error(`invalid --table: "${table}" — must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)`);
 
         return { code: 1, file: "" };
@@ -272,7 +275,7 @@ const resolveMigrationTable = (cwd: string, id: string): string | undefined => {
 };
 
 /**
- * `cirrus migrate up|down|status <id>` — drive the cross-shard data-migration
+ * `cirrus migrate up|down|status &lt;id>` — drive the cross-shard data-migration
  * orchestrator. Resolves the migration's table locally, then POSTs a migration
  * admin RPC to the Worker's `/_cirrus/migrate` endpoint, which fans it out to
  * every live shard of that table and rolls up the per-shard outcomes.

@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
+import type { SchemaSnapshot } from "../../src/util/migration-diff.js";
 import {
     diffSnapshots,
     renderAddColumn,
@@ -8,14 +9,13 @@ import {
     renderDropIndex,
     renderDropTable,
     renderMigrationFile,
-    type SchemaSnapshot,
     validatorKindToSqlType,
 } from "../../src/util/migration-diff.js";
 
-const snapshot = (tables: SchemaSnapshot["tables"]): SchemaSnapshot => ({ tables, version: 1 });
+const snapshot = (tables: SchemaSnapshot["tables"]): SchemaSnapshot => { return { tables, version: 1 }; };
 
 describe("validatorKindToSqlType", () => {
-    test("maps boolean/number/bigint to INTEGER", () => {
+    it("maps boolean/number/bigint to INTEGER", () => {
         expect.assertions(3);
 
         expect(validatorKindToSqlType("boolean")).toBe("INTEGER");
@@ -23,13 +23,13 @@ describe("validatorKindToSqlType", () => {
         expect(validatorKindToSqlType("bigint")).toBe("INTEGER");
     });
 
-    test("maps bytes to BLOB", () => {
+    it("maps bytes to BLOB", () => {
         expect.assertions(1);
 
         expect(validatorKindToSqlType("bytes")).toBe("BLOB");
     });
 
-    test("maps string/id/literal to TEXT", () => {
+    it("maps string/id/literal to TEXT", () => {
         expect.assertions(3);
 
         expect(validatorKindToSqlType("string")).toBe("TEXT");
@@ -37,7 +37,7 @@ describe("validatorKindToSqlType", () => {
         expect(validatorKindToSqlType("literal")).toBe("TEXT");
     });
 
-    test("falls back to TEXT for compound kinds", () => {
+    it("falls back to TEXT for compound kinds", () => {
         expect.assertions(3);
 
         expect(validatorKindToSqlType("object")).toBe("TEXT");
@@ -47,7 +47,7 @@ describe("validatorKindToSqlType", () => {
 });
 
 describe("sQL renderers", () => {
-    test("renderCreateTable emits an `_id` primary key + columns", () => {
+    it("renderCreateTable emits an `_id` primary key + columns", () => {
         expect.assertions(6);
 
         const sql = renderCreateTable({
@@ -67,7 +67,7 @@ describe("sQL renderers", () => {
         expect(sql.trim().endsWith(";")).toBe(true);
     });
 
-    test("renderAddColumn produces ALTER TABLE", () => {
+    it("renderAddColumn produces ALTER TABLE", () => {
         expect.assertions(1);
 
         const sql = renderAddColumn("users", "nickname", { sqlType: "TEXT", nullable: true });
@@ -75,13 +75,13 @@ describe("sQL renderers", () => {
         expect(sql).toBe('ALTER TABLE "users" ADD COLUMN "nickname" TEXT;');
     });
 
-    test("renderDropTable emits DROP TABLE IF EXISTS", () => {
+    it("renderDropTable emits DROP TABLE IF EXISTS", () => {
         expect.assertions(1);
 
         expect(renderDropTable("users")).toBe('DROP TABLE IF EXISTS "users";');
     });
 
-    test("renderCreateIndex emits the named index", () => {
+    it("renderCreateIndex emits the named index", () => {
         expect.assertions(1);
 
         const sql = renderCreateIndex("users", { name: "by_email", fields: ["email"], unique: true });
@@ -89,7 +89,7 @@ describe("sQL renderers", () => {
         expect(sql).toBe('CREATE UNIQUE INDEX IF NOT EXISTS "by_email" ON "users" ("email");');
     });
 
-    test("renderDropIndex emits DROP INDEX IF EXISTS", () => {
+    it("renderDropIndex emits DROP INDEX IF EXISTS", () => {
         expect.assertions(1);
 
         expect(renderDropIndex("by_email")).toBe('DROP INDEX IF EXISTS "by_email";');
@@ -97,7 +97,7 @@ describe("sQL renderers", () => {
 });
 
 describe("diffSnapshots", () => {
-    test("cREATE TABLE when a table appears", () => {
+    it("cREATE TABLE when a table appears", () => {
         expect.assertions(5);
 
         const previous = snapshot({});
@@ -118,7 +118,7 @@ describe("diffSnapshots", () => {
         expect(diff.unsupported).toHaveLength(0);
     });
 
-    test("cREATE TABLE includes its CREATE INDEX statements", () => {
+    it("cREATE TABLE includes its CREATE INDEX statements", () => {
         expect.assertions(4);
 
         const previous = snapshot({});
@@ -140,7 +140,7 @@ describe("diffSnapshots", () => {
         expect(diff.entries[1]?.sql).toContain("by_email");
     });
 
-    test("dROP TABLE when a table is removed", () => {
+    it("dROP TABLE when a table is removed", () => {
         expect.assertions(3);
 
         const previous = snapshot({
@@ -155,7 +155,7 @@ describe("diffSnapshots", () => {
         expect(diff.entries[0]?.sql).toBe('DROP TABLE IF EXISTS "users";');
     });
 
-    test("aDD COLUMN when a column appears on an existing table", () => {
+    it("aDD COLUMN when a column appears on an existing table", () => {
         expect.assertions(3);
 
         const previous = snapshot({
@@ -179,7 +179,7 @@ describe("diffSnapshots", () => {
         expect(diff.entries[0]?.sql).toContain('ADD COLUMN "nickname" TEXT');
     });
 
-    test("cREATE INDEX / DROP INDEX on column-stable tables", () => {
+    it("cREATE INDEX / DROP INDEX on column-stable tables", () => {
         expect.hasAssertions();
 
         const previous = snapshot({
@@ -203,7 +203,7 @@ describe("diffSnapshots", () => {
         expect(kinds).toEqual(expect.arrayContaining(["createIndex", "dropIndex"]));
     });
 
-    test("dROP COLUMN is unsupported", () => {
+    it("dROP COLUMN is unsupported", () => {
         expect.assertions(4);
 
         const previous = snapshot({
@@ -228,7 +228,7 @@ describe("diffSnapshots", () => {
         expect(diff.unsupported[0]?.summary).toMatch(/legacyColumn/u);
     });
 
-    test("column type change is unsupported", () => {
+    it("column type change is unsupported", () => {
         expect.assertions(3);
 
         const previous = snapshot({
@@ -245,7 +245,7 @@ describe("diffSnapshots", () => {
         expect(diff.unsupported[0]?.kind).toBe("columnTypeChange");
     });
 
-    test("empty diff when snapshots are identical", () => {
+    it("empty diff when snapshots are identical", () => {
         expect.assertions(3);
 
         const equal = snapshot({
@@ -259,7 +259,7 @@ describe("diffSnapshots", () => {
         expect(diff.unsupported).toHaveLength(0);
     });
 
-    test("treats missing previous snapshot as initial migration", () => {
+    it("treats missing previous snapshot as initial migration", () => {
         expect.assertions(2);
 
         const next = snapshot({
@@ -274,7 +274,7 @@ describe("diffSnapshots", () => {
 });
 
 describe("renderMigrationFile", () => {
-    test("includes per-entry SQL + comments and a header", () => {
+    it("includes per-entry SQL + comments and a header", () => {
         expect.assertions(3);
 
         const next = snapshot({
@@ -293,7 +293,7 @@ describe("renderMigrationFile", () => {
         expect(body).toContain('CREATE TABLE IF NOT EXISTS "users"');
     });
 
-    test("appends a manual-SQL comment block for unsupported deltas", () => {
+    it("appends a manual-SQL comment block for unsupported deltas", () => {
         expect.assertions(2);
 
         const previous = snapshot({

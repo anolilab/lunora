@@ -1,6 +1,6 @@
 import { act, render } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { UseRateLimitResult } from "../src/use-rate-limit.js";
 import { useRateLimit } from "../src/use-rate-limit.js";
@@ -20,7 +20,7 @@ describe("useRateLimit", () => {
         vi.useRealTimers();
     });
 
-    test("starts available and blocks once the bucket is drained", () => {
+    it("starts available and blocks once the bucket is drained", () => {
         expect.assertions(3);
 
         render(<Probe />);
@@ -36,7 +36,7 @@ describe("useRateLimit", () => {
         expect(handle.retryAfter).toBeGreaterThan(0);
     });
 
-    test("check does not consume", () => {
+    it("check does not consume", () => {
         expect.assertions(3);
 
         render(<Probe />);
@@ -53,7 +53,7 @@ describe("useRateLimit", () => {
         expect(handle.consume().ok).toBe(true);
     });
 
-    test("reset restores availability", () => {
+    it("reset restores availability", () => {
         expect.assertions(2);
 
         render(<Probe />);
@@ -72,7 +72,7 @@ describe("useRateLimit", () => {
         expect(handle.ok).toBe(true);
     });
 
-    test("re-enables on its own as tokens refill", () => {
+    it("re-enables on its own as tokens refill", () => {
         expect.assertions(2);
 
         vi.useFakeTimers();

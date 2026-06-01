@@ -19,6 +19,7 @@ export interface InitCommandOptions {
      */
     allowUnsafeSource?: boolean;
     cwd?: string;
+
     /**
      * Local directory containing the template subdirs (e.g. `vite/`,
      * `standalone/`). When provided, skips the network fetch entirely.
@@ -27,9 +28,10 @@ export interface InitCommandOptions {
     from?: string;
     logger: Logger;
     name?: string;
+
     /**
      * Override the remote source giget downloads from. Default:
-     * `gh:anolilab/cirrus/templates/<templateType>#v<cliVersion>`. Tests
+     * `gh:anolilab/cirrus/templates/&lt;templateType>#v&lt;cliVersion>`. Tests
      * typically use `from` instead to skip the network.
      */
     source?: string;
@@ -101,9 +103,7 @@ const isTextFile = (filePath: string): boolean => {
     return TEXT_EXTENSIONS.has(filePath.slice(lastDot));
 };
 
-const substitute = (content: string, name: string): string => {
-    return content.replaceAll("{{name}}", name);
-};
+const substitute = (content: string, name: string): string => content.replaceAll("{{name}}", name);
 
 const collectFiles = (dir: string): ReadonlyArray<string> => {
     const out: string[] = [];
@@ -163,7 +163,7 @@ const isSafeSource = (source: string): boolean => {
 };
 
 const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, target: string, name: string): void => {
-    logger.success(`scaffolded ${written.length} files into ${target}`);
+    logger.success(`scaffolded ${String(written.length)} files into ${target}`);
     logger.info("next steps:");
     logger.info(`  cd ${name}`);
     logger.info("  pnpm install");
@@ -221,9 +221,9 @@ const scaffoldFromRemote = async (
         const staged = collectFiles(stagingDir);
 
         if (downloaded.commit) {
-            logger.info(`resolved ${downloaded.source} @ ${downloaded.commit} (${staged.length} file(s))`);
+            logger.info(`resolved ${downloaded.source} @ ${downloaded.commit} (${String(staged.length)} file(s))`);
         } else {
-            logger.info(`resolved ${downloaded.source} (${staged.length} file(s))`);
+            logger.info(`resolved ${downloaded.source} (${String(staged.length)} file(s))`);
         }
 
         const written = copyTemplate(stagingDir, target, name);

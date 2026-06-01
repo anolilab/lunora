@@ -1,8 +1,12 @@
 import { createInMemoryBookmarkStorage } from "./bookmark.js";
-import { OfflineQueue, type QueuedMutation } from "./offline-queue.js";
-import { createReconnect, type ReconnectCalculator } from "./reconnect.js";
-import { createStream, type StreamHandle, type StreamIterable } from "./stream.js";
-import { type SubscriptionCallback, type SubscriptionErrorCallback, SubscriptionRegistry, type SubscriptionState } from "./subscription.js";
+import type { QueuedMutation } from "./offline-queue.js";
+import { OfflineQueue } from "./offline-queue.js";
+import type { ReconnectCalculator } from "./reconnect.js";
+import { createReconnect } from "./reconnect.js";
+import type { StreamHandle, StreamIterable } from "./stream.js";
+import { createStream } from "./stream.js";
+import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState } from "./subscription.js";
+import { SubscriptionRegistry } from "./subscription.js";
 import type {
     ArgsOf,
     AuthPage,
@@ -76,7 +80,7 @@ const stableStringify = (value: unknown): string => {
         return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
     }
 
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
 };
@@ -84,7 +88,7 @@ const stableStringify = (value: unknown): string => {
 /**
  * One WebSocket per shard key. Subscriptions and the writes they observe must
  * land on the same Durable Object, so each distinct `shardKey` gets its own
- * socket connected to `?shard=<key>` (the default shard uses no query param).
+ * socket connected to `?shard=&lt;key>` (the default shard uses no query param).
  * Reconnect backoff, offline-flush state, and the pending-unsubscribe buffer
  * are all per-connection so one shard dropping doesn't disturb the others.
  */
@@ -394,7 +398,7 @@ export class CirrusClient {
         const argsRecord = args as Record<string, unknown>;
 
         // Apply optimistic updates to any subscriber listening on this fn.
-        const optimisticRollbacks: Array<() => void> = [];
+        const optimisticRollbacks: (() => void)[] = [];
 
         if (opts.optimistic) {
             // Scope optimistic updates to subscriptions on the SAME function
@@ -797,7 +801,7 @@ export class CirrusClient {
 
         if (!state) {
             this.nextSubId += 1;
-            const id = `sub_${this.nextSubId}`;
+            const id = `sub_${this.nextSubId.toString()}`;
 
             state = {
                 id,
@@ -887,7 +891,7 @@ export class CirrusClient {
         }
 
         this.nextStreamId += 1;
-        const id = `stream_${this.nextStreamId}`;
+        const id = `stream_${this.nextStreamId.toString()}`;
         const { shardKey } = opts;
         const argsRecord = (args ?? {}) as Record<string, unknown>;
 
@@ -1078,7 +1082,7 @@ export class CirrusClient {
         try {
             body = await response.json();
         } catch {
-            throw new Error(`CirrusClient: response was not JSON (status ${response.status})`);
+            throw new Error(`CirrusClient: response was not JSON (status ${response.status.toString()})`);
         }
 
         if ("error" in body) {
@@ -1123,7 +1127,7 @@ export class CirrusClient {
         try {
             body = await response.json();
         } catch {
-            throw new Error(`CirrusClient: response was not JSON (status ${response.status})`);
+            throw new Error(`CirrusClient: response was not JSON (status ${response.status.toString()})`);
         }
 
         if (body && typeof body === "object" && "error" in body) {

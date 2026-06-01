@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useAuth } from "../src/use-auth.js";
@@ -21,7 +21,7 @@ const Display = (): ReactElement => {
 };
 
 describe("useAuth", () => {
-    test("initial token reflects client.getAuthToken()", () => {
+    it("initial token reflects client.getAuthToken()", () => {
         expect.assertions(1);
 
         const mock = createMockClient();
@@ -37,7 +37,7 @@ describe("useAuth", () => {
         expect(screen.getByTestId("display").textContent).toBe("seeded-token|anon");
     });
 
-    test("setToken updates both the hook state and the underlying client", () => {
+    it("setToken updates both the hook state and the underlying client", () => {
         expect.assertions(5);
 
         const mock = createMockClient();

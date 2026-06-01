@@ -31,6 +31,10 @@ const DEV_VARS_FILE = ".dev.vars";
 
 const KEY_PATTERN = /^[A-Za-z_]\w*$/u;
 
+const NEWLINE_SPLIT = /\r?\n/u;
+
+const NEWLINE_PRESENT = /[\r\n]/u;
+
 interface ParsedLine {
     key: string;
     quoted: boolean;
@@ -40,7 +44,7 @@ interface ParsedLine {
 const parseDevVars = (content: string): Map<string, ParsedLine> => {
     const map = new Map<string, ParsedLine>();
 
-    for (const rawLine of content.split(/\r?\n/u)) {
+    for (const rawLine of content.split(NEWLINE_SPLIT)) {
         const line = rawLine.trim();
 
         if (line === "" || line.startsWith("#")) {
@@ -169,7 +173,7 @@ export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvComm
         // `.dev.vars` is a line-oriented format and parseDevVars splits on
         // newlines; a value containing CR/LF would corrupt the round-trip and
         // could inject spurious vars. Reject rather than silently mangle.
-        if (/[\r\n]/u.test(options.value)) {
+        if (NEWLINE_PRESENT.test(options.value)) {
             logger.error(`env: value for "${options.key}" contains a newline, which .dev.vars cannot represent`);
 
             return { code: 1, descriptors: [] };
@@ -247,13 +251,13 @@ export const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvComm
             const result = await spawner(descriptor);
 
             if (result.code !== 0) {
-                logger.error(`env push: failed at ${entry.key} (exit ${result.code})`);
+                logger.error(`env push: failed at ${entry.key} (exit ${String(result.code)})`);
 
                 return { code: result.code, descriptors };
             }
         }
 
-        logger.success(`env: pushed ${map.size} secret(s)`);
+        logger.success(`env: pushed ${String(map.size)} secret(s)`);
 
         return { code: 0, descriptors };
     }

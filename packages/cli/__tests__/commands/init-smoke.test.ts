@@ -8,7 +8,7 @@
  *   3. `validateWranglerProject` → asserts bindings line up with the schema
  *
  * If any step throws, the scaffold is broken — exactly the failure a fresh
- * `cirrus init && cirrus dev` would hit on a clean machine.
+ * `cirrus init &amp;& cirrus dev` would hit on a clean machine.
  *
  * The unit suite must work offline, so we use `--from` to point at the local
  * templates root rather than hitting GitHub through giget. The remote-fetch
@@ -22,17 +22,19 @@ import { fileURLToPath } from "node:url";
 
 import { runCodegen } from "@cirrus/codegen";
 import { validateWranglerProject } from "@cirrus/config";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runInitCommand } from "../../src/commands/init.js";
 import type { Logger } from "../../src/util/logger.js";
 
-const silentLogger = (): Logger => ({
+const silentLogger = (): Logger => {
+ return {
     error: () => {},
     info: () => {},
     success: () => {},
     warn: () => {},
-});
+};
+};
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const templatesRoot = resolve(testDirectory, "..", "..", "..", "..", "templates");
@@ -49,7 +51,7 @@ describe("cirrus init smoke", () => {
     });
 
     describe("cirrus init → codegen → wrangler validator (Phase 5 smoke)", () => {
-        test("vite template produces a project that codegen + wrangler validator accept", async () => {
+        it("vite template produces a project that codegen + wrangler validator accept", async () => {
             expect.assertions(7);
 
             const result = await runInitCommand({
@@ -87,7 +89,7 @@ describe("cirrus init smoke", () => {
             expect(wranglerResult.problems).toEqual([]);
         });
 
-        test("standalone template produces a project that codegen + wrangler validator accept", async () => {
+        it("standalone template produces a project that codegen + wrangler validator accept", async () => {
             expect.assertions(3);
 
             const result = await runInitCommand({

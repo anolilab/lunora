@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 
 import { boxen } from "@visulima/boxen";
 import { Cerebro } from "@visulima/cerebro";
-import colorize from "@visulima/colorize";
+import { bold, cyan, dim } from "@visulima/colorize";
 
 import { runAnalyzeCommand } from "./commands/analyze.js";
 import { runCodegenCommand } from "./commands/codegen.js";
@@ -49,17 +49,11 @@ export interface RunCliOptions {
     cwd?: string;
 }
 
-const isTemplate = (value: unknown): value is Template => {
-    return value === "vite" || value === "standalone" || value === "next" || value === "tanstack-start";
-};
+const isTemplate = (value: unknown): value is Template => value === "vite" || value === "standalone" || value === "next" || value === "tanstack-start";
 
-const isEnvSubcommand = (value: unknown): value is EnvSubcommand => {
-    return value === "list" || value === "get" || value === "set" || value === "unset" || value === "push";
-};
+const isEnvSubcommand = (value: unknown): value is EnvSubcommand => value === "list" || value === "get" || value === "set" || value === "unset" || value === "push";
 
-const toStringOrUndefined = (value: unknown): string | undefined => {
-    return typeof value === "string" && value.length > 0 ? value : undefined;
-};
+const toStringOrUndefined = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
 const toNumberOrUndefined = (value: unknown): number | undefined => {
     if (typeof value === "number" && Number.isFinite(value)) {
@@ -76,10 +70,10 @@ const toNumberOrUndefined = (value: unknown): number | undefined => {
 };
 
 const renderBanner = (): string => {
-    const title = `${colorize.bold.cyan("cirrus")} ${colorize.dim(`v${VERSION}`)}`;
+    const title = `${bold.cyan("cirrus")} ${dim(`v${VERSION}`)}`;
 
-    return boxen(`${title}\n${colorize.dim("Cirrus framework CLI")}`, {
-        borderColor: (border) => colorize.cyan(border),
+    return boxen(`${title}\n${dim("Cirrus framework CLI")}`, {
+        borderColor: (border) => cyan(border),
         borderStyle: "round",
         padding: { left: 2, right: 2, top: 0, bottom: 0 },
         margin: 0,
@@ -100,9 +94,9 @@ interface BuildCliResult {
  */
 const BOOLEAN_OPTIONS = new Set<string>(["all", "allow-unsafe-source", "dry-run", "json", "no-vite", "prod", "remote", "yes"]);
 
-const isOptionToken = (token: string): boolean => {
-    return token.startsWith("-");
-};
+const LEADING_DASHES = /^-+/u;
+
+const isOptionToken = (token: string): boolean => token.startsWith("-");
 
 const optionTakesValue = (token: string): boolean => {
     // "--foo=bar" is self-contained, never consumes the next token.
@@ -111,7 +105,7 @@ const optionTakesValue = (token: string): boolean => {
     }
 
     // Strip leading dashes and look up against the boolean set.
-    const name = token.replace(/^-+/u, "");
+    const name = token.replace(LEADING_DASHES, "");
 
     return !BOOLEAN_OPTIONS.has(name);
 };
@@ -184,7 +178,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 
     cli.setCommandSection({
         header: renderBanner(),
-        footer: colorize.dim("Run `cirrus help <command>` for details on a specific command."),
+        footer: dim("Run `cirrus help <command>` for details on a specific command."),
     });
 
     cli.addCommand({
@@ -711,13 +705,12 @@ const isMain = (): boolean => {
 };
 
 if (isMain()) {
-    runCli().then(
-        (code) => {
-            process.exit(code);
-        },
-        (error: unknown) => {
-            process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-            process.exit(1);
-        },
-    );
+    try {
+        const code = await runCli();
+
+        process.exit(code);
+    } catch (error: unknown) {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exit(1);
+    }
 }

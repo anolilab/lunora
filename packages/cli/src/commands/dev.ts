@@ -24,13 +24,9 @@ export interface DevCommandPlan {
     mode: DevMode;
 }
 
-const findWranglerConfig = (cwd: string): boolean => {
-    return existsSync(join(cwd, "wrangler.jsonc")) || existsSync(join(cwd, "wrangler.json")) || existsSync(join(cwd, "wrangler.toml"));
-};
+const findWranglerConfig = (cwd: string): boolean => existsSync(join(cwd, "wrangler.jsonc")) || existsSync(join(cwd, "wrangler.json")) || existsSync(join(cwd, "wrangler.toml"));
 
-const findViteConfig = (cwd: string): boolean => {
-    return existsSync(join(cwd, "vite.config.ts")) || existsSync(join(cwd, "vite.config.js")) || existsSync(join(cwd, "vite.config.mjs"));
-};
+const findViteConfig = (cwd: string): boolean => existsSync(join(cwd, "vite.config.ts")) || existsSync(join(cwd, "vite.config.js")) || existsSync(join(cwd, "vite.config.mjs"));
 
 const buildPlan = (cwd: string, options: DevCommandOptions): DevCommandPlan => {
     const viteConfigPresent = findViteConfig(cwd);
@@ -83,9 +79,7 @@ const buildPlan = (cwd: string, options: DevCommandOptions): DevCommandPlan => {
     };
 };
 
-export const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
-    return buildPlan(options.cwd ?? process.cwd(), options);
-};
+export const planDevCommand = (options: DevCommandOptions): DevCommandPlan => buildPlan(options.cwd ?? process.cwd(), options);
 
 /** Grace period after the first SIGINT before we force-kill children. */
 const SIGINT_GRACE_MS = 5000;
@@ -121,7 +115,7 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
             logger.info("received SIGINT — forwarding SIGTERM (press Ctrl-C again to force-kill)");
             cleanup("SIGTERM");
             escalationTimer = setTimeout(() => {
-                logger.warn(`children did not exit within ${SIGINT_GRACE_MS}ms — sending SIGKILL`);
+                logger.warn(`children did not exit within ${String(SIGINT_GRACE_MS)}ms — sending SIGKILL`);
                 cleanup("SIGKILL");
             }, SIGINT_GRACE_MS);
             escalationTimer.unref?.();
@@ -143,8 +137,7 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
     process.on("SIGINT", onSigint);
     process.on("SIGTERM", onSigterm);
 
-    const promises = descriptors.map(async (descriptor) => {
-        return new Promise<number>((resolve) => {
+    const promises = descriptors.map(async (descriptor) => new Promise<number>((resolve) => {
             const tag = descriptor.tag ?? "child";
             const child = nodeSpawn(descriptor.command, [...descriptor.args], {
                 cwd: descriptor.cwd ?? process.cwd(),
@@ -187,14 +180,18 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
             child.on("exit", (code) => {
                 resolve(code ?? 0);
             });
-        });
-    });
+        }));
 
     try {
         const codes = await Promise.all(promises);
-        const worst = codes.reduce((accumulator, code) => {
-            return code === 0 ? accumulator : code;
-        }, 0);
+
+        let worst = 0;
+
+        for (const code of codes) {
+            if (code !== 0) {
+                worst = code;
+            }
+        }
 
         return { code: worst };
     } finally {

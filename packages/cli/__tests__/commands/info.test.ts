@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runInfoCommand } from "../../src/commands/info.js";
 import type { Logger } from "../../src/util/logger.js";
@@ -70,7 +70,7 @@ describe("cirrus info", () => {
     });
 
     describe("cirrus info", () => {
-        test("collects @cirrus/* packages, wrangler summary, and schema overview", () => {
+        it("collects @cirrus/* packages, wrangler summary, and schema overview", () => {
             expect.hasAssertions();
 
             const { logger } = recordingLogger();
@@ -94,7 +94,7 @@ describe("cirrus info", () => {
             expect(result.snapshot.schema?.tables.length).toBeGreaterThan(0);
         });
 
-        test("--json emits a machine-readable snapshot on stdout (jq-pipeable)", () => {
+        it("--json emits a machine-readable snapshot on stdout (jq-pipeable)", () => {
             expect.assertions(3);
 
             const { logger } = recordingLogger();
@@ -103,7 +103,7 @@ describe("cirrus info", () => {
                 written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
 
                 return true;
-            }) as typeof process.stdout.write);
+            }));
 
             try {
                 const result = runInfoCommand({ cwd: workdir, json: true, logger });
@@ -121,7 +121,7 @@ describe("cirrus info", () => {
             }
         });
 
-        test("missing wrangler is reported but does not fail", () => {
+        it("missing wrangler is reported but does not fail", () => {
             expect.assertions(3);
 
             rmSync(join(workdir, "wrangler.jsonc"));

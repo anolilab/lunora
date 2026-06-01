@@ -2,13 +2,13 @@ import type { FunctionReference } from "@cirrus/client";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useQuery } from "../src/use-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const fn = (reference: string): FunctionReference => ({ __cirrusRef: reference });
+const fn = (reference: string): FunctionReference => { return { __cirrusRef: reference }; };
 
 const Display = (): ReactElement => {
     const value = useQuery(fn("posts:list"), {});
@@ -25,10 +25,10 @@ const Display = (): ReactElement => {
 };
 
 describe("cirrusProvider — bring-your-own QueryClient", () => {
-    test("uses an explicit queryClient prop instead of creating one", async () => {
+    it("uses an explicit queryClient prop instead of creating one", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient(() => ({ count: 7 }));
+        const mock = createMockClient(() => { return { count: 7 }; });
         const myQc = new QueryClient({ defaultOptions: { queries: { gcTime: 99, retry: 0 } } });
 
         render(
@@ -46,10 +46,10 @@ describe("cirrusProvider — bring-your-own QueryClient", () => {
         expect(defaults.gcTime).toBe(99);
     });
 
-    test("inherits the QueryClient from a parent <QueryClientProvider> without double-wrapping", async () => {
+    it("inherits the QueryClient from a parent <QueryClientProvider> without double-wrapping", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient(() => ({ count: 3 }));
+        const mock = createMockClient(() => { return { count: 3 }; });
         const parentQc = new QueryClient({ defaultOptions: { queries: { gcTime: 12_345, retry: 0 } } });
 
         render(
@@ -71,10 +71,10 @@ describe("cirrusProvider — bring-your-own QueryClient", () => {
         expect(defaults.gcTime).toBe(12_345);
     });
 
-    test("creates a default QueryClient when none is provided", async () => {
+    it("creates a default QueryClient when none is provided", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient(() => ({ count: 1 }));
+        const mock = createMockClient(() => { return { count: 1 }; });
 
         render(
             <CirrusProvider client={mock.asClient}>

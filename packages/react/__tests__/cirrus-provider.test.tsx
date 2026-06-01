@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { CirrusProvider, useCirrus } from "../src/cirrus-provider.js";
 import { createMockClient } from "./mock-client.js";
@@ -12,7 +12,7 @@ const Probe = (): ReactElement => {
 };
 
 describe("cirrusProvider", () => {
-    test("useCirrus returns the provided client", () => {
+    it("useCirrus returns the provided client", () => {
         expect.assertions(1);
 
         const mock = createMockClient();
@@ -26,7 +26,7 @@ describe("cirrusProvider", () => {
         expect(screen.getByTestId("probe").textContent).toBe("ok");
     });
 
-    test("useCirrus throws when used outside the provider", () => {
+    it("useCirrus throws when used outside the provider", () => {
         expect.assertions(1);
 
         // Suppress React's error logging for this test.

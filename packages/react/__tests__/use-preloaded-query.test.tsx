@@ -2,18 +2,20 @@ import type { Preloaded } from "@cirrus/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { usePreloadedQuery } from "../src/use-preloaded-query.js";
 import { createMockClient } from "./mock-client.js";
 
-const preloaded = <T,>(functionPath: string, value: T, args: Record<string, unknown> = {}): Preloaded<T> => ({
+const preloaded = <T,>(functionPath: string, value: T, args: Record<string, unknown> = {}): Preloaded<T> => {
+ return {
     __cirrusPreloaded: true,
     args,
     functionPath,
     value,
-});
+};
+};
 
 const Display = ({ token }: { token: Preloaded }): ReactElement => {
     const data = usePreloadedQuery(token);
@@ -22,11 +24,11 @@ const Display = ({ token }: { token: Preloaded }): ReactElement => {
 };
 
 describe("usePreloadedQuery", () => {
-    test("renders the preloaded value immediately with no initial HTTP fetch", () => {
+    it("renders the preloaded value immediately with no initial HTTP fetch", () => {
         expect.assertions(2);
 
         // queryImpl returns a sentinel that must never appear — proving no fetch.
-        const mock = createMockClient(() => ({ count: 999 }));
+        const mock = createMockClient(() => { return { count: 999 }; });
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -38,10 +40,10 @@ describe("usePreloadedQuery", () => {
         expect(mock.query).not.toHaveBeenCalled();
     });
 
-    test("attaches a live subscription so server pushes update the value", async () => {
+    it("attaches a live subscription so server pushes update the value", async () => {
         expect.hasAssertions();
 
-        const mock = createMockClient(() => ({ count: 1 }));
+        const mock = createMockClient(() => { return { count: 1 }; });
 
         render(
             <CirrusProvider client={mock.asClient}>
@@ -66,10 +68,10 @@ describe("usePreloadedQuery", () => {
         });
     });
 
-    test("server-renders the preloaded value (SSR getServerSnapshot, no effects)", () => {
+    it("server-renders the preloaded value (SSR getServerSnapshot, no effects)", () => {
         expect.assertions(3);
 
-        const mock = createMockClient(() => ({ count: 1 }));
+        const mock = createMockClient(() => { return { count: 1 }; });
 
         const view = renderToString(
             <CirrusProvider client={mock.asClient}>

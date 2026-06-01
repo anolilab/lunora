@@ -90,13 +90,13 @@ export const createCtxVectors = (cirrus: CirrusVectors): VectorSearchLike => {
 
             return {
                 count: result.count,
-                matches: result.matches.map((match) => ({ id: match.id, score: match.score, metadata: match.metadata })),
+                matches: result.matches.map((match) => { return { id: match.id, score: match.score, metadata: match.metadata }; }),
             };
         },
         getByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorRecordLike>> => {
             const records = await cirrus.getByIds(indexName, ids);
 
-            return records.map((record) => ({ id: record.id, values: record.values, metadata: record.metadata }));
+            return records.map((record) => { return { id: record.id, values: record.values, metadata: record.metadata }; });
         },
         deleteByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<void> => {
             await cirrus.deleteByIds(indexName, ids);

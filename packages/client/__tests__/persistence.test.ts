@@ -1,15 +1,17 @@
 import { IDBFactory } from "fake-indexeddb";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { createIndexedDbPersistence, createInMemoryPersistence } from "../src/persistence.js";
 import type { PersistedMutation, PersistenceAdapter } from "../src/types.js";
 
-const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): PersistedMutation => ({
+const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): PersistedMutation => {
+ return {
     args: { id },
     functionPath: "posts:create",
     id,
     ...overrides,
-});
+};
+};
 
 /**
  * Both adapters must satisfy the same contract, so the behavioural suite is
@@ -22,7 +24,7 @@ const adapters: [string, () => PersistenceAdapter][] = [
 ];
 
 describe.each(adapters)("%s", (_name, makeAdapter) => {
-    test("load() returns appended mutations in FIFO (enqueue) order", async () => {
+    it("load() returns appended mutations in FIFO (enqueue) order", async () => {
         expect.assertions(1);
 
         const adapter = makeAdapter();
@@ -36,7 +38,7 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
         expect(loaded.map((m) => m.id)).toEqual(["a", "b", "c"]);
     });
 
-    test("load() preserves the full mutation shape", async () => {
+    it("load() preserves the full mutation shape", async () => {
         expect.assertions(1);
 
         const adapter = makeAdapter();
@@ -53,7 +55,7 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
         });
     });
 
-    test("remove() drops a single mutation by id and leaves the rest in order", async () => {
+    it("remove() drops a single mutation by id and leaves the rest in order", async () => {
         expect.assertions(1);
 
         const adapter = makeAdapter();
@@ -69,7 +71,7 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
         expect(loaded.map((m) => m.id)).toEqual(["a", "c"]);
     });
 
-    test("remove() of an unknown id is a no-op", async () => {
+    it("remove() of an unknown id is a no-op", async () => {
         expect.assertions(1);
 
         const adapter = makeAdapter();
@@ -82,7 +84,7 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
         expect(loaded.map((m) => m.id)).toEqual(["a"]);
     });
 
-    test("clear() drops every persisted mutation", async () => {
+    it("clear() drops every persisted mutation", async () => {
         expect.assertions(1);
 
         const adapter = makeAdapter();
@@ -95,7 +97,7 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
         await expect(adapter.load()).resolves.toEqual([]);
     });
 
-    test("load() on an empty store resolves to an empty array", async () => {
+    it("load() on an empty store resolves to an empty array", async () => {
         expect.assertions(1);
 
         const adapter = makeAdapter();
@@ -105,7 +107,7 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
 });
 
 describe("createInMemoryPersistence — isolation", () => {
-    test("does not retain references to caller-supplied args", async () => {
+    it("does not retain references to caller-supplied args", async () => {
         expect.assertions(1);
 
         const adapter = createInMemoryPersistence();
@@ -121,7 +123,7 @@ describe("createInMemoryPersistence — isolation", () => {
 });
 
 describe("createIndexedDbPersistence — durability across handles", () => {
-    test("a fresh adapter over the same factory restores previously appended mutations", async () => {
+    it("a fresh adapter over the same factory restores previously appended mutations", async () => {
         expect.assertions(1);
 
         const indexedDB = new IDBFactory();
@@ -137,7 +139,7 @@ describe("createIndexedDbPersistence — durability across handles", () => {
         expect(loaded.map((m) => m.id)).toEqual(["a", "b"]);
     });
 
-    test("throws eagerly when no IndexedDB factory is available", () => {
+    it("throws eagerly when no IndexedDB factory is available", () => {
         expect.assertions(1);
 
         expect(() => createIndexedDbPersistence({ indexedDB: undefined as unknown as IDBFactory })).toThrow(/no IndexedDB available/);

@@ -36,12 +36,14 @@ const parseArgsJson = (raw: string | undefined): unknown => {
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        throw new Error(`failed to parse --args as JSON: ${message}`);
+        throw new Error(`failed to parse --args as JSON: ${message}`, { cause: error });
     }
 };
 
+const TRAILING_SLASH = /\/$/u;
+
 export const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResult> => {
-    const baseUrl = (options.url ?? "http://localhost:8787").replace(/\/$/u, "");
+    const baseUrl = (options.url ?? "http://localhost:8787").replace(TRAILING_SLASH, "");
     const requestUrl = `${baseUrl}/_cirrus/rpc`;
 
     const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
