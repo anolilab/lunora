@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
-import { useAuth } from "../src/use-auth.js";
+import useAuth from "../src/use-auth.js";
 import { createMockClient } from "./mock-client.js";
 
 let setTokenHandle: ((token: string | null) => void) | undefined;

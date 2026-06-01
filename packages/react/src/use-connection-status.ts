@@ -9,7 +9,7 @@ import { useCirrus } from "./cirrus-provider.js";
  * `connected` → `offline`). Use it to drive a connection indicator so an
  * operator can tell a healthy live channel from a silently-dropped socket.
  */
-export function useConnectionStatus(): ConnectionStatus {
+const useConnectionStatus = (): ConnectionStatus => {
     const client = useCirrus();
 
     return useSyncExternalStore(
@@ -23,4 +23,6 @@ export function useConnectionStatus(): ConnectionStatus {
         () => client.connectionStatus(),
         () => client.connectionStatus(),
     );
-}
+};
+
+export default useConnectionStatus;

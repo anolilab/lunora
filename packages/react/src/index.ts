@@ -18,17 +18,17 @@ export type {
     User,
     UseSubscriptionResult,
 } from "./types.js";
-export { useAuth } from "./use-auth.js";
-export { useConnectionStatus } from "./use-connection-status.js";
-export { useInfiniteQuery } from "./use-infinite-query.js";
+export { default as useAuth } from "./use-auth.js";
+export { default as useConnectionStatus } from "./use-connection-status.js";
+export { default as useInfiniteQuery } from "./use-infinite-query.js";
 export type { MutationHook } from "./use-mutation.js";
 export { useMutation } from "./use-mutation.js";
 export type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
 export { usePaginatedQuery } from "./use-paginated-query.js";
-export { usePreloadedQuery } from "./use-preloaded-query.js";
-export { useQuery } from "./use-query.js";
+export { default as usePreloadedQuery } from "./use-preloaded-query.js";
+export { default as useQuery } from "./use-query.js";
 export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit.js";
 export { useRateLimit } from "./use-rate-limit.js";
 export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream.js";
 export { useStream } from "./use-stream.js";
-export { useSubscription } from "./use-subscription.js";
+export { default as useSubscription } from "./use-subscription.js";

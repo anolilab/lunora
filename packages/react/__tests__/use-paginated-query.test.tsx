@@ -72,13 +72,14 @@ describe("usePaginatedQuery", () => {
 
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
 
-        let loadMore: (numberItems: number) => void = () => undefined;
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
 
         render(
             <CirrusProvider client={mock.asClient}>
                 <Harness
-                    onLoadMore={(function_) => {
-                        loadMore = function_;
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
+                    onLoadMore={(next) => {
+                        loadMore = next;
                     }}
                 />
             </CirrusProvider>,
@@ -115,13 +116,14 @@ describe("usePaginatedQuery", () => {
 
         const mock = createMockClient(makePaginator(["a", "b"]));
 
-        let loadMore: (numberItems: number) => void = () => undefined;
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
 
         render(
             <CirrusProvider client={mock.asClient}>
                 <Harness
-                    onLoadMore={(function_) => {
-                        loadMore = function_;
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
+                    onLoadMore={(next) => {
+                        loadMore = next;
                     }}
                 />
             </CirrusProvider>,

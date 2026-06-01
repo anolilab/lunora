@@ -4,9 +4,9 @@ import { useEffect, useReducer, useRef } from "react";
 import { useCirrus } from "./cirrus-provider.js";
 
 /** The lifecycle of a stream the hook is observing. */
-export type UseStreamStatus = "complete" | "error" | "idle" | "streaming";
+type UseStreamStatus = "complete" | "error" | "idle" | "streaming";
 
-export interface UseStreamResult<T> {
+interface UseStreamResult<T> {
     /** Force-cancel the stream and resolve the iterator. Safe to call multiple times. */
     cancel: () => void;
     /** Chunks the server has pushed so far, in arrival order. */
@@ -15,7 +15,7 @@ export interface UseStreamResult<T> {
     status: UseStreamStatus;
 }
 
-export interface UseStreamOptions {
+interface UseStreamOptions {
     /** Forwarded to `client.stream()` — caps the in-flight chunk buffer. */
     maxBuffer?: number;
     shardKey?: string;
@@ -78,7 +78,7 @@ const stableStringify = (value: unknown): string => {
  * Pass `"skip"` for `args` to keep the hook mounted without opening a stream
  * (mirrors `useQuery` / `useSubscription`).
  */
-export function useStream<F extends FunctionReference>(function_: F, args: "skip" | ArgsOf<F>, options: UseStreamOptions = {}): UseStreamResult<ReturnOf<F>> {
+const useStream = <F extends FunctionReference>(function_: F, args: "skip" | ArgsOf<F>, options: UseStreamOptions = {}): UseStreamResult<ReturnOf<F>> => {
     const client = useCirrus();
     const [state, dispatch] = useReducer<State<ReturnOf<F>>, [Action<ReturnOf<F>>]>(reducer<ReturnOf<F>>, { chunks: [], error: undefined, status: "idle" });
 
@@ -92,7 +92,7 @@ export function useStream<F extends FunctionReference>(function_: F, args: "skip
 
     useEffect(() => {
         if (skipped) {
-            return;
+            return undefined;
         }
 
         dispatch({ type: "reset" });
@@ -114,11 +114,12 @@ export function useStream<F extends FunctionReference>(function_: F, args: "skip
 
         // Run the consumer loop in a background async IIFE so the effect body
         // stays synchronous; the cancel handle is what the cleanup uses. The
-        // `void` mark tells the linter we intentionally don't await — the IIFE
-        // owns its own try/catch so any error already lands in the reducer.
-        void (async () => {
+        // IIFE owns its own try/catch so any error already lands in the reducer;
+        // the trailing `.catch` is a belt-and-braces guard that can never fire.
+        (async () => {
             try {
                 for await (const chunk of iterable) {
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stillMounted` is flipped to `false` by the cleanup closure between awaits; TS's static flow analysis can't see the async mutation, so this guard is real, not dead.
                     if (!stillMounted) {
                         return;
                     }
@@ -126,10 +127,12 @@ export function useStream<F extends FunctionReference>(function_: F, args: "skip
                     dispatch({ chunk, type: "chunk" });
                 }
 
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stillMounted` may have been flipped to `false` by the cleanup closure while the iterator was awaiting; the guard is real, not dead.
                 if (stillMounted) {
                     dispatch({ type: "complete" });
                 }
             } catch (error: unknown) {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stillMounted` may have been flipped to `false` by the cleanup closure while the iterator was awaiting; the guard is real, not dead.
                 if (!stillMounted) {
                     return;
                 }
@@ -138,7 +141,10 @@ export function useStream<F extends FunctionReference>(function_: F, args: "skip
 
                 dispatch({ error: normalized, type: "error" });
             }
-        })();
+        })().catch(() => {
+            // Unreachable: the IIFE's own try/catch already routes errors into
+            // the reducer. This satisfies no-floating-promises.
+        });
 
         return () => {
             stillMounted = false;
@@ -155,4 +161,7 @@ export function useStream<F extends FunctionReference>(function_: F, args: "skip
         error: state.error,
         status: state.status,
     };
-}
+};
+
+export type { UseStreamOptions, UseStreamResult, UseStreamStatus };
+export { useStream };

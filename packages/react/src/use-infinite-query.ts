@@ -9,6 +9,8 @@ import type { PaginationResult, PaginationStatus, UseInfiniteQueryOptions, UseIn
 import type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
 
 interface PageRequest {
+    // `null | string` mirrors the server's `continueCursor` wire shape: `null`
+    // is the explicit "first page / no cursor" marker sent in `paginationOpts`.
     cursor: null | string;
     numItems: number;
 }
@@ -16,7 +18,7 @@ interface PageRequest {
 /**
  * Subscribe to a keyset-paginated query and expose its pages discretely.
  *
- * Mirrors {@link usePaginatedQuery}'s per-page live-subscription plumbing but
+ * Mirrors `usePaginatedQuery`'s per-page live-subscription plumbing but
  * keeps each page as its own inner array rather than flattening them, and adds
  * the TanStack-Query-style `fetchNextPage` / `hasNextPage` /
  * `isFetchingNextPage` shape. Each loaded page is an independent live
@@ -27,20 +29,21 @@ interface PageRequest {
  * Changing `fn`, the base `args`, `initialNumItems`, or `shardKey` resets the
  * feed to its first page.
  */
-export function useInfiniteQuery<F extends FunctionReference>(
+const useInfiniteQuery = <F extends FunctionReference>(
     function_: F,
     args: "skip" | PaginatedArgs<F>,
     options: UseInfiniteQueryOptions,
-): UseInfiniteQueryResult<PageItemOf<F>> {
+): UseInfiniteQueryResult<PageItemOf<F>> => {
     const client = useCirrus();
     const queryClient = useQueryClient();
     const { initialNumItems, shardKey } = options;
 
     const skipped = args === "skip";
-    const baseArgs = (skipped ? {} : (args as Record<string, unknown>)) ?? {};
+    const baseArgs = skipped ? {} : (args as Record<string, unknown>);
     const baseArgsKey = JSON.stringify(baseArgs);
 
     const [, forceRender] = useReducer((tick: number) => tick + 1, 0);
+    // eslint-disable-next-line unicorn/no-null -- `cursor: null` is the wire-shape first-page marker sent to the server in `paginationOpts`.
     const [pages, setPages] = useState<PageRequest[]>(() => [{ cursor: null, numItems: initialNumItems }]);
 
     const resetKey = `${function_.__cirrusRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
@@ -48,6 +51,7 @@ export function useInfiniteQuery<F extends FunctionReference>(
 
     if (resetKeyRef.current !== resetKey) {
         resetKeyRef.current = resetKey;
+        // eslint-disable-next-line unicorn/no-null -- `cursor: null` is the wire-shape first-page marker sent to the server in `paginationOpts`.
         setPages([{ cursor: null, numItems: initialNumItems }]);
     }
 
@@ -115,7 +119,7 @@ export function useInfiniteQuery<F extends FunctionReference>(
             }
 
             // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above.
-            void queryClient.fetchQuery({
+            const initialFetch = queryClient.fetchQuery({
                 queryFn: () =>
                     (client.query as (function_: F, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(desired.fn, entry.args, {
                         shardKey: desired.shardKey,
@@ -123,6 +127,10 @@ export function useInfiniteQuery<F extends FunctionReference>(
                 queryKey: entry.key,
                 staleTime: Number.POSITIVE_INFINITY,
             });
+
+            // Initial fetch failures surface through the live subscription /
+            // polling fallback; swallow here so the promise doesn't float.
+            initialFetch.catch(() => {});
 
             detaches.set(hash, registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey));
         }
@@ -204,4 +212,6 @@ export function useInfiniteQuery<F extends FunctionReference>(
         pages: resolvedPages,
         status,
     };
-}
+};
+
+export default useInfiniteQuery;

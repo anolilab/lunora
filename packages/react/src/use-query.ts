@@ -18,13 +18,13 @@ import type { UseQueryOptions } from "./types.js";
  * subscription registry shares a single WS subscription across every consumer
  * of the same queryKey; pushes call `queryClient.setQueryData(...)`.
  */
-export function useQuery<F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options: UseQueryOptions = {}): ReturnOf<F> | undefined {
+const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options: UseQueryOptions = {}): ReturnOf<F> | undefined => {
     const client = useCirrus();
     const queryClient = useQueryClient();
     const { shardKey } = options;
 
     const skipped = args === "skip";
-    const argsRecord = (skipped ? {} : (args as Record<string, unknown>)) ?? {};
+    const argsRecord = skipped ? {} : (args as Record<string, unknown>);
 
     // Memoise the queryKey so the effect dep array tracks structural equality
     // via TanStack's hash, not reference equality of the args object.
@@ -43,7 +43,7 @@ export function useQuery<F extends FunctionReference>(function_: F, args: ArgsOf
 
     useEffect(() => {
         if (skipped) {
-            return;
+            return undefined;
         }
 
         const registry = getSubscriptionRegistry(client);
@@ -52,4 +52,6 @@ export function useQuery<F extends FunctionReference>(function_: F, args: ArgsOf
     }, [client, queryClient, serializeQueryKey(queryKey), skipped]);
 
     return data;
-}
+};
+
+export default useQuery;

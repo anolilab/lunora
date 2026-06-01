@@ -12,7 +12,7 @@ import { useCirrus } from "./cirrus-provider.js";
  * The first render returns the preloaded value (TanStack's `initialData`),
  * so the server markup and the initial client markup match — no hydration
  * mismatch, no loading flash. After mount, a WS subscription attaches so
- * later server pushes update the value just like {@link useQuery}.
+ * later server pushes update the value just like `useQuery`.
  *
  * The {@link Preloaded} token's `value` seeds `initialData`; we don't need a
  * full dehydrate/hydrate dance because the consumer hands us the resolved
@@ -20,15 +20,15 @@ import { useCirrus } from "./cirrus-provider.js";
  * many preloaded queries can pass their own `queryClient` to `CirrusProvider`
  * and hydrate it themselves via TanStack's `hydrate(qc, dehydratedState)`.
  */
-export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
+const usePreloadedQuery = <T>(preloaded: Preloaded<T>): T => {
     const client = useCirrus();
     const queryClient = useQueryClient();
 
     const { args, functionPath, shardKey, value } = preloaded;
-    const function_ = useMemo<FunctionReference>(() => {
+    const functionRef = useMemo<FunctionReference>(() => {
         return { __cirrusRef: functionPath };
     }, [functionPath]);
-    const queryKey = useMemo(() => cirrusQueryKey(function_, args, shardKey), [function_.__cirrusRef, JSON.stringify(args), shardKey]);
+    const queryKey = useMemo(() => cirrusQueryKey(functionRef, args, shardKey), [functionRef.__cirrusRef, JSON.stringify(args), shardKey]);
 
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<T>({
@@ -36,7 +36,7 @@ export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
         // re-fetch. TanStack treats `initialData` as fresh — the WS push from
         // the registry is what supplies subsequent updates.
         initialData: value,
-        queryFn: () => client.query(function_, args, { shardKey }) as Promise<T>,
+        queryFn: () => client.query(functionRef, args, { shardKey }) as Promise<T>,
         queryKey,
         staleTime: Number.POSITIVE_INFINITY,
     });
@@ -44,7 +44,7 @@ export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
     useEffect(() => {
         const registry = getSubscriptionRegistry(client);
 
-        return registry.attach(queryClient, queryKey, function_, args, shardKey);
+        return registry.attach(queryClient, queryKey, functionRef, args, shardKey);
     }, [client, queryClient, serializeQueryKey(queryKey)]);
 
     // TanStack types `data` as `T | undefined` even with `initialData` because
@@ -53,4 +53,6 @@ export function usePreloadedQuery<T>(preloaded: Preloaded<T>): T {
     // an explicit `undefined` — preserve that semantic via `??` instead of
     // forcing a cast that lies about possible runtime states.
     return data ?? value;
-}
+};
+
+export default usePreloadedQuery;

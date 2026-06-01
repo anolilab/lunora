@@ -30,9 +30,9 @@ describe("useMutation", () => {
     it("invokes client.mutation and flips `pending` while in-flight", async () => {
         expect.hasAssertions();
 
-        let resolve: (value: unknown) => void = () => undefined;
-        const promise = new Promise((r) => {
-            resolve = r;
+        let resolvePromise: (value: unknown) => void = (_value) => undefined;
+        const promise = new Promise((resolve) => {
+            resolvePromise = resolve;
         });
         const mock = createMockClient();
 
@@ -43,6 +43,7 @@ describe("useMutation", () => {
         render(
             <CirrusProvider client={mock.asClient}>
                 <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
                     onCall={(call) => {
                         trigger = call;
                     }}
@@ -66,7 +67,7 @@ describe("useMutation", () => {
         });
 
         await act(async () => {
-            resolve({ id: "p1" });
+            resolvePromise({ id: "p1" });
             await inFlight;
         });
 
@@ -90,6 +91,7 @@ describe("useMutation", () => {
                 <button
                     aria-label="increment"
                     data-testid="btn"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-only click handler; stable identity is irrelevant for a single fireEvent.
                     onClick={() => {
                         void mutate({}, { optimistic });
                     }}

@@ -8,12 +8,14 @@ import { useCirrus } from "./cirrus-provider.js";
 import type { PaginationResult, PaginationStatus, UsePaginatedQueryOptions, UsePaginatedQueryResult } from "./types.js";
 
 /** The args a paginated query exposes minus the framework-supplied page cursor. */
-export type PaginatedArgs<F> = Omit<ArgsOf<F>, "paginationOpts">;
+type PaginatedArgs<F> = Omit<ArgsOf<F>, "paginationOpts">;
 
 /** The element type of the `page` array a paginated query returns. */
-export type PageItemOf<F> = ReturnOf<F> extends { page: (infer T)[] } ? T : unknown;
+type PageItemOf<F> = ReturnOf<F> extends { page: (infer T)[] } ? T : unknown;
 
 interface PageRequest {
+    // `null | string` mirrors the server's `continueCursor` wire shape: `null`
+    // is the explicit "first page / no cursor" marker sent in `paginationOpts`.
     cursor: null | string;
     numItems: number;
 }
@@ -35,20 +37,21 @@ interface PageRequest {
  * subscription registry keeps one WS subscription per page open so a delta on
  * any cursor patches the right slice without dropping the rest.
  */
-export function usePaginatedQuery<F extends FunctionReference>(
+const usePaginatedQuery = <F extends FunctionReference>(
     function_: F,
     args: "skip" | PaginatedArgs<F>,
     options: UsePaginatedQueryOptions,
-): UsePaginatedQueryResult<PageItemOf<F>> {
+): UsePaginatedQueryResult<PageItemOf<F>> => {
     const client = useCirrus();
     const queryClient = useQueryClient();
     const { initialNumItems, shardKey } = options;
 
     const skipped = args === "skip";
-    const baseArgs = (skipped ? {} : (args as Record<string, unknown>)) ?? {};
+    const baseArgs = skipped ? {} : (args as Record<string, unknown>);
     const baseArgsKey = JSON.stringify(baseArgs);
 
     const [, forceRender] = useReducer((tick: number) => tick + 1, 0);
+    // eslint-disable-next-line unicorn/no-null -- `cursor: null` is the wire-shape first-page marker sent to the server in `paginationOpts`.
     const [pages, setPages] = useState<PageRequest[]>(() => [{ cursor: null, numItems: initialNumItems }]);
 
     // Reset to the first page whenever the query identity, base args, or page
@@ -60,6 +63,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
 
     if (resetKeyRef.current !== resetKey) {
         resetKeyRef.current = resetKey;
+        // eslint-disable-next-line unicorn/no-null -- `cursor: null` is the wire-shape first-page marker sent to the server in `paginationOpts`.
         setPages([{ cursor: null, numItems: initialNumItems }]);
     }
 
@@ -136,11 +140,15 @@ export function usePaginatedQuery<F extends FunctionReference>(
             // Trigger the initial fetch via TanStack so its dedup applies
             // even when two mounts ask for the same page.
             // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above.
-            void queryClient.fetchQuery({
+            const initialFetch = queryClient.fetchQuery({
                 queryFn: () => client.query(desired.fn, entry.args as ArgsOf<F>, { shardKey: desired.shardKey }),
                 queryKey: entry.key,
                 staleTime: Number.POSITIVE_INFINITY,
             });
+
+            // Initial fetch failures surface through the live subscription /
+            // polling fallback; swallow here so the promise doesn't float.
+            initialFetch.catch(() => {});
 
             detaches.set(hash, registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey));
         }
@@ -223,4 +231,7 @@ export function usePaginatedQuery<F extends FunctionReference>(
         results,
         status,
     };
-}
+};
+
+export type { PageItemOf, PaginatedArgs };
+export { usePaginatedQuery };

@@ -22,7 +22,7 @@ export interface PaginationResult<T = unknown> {
 }
 
 /**
- * Lifecycle of a {@link usePaginatedQuery} feed.
+ * Lifecycle of a `usePaginatedQuery` feed.
  *
  * - `LoadingFirstPage` — the first page is in flight; `results` is empty.
  * - `CanLoadMore` — the loaded tail has a cursor; calling `loadMore` fetches the next page.

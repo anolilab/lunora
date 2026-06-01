@@ -4,7 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { useCirrus } from "./cirrus-provider.js";
 import type { UseMutationCallOptions } from "./types.js";
 
-export interface MutationHook<F extends FunctionReference> {
+interface MutationHook<F extends FunctionReference> {
     mutate: (args: ArgsOf<F>, options?: UseMutationCallOptions) => Promise<ReturnOf<F>>;
     pending: boolean;
 }
@@ -18,7 +18,7 @@ export interface MutationHook<F extends FunctionReference> {
  * overlapping `mutate(...)` calls compose correctly — `pending` only flips
  * back to `false` once every concurrent call has settled.
  */
-export function useMutation<F extends FunctionReference>(function_: F): MutationHook<F> {
+const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F> => {
     const client = useCirrus();
     const [pending, setPending] = useState(false);
     const pendingCountRef = useRef(0);
@@ -39,4 +39,7 @@ export function useMutation<F extends FunctionReference>(function_: F): Mutation
     );
 
     return { mutate, pending };
-}
+};
+
+export type { MutationHook };
+export { useMutation };

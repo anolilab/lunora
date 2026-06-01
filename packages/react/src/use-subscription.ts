@@ -28,11 +28,11 @@ const stableStringify = (value: unknown): string => {
  * hook does not issue an initial HTTP fetch — it only delivers values that
  * the server pushes over the WS.
  */
-export function useSubscription<F extends FunctionReference>(
+const useSubscription = <F extends FunctionReference>(
     function_: F,
     args: ArgsOf<F> | "skip",
     options: UseQueryOptions = {},
-): UseSubscriptionResult<ReturnOf<F>> {
+): UseSubscriptionResult<ReturnOf<F>> => {
     const client = useCirrus();
     const [state, setState] = useState<UseSubscriptionResult<ReturnOf<F>>>({ data: undefined, error: undefined });
 
@@ -49,7 +49,7 @@ export function useSubscription<F extends FunctionReference>(
 
     useEffect(() => {
         if (skipped) {
-            return;
+            return undefined;
         }
 
         let cancelled = false;
@@ -91,4 +91,6 @@ export function useSubscription<F extends FunctionReference>(
     }, [client, function_.__cirrusRef, serialized, options.shardKey, skipped]);
 
     return state;
-}
+};
+
+export default useSubscription;

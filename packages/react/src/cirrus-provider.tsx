@@ -5,16 +5,16 @@ import { createContext, use, useState } from "react";
 
 const CirrusContext = createContext<CirrusClient | null>(null);
 
-export interface CirrusProviderProps {
+interface CirrusProviderProps {
     children: ReactNode;
     client: CirrusClient;
 
     /**
      * Bring-your-own QueryClient. When omitted, the provider creates one with
-     * defaults tuned for Cirrus's push-driven model:
-     *  - `staleTime: Infinity` — the WS subscription is the only invalidation signal.
-     *  - `retry: 0` — failures route through the offline queue on the client.
-     *  - `gcTime: 5min` — keep results around for a short return-to-view window.
+     * defaults tuned for Cirrus's push-driven model: `staleTime: Infinity` (the
+     * WS subscription is the only invalidation signal), `retry: 0` (failures
+     * route through the offline queue on the client), and `gcTime: 5min` (keep
+     * results around for a short return-to-view window).
      *
      * If a parent `&lt;QueryClientProvider>` is already mounted, the provider
      * uses *that* client and does NOT install an inner one (so apps with their
@@ -40,7 +40,7 @@ const createDefaultQueryClient = (): QueryClient =>
  * tree. The detection logic for a parent QueryClientProvider keeps this safe to
  * drop into an app that already runs TanStack Query for its own purposes.
  */
-export const CirrusProvider = ({ children, client, queryClient }: CirrusProviderProps): ReactElement => {
+const CirrusProvider = ({ children, client, queryClient }: CirrusProviderProps): ReactElement => {
     const parentQueryClient = use(QueryClientContext);
 
     // The TanStack client we'll *render* with. Priority:
@@ -80,12 +80,10 @@ export const CirrusProvider = ({ children, client, queryClient }: CirrusProvider
 };
 
 /**
- * Read the {@link CirrusClient} from the nearest `&lt;CirrusProvider>`.
- *
- * eslint-disable-next-line react-refresh/only-export-components — kept colocated with the provider for back-compat.
+ * Read the {@link CirrusClient} from the nearest `&lt;CirrusProvider>`. Kept
+ * colocated with the provider for back-compat.
  */
-// eslint-disable-next-line react-refresh/only-export-components
-export const useCirrus = (): CirrusClient => {
+const useCirrus = (): CirrusClient => {
     const client = use(CirrusContext);
 
     if (!client) {
@@ -94,3 +92,7 @@ export const useCirrus = (): CirrusClient => {
 
     return client;
 };
+
+export type { CirrusProviderProps };
+// eslint-disable-next-line react-refresh/only-export-components -- useCirrus is a hook kept colocated with the provider component for back-compat; splitting it into its own module would break existing imports.
+export { CirrusProvider, useCirrus };

@@ -3,8 +3,8 @@ import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
 /**
  * Per-key bookkeeping: a single WS subscription is shared across every hook
- * that observes the same `queryKey`. {@link refCount} tracks the consumers so
- * we close the underlying subscription on the last `detach()`.
+ * that observes the same `queryKey`. The `refCount` field tracks the consumers
+ * so we close the underlying subscription on the last `detach()`.
  */
 interface RegistryEntry {
     /** Polling fallback when `client.subscribe` is unavailable (e.g. no WS). */
@@ -22,9 +22,8 @@ const keyHash = (queryKey: QueryKey): string => JSON.stringify(queryKey);
  *
  * Where the old `QueryCache` owned both the data *and* the subscription
  * lifecycle, this adapter only owns the subscription side: data lives in the
- * TanStack {@link QueryClient}. The flow on every push:
- *
- *   client.subscribe(fn, args, value => qc.setQueryData(queryKey, value))
+ * TanStack {@link QueryClient}. The flow on every push is
+ * `client.subscribe(fn, args, value => qc.setQueryData(queryKey, value))`.
  *
  * Every hook that mounts a `useQuery({queryKey: ["cirrus", fn, args, shard]})`
  * also calls `registry.attach(qc, queryKey, fn, args, shardKey)`; the registry
@@ -36,7 +35,7 @@ const keyHash = (queryKey: QueryKey): string => JSON.stringify(queryKey);
  * the registry installs a 5s interval that calls `qc.invalidateQueries({
  * queryKey })`, letting TanStack's own `refetch` loop drive freshness.
  */
-export class CirrusSubscriptionRegistry {
+class CirrusSubscriptionRegistry {
     private readonly entries = new Map<string, RegistryEntry>();
 
     public constructor(private readonly client: CirrusClient) {}
@@ -45,6 +44,7 @@ export class CirrusSubscriptionRegistry {
      * Hash a TanStack `queryKey` to the internal registry index. Exposed so a
      * hook can look up the registry without re-implementing the hash.
      */
+    // eslint-disable-next-line class-methods-use-this -- instance method by design: callers reach the hash through a registry handle rather than importing the module-level helper.
     public keyOf(queryKey: QueryKey): string {
         return keyHash(queryKey);
     }
@@ -83,7 +83,10 @@ export class CirrusSubscriptionRegistry {
                 // WS unavailable — fall back to periodic invalidation so
                 // TanStack Query's own refetch loop keeps the cache fresh.
                 entry.pollTimer = setInterval(() => {
-                    void queryClient.invalidateQueries({ queryKey });
+                    queryClient.invalidateQueries({ queryKey }).catch(() => {
+                        // Best-effort refresh: a failed invalidation just means
+                        // the next tick tries again.
+                    });
                 }, options.pollIntervalMs ?? 5000);
             }
         }
@@ -119,10 +122,11 @@ export class CirrusSubscriptionRegistry {
  * TanStack hashes for dedup. The `"cirrus"` literal namespaces our entries so
  * an app's own queries can't collide with ours.
  */
-export const cirrusQueryKey = (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => [
+const cirrusQueryKey = (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => [
     "cirrus",
     function_.__cirrusRef,
     args,
+    // eslint-disable-next-line unicorn/no-null -- this literal is part of the JSON-serialized query key TanStack hashes for dedup; `null` keeps a stable, distinct slot from an absent shardKey across renders.
     shardKey ?? null,
 ];
 
@@ -132,12 +136,12 @@ export const cirrusQueryKey = (function_: FunctionReference, args: Record<string
  * the same contents but different identity hash to the same string and won't
  * trigger a re-attach.
  */
-export const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
+const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
 
 const registryByClient = new WeakMap<CirrusClient, CirrusSubscriptionRegistry>();
 
 /** Returns the shared subscription registry for `client`, creating it on first access. */
-export const getSubscriptionRegistry = (client: CirrusClient): CirrusSubscriptionRegistry => {
+const getSubscriptionRegistry = (client: CirrusClient): CirrusSubscriptionRegistry => {
     let registry = registryByClient.get(client);
 
     if (!registry) {
@@ -147,3 +151,5 @@ export const getSubscriptionRegistry = (client: CirrusClient): CirrusSubscriptio
 
     return registry;
 };
+
+export { cirrusQueryKey, CirrusSubscriptionRegistry, getSubscriptionRegistry, serializeQueryKey };

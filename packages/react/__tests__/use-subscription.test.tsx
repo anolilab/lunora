@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
-import { useSubscription } from "../src/use-subscription.js";
+import useSubscription from "../src/use-subscription.js";
 import { createMockClient } from "./mock-client.js";
 
 const function_ = (ref: string): FunctionReference => {

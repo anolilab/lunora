@@ -4,7 +4,7 @@ import type { PropsWithChildren, ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
-import { useInfiniteQuery } from "../src/use-infinite-query.js";
+import useInfiniteQuery from "../src/use-infinite-query.js";
 import { createMockClient } from "./mock-client.js";
 
 const function_ = (ref: string): FunctionReference => {
