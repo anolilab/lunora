@@ -40,6 +40,8 @@
         "@cirrus/ratelimit": "workspace:*"
     },
     "devDependencies": {
+        "@babel/core": "catalog:build",
+        "@babel/preset-react": "catalog:build",
         "@tanstack/react-query": "catalog:frontend",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
@@ -47,6 +49,7 @@
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
         "@visulima/packem": "catalog:build",
+        "babel-plugin-react-compiler": "catalog:build",
         "esbuild": "catalog:build",
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
@@ -57,8 +60,8 @@
     },
     "peerDependencies": {
         "@tanstack/react-query": "^5.100.14",
-        "react": "^19.2.6",
-        "react-dom": "^19.2.6"
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7"
     },
     "peerDependenciesMeta": {
         "@tanstack/react-query": {
