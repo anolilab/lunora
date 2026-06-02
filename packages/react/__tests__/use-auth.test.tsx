@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { useEffect } from "react";
 import { describe, expect, it } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
@@ -11,7 +12,11 @@ let setTokenHandle: ((token: string | null) => void) | undefined;
 const Display = (): ReactElement => {
     const { setToken, token, user } = useAuth();
 
-    setTokenHandle = setToken;
+    // Capture the handle out of render (an effect) so the test can drive it
+    // without reassigning a module-level binding during render.
+    useEffect(() => {
+        setTokenHandle = setToken;
+    }, [setToken]);
 
     return (
         <div data-testid="display">

@@ -1,5 +1,6 @@
 import { act, render } from "@testing-library/react";
 import type { ReactElement } from "react";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { UseRateLimitResult } from "../src/use-rate-limit.js";
@@ -9,9 +10,15 @@ const clock = { now: 0 };
 let handle: UseRateLimitResult;
 
 const Probe = ({ tickMs }: { tickMs?: number }): ReactElement => {
-    handle = useRateLimit({ kind: "token bucket", period: 1000, rate: 2 }, { now: () => clock.now, tickMs });
+    const result = useRateLimit({ kind: "token bucket", period: 1000, rate: 2 }, { now: () => clock.now, tickMs });
 
-    return <span>{handle.ok ? "ok" : "blocked"}</span>;
+    // Capture the handle out of render (an effect) so the test can read it
+    // without reassigning a module-level binding during render.
+    useEffect(() => {
+        handle = result;
+    }, [result]);
+
+    return <span>{result.ok ? "ok" : "blocked"}</span>;
 };
 
 describe("useRateLimit", () => {
