@@ -45,9 +45,13 @@ const useSubscription = <F extends FunctionReference>(
     // and the serialized args, which already capture every meaningful change;
     // reading `fn`/`args` from a ref keeps the dependency array honest without
     // re-subscribing whenever the consumer recreates them with the same value.
+    // The ref is refreshed in an effect (not during render) so it stays a legal
+    // write — the subscribe effect below reads `.current` at run time.
     const subscribeRef = useRef({ args, fn: function_ });
 
-    subscribeRef.current = { args, fn: function_ };
+    useEffect(() => {
+        subscribeRef.current = { args, fn: function_ };
+    });
 
     useEffect(() => {
         if (skipped) {

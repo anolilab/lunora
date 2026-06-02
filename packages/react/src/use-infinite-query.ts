@@ -67,7 +67,9 @@ const useInfiniteQuery = <F extends FunctionReference>(
 
     const desiredRef = useRef<{ entries: typeof pageEntries; fn: F; shardKey: string | undefined }>({ entries: [], fn: function_, shardKey });
 
-    desiredRef.current = { entries: pageEntries, fn: function_, shardKey };
+    useEffect(() => {
+        desiredRef.current = { entries: pageEntries, fn: function_, shardKey };
+    });
 
     const detachesRef = useRef(new Map<string, () => void>());
 

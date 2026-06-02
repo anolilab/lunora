@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 import { useCirrus } from "./cirrus-provider.js";
 import type { UseAuthResult, User } from "./types.js";
@@ -17,22 +17,21 @@ import type { UseAuthResult, User } from "./types.js";
  */
 const useAuth = (): UseAuthResult => {
     const client = useCirrus();
+    // No manual memoization: React Compiler (enabled in the build) stabilises
+    // these callbacks, so `useSyncExternalStore` keeps a steady subscription.
     const token = useSyncExternalStore(
-        useCallback((onChange) => client.onAuthTokenChange(onChange), [client]),
-        useCallback(() => client.getAuthToken(), [client]),
-        useCallback(() => client.getAuthToken(), [client]),
+        (onChange) => client.onAuthTokenChange(onChange),
+        () => client.getAuthToken(),
+        () => client.getAuthToken(),
     );
     // `user` is exposed for forward-compatibility; real population happens once
     // auth lands. Until then it tracks `null` regardless of token state.
     // eslint-disable-next-line unicorn/no-null -- `UseAuthResult.user` is a public exported type whose contract is `User | null`; `null` is the documented "signed-out" sentinel.
     const [user] = useState<User | null>(null);
 
-    const setToken = useCallback(
-        (next: string | null): void => {
-            client.setAuthToken(next);
-        },
-        [client],
-    );
+    const setToken = (next: string | null): void => {
+        client.setAuthToken(next);
+    };
 
     return { setToken, token, user };
 };

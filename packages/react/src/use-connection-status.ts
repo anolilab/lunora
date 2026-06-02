@@ -1,7 +1,7 @@
 "use client";
 
 import type { ConnectionStatus } from "@cirrus/client";
-import { useCallback, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 import { useCirrus } from "./cirrus-provider.js";
 
@@ -14,14 +14,13 @@ import { useCirrus } from "./cirrus-provider.js";
 const useConnectionStatus = (): ConnectionStatus => {
     const client = useCirrus();
 
+    // No manual memoization: React Compiler (enabled in the build) stabilises
+    // the subscribe callback, so the store subscription stays steady.
     return useSyncExternalStore(
-        useCallback(
-            (onChange) =>
-                client.onConnectionStatus(() => {
-                    onChange();
-                }),
-            [client],
-        ),
+        (onChange) =>
+            client.onConnectionStatus(() => {
+                onChange();
+            }),
         () => client.connectionStatus(),
         () => client.connectionStatus(),
     );

@@ -84,7 +84,9 @@ const usePaginatedQuery = <F extends FunctionReference>(
     // keyed on `pageKeysHash` alone — args/fn changes already invalidate the hash.
     const desiredRef = useRef<{ entries: typeof pageEntries; fn: F; shardKey: string | undefined }>({ entries: [], fn: function_, shardKey });
 
-    desiredRef.current = { entries: pageEntries, fn: function_, shardKey };
+    useEffect(() => {
+        desiredRef.current = { entries: pageEntries, fn: function_, shardKey };
+    });
 
     // Track per-page detach handles so a page falling out of the request set
     // releases its subscription without disturbing the others.
