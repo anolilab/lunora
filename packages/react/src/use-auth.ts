@@ -1,3 +1,5 @@
+"use client";
+
 import { useCallback, useState, useSyncExternalStore } from "react";
 
 import { useCirrus } from "./cirrus-provider.js";

@@ -18,6 +18,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./server": {
+            "types": "./dist/server.d.ts",
+            "import": "./dist/server.mjs"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {

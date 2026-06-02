@@ -1,3 +1,11 @@
+"use client";
+
+// Every export in this barrel is a client-side hook or the context provider —
+// they call `useState`/`useEffect`/`use(...)` and own a live WS connection, so
+// each source module here declares `"use client"` and is meant to run only in
+// Client Components. In a Next.js / RSC app, import these from your own
+// `"use client"` files (see the provider/hook examples in the docs); server-side
+// data loading lives in the socket-free `@cirrus/react/server` entry.
 export type { CirrusProviderProps } from "./cirrus-provider.js";
 export { CirrusProvider, useCirrus } from "./cirrus-provider.js";
 export type {

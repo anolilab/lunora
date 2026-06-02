@@ -1,3 +1,5 @@
+"use client";
+
 import type { CirrusClient } from "@cirrus/client";
 import { QueryClient, QueryClientContext, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";

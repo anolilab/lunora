@@ -89,6 +89,33 @@ Reads the current `CirrusClient` from the nearest `<CirrusProvider>`. Throws if 
 
 Stable identity — the underlying context value is just the `CirrusClient` you pass in, so re-renders don't tear down subscriptions.
 
+## Server Components (`@cirrus/react/server`)
+
+The hooks are client-only (each module declares `"use client"`) — use them inside your own Client Components. Server-side data loading lives in the separate, socket-free `@cirrus/react/server` entry — safe to call from a React Server Component:
+
+```tsx
+// Server Component
+import { createServerClient, prefetchQuery, dehydrate, HydrationBoundary } from "@cirrus/react/server";
+import { QueryClient } from "@tanstack/react-query";
+
+const client = createServerClient({ url: process.env.CIRRUS_URL!, token });
+const queryClient = new QueryClient();
+await prefetchQuery(queryClient, client, api.posts.list, {});
+
+return (
+    <HydrationBoundary state={dehydrate(queryClient)}>
+        <PostList /> {/* client component: useQuery(api.posts.list, {}) reads the hydrated value */}
+    </HydrationBoundary>
+);
+```
+
+- `createServerClient({ url, token?, fetch? })` — request-scoped, HTTP-only client. Build one per request.
+- `prefetchQuery(queryClient, client, fn, args, opts?)` — seeds the TanStack cache under the same key `useQuery` reads.
+- `preloadQuery(client, fn, args, opts?)` — returns a serializable `Preloaded` token for `usePreloadedQuery`.
+- `dehydrate`, `HydrationBoundary` — re-exported from `@tanstack/react-query`.
+
+See the [React reference](../../apps/docs/content/docs/api/react.mdx#server-components-nextjs-app-router) for the full Next.js walkthrough.
+
 ## API
 
 | Export                      | Description                                                         |

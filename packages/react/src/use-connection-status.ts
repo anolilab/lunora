@@ -1,3 +1,5 @@
+"use client";
+
 import type { ConnectionStatus } from "@cirrus/client";
 import { useCallback, useSyncExternalStore } from "react";
 

@@ -1,3 +1,5 @@
+"use client";
+
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { useCallback, useRef, useState } from "react";
 

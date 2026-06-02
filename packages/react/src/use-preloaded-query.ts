@@ -1,3 +1,5 @@
+"use client";
+
 import type { FunctionReference, Preloaded } from "@cirrus/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";

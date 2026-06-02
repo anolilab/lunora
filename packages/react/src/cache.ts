@@ -1,6 +1,8 @@
 import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/client";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
+import { keyHash } from "./query-key.js";
+
 /**
  * Per-key bookkeeping: a single WS subscription is shared across every hook
  * that observes the same `queryKey`. The `refCount` field tracks the consumers
@@ -13,9 +15,6 @@ interface RegistryEntry {
     /** WS unsubscribe handle, set on first successful attach. */
     unsubscribe: Unsubscribe | undefined;
 }
-
-/** Stringified queryKey used as the internal index key for {@link CirrusSubscriptionRegistry}. */
-const keyHash = (queryKey: QueryKey): string => JSON.stringify(queryKey);
 
 /**
  * Per-client subscription dedup layer that sits *next to* TanStack Query.
@@ -117,27 +116,6 @@ class CirrusSubscriptionRegistry {
     }
 }
 
-/**
- * Project a Cirrus `(fn, args, shardKey)` triple into the structural query key
- * TanStack hashes for dedup. The `"cirrus"` literal namespaces our entries so
- * an app's own queries can't collide with ours.
- */
-const cirrusQueryKey = (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => [
-    "cirrus",
-    function_.__cirrusRef,
-    args,
-    // eslint-disable-next-line unicorn/no-null -- this literal is part of the JSON-serialized query key TanStack hashes for dedup; `null` keeps a stable, distinct slot from an absent shardKey across renders.
-    shardKey ?? null,
-];
-
-/**
- * Stringify a queryKey for use in a React effect's dep list. TanStack hashes
- * queryKeys structurally, so the dep list mirrors that — two args objects with
- * the same contents but different identity hash to the same string and won't
- * trigger a re-attach.
- */
-const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
-
 const registryByClient = new WeakMap<CirrusClient, CirrusSubscriptionRegistry>();
 
 /** Returns the shared subscription registry for `client`, creating it on first access. */
@@ -152,4 +130,5 @@ const getSubscriptionRegistry = (client: CirrusClient): CirrusSubscriptionRegist
     return registry;
 };
 
-export { cirrusQueryKey, CirrusSubscriptionRegistry, getSubscriptionRegistry, serializeQueryKey };
+export { CirrusSubscriptionRegistry, getSubscriptionRegistry };
+export { cirrusQueryKey, serializeQueryKey } from "./query-key.js";

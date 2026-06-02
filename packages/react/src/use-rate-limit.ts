@@ -1,3 +1,5 @@
+"use client";
+
 import type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "@cirrus/ratelimit";
 import { evaluate } from "@cirrus/ratelimit";
 import { useCallback, useEffect, useReducer, useRef } from "react";
