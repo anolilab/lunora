@@ -188,6 +188,14 @@ interface CtxDbOptions {
      * Leave undefined to keep the legacy zero-cost behavior.
      */
     cache?: ReactiveCache;
+
+    /**
+     * Opt into change-data-capture: when `true`, every committed write appends a
+     * post-image entry to the `__cdc_log` table (created by `runShardMigrations`
+     * when its matching `cdc` flag is set). Backs streaming export and
+     * replay-PITR. Leave undefined for zero-cost legacy behaviour.
+     */
+    cdc?: boolean;
     clock?: Clock;
 
     /**
@@ -1213,6 +1221,93 @@ const countRankBefore = (
     return { before: beforeRow.c, total: totalRow.c };
 };
 
+/** Reserved append-only changelog table backing CDC streaming export and replay-PITR. */
+const CDC_LOG_TABLE = "__cdc_log";
+
+/** One change-data-capture entry: a committed mutation, in monotonic `seq` order. */
+interface CdcChange {
+    /** Post-image document for insert/update; absent for delete (the `id` identifies the removed row). */
+    doc?: Record<string, unknown>;
+    id: string;
+    op: "delete" | "insert" | "update";
+    /** Monotonic per-shard cursor — strictly increasing, never reused. */
+    seq: number;
+    table: string;
+    /** Wall-clock millis when the change committed (the ctx-db `clock`). */
+    ts: number;
+}
+
+/**
+ * Create the `__cdc_log` table. `seq` is an `AUTOINCREMENT` primary key, giving
+ * each shard a monotonic cursor that streaming-export consumers and replay-PITR
+ * page through; `doc` holds the post-image JSON for insert/update and is `NULL`
+ * for delete. Only created when CDC is enabled, so non-CDC apps pay nothing.
+ */
+const migrateCdcLog = (sql: SqlExec): void => {
+    runSql(
+        sql,
+        `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(CDC_LOG_TABLE)} (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            "table" TEXT NOT NULL,
+            id TEXT NOT NULL,
+            op TEXT NOT NULL,
+            doc TEXT
+        )`,
+    );
+};
+
+/**
+ * Append one committed mutation to the changelog. Called inside the same DO
+ * transaction as the row write, so the change is durable iff the write is.
+ */
+const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op: CdcChange["op"], doc: Record<string, unknown> | undefined): void => {
+    runSql(
+        sql,
+        `INSERT INTO ${quoteIdentifier(CDC_LOG_TABLE)} (ts, "table", id, op, doc) VALUES (?, ?, ?, ?, ?)`,
+        ts,
+        table,
+        id,
+        op,
+        // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct post-image for a delete; the `id` column identifies the removed row.
+        doc === undefined ? null : JSON.stringify(doc),
+    );
+};
+
+/**
+ * Read changelog entries newer than `sinceSeq` in commit order, up to `limit`
+ * (clamped to [1, 10000]). Returns the rows plus the cursor to resume from (the
+ * last `seq`, or `sinceSeq` when the page is empty).
+ */
+const readCdcChanges = (sql: SqlExec, options: { limit?: number; sinceSeq?: number } = {}): { changes: CdcChange[]; cursor: number } => {
+    const sinceSeq = options.sinceSeq ?? 0;
+    const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
+
+    const rows = runSql<{ doc: null | string; id: string; op: string; seq: number; table: string; ts: number }>(
+        sql,
+        `SELECT seq, ts, "table", id, op, doc FROM ${quoteIdentifier(CDC_LOG_TABLE)} WHERE seq > ? ORDER BY seq ASC LIMIT ?`,
+        sinceSeq,
+        limit,
+    ).toArray();
+
+    const changes = rows.map((row): CdcChange => {
+        const base = { id: row.id, op: row.op as CdcChange["op"], seq: row.seq, table: row.table, ts: row.ts };
+
+        return row.doc === null ? base : { ...base, doc: JSON.parse(row.doc) as Record<string, unknown> };
+    });
+
+    return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };
+};
+
+/**
+ * Drop changelog entries at or below a checkpointed `throughSeq` — retention
+ * after a consumer has durably advanced past them, so the log can't grow
+ * unbounded.
+ */
+const trimCdcChanges = (sql: SqlExec, throughSeq: number): void => {
+    runSql(sql, `DELETE FROM ${quoteIdentifier(CDC_LOG_TABLE)} WHERE seq <= ?`, throughSeq);
+};
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
@@ -1224,6 +1319,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const scheduler = options.scheduler ?? throwingScheduler;
     const { globalDb } = options;
+    const cdcEnabled = options.cdc ?? false;
+
+    /** Append a post-image to the changelog when CDC is enabled; a no-op otherwise. */
+    const recordCdc = (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): void => {
+        if (cdcEnabled) {
+            appendCdcChange(sql, clock(), table, id, op, doc);
+        }
+    };
 
     /** True when `tableName` is declared `.global()` (i.e. lives in D1, not this DO). */
     const isGlobalTable = (tableName: string): boolean => schema.tables[tableName]?.shardMode?.kind === "global";
@@ -1975,6 +2078,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             cache?.invalidate(tableName, id);
 
+            recordCdc(tableName, id, "delete");
             broadcast({ key: id, op: "delete", table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
@@ -2282,6 +2386,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // the new row id was never read by anything.
             cache?.invalidate(tableName, id);
 
+            recordCdc(tableName, id, "insert", documentWithMeta);
             broadcast({ key: id, op: "insert", row: documentWithMeta, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "insert")) {
@@ -2353,6 +2458,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // row's per-id deps AND the `*scan` bucket on this table.
             cache?.invalidate(tableName, id);
 
+            recordCdc(tableName, id, "update", merged);
             broadcast({ key: id, op: "update", row: merged, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
@@ -2680,6 +2786,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             cache?.invalidate(tableName, id);
 
+            recordCdc(tableName, id, "update", replaced);
             broadcast({ key: id, op: "update", row: replaced, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
@@ -2820,7 +2927,7 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
     }
 };
 
-const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
+const runShardMigrations = (sql: SqlExec, schema: SchemaLike, options: { cdc?: boolean } = {}): void => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind === "global") {
             continue;
@@ -2839,6 +2946,10 @@ const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
         migrateSearchIndexes(sql, tableName, definition);
         migrateAggregateIndexes(sql, tableName, definition);
         migrateRankIndexes(sql, tableName, definition);
+    }
+
+    if (options.cdc) {
+        migrateCdcLog(sql);
     }
 };
 
@@ -2946,10 +3057,11 @@ const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     }
 };
 
-export { backfillAggregateIndexes, backfillRankIndexes, createShardCtxDb, runShardMigrations };
+export { backfillAggregateIndexes, backfillRankIndexes, CDC_LOG_TABLE, createShardCtxDb, migrateCdcLog, readCdcChanges, runShardMigrations, trimCdcChanges };
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 export type {
     BroadcastDelta,
+    CdcChange,
     Clock,
     ColumnMetaLike,
     CountArgs,
