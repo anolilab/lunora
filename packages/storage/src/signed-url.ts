@@ -7,11 +7,10 @@ const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;
 const LEADING_SLASH_RE = /^\//;
 
 const toBase64Url = (bytes: Uint8Array): string => {
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
+    // A SHA-256 HMAC is a fixed 32 bytes, well under the argument-spread limit,
+    // so building the binary string in one `fromCharCode` call is safe and
+    // cheaper than a per-byte loop.
+    const binary = String.fromCharCode(...bytes);
 
     return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 };
@@ -28,8 +27,25 @@ const fromBase64Url = (input: string): Uint8Array => {
     return bytes;
 };
 
-const importHmacKey = async (secret: string): Promise<CryptoKey> =>
-    crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
+// The signing secret is effectively constant per process, so the imported
+// (non-extractable) CryptoKey is memoized by secret value: this removes one
+// `crypto.subtle.importKey` from the verify hot path on every request. Caching
+// the Promise (not the resolved key) also coalesces concurrent imports.
+const keyCache = new Map<string, Promise<CryptoKey>>();
+
+const importHmacKey = async (secret: string): Promise<CryptoKey> => {
+    const cached = keyCache.get(secret);
+
+    if (cached) {
+        return cached;
+    }
+
+    const keyPromise = crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
+
+    keyCache.set(secret, keyPromise);
+
+    return keyPromise;
+};
 
 // Host is lowercased so a signature minted for `Example.com` verifies against
 // `example.com` — DNS is case-insensitive, but the URL parser preserves case.
