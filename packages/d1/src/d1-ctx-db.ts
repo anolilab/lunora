@@ -1190,7 +1190,14 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             await runD1AggregateMigrations(exec, schema);
             await runD1RankMigrations(exec, schema);
             await runD1SearchMigrations(exec, schema);
-        })();
+        })().catch((error: unknown) => {
+            // Don't cache a rejection — a transient DDL failure (e.g. a dropped
+            // connection) would otherwise poison every later call on this
+            // ctx-db. Clear the cache so the next call retries the idempotent
+            // CREATE-IF-NOT-EXISTS migrations.
+            migratedPromise = undefined;
+            throw error;
+        });
 
         return migratedPromise;
     };

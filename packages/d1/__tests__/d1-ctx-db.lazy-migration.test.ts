@@ -120,9 +120,10 @@ describe("d1 ctx-db lazy companion migration", () => {
     it("creates the fts companion lazily so search writes and reads work without an explicit migration", async () => {
         expect.assertions(2);
 
-        // Real fts5 path only runs on engines that ship fts5; this asserts the
-        // write path no longer throws "no such table" regardless. On node:sqlite
-        // (no fts5) the writes are no-ops and the scan answers the read.
+        // Works on both engine variants: where fts5 is present, ensureMigrated
+        // creates the shadow table and the fts path answers; where it's absent,
+        // runD1SearchMigrations no-ops (gated on isFtsAvailable) and the scan
+        // fallback answers. Either way the write must not throw "no such table".
         await createDocsTable(harness.exec);
 
         // No runD1SearchMigrations call — the writer must create the fts table.
@@ -225,6 +226,23 @@ describe("d1 ctx-db groupBy emptied-group pruning", () => {
 
         expect(keys).toStrictEqual(["p1"]);
         expect(Object.fromEntries(groups.map((g) => [g.key["projectId"], g.value]))).toStrictEqual({ p1: 3 });
+    });
+
+    it("omits a group emptied by a by-key move (patch decrements the old group to zero)", async () => {
+        expect.assertions(1);
+
+        createTodosTable();
+
+        const writer = createD1ContextDatabase({ clock: () => 1_700_000_000_000, exec: harness.exec, schema: makeAggregateSchema(byProject) });
+
+        await seedTwoGroups(writer);
+
+        await writer.patch("t3", { projectId: "p1" }); // p2's only row moves to p1 → p2 empties
+
+        const groups = await writer.groupBy("todos", { by: ["projectId"] });
+
+        // The move must prune the now-empty p2 companion row, not leave a phantom.
+        expect(groups.map((g) => g.key["projectId"])).toStrictEqual(["p1"]);
     });
 
     it("a sum group with value 0 but rows present is NOT pruned", async () => {
