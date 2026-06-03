@@ -76,8 +76,12 @@ const readRunArguments = (input: Record<string, unknown>): { args: Record<string
         throw new Error('"functionPath" is required and must be a non-empty string');
     }
 
+    // Per the tool's JSON Schema, `args` is an object; coerce anything else
+    // (including arrays — `typeof [] === "object"`) to an empty bag so a
+    // malformed payload can't be forwarded as the function's arguments.
     const rawArguments = input.args;
-    const args = typeof rawArguments === "object" && rawArguments !== null ? (rawArguments as Record<string, unknown>) : {};
+    const isPlainObject = typeof rawArguments === "object" && rawArguments !== null && !Array.isArray(rawArguments);
+    const args = isPlainObject ? (rawArguments as Record<string, unknown>) : {};
     const shardKey = typeof input.shardKey === "string" ? input.shardKey : undefined;
 
     return { args, functionPath, shardKey };

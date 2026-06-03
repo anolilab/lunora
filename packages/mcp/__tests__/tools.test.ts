@@ -76,6 +76,16 @@ describe("callTool", () => {
         expect(mock.mutation).toHaveBeenCalledWith({ __cirrusRef: "messages:send" }, {}, { shardKey: undefined });
     });
 
+    it("coerces a non-object args payload (e.g. an array) to an empty bag", async () => {
+        expect.assertions(1);
+
+        const mock = mockClient();
+
+        await callTool(mock.asClient, "cirrus_run_query", { args: [1, 2, 3], functionPath: "messages:list" });
+
+        expect(mock.query).toHaveBeenCalledWith({ __cirrusRef: "messages:list" }, {}, { shardKey: undefined });
+    });
+
     it("returns an error result when functionPath is missing", async () => {
         expect.assertions(2);
 
