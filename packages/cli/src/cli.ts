@@ -5,6 +5,8 @@ import { Cerebro } from "@visulima/cerebro";
 import { bold, cyan, dim } from "@visulima/colorize";
 
 import { runAnalyzeCommand } from "./commands/analyze.js";
+import type { BackupSubcommand } from "./commands/backup.js";
+import { runBackupCommand } from "./commands/backup.js";
 import { runCodegenCommand } from "./commands/codegen.js";
 import { runExportCommand, runImportCommand } from "./commands/data-transfer.js";
 import { runDeployCommand } from "./commands/deploy.js";
@@ -35,6 +37,7 @@ const COMMANDS = [
     "migrate",
     "export",
     "import",
+    "backup",
     "verify",
     "info",
     "env",
@@ -56,6 +59,8 @@ const isTemplate = (value: unknown): value is Template => value === "vite" || va
 
 const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
     value === "list" || value === "get" || value === "set" || value === "unset" || value === "push";
+
+const isBackupSubcommand = (value: unknown): value is BackupSubcommand => value === "create" || value === "list" || value === "restore";
 
 const toStringOrUndefined = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
@@ -323,6 +328,48 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             { description: "Output format: pretty (default) | json", name: "format", type: String },
             { description: "Filter by status: ok | error | canceled", name: "status", type: String },
             { description: "Substring filter on log messages", name: "search", type: String },
+        ],
+    });
+
+    cli.addCommand({
+        argument: { description: "create | list | restore <id|file>", name: "subcommand", type: String },
+        description: "Managed snapshot backups: create | list | restore over the export/import endpoints",
+        execute: async ({ argument, options: parsed }) => {
+            const sub = argument[0];
+
+            if (!isBackupSubcommand(sub)) {
+                logger.error(`backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore`);
+                exitCode.value = 1;
+
+                return;
+            }
+
+            try {
+                const result = await runBackupCommand({
+                    cwd,
+                    dir: toStringOrUndefined(parsed.dir),
+                    logger,
+                    prod: parsed.prod === true,
+                    subcommand: sub,
+                    tables: toStringOrUndefined(parsed.tables),
+                    target: argument[1],
+                    token: toStringOrUndefined(parsed.token),
+                    url: toStringOrUndefined(parsed.url),
+                });
+
+                exitCode.value = result.code;
+            } catch (error: unknown) {
+                logger.error(error instanceof Error ? error.message : String(error));
+                exitCode.value = 1;
+            }
+        },
+        name: "backup",
+        options: [
+            { description: "Backup directory (default .cirrus-backups)", name: "dir", type: String },
+            { description: "Comma-separated table allowlist (create)", name: "tables", type: String },
+            { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
+            { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
+            { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
         ],
     });
 
@@ -671,6 +718,8 @@ Commands:
           [--tables <t1,t2,...>] [--prod] [--url <url>] [--token <t>]
   import <path> [--table <n>]   Bulk-insert NDJSON rows via the admin endpoint
           [--batch-size <n>] [--prod] [--url <url>] [--token <t>]
+  backup create|list           Managed snapshot backups (export/import based)
+         | restore <id|file>   [--dir <d>] [--tables <t1,t2>] [--prod] [--url <url>] [--token <t>]
   reset [--all] [--yes]         Clear local Miniflare state (and .cirrus-cache with --all)
   verify                        Validate wrangler.jsonc + run codegen in dry-run mode
   info [--json]                 Print resolved project config (packages, wrangler, schema)
