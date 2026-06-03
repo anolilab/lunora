@@ -13,7 +13,12 @@ export interface QueuedSend {
     to: string | string[];
 }
 
-export const toQueuedPayload = (options: QueuedSend): QueuedSend => {
+/**
+ * Narrow a `SendOptions` to its serializable `QueuedSend` shape by dropping the
+ * non-cloneable `react` field. React elements are not structured-cloneable, so
+ * the queue body must carry only the pre-rendered html/text and scalar fields.
+ */
+export const toQueuedPayload = (options: SendOptions): QueuedSend => {
     return {
         bcc: options.bcc,
         cc: options.cc,
