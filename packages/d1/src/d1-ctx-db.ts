@@ -299,13 +299,85 @@ const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike]
     return columns;
 };
 
-/** Decode a SELECTed row back into a document: `id` → `_id`, and 1/0 → boolean for boolean columns. */
-const decodeRow = (definition: TableDefinitionLike, row: Record<string, unknown> | undefined): Record<string, unknown> | null => {
-    if (!row) {
-        // eslint-disable-next-line unicorn/no-null -- a missing row decodes to `null`, the value writer.get() returns per the public DatabaseWriterLike contract.
-        return null;
+/**
+ * Inverse of {@link serializeColumnValue}: map a SQLite storage value back onto
+ * its JS form, driven by the field's declared validator `kind`. Without this,
+ * `serializeColumnValue` JSON-encodes objects/arrays/records and stringifies
+ * bigints on write, but reads return those storage strings verbatim — so a
+ * stored `{x:1}` comes back as the literal string `'{"x":1}'`, a bigint as a
+ * decimal string, etc. The decode reverses each serialized case:
+ *
+ * - `boolean`: 1/0 → true/false (SQLite has no boolean type).
+ * - `bigint`: decimal string → `BigInt`.
+ * - `object`/`array`/`record`: JSON string → parsed value.
+ * - `union`/`any`: these only get JSON-encoded when the runtime value was
+ *   non-scalar, so a stored *string* is parsed back when it is valid JSON for a
+ *   non-scalar shape, and otherwise returned as-is (a scalar union member round-
+ *   trips through SQLite's native column type, never as JSON).
+ * - everything else (string/number/date/timestamp/id/literal): stored natively,
+ *   returned verbatim.
+ */
+const decodeColumnValue = (kind: string | undefined, raw: unknown): unknown => {
+    if (raw === null) {
+        return raw;
     }
 
+    switch (kind) {
+        case "any":
+        case "union": {
+            // Scalars round-trip natively; only a JSON-encoded non-scalar was
+            // ever stored as a string. Parse those, but leave plain strings
+            // (the value really was a string) untouched.
+            if (typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("["))) {
+                try {
+                    return JSON.parse(raw) as unknown;
+                } catch {
+                    return raw;
+                }
+            }
+
+            return raw;
+        }
+        case "array":
+        case "object":
+        case "record": {
+            if (typeof raw === "string") {
+                try {
+                    return JSON.parse(raw) as unknown;
+                } catch {
+                    return raw;
+                }
+            }
+
+            return raw;
+        }
+        case "bigint": {
+            if (typeof raw === "string") {
+                try {
+                    return BigInt(raw);
+                } catch {
+                    return raw;
+                }
+            }
+
+            return raw;
+        }
+        case "boolean": {
+            return raw === 0 || raw === 1 ? raw === 1 : raw;
+        }
+        default: {
+            return raw;
+        }
+    }
+};
+
+/**
+ * Decode a SELECTed row back into a document: `id` → `_id`, `_creationTime`
+ * preserved, and every column run through {@link decodeColumnValue} so the
+ * stored form is reversed back into its JS shape. Exported so the data-browser
+ * (`introspect.ts`) and admin export/import paths share the exact same decode.
+ */
+const decodeGlobalRow = (definition: TableDefinitionLike, row: Record<string, unknown>): Record<string, unknown> => {
     const decoded: Record<string, unknown> = {};
 
     for (const [field, validator] of Object.entries(definition.shape)) {
@@ -315,13 +387,23 @@ const decodeRow = (definition: TableDefinitionLike, row: Record<string, unknown>
             continue;
         }
 
-        decoded[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
+        decoded[field] = decodeColumnValue(validator.kind, raw);
     }
 
     decoded["_id"] = row["id"];
     decoded["_creationTime"] = row["_creationTime"];
 
     return decoded;
+};
+
+/** Decode a SELECTed row back into a document, or `null` when the row is absent. */
+const decodeRow = (definition: TableDefinitionLike, row: Record<string, unknown> | undefined): Record<string, unknown> | null => {
+    if (!row) {
+        // eslint-disable-next-line unicorn/no-null -- a missing row decodes to `null`, the value writer.get() returns per the public DatabaseWriterLike contract.
+        return null;
+    }
+
+    return decodeGlobalRow(definition, row);
 };
 
 /**
@@ -2646,6 +2728,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
 export {
     createD1ContextDatabase as createD1CtxDb,
+    decodeGlobalRow,
     readD1CdcChanges,
     runD1AggregateMigrations,
     runD1CdcMigration,
