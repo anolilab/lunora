@@ -32,12 +32,25 @@ interface WranglerDurableObjectBinding {
     name?: string;
 }
 
+/**
+ * A `tail_consumers` entry: a Worker that receives this Worker's tail events
+ * (logs, exceptions, fetch metadata) for forwarding to an external sink. See
+ * `withTailConsumer` for the wiring helper.
+ */
+interface TailConsumer {
+    /** Optional Cloudflare environment of the consumer Worker. */
+    environment?: string;
+    /** Name of the Worker that consumes tail events. */
+    service?: string;
+}
+
 interface WranglerConfig {
     compatibility_date?: string;
     compatibility_flags?: ReadonlyArray<string>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
+    tail_consumers?: ReadonlyArray<TailConsumer>;
     vectorize?: ReadonlyArray<{ binding?: string; index_name?: string }>;
 }
 
@@ -72,6 +85,54 @@ const validateVectorizeBindings = (wrangler: WranglerConfig, vectorIndexNames: R
             errors.push(`schema declares vector index "${indexName}"; wrangler "vectorize" must include a binding with index_name "${indexName}"`);
         }
     }
+};
+
+/**
+ * `tail_consumers` is optional, but a present entry must name the consumer
+ * Worker via a non-empty `service`. A malformed entry would be silently
+ * dropped by wrangler and the sink would never receive logs, so we surface it
+ * as an error. Extracted to keep `validateWranglerConfig`'s complexity bounded.
+ */
+const validateTailConsumers = (wrangler: WranglerConfig, errors: string[]): void => {
+    const consumers = wrangler.tail_consumers;
+
+    if (consumers === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(consumers)) {
+        errors.push("tail_consumers must be an array of { service, environment? } entries");
+
+        return;
+    }
+
+    // `Array.isArray` widens the readonly element type to `any`; restore it so
+    // member access below stays type-safe.
+    const entries = consumers as ReadonlyArray<TailConsumer>;
+
+    for (const [index, consumer] of entries.entries()) {
+        if (typeof consumer.service !== "string" || consumer.service.length === 0) {
+            errors.push(`tail_consumers[${String(index)}] must have a non-empty "service" naming the consumer Worker`);
+        }
+    }
+};
+
+/**
+ * Return a new `WranglerConfig` with `consumer` present in `tail_consumers`,
+ * wiring this Worker to forward its tail events (logs/exceptions) to another
+ * Worker that fans them out to an external sink. Pure and idempotent: an
+ * existing entry with the same `service` + `environment` is left untouched
+ * rather than duplicated, so it is safe to call on every codegen/deploy.
+ */
+const withTailConsumer = (wrangler: WranglerConfig, consumer: TailConsumer): WranglerConfig => {
+    const existing = wrangler.tail_consumers ?? [];
+    const alreadyWired = existing.some((entry) => entry.service === consumer.service && entry.environment === consumer.environment);
+
+    if (alreadyWired) {
+        return wrangler;
+    }
+
+    return { ...wrangler, tail_consumers: [...existing, consumer] };
 };
 
 /**
@@ -127,6 +188,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     }
 
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
+    validateTailConsumers(wrangler, errors);
 
     return { errors, valid: errors.length === 0, warnings };
 };
@@ -233,5 +295,5 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     };
 };
 
-export type { SchemaInfo, WranglerConfig, WranglerProjectValidationOptions, WranglerProjectValidationResult, WranglerValidationReport };
-export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject };
+export type { SchemaInfo, TailConsumer, WranglerConfig, WranglerProjectValidationOptions, WranglerProjectValidationResult, WranglerValidationReport };
+export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject, withTailConsumer };
