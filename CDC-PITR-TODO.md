@@ -19,13 +19,12 @@ scheduled handler.
 - [x] **A. `applyCdc` shard admin RPC** (`@cirrus/do`) — `8b0adcb`
     - ADMIN_FUNCTIONS.applyCdc, base runShardApplyCdc (NOT_IMPLEMENTED), dispatch +
       flushChangedTables, parseApplyCdcArgs, types exported, 2 tests.
-- [ ] **A2. codegen: emit `runShardApplyCdc` override** (`@cirrus/codegen` emit.ts)
-    - Mirror the emitted `runShardWrite`: build a writer, `await applyCdcChanges(...)`,
-      return `{ applied }`. Import `applyCdcChanges` in the emitted shard.ts.
-- [ ] **A3. codegen: thread a `cdc`-enable flag** so the emitted `createShardCtxDb`
-    - `runShardMigrations` get `cdc: true` when the app opts in (otherwise the
-      changelog never records in real apps). Needs a config knob (e.g. defineApp/schema).
-      Same for the D1 ctx-db (`createD1CtxDb({ cdc })`).
+- [x] **A2. codegen: emit `runShardApplyCdc` override** — `35f4914`
+- [x] **A3. codegen: `cdc` flag on the emitted `ShardDOConfig`**, threaded into
+      every `createShardCtxDb` + `runShardMigrations`. App opts in via
+      `createShardDO({ cdc: true })`. (D1 side: the host's `config.d1` factory should
+      pass `cdc: true` to `createD1CtxDb`, and wire `syncGlobals`/`applyGlobals` to
+      `readD1CdcChanges`/`applyCdcChanges` — runtime integration, not codegen.)
 - [x] **B. Coordinator `orchestrateApplyCdc`** (`@cirrus/runtime`) — `5d30c78`
 - [x] **C. `/_cirrus/admin/apply` worker route** + `applyGlobals` option — `ea1b538`
     - Takes pre-bucketed per-shard batches (the `/sync` shape) so no re-bucketing.
