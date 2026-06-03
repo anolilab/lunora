@@ -83,6 +83,13 @@ interface D1Exec {
 }
 
 interface D1ContextDatabaseOptions {
+    /**
+     * Opt into change-data-capture: when `true`, every committed write appends a
+     * post-image to the `__cdc_log` table (created lazily alongside the other
+     * companion tables). Backs streaming export and replay-PITR for global
+     * tables. Leave undefined for zero-cost legacy behaviour.
+     */
+    cdc?: boolean;
     clock?: () => number;
     exec: D1Exec;
     idGenerator?: () => string;
@@ -971,10 +978,93 @@ const runD1SearchMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<
     }
 };
 
+/** Reserved append-only changelog table backing CDC streaming export and replay-PITR (global tables). */
+const CDC_LOG_TABLE = "__cdc_log";
+
+/** One change-data-capture entry: a committed mutation, in monotonic `seq` order. Mirrors the DO twin. */
+interface CdcChange {
+    /** Post-image document for insert/update; absent for delete (the `id` identifies the removed row). */
+    doc?: Record<string, unknown>;
+    id: string;
+    op: "delete" | "insert" | "update";
+    /** Monotonic per-database cursor — strictly increasing, never reused. */
+    seq: number;
+    table: string;
+    /** Wall-clock millis when the change committed (the ctx-db `clock`). */
+    ts: number;
+}
+
+/** Create the `__cdc_log` table in D1. Idempotent; only run when CDC is enabled. */
+const runD1CdcMigration = async (exec: D1Exec): Promise<void> => {
+    await exec.run(
+        `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(CDC_LOG_TABLE)} (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            "table" TEXT NOT NULL,
+            id TEXT NOT NULL,
+            op TEXT NOT NULL,
+            doc TEXT
+        )`,
+        [],
+    );
+};
+
+/** Append one committed mutation to the changelog (post-image JSON, or NULL for delete). */
+const appendD1CdcChange = async (
+    exec: D1Exec,
+    ts: number,
+    table: string,
+    id: string,
+    op: CdcChange["op"],
+    doc: Record<string, unknown> | undefined,
+): Promise<void> => {
+    await exec.run(
+        `INSERT INTO ${quoteIdentifier(CDC_LOG_TABLE)} (ts, "table", id, op, doc) VALUES (?, ?, ?, ?, ?)`,
+        // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct post-image for a delete; the `id` identifies the removed row.
+        [ts, table, id, op, doc === undefined ? null : JSON.stringify(doc)],
+    );
+};
+
+/**
+ * Read changelog entries newer than `sinceSeq` in commit order, up to `limit`
+ * (clamped to [1, 10000]); plus the cursor to resume from.
+ */
+const readD1CdcChanges = async (exec: D1Exec, options: { limit?: number; sinceSeq?: number } = {}): Promise<{ changes: CdcChange[]; cursor: number }> => {
+    const sinceSeq = options.sinceSeq ?? 0;
+    const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
+
+    const rows = await exec.all(`SELECT seq, ts, "table", id, op, doc FROM ${quoteIdentifier(CDC_LOG_TABLE)} WHERE seq > ? ORDER BY seq ASC LIMIT ?`, [
+        sinceSeq,
+        limit,
+    ]);
+
+    const changes = rows.map((row): CdcChange => {
+        const { doc } = row;
+        const base = { id: String(row.id), op: String(row.op) as CdcChange["op"], seq: Number(row.seq), table: String(row.table), ts: Number(row.ts) };
+
+        return typeof doc === "string" ? { ...base, doc: JSON.parse(doc) as Record<string, unknown> } : base;
+    });
+
+    return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };
+};
+
+/** Drop changelog entries at or below a checkpointed `throughSeq` (retention). */
+const trimD1CdcChanges = async (exec: D1Exec, throughSeq: number): Promise<void> => {
+    await exec.run(`DELETE FROM ${quoteIdentifier(CDC_LOG_TABLE)} WHERE seq <= ?`, [throughSeq]);
+};
+
 const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWriterLike => {
     const { exec, schema } = options;
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
+    const cdcEnabled = options.cdc ?? false;
+
+    /** Append a post-image to the changelog when CDC is enabled; a no-op otherwise. */
+    const recordCdc = async (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): Promise<void> => {
+        if (cdcEnabled) {
+            await appendD1CdcChange(exec, clock(), table, id, op, doc);
+        }
+    };
     const scheduler = options.scheduler ?? throwingScheduler;
 
     // Per-ctx-db LRU bounding the `id → tableName` resolution cost. See
@@ -1000,6 +1090,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             await runD1AggregateMigrations(exec, schema);
             await runD1RankMigrations(exec, schema);
             await runD1SearchMigrations(exec, schema);
+
+            if (cdcEnabled) {
+                await runD1CdcMigration(exec);
+            }
         })().catch((error: unknown) => {
             // Don't cache a rejection — a transient DDL failure (e.g. a dropped
             // connection) would otherwise poison every later call on this
@@ -1914,6 +2008,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             await syncAggregates(tableName, existing ?? undefined, undefined);
             await syncRanks(tableName, id, existing ?? undefined, undefined);
             await syncSearch(tableName, id, undefined);
+            await recordCdc(tableName, id, "delete");
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
                 await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
@@ -2145,6 +2240,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             await syncAggregates(tableName, undefined, documentWithMeta);
             await syncRanks(tableName, id, undefined, documentWithMeta);
             await syncSearch(tableName, id, documentWithMeta);
+            await recordCdc(tableName, id, "insert", documentWithMeta);
 
             if (hasMatchingTrigger(tableName, "after", "insert")) {
                 await fireTriggers("after", "insert", { doc: documentWithMeta, id, op: "insert", table: tableName });
@@ -2206,6 +2302,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             await syncAggregates(tableName, existing, merged);
             await syncRanks(tableName, id, existing, merged);
             await syncSearch(tableName, id, merged);
+            await recordCdc(tableName, id, "update", merged);
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
@@ -2526,6 +2623,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             await syncAggregates(tableName, previous, replaced);
             await syncRanks(tableName, id, previous, replaced);
             await syncSearch(tableName, id, replaced);
+            await recordCdc(tableName, id, "update", replaced);
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
@@ -2538,5 +2636,13 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
     return writer;
 };
 
-export { createD1ContextDatabase as createD1CtxDb, runD1AggregateMigrations, runD1RankMigrations, runD1SearchMigrations };
+export {
+    createD1ContextDatabase as createD1CtxDb,
+    readD1CdcChanges,
+    runD1AggregateMigrations,
+    runD1CdcMigration,
+    runD1RankMigrations,
+    runD1SearchMigrations,
+    trimD1CdcChanges,
+};
 export type { D1ContextDatabaseOptions as D1CtxDbOptions, D1Exec };
