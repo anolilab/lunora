@@ -157,10 +157,12 @@ describe("d1 rankIndex parity", () => {
         expect(page.page.map((document_) => document_["_id"])).toEqual(["m1", "m3"]);
     });
 
-    it("falls back to null when no rank companion exists (opt-in)", async () => {
+    it("lazily materializes the rank companion without an explicit migration", async () => {
         expect.assertions(1);
 
-        // Skip runD1RankMigrations — the companion isn't materialized.
+        // Skip runD1RankMigrations — the writer's lazy ensureMigrated() must
+        // create the companion before the first insert syncs it, so rank()
+        // returns a real position rather than null.
         harness.ddl(
             `CREATE TABLE "messages" (
                 "id" TEXT PRIMARY KEY,
@@ -176,6 +178,6 @@ describe("d1 rankIndex parity", () => {
 
         await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
 
-        await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toBeNull();
+        await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
     });
 });

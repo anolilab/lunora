@@ -1034,6 +1034,133 @@ const forEachRowPaged = async (
     }
 };
 
+/**
+ * Materialize the `__agg_&lt;index>` companion tables for every declared
+ * `aggregateIndex` on a global table. Global tables in Cirrus ship their own
+ * DDL — counter tables are opt-in so production hosts can decide where they
+ * live. Tests and dev hosts can call this once after their schema migration to
+ * unlock O(1) counts.
+ *
+ * Idempotent (`CREATE TABLE IF NOT EXISTS`).
+ */
+const runD1AggregateMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        const indexes = definition.aggregateIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            continue;
+        }
+
+        for (const index of indexes) {
+            const aggTable = aggregateTableName(tableName, index.name);
+
+            // `__value__` is op-aware now (count / running sum / extreme — NULL
+            // for an empty min/max group) and `__count__` tracks the row count
+            // (avg divisor + empty-group detection). It is nullable; the pre-
+            // reducer-aware shape declared it `NOT NULL`.
+            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared D1 connection.
+            await exec.run(
+                `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} (
+                    "__key__" TEXT PRIMARY KEY,
+                    "__value__" REAL,
+                    "__count__" INTEGER NOT NULL DEFAULT 0
+                )`,
+                [],
+            );
+
+            // Alpha-era companion-rebuild caveat: a binding that materialized
+            // this table before `__count__` existed gets the column added here
+            // (defaulted 0). `CREATE TABLE IF NOT EXISTS` won't reshape an
+            // existing table, so we pragma-check then ALTER — the first read/
+            // write that touches the index re-backfills with real per-op values.
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+            const columns = await exec.all(`PRAGMA table_info(${quoteIdentifier(aggTable)})`, []);
+
+            if (!columns.some((column) => column["name"] === "__count__")) {
+                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+                await exec.run(`ALTER TABLE ${quoteIdentifier(aggTable)} ADD COLUMN "__count__" INTEGER NOT NULL DEFAULT 0`, []);
+            }
+        }
+    }
+};
+
+/**
+ * Materialize the `__rank_&lt;index>` companion tables for every declared
+ * `rankIndex` on a global table. Mirrors `runD1AggregateMigrations` — same
+ * opt-in pattern so production hosts decide whether to spend the DDL.
+ *
+ * Idempotent (`CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`).
+ */
+const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        const indexes = definition.rankIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            continue;
+        }
+
+        for (const index of indexes) {
+            const rankTable = rankTableName(tableName, index.name);
+            const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+            const columnDdl = sortColumns.map((column) => `${quoteIdentifier(column)} BLOB`).join(", ");
+            const columnPart = sortColumns.length > 0 ? `, ${columnDdl}` : "";
+
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection; the table must exist before its index below.
+            await exec.run(
+                `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(rankTable)} (
+                    "__id__" TEXT PRIMARY KEY,
+                    "__partition__" TEXT NOT NULL${columnPart}
+                )`,
+                [],
+            );
+
+            const orderedColumns = ['"__partition__" ASC'];
+
+            for (const [i, sortKey] of index.sortBy.entries()) {
+                orderedColumns.push(`${quoteIdentifier(sortColumnName(i))} ${sortKey.direction === "desc" ? "DESC" : "ASC"}`);
+            }
+
+            orderedColumns.push('"__id__" ASC');
+
+            const btreeName = `${tableName}__rank_${index.name}__btree`;
+
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
+            await exec.run(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(btreeName)} ON ${quoteIdentifier(rankTable)} (${orderedColumns.join(", ")})`, []);
+        }
+    }
+};
+
+/**
+ * Materialize the `__fts_&lt;index>` FTS5 shadow tables for every declared
+ * `.searchIndex()` on a global table. Mirrors `runD1AggregateMigrations` — same
+ * opt-in pattern so production hosts decide whether to spend the DDL. Only runs
+ * on engines that ship FTS5 (D1 does; the `node:sqlite` test runner doesn't,
+ * where `.search()` transparently falls back to a scan). `__text__` holds the
+ * indexed field; `__id__` (UNINDEXED) joins back to the row.
+ *
+ * Idempotent (`CREATE VIRTUAL TABLE IF NOT EXISTS`).
+ */
+const runD1SearchMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
+    if (!(await isFtsAvailable(exec))) {
+        return;
+    }
+
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        const indexes = definition.searchIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            continue;
+        }
+
+        for (const index of indexes) {
+            const ftName = ftsTableName(tableName, index.name);
+
+            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared D1 connection.
+            await exec.run(`CREATE VIRTUAL TABLE IF NOT EXISTS ${quoteIdentifier(ftName)} USING fts5("__text__", "__id__" UNINDEXED)`, []);
+        }
+    }
+};
+
 const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWriterLike => {
     const { exec, schema } = options;
     const clock = options.clock ?? (() => Date.now());
@@ -1045,6 +1172,28 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
     const tableNameCache = createTableNameCache();
 
     let triggerDepth = 0;
+
+    // Memoized companion-DDL guard. In production NOTHING outside this ctx-db
+    // calls the `runD1*Migrations` helpers (they're exported for tests/dev
+    // hosts), so without this every search write would hit a non-existent fts5
+    // shadow table ("no such table") and every aggregate/rank read would fall
+    // back to a scan. We run all three CREATE-IF-NOT-EXISTS migrations exactly
+    // once per ctx-db, lazily, before any path that can touch a companion. The
+    // cached value is the resolving `Promise` so concurrent first-callers share
+    // the single round-trip rather than racing duplicate DDL (mirrors the
+    // `isFtsAvailable` probe). CREATE IF NOT EXISTS is idempotent, so running it
+    // once per instance is cheap.
+    let migratedPromise: Promise<void> | undefined;
+
+    const ensureMigrated = async (): Promise<void> => {
+        migratedPromise ??= (async (): Promise<void> => {
+            await runD1AggregateMigrations(exec, schema);
+            await runD1RankMigrations(exec, schema);
+            await runD1SearchMigrations(exec, schema);
+        })();
+
+        return migratedPromise;
+    };
 
     // Per-(table, index) backfill state. The map records the outcome of the
     // probe: `true` once the counter companion table was found and rebuilt;
@@ -1176,6 +1325,20 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
     };
 
     /**
+     * Drop a companion group row whose last contributing source row was just
+     * removed. An emptied group must be ABSENT (not a zeroed row): the indexed
+     * `groupBy` walk enumerates every companion row, so a leftover zeroed row
+     * (value `null`/0, count 0) would surface a phantom group a SQL `GROUP BY`
+     * omits. We trigger strictly on a non-positive `__count__` — never on a zero value,
+     * since a `sum` can legitimately be 0 with rows present. A scalar
+     * `aggregate()`/`count()` reads an absent key as null/0, identical to the
+     * zeroed row it replaces, so removing it keeps those paths correct.
+     */
+    const pruneEmptyGroup = async (aggTable: string, encoded: string): Promise<void> => {
+        await exec.run(`DELETE FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ? AND "__count__" <= 0`, [encoded]);
+    };
+
+    /**
      * Op-aware companion maintenance for a single index, against the D1 column
      * dialect. Mirrors the DO `applyAggregateDelta`: count/sum/avg step
      * `__value__`/`__count__` directly; min/max bump cheaply on the add side and
@@ -1202,6 +1365,11 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         }
 
         if (op === "count") {
+            // Track the group keys we touched so an emptied group can be pruned
+            // (count steps both the removes and the adds key on a `by`-changing
+            // update; only the removes side can reach 0).
+            const touched = new Set<string>();
+
             for (const [document, delta] of [
                 [removes, -1],
                 [adds, 1],
@@ -1212,6 +1380,8 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
                 const encoded = encodeAggregateKey(index.by ?? [], document);
 
+                touched.add(encoded);
+
                 // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared D1 connection
                 await exec.run(
                     `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)
@@ -1220,10 +1390,19 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 );
             }
 
+            for (const encoded of touched) {
+                // eslint-disable-next-line no-await-in-loop -- sequential prune on the shared D1 connection (see above).
+                await pruneEmptyGroup(aggTable, encoded);
+            }
+
             return;
         }
 
         if (op === "sum" || op === "avg") {
+            // Same prune-after-step contract as count: a group whose last row
+            // left drops to `__count__ <= 0` and must be removed, not zeroed.
+            const touched = new Set<string>();
+
             for (const [document, sign] of [
                 [removes, -1],
                 [adds, 1],
@@ -1240,12 +1419,19 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
                 const encoded = encodeAggregateKey(index.by ?? [], document);
 
+                touched.add(encoded);
+
                 // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared D1 connection
                 await exec.run(
                     `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)
                      ON CONFLICT("__key__") DO UPDATE SET "__value__" = COALESCE("__value__", 0) + excluded."__value__", "__count__" = "__count__" + excluded."__count__"`,
                     [encoded, sign * numeric, sign],
                 );
+            }
+
+            for (const encoded of touched) {
+                // eslint-disable-next-line no-await-in-loop -- sequential prune on the shared D1 connection (see above).
+                await pruneEmptyGroup(aggTable, encoded);
             }
 
             return;
@@ -1263,8 +1449,12 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const remainingCount = (existing?.count ?? 0) - 1;
 
             if (remainingCount <= 0) {
-                // eslint-disable-next-line unicorn/no-null -- empty min/max group stores NULL value
-                await exec.run(`UPDATE ${quoteIdentifier(aggTable)} SET "__value__" = ?, "__count__" = 0 WHERE "__key__" = ?`, [null, encoded]);
+                // Last contributing row left: remove the group row entirely so
+                // the indexed `groupBy` walk omits it (a zeroed row would surface
+                // a phantom group a SQL `GROUP BY` skips). Scalar `aggregate()`
+                // reads an absent min/max group as null, same as the prior NULL
+                // row, so this stays correct.
+                await exec.run(`DELETE FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [encoded]);
             } else if (existing && removedValue !== undefined && existingValue !== null && removedValue === existingValue) {
                 const recomputed = await recomputeExtreme(tableName, index, removes);
 
@@ -1722,6 +1912,11 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`unknown table: ${tableName}`);
             }
 
+            // Ensure the companion tables exist so the indexed fast-path can
+            // find (and backfill) the `__agg_` companion instead of falling
+            // back to a scan on a binding that never ran the migration helper.
+            await ensureMigrated();
+
             // Reject an off-allowlist `op` up front (it's a compile-time-only
             // type) before it can reach any SQL-emitting path.
             aggregateSqlFunction(aggOptions.op);
@@ -1786,6 +1981,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`unknown table: ${tableName}`);
             }
 
+            // Ensure the `__agg_` companion exists so the indexed count path
+            // can find (and backfill) it rather than scanning.
+            await ensureMigrated();
+
             const countOptions = normalizeCountArgument(whereOrOptions);
 
             if (countOptions.restrictsCounts) {
@@ -1841,6 +2040,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             if (!definition) {
                 return;
             }
+
+            // Companion DDL must exist before the sync hooks below run an
+            // INSERT/DELETE against the fts/agg/rank tables.
+            await ensureMigrated();
 
             const snapshot = await rawRow(tableName, id);
             const existing = decodeRow(definition, snapshot);
@@ -2007,6 +2210,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`unknown table: ${tableName}`);
             }
 
+            // Ensure the `__agg_` companion exists so the indexed groupBy path
+            // can find (and backfill) it rather than scanning.
+            await ensureMigrated();
+
             const agg = groupOptions.agg ?? { op: "count" };
 
             // Reject an off-allowlist reducer `op` before any SQL is emitted.
@@ -2077,6 +2284,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`unknown table: ${tableName}`);
             }
 
+            // Companion DDL must exist before the sync hooks below run an
+            // INSERT against the fts/agg/rank tables.
+            await ensureMigrated();
+
             const withDefaults = applyInsertDefaults(definition, document);
 
             // Refinements declared via `.check(predicate)` fire on the
@@ -2138,6 +2349,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`document not found: ${id}`);
             }
 
+            // Companion DDL must exist before the sync hooks below run an
+            // INSERT/DELETE against the fts/agg/rank tables.
+            await ensureMigrated();
+
             // Capture the RAW stored row alongside the decoded `existing` — the
             // raw values seed the optimistic-concurrency CAS below, before the
             // before-update trigger's `await` window can let a concurrent write
@@ -2193,10 +2408,15 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             // is the public read surface there. Only `.withSearchIndex()` is
             // supported, so a staged search runs and every other terminal op
             // throws the same legacy-reader error the bare `query()` used to.
-            const runSearch = async (stage: SearchStage, limit: number | undefined): Promise<Record<string, unknown>[]> =>
-                (await isFtsAvailable(exec))
+            const runSearch = async (stage: SearchStage, limit: number | undefined): Promise<Record<string, unknown>[]> => {
+                // Ensure the fts5 shadow table exists before a MATCH reads it;
+                // on a no-fts5 engine the scan fallback reads the live table.
+                await ensureMigrated();
+
+                return (await isFtsAvailable(exec))
                     ? searchViaFts(exec, definition, tableName, stage, limit)
                     : searchViaScan(exec, definition, tableName, stage, limit);
+            };
 
             const buildReader = (stage: SearchStage | undefined): TableReaderLike => {
                 const reader: TableReaderLike = {
@@ -2291,6 +2511,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new CountRlsUnsupportedError(tableName);
             }
 
+            // Ensure the `__rank_` companion exists so the indexed rank path
+            // can find (and backfill) it rather than returning null.
+            await ensureMigrated();
+
             const counterReady = await ensureRankBackfilled(tableName, index);
 
             if (!counterReady) {
@@ -2362,6 +2586,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             if (!index) {
                 throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
             }
+
+            // Ensure the `__rank_` companion exists so the indexed rankPage path
+            // can find (and backfill) it rather than returning an empty page.
+            await ensureMigrated();
 
             const counterReady = await ensureRankBackfilled(tableName, index);
 
@@ -2437,6 +2665,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`document not found: ${id}`);
             }
 
+            // Companion DDL must exist before the sync hooks below run an
+            // INSERT/DELETE against the fts/agg/rank tables.
+            await ensureMigrated();
+
             // Always snapshot the RAW stored row — it seeds the optimistic-
             // concurrency CAS below. `previous` (the decoded prior doc) is only
             // needed when a trigger or an aggregate/rank index has to step the
@@ -2487,133 +2719,6 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
     triggerContext = { db: writer, scheduler };
 
     return writer;
-};
-
-/**
- * Materialize the `__agg_&lt;index>` companion tables for every declared
- * `aggregateIndex` on a global table. Global tables in Cirrus ship their own
- * DDL — counter tables are opt-in so production hosts can decide where they
- * live. Tests and dev hosts can call this once after their schema migration to
- * unlock O(1) counts.
- *
- * Idempotent (`CREATE TABLE IF NOT EXISTS`).
- */
-const runD1AggregateMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        const indexes = definition.aggregateIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            continue;
-        }
-
-        for (const index of indexes) {
-            const aggTable = aggregateTableName(tableName, index.name);
-
-            // `__value__` is op-aware now (count / running sum / extreme — NULL
-            // for an empty min/max group) and `__count__` tracks the row count
-            // (avg divisor + empty-group detection). It is nullable; the pre-
-            // reducer-aware shape declared it `NOT NULL`.
-            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared D1 connection.
-            await exec.run(
-                `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} (
-                    "__key__" TEXT PRIMARY KEY,
-                    "__value__" REAL,
-                    "__count__" INTEGER NOT NULL DEFAULT 0
-                )`,
-                [],
-            );
-
-            // Alpha-era companion-rebuild caveat: a binding that materialized
-            // this table before `__count__` existed gets the column added here
-            // (defaulted 0). `CREATE TABLE IF NOT EXISTS` won't reshape an
-            // existing table, so we pragma-check then ALTER — the first read/
-            // write that touches the index re-backfills with real per-op values.
-            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-            const columns = await exec.all(`PRAGMA table_info(${quoteIdentifier(aggTable)})`, []);
-
-            if (!columns.some((column) => column["name"] === "__count__")) {
-                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-                await exec.run(`ALTER TABLE ${quoteIdentifier(aggTable)} ADD COLUMN "__count__" INTEGER NOT NULL DEFAULT 0`, []);
-            }
-        }
-    }
-};
-
-/**
- * Materialize the `__rank_&lt;index>` companion tables for every declared
- * `rankIndex` on a global table. Mirrors `runD1AggregateMigrations` — same
- * opt-in pattern so production hosts decide whether to spend the DDL.
- *
- * Idempotent (`CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`).
- */
-const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        const indexes = definition.rankIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            continue;
-        }
-
-        for (const index of indexes) {
-            const rankTable = rankTableName(tableName, index.name);
-            const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-            const columnDdl = sortColumns.map((column) => `${quoteIdentifier(column)} BLOB`).join(", ");
-            const columnPart = sortColumns.length > 0 ? `, ${columnDdl}` : "";
-
-            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection; the table must exist before its index below.
-            await exec.run(
-                `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(rankTable)} (
-                    "__id__" TEXT PRIMARY KEY,
-                    "__partition__" TEXT NOT NULL${columnPart}
-                )`,
-                [],
-            );
-
-            const orderedColumns = ['"__partition__" ASC'];
-
-            for (const [i, sortKey] of index.sortBy.entries()) {
-                orderedColumns.push(`${quoteIdentifier(sortColumnName(i))} ${sortKey.direction === "desc" ? "DESC" : "ASC"}`);
-            }
-
-            orderedColumns.push('"__id__" ASC');
-
-            const btreeName = `${tableName}__rank_${index.name}__btree`;
-
-            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
-            await exec.run(`CREATE INDEX IF NOT EXISTS ${quoteIdentifier(btreeName)} ON ${quoteIdentifier(rankTable)} (${orderedColumns.join(", ")})`, []);
-        }
-    }
-};
-
-/**
- * Materialize the `__fts_&lt;index>` FTS5 shadow tables for every declared
- * `.searchIndex()` on a global table. Mirrors `runD1AggregateMigrations` — same
- * opt-in pattern so production hosts decide whether to spend the DDL. Only runs
- * on engines that ship FTS5 (D1 does; the `node:sqlite` test runner doesn't,
- * where `.search()` transparently falls back to a scan). `__text__` holds the
- * indexed field; `__id__` (UNINDEXED) joins back to the row.
- *
- * Idempotent (`CREATE VIRTUAL TABLE IF NOT EXISTS`).
- */
-const runD1SearchMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
-    if (!(await isFtsAvailable(exec))) {
-        return;
-    }
-
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        const indexes = definition.searchIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            continue;
-        }
-
-        for (const index of indexes) {
-            const ftName = ftsTableName(tableName, index.name);
-
-            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared D1 connection.
-            await exec.run(`CREATE VIRTUAL TABLE IF NOT EXISTS ${quoteIdentifier(ftName)} USING fts5("__text__", "__id__" UNINDEXED)`, []);
-        }
-    }
 };
 
 export { createD1ContextDatabase as createD1CtxDb, runD1AggregateMigrations, runD1RankMigrations, runD1SearchMigrations };
