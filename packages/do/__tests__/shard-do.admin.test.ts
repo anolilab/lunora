@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
+import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration.js";
 import { runDataMigration } from "../src/data-migration.js";
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
 import type { RankIndexDefinitionLike } from "../src/rank.js";
 import { rankKeyFromDoc } from "../src/rank.js";
-import type { RunShardMigrationArgs, RunShardRankBeforeArgs, RunShardWriteArgs, RunShardWriteResult, ShardDOState } from "../src/shard-do.js";
+import type {
+    RunShardApplyCdcArgs,
+    RunShardApplyCdcResult,
+    RunShardMigrationArgs,
+    RunShardRankBeforeArgs,
+    RunShardWriteArgs,
+    RunShardWriteResult,
+    ShardDOState,
+} from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
 import createSqliteExec from "./_helpers/node-sqlite.js";
 
@@ -711,5 +719,91 @@ describe("shardDO admin cdcSync", () => {
 
         expect(body.result.changes).toStrictEqual([]);
         expect(body.result.cursor).toBe(7);
+    });
+});
+
+/** Mirrors the codegen subclass: overrides runShardApplyCdc with a real writer. */
+class ApplyShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override async runShardApplyCdc(args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult> {
+        const writer = createShardContextDatabase({
+            broadcast: (delta) => {
+                this.recordChangedTable(delta.table);
+            },
+            schema: usersSchema,
+            sql: this.sql as SqlExec,
+        });
+
+        await applyCdcChanges(writer, args.changes);
+
+        return { applied: args.changes.length };
+    }
+}
+
+describe("shardDO admin applyCdc", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema);
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const applyRequest = (changes: unknown[]): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args: { changes }, functionPath: ADMIN_FUNCTIONS.applyCdc }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    const rowCount = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "users"`)[0]?.["c"] ?? 0);
+
+    it("replays an insert + a delete through the writer", async () => {
+        expect.assertions(3);
+
+        const shard = new ApplyShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const seed = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
+        const doomedId = await seed.insert("users", { name: "doomed", version: 1 });
+
+        const response = await shard.fetch(
+            applyRequest([
+                { doc: { _id: "u_keep", name: "Ada", version: 1 }, id: "u_keep", op: "insert", table: "users" },
+                { id: doomedId, op: "delete", table: "users" },
+            ]),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: RunShardApplyCdcResult }>();
+
+        expect(body.result.applied).toBe(2);
+        // The seeded row was deleted and the replayed row inserted — net one row.
+        expect(rowCount()).toBe(1);
+    });
+
+    it("rejects a malformed changes payload (400)", async () => {
+        expect.assertions(1);
+
+        const shard = new ApplyShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(applyRequest([{ id: "x", op: "bogus", table: "users" }]));
+
+        expect(response.status).toBe(400);
     });
 });

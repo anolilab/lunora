@@ -15,6 +15,7 @@ const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
  * the values stay emittable under `--isolatedDeclarations`.
  */
 const ADMIN_FUNCTIONS = {
+    applyCdc: "__cirrus_admin__:applyCdc",
     cdcSync: "__cirrus_admin__:cdcSync",
     exportShard: "__cirrus_admin__:exportShard",
     getLogs: "__cirrus_admin__:getLogs",

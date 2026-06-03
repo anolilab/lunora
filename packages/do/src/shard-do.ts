@@ -340,6 +340,57 @@ interface RunShardCdcSyncArgs {
     sinceSeq: number;
 }
 
+/** Arguments accepted by the `__cirrus_admin__:applyCdc` admin RPC. */
+interface RunShardApplyCdcArgs {
+    changes: ReadonlyArray<CdcChange>;
+}
+
+/** Result of an `applyCdc` replay batch. */
+interface RunShardApplyCdcResult {
+    applied: number;
+}
+
+/**
+ * Validate the `__cirrus_admin__:applyCdc` payload. `changes` must be an array
+ * of CDC entries (`{ table, id, op, doc? }`); each is shape-checked just enough
+ * to reject obvious garbage before it reaches the writer.
+ */
+const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs => {
+    const raw = args["changes"];
+
+    if (!Array.isArray(raw)) {
+        throw Object.assign(new Error("applyCdc: `changes` must be an array"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    const changes = raw.map((entry, index): CdcChange => {
+        const record = entry as Record<string, unknown>;
+        const { op } = record;
+        const table = typeof record["table"] === "string" ? record["table"] : "";
+        const id = typeof record["id"] === "string" ? record["id"] : "";
+
+        if (table === "" || id === "" || (op !== "insert" && op !== "update" && op !== "delete")) {
+            throw Object.assign(new Error(`applyCdc: changes[${String(index)}] must have a table, id, and op of insert|update|delete`), {
+                code: "BAD_REQUEST",
+                name: "CirrusError",
+                status: 400,
+            });
+        }
+
+        const document = typeof record["doc"] === "object" && record["doc"] !== null ? (record["doc"] as Record<string, unknown>) : undefined;
+
+        return {
+            doc: document,
+            id,
+            op,
+            seq: typeof record["seq"] === "number" ? record["seq"] : 0,
+            table,
+            ts: typeof record["ts"] === "number" ? record["ts"] : 0,
+        };
+    });
+
+    return { changes };
+};
+
 /**
  * Validate the `__cirrus_admin__:cdcSync` payload. `sinceSeq` is the caller's
  * per-shard cursor (defaults to 0 = from the beginning); `limit` is an optional
@@ -1100,6 +1151,19 @@ abstract class ShardDO {
     }
 
     /**
+     * Replay a batch of CDC changes into this shard (point-in-time recovery).
+     * Schema-aware — it builds a `createShardCtxDb` writer — so the base class
+     * can't implement it; the codegen-generated subclass overrides this to call
+     * `applyCdcChanges(writer, args.changes)`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult> {
+        return Promise.reject(
+            Object.assign(new Error("applyCdc is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "CirrusError", status: 500 }),
+        );
+    }
+
+    /**
      * Register a subscription on the given socket. Stored via
      * `ws.serializeAttachment` so it survives hibernation.
      *
@@ -1527,6 +1591,16 @@ abstract class ShardDO {
                 // caller's per-shard cursor. The coordinator collects each
                 // shard's `{ changes, cursor }` into one streaming-export batch.
                 const result = this.runShardCdcSync(parseCdcSyncArgs(args));
+
+                return jsonResponse({ result }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.applyCdc) {
+                // Replay a CDC batch into this shard (point-in-time recovery).
+                // The writer mutates rows, so flush touched tables afterward.
+                const result = await this.runShardApplyCdc(parseApplyCdcArgs(args));
+
+                await this.flushChangedTables();
 
                 return jsonResponse({ result }, 200);
             }
@@ -1983,6 +2057,8 @@ abstract class ShardDO {
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
 export type {
     HibernatableWebSocket,
+    RunShardApplyCdcArgs,
+    RunShardApplyCdcResult,
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
