@@ -7,8 +7,9 @@ import type { ReactElement } from "react";
  * `@visulima/email`'s react-email template engine without touching callers.
  */
 const renderEmail = async (element: ReactElement): Promise<{ html: string; text: string }> => {
-    const html = await render(element, { pretty: false });
-    const text = await render(element, { plainText: true });
+    // The two passes share no state and neither depends on the other, so run
+    // them together — any async/IO work inside @react-email/render can overlap.
+    const [html, text] = await Promise.all([render(element, { pretty: false }), render(element, { plainText: true })]);
 
     return { html, text };
 };
