@@ -26,6 +26,7 @@ import type {
     SchedulerLike,
     SchemaLike,
     TableDefinitionLike,
+    TableReaderLike,
     TriggerContextLike,
     TriggerEventLike,
     TriggerOpLike,
@@ -54,6 +55,7 @@ import {
     resolveWith,
     runRowValidators,
     runTriggers,
+    selectIndexForAggregate,
     selectIndexForCount,
     selectIndexForGroupBy,
     sortColumnName,
@@ -121,6 +123,92 @@ const aggregateSqlFunction = (op: string): string => {
 /** Companion-table name for an aggregateIndex (`__agg_` infix matches the DO dialect). */
 const aggregateTableName = (table: string, indexName: string): string => `${table}__agg_${indexName}`;
 
+/**
+ * Structural shape of a `.searchIndex()` declaration. Kept local (not imported
+ * from `@cirrus/do`) because that file owns the FTS surface and doesn't export
+ * the type — mirrored byte-for-byte so a parity test could compare the two.
+ */
+interface SearchIndexDefinitionLike {
+    readonly field: string;
+    readonly filterFields?: ReadonlyArray<string>;
+    readonly name: string;
+}
+
+/** FTS5 shadow-table name for a search index (`__fts_` infix matches the DO dialect). */
+const ftsTableName = (table: string, indexName: string): string => `${table}__fts_${indexName}`;
+
+/**
+ * Split a search string into lowercased alphanumeric tokens. The Unicode
+ * `\p{L}\p{N}` class guarantees tokens carry no SQL/FTS metacharacters, so they
+ * need no escaping beyond the literal-phrase quoting {@link buildFtsMatch} adds.
+ */
+const tokenizeSearch = (query: string): string[] => query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+
+/**
+ * Render tokens as an FTS5 MATCH expression: each token is a quoted literal
+ * phrase (neutralizes reserved words), the final token gains a trailing `*` for
+ * prefix matching (asterisk outside the quotes), and they AND together so every
+ * token must be present — mirroring the fallback scorer's conjunction semantics.
+ */
+const buildFtsMatch = (tokens: ReadonlyArray<string>): string =>
+    tokens.map((token, index) => (index === tokens.length - 1 ? `"${token}"*` : `"${token}"`)).join(" AND ");
+
+/** Coerce a search/filter field value to the text FTS indexes and the scorer scans. */
+const stringifySearchText = (value: unknown): string => {
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (value === null || value === undefined) {
+        return "";
+    }
+
+    if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+        return String(value);
+    }
+
+    // Objects/arrays (and any other non-primitive) are serialized as JSON so
+    // they contribute real text to the scan instead of `[object Object]`.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify is typed `=> string` but returns undefined for a function/symbol value; the ?? keeps the scan text a string at runtime
+    return JSON.stringify(value) ?? "";
+};
+
+/**
+ * Score a document's indexed text against the query tokens with AND semantics:
+ * every non-final token must appear exactly, the final token matches as a
+ * prefix. Returns 0 (no match) unless all tokens are present; otherwise the sum
+ * of occurrences, giving a coarse term-frequency relevance order for the
+ * LIKE-scan fallback used when FTS5 is unavailable.
+ */
+const scoreDocument = (text: string, tokens: ReadonlyArray<string>): number => {
+    const documentTokens = tokenizeSearch(text);
+
+    if (documentTokens.length === 0) {
+        return 0;
+    }
+
+    let score = 0;
+
+    for (const [index, token] of tokens.entries()) {
+        const isLast = index === tokens.length - 1;
+        let occurrences = 0;
+
+        for (const documentToken of documentTokens) {
+            if (isLast ? documentToken.startsWith(token) : documentToken === token) {
+                occurrences += 1;
+            }
+        }
+
+        if (occurrences === 0) {
+            return 0;
+        }
+
+        score += occurrences;
+    }
+
+    return score;
+};
+
 /** Code-unit string comparator (matches the default `Array#sort()` ordering). Hoisted so the keying stays a flat call. */
 const compareCodeUnits = (a: string, b: string): number => {
     if (a < b) {
@@ -178,6 +266,100 @@ const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record
     }
 
     return true;
+};
+
+/**
+ * Coerce a doc field to the numeric value a reducer contributes, or `undefined`
+ * when the value isn't numeric. Mirrors how the SQL scan path treats
+ * `SUM`/`AVG`/`MIN`/`MAX` — a `null`/non-numeric field is skipped (it neither
+ * shifts the running value nor counts toward `avg`'s divisor). Kept byte-for-
+ * byte aligned with the DO twin so a parity test could compare the two.
+ */
+const coerceAggregateNumber = (value: unknown): number | undefined => {
+    if (typeof value === "number") {
+        return Number.isFinite(value) ? value : undefined;
+    }
+
+    return undefined;
+};
+
+/** A backfill accumulator for one companion group: the op-aware value + row count. */
+interface AggregateTally {
+    count: number;
+    value: null | number;
+}
+
+/**
+ * Fold one source row into the per-group {@link AggregateTally} during a
+ * backfill scan, op-aware so the seeded `__value__`/`__count__` match what the
+ * incremental `applyAggregateDelta` maintains. Mirrors the DO twin.
+ */
+const foldAggregateTally = (
+    tallies: Map<string, AggregateTally>,
+    encoded: string,
+    index: AggregateIndexDefinitionLike,
+    document: Record<string, unknown>,
+): void => {
+    // eslint-disable-next-line unicorn/no-null -- empty group's running value seeds as null; the count op overwrites it below
+    const tally = tallies.get(encoded) ?? { count: 0, value: null };
+
+    if (index.op === "count") {
+        tally.count += 1;
+        tally.value = tally.count;
+        tallies.set(encoded, tally);
+
+        return;
+    }
+
+    const numeric = coerceAggregateNumber(document[index.field ?? ""]);
+
+    if (index.op === "sum" || index.op === "avg") {
+        if (numeric !== undefined) {
+            tally.value = (tally.value ?? 0) + numeric;
+            tally.count += 1;
+        }
+
+        tallies.set(encoded, tally);
+
+        return;
+    }
+
+    // min/max: every row counts toward the group; only numeric ones move the extreme.
+    tally.count += 1;
+
+    if (numeric !== undefined) {
+        if (tally.value === null) {
+            tally.value = numeric;
+        } else {
+            tally.value = index.op === "min" ? Math.min(tally.value, numeric) : Math.max(tally.value, numeric);
+        }
+    }
+
+    tallies.set(encoded, tally);
+};
+
+/**
+ * Project a maintained companion row onto the scalar an `aggregate()` reader
+ * returns for `op`. Mirrors the SQL scan's empty-group contract and the DO twin:
+ * `count` keeps its 0-on-empty contract; an absent/empty group is `null` for the
+ * other ops; `avg` divides the running sum by the row count.
+ */
+const readAggregateValue = (op: string, row: { count: number; value: null | number } | undefined): null | number => {
+    if (op === "count") {
+        return row?.value ?? 0;
+    }
+
+    if (!row || row.count === 0) {
+        // eslint-disable-next-line unicorn/no-null -- AggregateResult is `null | number`: null is the documented "no rows matched" result
+        return null;
+    }
+
+    if (op === "avg") {
+        // eslint-disable-next-line unicorn/no-null -- guarded above; keep the empty-divisor branch explicit for type narrowing
+        return row.value === null ? null : row.value / row.count;
+    }
+
+    return row.value;
 };
 
 /** Marker keys that distinguish a restrictable count-options object from a plain where input. */
@@ -240,6 +422,50 @@ const serializeColumnValue = (value: unknown): unknown => {
 
 /** D1 dialect: fields resolve to real columns; values via {@link serializeColumnValue}. */
 const d1WhereStrategy: WhereCompilerStrategy = { fieldRef: columnRef, serialize: serializeColumnValue };
+
+/**
+ * Memoized per-`D1Exec` FTS5 capability probe. D1's SQLite ships FTS5;
+ * `node:sqlite` (used in tests) does not. We create and drop a throwaway virtual
+ * table once per handle and cache the resolving promise — the exec handle is
+ * stable for the ctx-db's lifetime, so this runs at most once per binding. The
+ * cached value is a `Promise` so concurrent first-callers share the single probe
+ * rather than racing two CREATE/DROP round-trips.
+ */
+const ftsAvailabilityCache = new WeakMap<D1Exec, Promise<boolean>>();
+
+const isFtsAvailable = (exec: D1Exec): Promise<boolean> => {
+    const cached = ftsAvailabilityCache.get(exec);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const probe = (async (): Promise<boolean> => {
+        let available: boolean;
+
+        try {
+            await exec.run(`CREATE VIRTUAL TABLE IF NOT EXISTS "__cirrus_fts_probe" USING fts5(x)`, []);
+            available = true;
+        } catch {
+            available = false;
+        } finally {
+            // Always attempt the DROP so the probe table never lingers — if the
+            // CREATE threw, the IF EXISTS makes the DROP a no-op.
+            try {
+                await exec.run(`DROP TABLE IF EXISTS "__cirrus_fts_probe"`, []);
+            } catch {
+                // The probe table cleanup is best-effort; swallow so the
+                // availability decision still propagates.
+            }
+        }
+
+        return available;
+    })();
+
+    ftsAvailabilityCache.set(exec, probe);
+
+    return probe;
+};
 
 /** A table's fields paired with their column meta, skipping fields that declare none. */
 const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
@@ -455,6 +681,153 @@ const decodeRows = (definition: TableDefinitionLike, rows: ReadonlyArray<Record<
     }
 
     return documents;
+};
+
+/** The staged `.withSearchIndex().search()` query the D1 reader executes. */
+interface SearchStage {
+    definition: SearchIndexDefinitionLike;
+    field: string;
+    filters: { field: string; value: unknown }[];
+    hasQuery: boolean;
+    indexName: string;
+    query: string;
+}
+
+/**
+ * Run a search via the FTS5 shadow table: MATCH the query against the indexed
+ * text column, JOIN back to the document table on the stored id, narrow by any
+ * `.eq()` filter fields (real columns in the D1 dialect), and order by FTS5's
+ * `rank` (bm25 — best first). Mirrors the DO twin, swapping the JSON-blob SELECT
+ * for the column-per-field `m.*` and `columnRef` filter quoting.
+ */
+const searchViaFts = async (
+    exec: D1Exec,
+    definition: TableDefinitionLike,
+    tableName: string,
+    search: SearchStage,
+    limit: number | undefined,
+): Promise<Record<string, unknown>[]> => {
+    const tokens = tokenizeSearch(search.query);
+
+    if (tokens.length === 0) {
+        return [];
+    }
+
+    const ftName = ftsTableName(tableName, search.indexName);
+    // MATCH must target the FTS table (by name or an indexed column), never the
+    // bare alias `f` — `f MATCH ?` is a "no such column: f" error in SQLite.
+    // We match the indexed `__text__` column so the alias join still works.
+    const where: string[] = [`f."__text__" MATCH ?`];
+    const params: unknown[] = [buildFtsMatch(tokens)];
+
+    for (const filter of search.filters) {
+        where.push(`m.${columnRef(filter.field)} = ?`);
+        params.push(serializeColumnValue(filter.value));
+    }
+
+    // `f.rank` is FTS5's bm25 relevance (best first); the `_creationTime DESC`
+    // tiebreak matches the scan fallback so equal-rank rows order newest-first
+    // on both engines.
+    let querySql = `SELECT m.* FROM ${quoteIdentifier(ftName)} f JOIN ${quoteIdentifier(tableName)} m ON m."id" = f."__id__" WHERE ${where.join(" AND ")} ORDER BY f.rank, m."_creationTime" DESC`;
+
+    if (typeof limit === "number") {
+        querySql += ` LIMIT ${String(Math.max(0, Math.floor(limit)))}`;
+    }
+
+    const rows = await exec.all(querySql, params);
+
+    return decodeRows(definition, rows);
+};
+
+/**
+ * Portable fallback for engines without FTS5 (the `node:sqlite` test runner):
+ * pull candidate rows (narrowed by `.eq()` filters in SQL), tokenize the indexed
+ * field in JS, and rank with `scoreDocument`. Matches the FTS path's AND +
+ * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
+ * by creation time (newest first).
+ */
+const searchViaScan = async (
+    exec: D1Exec,
+    definition: TableDefinitionLike,
+    tableName: string,
+    search: SearchStage,
+    limit: number | undefined,
+): Promise<Record<string, unknown>[]> => {
+    const tokens = tokenizeSearch(search.query);
+
+    if (tokens.length === 0) {
+        return [];
+    }
+
+    const where: string[] = [];
+    const params: unknown[] = [];
+
+    for (const filter of search.filters) {
+        where.push(`${columnRef(filter.field)} = ?`);
+        params.push(serializeColumnValue(filter.value));
+    }
+
+    let querySql = `SELECT * FROM ${quoteIdentifier(tableName)}`;
+
+    if (where.length > 0) {
+        querySql += ` WHERE ${where.join(" AND ")}`;
+    }
+
+    const rows = await exec.all(querySql, params);
+    const scored: { creationTime: number; doc: Record<string, unknown>; score: number }[] = [];
+
+    for (const record of decodeRows(definition, rows)) {
+        const score = scoreDocument(stringifySearchText(record[search.field]), tokens);
+
+        if (score > 0) {
+            scored.push({ creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0, doc: record, score });
+        }
+    }
+
+    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime);
+
+    const documents = scored.map((entry) => entry.doc);
+
+    return typeof limit === "number" ? documents.slice(0, Math.max(0, Math.floor(limit))) : documents;
+};
+
+/**
+ * Builder passed to `.withSearchIndex(name, q => …)`: `.search(field, query)`
+ * stages the full-text match (exactly once), `.eq(field, value)` narrows by a
+ * declared filter field. Mirrors the DO `createSearchBuilder` guards verbatim.
+ */
+const createSearchBuilder = (
+    search: SearchStage,
+    tableName: string,
+): { eq: (field: string, value: unknown) => unknown; search: (field: string, query: string) => unknown } => {
+    const builder = {
+        eq: (field: string, value: unknown) => {
+            if (!search.definition.filterFields?.includes(field)) {
+                throw new Error(`field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
+            }
+
+            search.filters.push({ field, value });
+
+            return builder;
+        },
+        search: (field: string, query: string) => {
+            if (field !== search.definition.field) {
+                throw new Error(`search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`);
+            }
+
+            // Mutate the caller-owned stage in place (same object the reader
+            // executes); alias to a local so the param itself isn't reassigned.
+            const stage = search;
+
+            stage.field = field;
+            stage.query = query;
+            stage.hasQuery = true;
+
+            return builder;
+        },
+    };
+
+    return builder;
 };
 
 /**
@@ -725,10 +1098,12 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         }
 
         const by = index.by ?? [];
-        const tallies = new Map<string, number>();
+        const tallies = new Map<string, AggregateTally>();
 
         // Keyset pagination on `id` — tallies accumulate incrementally so the
-        // memory footprint is `unique(by)` keys, not row count.
+        // memory footprint is `unique(by)` keys, not row count. The fold is
+        // op-aware (sum/avg accumulate the running sum, min/max the extreme),
+        // mirroring the DO backfill.
         await forEachRowPaged(exec, definition, tableName, (document) => {
             if (index.where && !matchesStaticWhere(document, index.where)) {
                 return;
@@ -736,16 +1111,20 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             const encoded = encodeAggregateKey(by, document);
 
-            tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
+            foldAggregateTally(tallies, encoded, index, document);
         });
 
         const aggTable = aggregateTableName(tableName, index.name);
 
         await exec.run(`DELETE FROM ${quoteIdentifier(aggTable)}`, []);
 
-        for (const [encoded, count] of tallies) {
+        for (const [encoded, tally] of tallies) {
             // eslint-disable-next-line no-await-in-loop -- counter rows are inserted sequentially on the single shared D1 connection; D1Exec exposes no batch API here.
-            await exec.run(`INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)`, [encoded, count]);
+            await exec.run(`INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)`, [
+                encoded,
+                tally.value,
+                tally.count,
+            ]);
         }
 
         backfilled.set(cacheKey, true);
@@ -753,20 +1132,175 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         return true;
     };
 
-    const stepAggregate = async (tableName: string, index: AggregateIndexDefinitionLike, document: Record<string, unknown>, delta: number): Promise<void> => {
-        if (index.where && !matchesStaticWhere(document, index.where)) {
+    /**
+     * Recompute a min/max group's extreme from the source table, scoped to the
+     * group's `by`-tuple and the index's static `where`, against the D1 column
+     * dialect. Runs AFTER the physical row write, so it sees the post-write
+     * source and returns the surviving extreme (`null` when none survives). The
+     * caller pins `__count__` from its own tracked tally.
+     */
+    const recomputeExtreme = async (tableName: string, index: AggregateIndexDefinitionLike, document: Record<string, unknown>): Promise<null | number> => {
+        const sqlFunction = aggregateSqlFunction(index.op);
+        const field = index.field ?? "";
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+
+        for (const key of index.by ?? []) {
+            // eslint-disable-next-line unicorn/no-null -- canonical key tuple: a missing by-field is matched as NULL, mirroring encodeAggregateKey's null-fill
+            const value = serializeColumnValue(document[key] ?? null);
+
+            if (value === null) {
+                conditions.push(`${columnRef(key)} IS NULL`);
+            } else {
+                conditions.push(`${columnRef(key)} = ?`);
+                params.push(value);
+            }
+        }
+
+        for (const [key, expected] of Object.entries(index.where ?? {})) {
+            const literal = expected !== null && typeof expected === "object" && !Array.isArray(expected) ? (expected as { eq: unknown }).eq : expected;
+            const value = serializeColumnValue(literal);
+
+            if (value === null) {
+                conditions.push(`${columnRef(key)} IS NULL`);
+            } else {
+                conditions.push(`${columnRef(key)} = ?`);
+                params.push(value);
+            }
+        }
+
+        const whereSql = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+        const rows = await exec.all(`SELECT ${sqlFunction}(${columnRef(field)}) AS value FROM ${quoteIdentifier(tableName)}${whereSql}`, params);
+
+        return aggregateScalar(rows[0]?.["value"]);
+    };
+
+    /**
+     * Op-aware companion maintenance for a single index, against the D1 column
+     * dialect. Mirrors the DO `applyAggregateDelta`: count/sum/avg step
+     * `__value__`/`__count__` directly; min/max bump cheaply on the add side and
+     * recompute from the source when the stored extreme leaves or the group
+     * empties. An update is remove-old then add-new. Companion maintenance runs
+     * after the physical row write, so the recompute sees the post-write source.
+     */
+    /* eslint-disable sonarjs/cognitive-complexity -- op-aware (count/sum/avg/min/max) maintenance over remove-old + add-new branches; splitting it would scatter the single companion-row update across helpers and read worse */
+    const applyAggregateDelta = async (
+        tableName: string,
+        index: AggregateIndexDefinitionLike,
+        previous: Record<string, unknown> | undefined,
+        next: Record<string, unknown> | undefined,
+    ): Promise<void> => {
+        const aggTable = aggregateTableName(tableName, index.name);
+        const { op } = index;
+        const field = index.field ?? "";
+
+        const removes = previous && (!index.where || matchesStaticWhere(previous, index.where)) ? previous : undefined;
+        const adds = next && (!index.where || matchesStaticWhere(next, index.where)) ? next : undefined;
+
+        if (!removes && !adds) {
             return;
         }
 
-        const aggTable = aggregateTableName(tableName, index.name);
-        const encoded = encodeAggregateKey(index.by ?? [], document);
+        if (op === "count") {
+            for (const [document, delta] of [
+                [removes, -1],
+                [adds, 1],
+            ] as const) {
+                if (!document) {
+                    continue;
+                }
 
-        await exec.run(
-            `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
-             ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__"`,
-            [encoded, delta],
-        );
+                const encoded = encodeAggregateKey(index.by ?? [], document);
+
+                // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared D1 connection
+                await exec.run(
+                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)
+                     ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__", "__count__" = "__count__" + excluded."__count__"`,
+                    [encoded, delta, delta],
+                );
+            }
+
+            return;
+        }
+
+        if (op === "sum" || op === "avg") {
+            for (const [document, sign] of [
+                [removes, -1],
+                [adds, 1],
+            ] as const) {
+                if (!document) {
+                    continue;
+                }
+
+                const numeric = coerceAggregateNumber(document[field]);
+
+                if (numeric === undefined) {
+                    continue;
+                }
+
+                const encoded = encodeAggregateKey(index.by ?? [], document);
+
+                // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared D1 connection
+                await exec.run(
+                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)
+                     ON CONFLICT("__key__") DO UPDATE SET "__value__" = COALESCE("__value__", 0) + excluded."__value__", "__count__" = "__count__" + excluded."__count__"`,
+                    [encoded, sign * numeric, sign],
+                );
+            }
+
+            return;
+        }
+
+        // min/max.
+        if (removes) {
+            const encoded = encodeAggregateKey(index.by ?? [], removes);
+            const removedValue = coerceAggregateNumber(removes[field]);
+            const existingRows = await exec.all(`SELECT "__value__" AS value, "__count__" AS count FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [
+                encoded,
+            ]);
+            const existing = existingRows[0] as { count: number; value: null | number } | undefined;
+            const existingValue = aggregateScalar(existing?.value);
+            const remainingCount = (existing?.count ?? 0) - 1;
+
+            if (remainingCount <= 0) {
+                // eslint-disable-next-line unicorn/no-null -- empty min/max group stores NULL value
+                await exec.run(`UPDATE ${quoteIdentifier(aggTable)} SET "__value__" = ?, "__count__" = 0 WHERE "__key__" = ?`, [null, encoded]);
+            } else if (existing && removedValue !== undefined && existingValue !== null && removedValue === existingValue) {
+                const recomputed = await recomputeExtreme(tableName, index, removes);
+
+                await exec.run(`UPDATE ${quoteIdentifier(aggTable)} SET "__value__" = ?, "__count__" = ? WHERE "__key__" = ?`, [
+                    recomputed,
+                    remainingCount,
+                    encoded,
+                ]);
+            } else {
+                await exec.run(`UPDATE ${quoteIdentifier(aggTable)} SET "__count__" = "__count__" - 1 WHERE "__key__" = ?`, [encoded]);
+            }
+        }
+
+        if (adds) {
+            const encoded = encodeAggregateKey(index.by ?? [], adds);
+            const addedValue = coerceAggregateNumber(adds[field]);
+
+            if (addedValue === undefined) {
+                await exec.run(
+                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, 1)
+                     ON CONFLICT("__key__") DO UPDATE SET "__count__" = "__count__" + 1`,
+                    // eslint-disable-next-line unicorn/no-null -- seeds an extreme-less group with NULL value
+                    [encoded, null],
+                );
+            } else {
+                const op2 = op === "min" ? "MIN" : "MAX";
+
+                await exec.run(
+                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, 1)
+                     ON CONFLICT("__key__") DO UPDATE SET "__value__" = ${op2}(COALESCE("__value__", excluded."__value__"), excluded."__value__"), "__count__" = "__count__" + 1`,
+                    [encoded, addedValue],
+                );
+            }
+        }
     };
+    /* eslint-enable sonarjs/cognitive-complexity */
 
     /** Pre-write hook: rebuild counters once per ctx-db before the row mutation. */
     const ensureBackfilledForTable = async (tableName: string): Promise<void> => {
@@ -804,15 +1338,8 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 continue;
             }
 
-            if (previous) {
-                // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared D1 connection (see above).
-                await stepAggregate(tableName, index, previous, -1);
-            }
-
-            if (next) {
-                // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared D1 connection (see above).
-                await stepAggregate(tableName, index, next, 1);
-            }
+            // eslint-disable-next-line no-await-in-loop -- op-aware step runs sequentially on the shared D1 connection (see above).
+            await applyAggregateDelta(tableName, index, previous, next);
         }
     };
 
@@ -960,6 +1487,33 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
     };
 
     /**
+     * Keep the FTS5 shadow tables in step with a row write. A no-op when the
+     * table declares no search indexes or when FTS5 is unavailable (the scan
+     * fallback reads the live table, so nothing to mirror). Delete then insert
+     * makes it idempotent across insert/update; `document === undefined` deletes
+     * only (row removal). The DO twin gates on the same availability probe.
+     */
+    const syncSearch = async (tableName: string, id: string, document: Record<string, unknown> | undefined): Promise<void> => {
+        const indexes = schema.tables[tableName]?.searchIndexes;
+
+        if (!indexes || indexes.length === 0 || !(await isFtsAvailable(exec))) {
+            return;
+        }
+
+        for (const index of indexes) {
+            const ftName = ftsTableName(tableName, index.name);
+
+            // eslint-disable-next-line no-await-in-loop -- FTS syncs run sequentially on the single shared D1 connection so DELETE/INSERT pairs don't interleave across indexes.
+            await exec.run(`DELETE FROM ${quoteIdentifier(ftName)} WHERE "__id__" = ?`, [id]);
+
+            if (document) {
+                // eslint-disable-next-line no-await-in-loop -- sequential companion INSERT on the shared D1 connection (see above).
+                await exec.run(`INSERT INTO ${quoteIdentifier(ftName)} ("__text__", "__id__") VALUES (?, ?)`, [stringifySearchText(document[index.field]), id]);
+            }
+        }
+    };
+
+    /**
      * Precomputed `(table → timing → op)` matcher: matches the DO ctx-db
      * fast-path so writer methods can skip the `await fireTriggers(...)`
      * microtask when no trigger is declared for the (timing, op).
@@ -1102,10 +1656,12 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
     };
 
     /**
-     * Indexed `count` groupBy fast-path: when an aggregateIndex's `by` matches
-     * the request, every group answer is already in the `__agg_` companion.
-     * Returns the group entries, or `undefined` to signal "fall through to the
-     * SQL `GROUP BY` scan" (no matching index, or its counter isn't built).
+     * Indexed groupBy fast-path: when an aggregateIndex's `by` matches the
+     * request, every group answer is already in the reducer-aware `__agg_`
+     * companion — read each group's `__value__`/`__count__` and project via
+     * `readAggregateValue`. Covers every op (count/sum/avg/min/max). Returns the
+     * group entries, or `undefined` to signal "fall through to the SQL
+     * `GROUP BY` scan" (no matching index, or its counter isn't built).
      */
     const tryIndexedGroupBy = async (
         tableName: string,
@@ -1131,23 +1687,34 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         // Fully-specified group key → at most one companion row.
         if (partialKeys.length === (planned.index.by ?? []).length && partialKeys.length > 0) {
             const encoded = encodeAggregateKey(planned.index.by ?? [], planned.partial);
-            const rowsIndexed = await exec.all(`SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [encoded]);
+            const rowsIndexed = await exec.all(`SELECT "__value__" AS value, "__count__" AS count FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [
+                encoded,
+            ]);
 
-            return rowsIndexed.length > 0 ? [{ key: { ...planned.partial }, value: aggregateScalar(rowsIndexed[0]?.["value"]) }] : [];
+            if (rowsIndexed.length === 0) {
+                return [];
+            }
+
+            const row = rowsIndexed[0] as { count: number; value: null | number };
+
+            return [{ key: { ...planned.partial }, value: readAggregateValue(agg.op, { count: row.count, value: aggregateScalar(row.value) }) }];
         }
 
         // Open group key → enumerate every companion row.
-        const rowsIndexed = await exec.all(`SELECT "__key__" AS key, "__value__" AS value FROM ${quoteIdentifier(aggTable)}`, []);
+        const rowsIndexed = await exec.all(`SELECT "__key__" AS key, "__value__" AS value, "__count__" AS count FROM ${quoteIdentifier(aggTable)}`, []);
 
         return rowsIndexed.map((row) => {
+            const typed = row as { count: number; key: string; value: null | number };
+
             return {
-                key: JSON.parse(row["key"] as string) as Record<string, unknown>,
-                value: aggregateScalar((row as { value: unknown }).value),
+                key: JSON.parse(typed.key) as Record<string, unknown>,
+                value: readAggregateValue(agg.op, { count: typed.count, value: aggregateScalar(typed.value) }),
             };
         });
     };
 
     const writer: DatabaseWriterLike = {
+        // eslint-disable-next-line sonarjs/cognitive-complexity -- routes count/sum/avg/min/max through the indexed companion vs scan fallback; the branching reads clearer inline than split across per-op helpers
         async aggregate(tableName, aggOptions: AggregateOptions): Promise<AggregateResult> {
             const definition = schema.tables[tableName];
 
@@ -1171,15 +1738,31 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
             }
 
-            // No indexed fast-path for non-count reducers: the `__agg_`
-            // companion stores a *row count* per `by`-group (the counter is
-            // stepped by ±1 and backfilled by tallying +1/row, regardless of
-            // the index's declared `op`). Reading it for sum/avg/min/max would
-            // return the row COUNT, not the reduction. Until the counter is
-            // made reducer-aware, sum/avg/min/max always fall through to the
-            // SQL scan below, which computes the correct value. `count` never
-            // reaches here (it early-returns to `writer.count` above, which
-            // does use the counter).
+            // Indexed fast-path: the `__agg_` companion is now reducer-aware
+            // (`__value__` holds the sum / running sum / extreme, `__count__`
+            // the row count), so a matching `(by, field, op)` index whose
+            // counter is materialized answers sum/avg/min/max in one row lookup.
+            // We only attempt it when no baseWhere is set; the RLS predicate
+            // falls through to the SQL scan below.
+            if (definition.aggregateIndexes && !aggOptions.baseWhere) {
+                const planned = selectIndexForAggregate(definition.aggregateIndexes, aggOptions.op, aggOptions.field, aggOptions.where);
+
+                if (planned) {
+                    const counterReady = await ensureBackfilled(tableName, planned.index);
+
+                    if (counterReady) {
+                        const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
+                        const aggTable = aggregateTableName(tableName, planned.index.name);
+                        const rows = await exec.all(`SELECT "__value__" AS value, "__count__" AS count FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, [
+                            encoded,
+                        ]);
+                        const row = rows[0] as { count: number; value: null | number } | undefined;
+
+                        return readAggregateValue(aggOptions.op, row === undefined ? undefined : { count: row.count, value: aggregateScalar(row.value) });
+                    }
+                }
+            }
+
             const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
 
@@ -1310,6 +1893,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             await syncAggregates(tableName, existing ?? undefined, undefined);
             await syncRanks(tableName, id, existing ?? undefined, undefined);
+            await syncSearch(tableName, id, undefined);
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
                 await fireTriggers("after", "delete", { id, op: "delete", previous: existing ?? undefined, table: tableName });
@@ -1434,14 +2018,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             // Indexed path: when no baseWhere is set and an aggregateIndex's
             // `by` exactly matches `groupOptions.by`, every group answer is
-            // already in the companion table. baseWhere falls through to scan.
-            //
-            // Restricted to `count`: the `__agg_` companion stores a *row
-            // count* per group regardless of the index's declared `op` (see
-            // `stepAggregate`/`ensureBackfilled`), so reading it for
-            // sum/avg/min/max would return counts. Non-count reducers fall
-            // through to the correct SQL `GROUP BY` scan below.
-            if (agg.op === "count" && definition.aggregateIndexes && !groupOptions.baseWhere) {
+            // already in the reducer-aware companion table — covers every op
+            // (count/sum/avg/min/max) now that `__value__`/`__count__` are
+            // maintained per op. baseWhere falls through to scan so RLS composes.
+            if (definition.aggregateIndexes && !groupOptions.baseWhere) {
                 const indexed = await tryIndexedGroupBy(tableName, definition.aggregateIndexes, agg, groupOptions);
 
                 if (indexed !== undefined) {
@@ -1536,6 +2116,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             await syncAggregates(tableName, undefined, documentWithMeta);
             await syncRanks(tableName, id, undefined, documentWithMeta);
+            await syncSearch(tableName, id, documentWithMeta);
 
             if (hasMatchingTrigger(tableName, "after", "insert")) {
                 await fireTriggers("after", "insert", { doc: documentWithMeta, id, op: "insert", table: tableName });
@@ -1592,14 +2173,102 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             await syncAggregates(tableName, existing, merged);
             await syncRanks(tableName, id, existing, merged);
+            await syncSearch(tableName, id, merged);
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
             }
         },
 
-        query() {
-            throw new Error("the legacy query()/withIndex() reader is not available on the D1 (global) backend; use findMany");
+        query(tableName) {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
+            }
+
+            const LEGACY_READER_ERROR = "the legacy query()/withIndex() reader is not available on the D1 (global) backend; use findMany";
+
+            // The D1 backend doesn't expose the scan/index reader — `findMany`
+            // is the public read surface there. Only `.withSearchIndex()` is
+            // supported, so a staged search runs and every other terminal op
+            // throws the same legacy-reader error the bare `query()` used to.
+            const runSearch = async (stage: SearchStage, limit: number | undefined): Promise<Record<string, unknown>[]> =>
+                (await isFtsAvailable(exec))
+                    ? searchViaFts(exec, definition, tableName, stage, limit)
+                    : searchViaScan(exec, definition, tableName, stage, limit);
+
+            const buildReader = (stage: SearchStage | undefined): TableReaderLike => {
+                const reader: TableReaderLike = {
+                    async collect() {
+                        if (!stage) {
+                            throw new Error(LEGACY_READER_ERROR);
+                        }
+
+                        return runSearch(stage, undefined);
+                    },
+                    filter() {
+                        throw new Error(LEGACY_READER_ERROR);
+                    },
+                    async first() {
+                        if (!stage) {
+                            throw new Error(LEGACY_READER_ERROR);
+                        }
+
+                        const rows = await runSearch(stage, 1);
+
+                        // eslint-disable-next-line unicorn/no-null -- documented `first()` result shape (Doc | null) returned to callers
+                        return rows[0] ?? null;
+                    },
+                    // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike.paginate returns a Promise; search queries don't support pagination on either backend
+                    async paginate() {
+                        if (stage) {
+                            throw new Error("pagination is not supported on search queries; use .take(n) or .collect()");
+                        }
+
+                        throw new Error(LEGACY_READER_ERROR);
+                    },
+                    async take(limit) {
+                        if (!stage) {
+                            throw new Error(LEGACY_READER_ERROR);
+                        }
+
+                        return runSearch(stage, limit);
+                    },
+                    withIndex() {
+                        throw new Error(LEGACY_READER_ERROR);
+                    },
+                    withSearchIndex(indexName, search) {
+                        // eslint-disable-next-line sonarjs/no-nested-functions -- the .find predicate sits inside the reader builder's terminal; hoisting it out for one lookup would be more indirection than it saves
+                        const searchDefinition = (definition.searchIndexes ?? []).find((index) => index.name === indexName);
+
+                        if (!searchDefinition) {
+                            throw new Error(`unknown search index "${indexName}" on table "${tableName}"`);
+                        }
+
+                        const searchStage: SearchStage = {
+                            definition: searchDefinition,
+                            field: searchDefinition.field,
+                            filters: [],
+                            hasQuery: false,
+                            indexName,
+                            query: "",
+                        };
+
+                        search(createSearchBuilder(searchStage, tableName) as Parameters<typeof search>[0]);
+
+                        if (!searchStage.hasQuery) {
+                            throw new Error(`search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
+                        }
+
+                        return buildReader(searchStage);
+                    },
+                };
+
+                return reader;
+            };
+
+            return buildReader(undefined);
         },
 
         async rank(tableName, indexName, rankOptions): Promise<null | RankResult> {
@@ -1807,6 +2476,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             await syncAggregates(tableName, previous, replaced);
             await syncRanks(tableName, id, previous, replaced);
+            await syncSearch(tableName, id, replaced);
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: replaced, id, op: "update", previous, table: tableName });
@@ -1839,14 +2509,32 @@ const runD1AggregateMigrations = async (exec: D1Exec, schema: SchemaLike): Promi
         for (const index of indexes) {
             const aggTable = aggregateTableName(tableName, index.name);
 
+            // `__value__` is op-aware now (count / running sum / extreme — NULL
+            // for an empty min/max group) and `__count__` tracks the row count
+            // (avg divisor + empty-group detection). It is nullable; the pre-
+            // reducer-aware shape declared it `NOT NULL`.
             // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared D1 connection.
             await exec.run(
                 `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} (
                     "__key__" TEXT PRIMARY KEY,
-                    "__value__" REAL NOT NULL
+                    "__value__" REAL,
+                    "__count__" INTEGER NOT NULL DEFAULT 0
                 )`,
                 [],
             );
+
+            // Alpha-era companion-rebuild caveat: a binding that materialized
+            // this table before `__count__` existed gets the column added here
+            // (defaulted 0). `CREATE TABLE IF NOT EXISTS` won't reshape an
+            // existing table, so we pragma-check then ALTER — the first read/
+            // write that touches the index re-backfills with real per-op values.
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+            const columns = await exec.all(`PRAGMA table_info(${quoteIdentifier(aggTable)})`, []);
+
+            if (!columns.some((column) => column["name"] === "__count__")) {
+                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+                await exec.run(`ALTER TABLE ${quoteIdentifier(aggTable)} ADD COLUMN "__count__" INTEGER NOT NULL DEFAULT 0`, []);
+            }
         }
     }
 };
@@ -1897,5 +2585,36 @@ const runD1RankMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<vo
     }
 };
 
-export { createD1ContextDatabase as createD1CtxDb, runD1AggregateMigrations, runD1RankMigrations };
+/**
+ * Materialize the `__fts_&lt;index>` FTS5 shadow tables for every declared
+ * `.searchIndex()` on a global table. Mirrors `runD1AggregateMigrations` — same
+ * opt-in pattern so production hosts decide whether to spend the DDL. Only runs
+ * on engines that ship FTS5 (D1 does; the `node:sqlite` test runner doesn't,
+ * where `.search()` transparently falls back to a scan). `__text__` holds the
+ * indexed field; `__id__` (UNINDEXED) joins back to the row.
+ *
+ * Idempotent (`CREATE VIRTUAL TABLE IF NOT EXISTS`).
+ */
+const runD1SearchMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
+    if (!(await isFtsAvailable(exec))) {
+        return;
+    }
+
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        const indexes = definition.searchIndexes;
+
+        if (!indexes || indexes.length === 0) {
+            continue;
+        }
+
+        for (const index of indexes) {
+            const ftName = ftsTableName(tableName, index.name);
+
+            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared D1 connection.
+            await exec.run(`CREATE VIRTUAL TABLE IF NOT EXISTS ${quoteIdentifier(ftName)} USING fts5("__text__", "__id__" UNINDEXED)`, []);
+        }
+    }
+};
+
+export { createD1ContextDatabase as createD1CtxDb, runD1AggregateMigrations, runD1RankMigrations, runD1SearchMigrations };
 export type { D1ContextDatabaseOptions as D1CtxDbOptions, D1Exec };
