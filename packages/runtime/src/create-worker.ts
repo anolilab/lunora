@@ -108,6 +108,21 @@ type AdminTableResolver = (table: string) => ShardingInfo | undefined;
  */
 type GlobalExportFunction = (request: { tables: ReadonlyArray<string> }) => AsyncIterable<{ doc: Record<string, unknown>; table: string }>;
 
+/**
+ * Read a page of the `.global()` (D1) change-data-capture log past `sinceSeq`
+ * for the admin sync endpoint. Wire it to `@cirrus/d1`'s `readD1CdcChanges`.
+ * When omitted, the sync endpoint returns only shard-local changes.
+ */
+type GlobalCdcSyncFunction = (request: { limit?: number; sinceSeq: number }) => Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }>;
+
+/**
+ * Replay a batch of `.global()` (D1) CDC changes for the admin apply endpoint
+ * (point-in-time recovery). Wire it to `applyCdcChanges` on a D1 writer;
+ * returns the number applied. When omitted, the apply endpoint replays only
+ * shard-local changes.
+ */
+type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
+
 /** Bulk import of `.global()` rows. Returns insert counts + errors merged across tables. */
 type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; startLine?: number }) => Promise<{
     conflicts: number;
@@ -224,6 +239,64 @@ interface AuthIntrospector {
     listUsers: (options: { limit?: number; offset?: number }) => Promise<AuthPage<AuthUser>>;
 }
 
+/**
+ * Cron controller handed to the worker's `scheduled()` entry by the Workers
+ * runtime. `cron` is the exact trigger expression that fired (matched against
+ * {@link WorkerOptions.crons} keys and {@link WorkerOptions.backupCron});
+ * `scheduledTime` is the firing time in epoch-ms, used as the backup id so the
+ * snapshot is named after the moment it represents rather than wall-clock skew.
+ */
+interface ScheduledControllerLike {
+    cron: string;
+    noRetry?: () => void;
+    scheduledTime: number;
+}
+
+/**
+ * A cron-trigger handler registered on {@link WorkerOptions.crons}. The worker's
+ * `scheduled()` entry invokes the handler whose map key equals the firing
+ * trigger's `cron` expression. Runs server-side with no end-user identity.
+ */
+type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
+
+/**
+ * R2-like sink for scheduled backups. Structurally a subset of `@cirrus/storage`'s
+ * `R2BucketLike` (and of the raw R2 binding), so passing `env.BACKUPS` straight
+ * through satisfies it. `put` writes the NDJSON snapshot and its manifest
+ * sidecar; `list`/`delete` drive retention pruning when
+ * {@link WorkerOptions.backupRetain} is set.
+ */
+interface BackupStore {
+    delete: (key: string) => Promise<unknown>;
+    list: (options?: { cursor?: string; limit?: number; prefix?: string }) => Promise<{
+        cursor?: string;
+        objects: ReadonlyArray<{ key: string }>;
+        truncated?: boolean;
+    }>;
+    put: (
+        key: string,
+        body: ArrayBuffer | Blob | null | ReadableStream | string,
+        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
+    ) => Promise<unknown>;
+}
+
+/**
+ * Manifest sidecar written next to each scheduled backup's NDJSON object (at
+ * `&lt;file>.manifest.json`). Mirrors the manifest entry the CLI records for local
+ * backups so both backup planes describe a snapshot the same way;
+ * `cron`/`scheduledTime` additionally record which trigger produced it.
+ */
+interface BackupManifest {
+    bytes: number;
+    createdAt: string;
+    cron: string;
+    file: string;
+    id: string;
+    rows: number;
+    scheduledTime: number;
+    tables?: string;
+}
+
 interface WorkerOptions {
     /**
      * Admin bearer token expected by the export/import endpoints. When unset,
@@ -246,6 +319,12 @@ interface WorkerOptions {
      * configured.
      */
     allowUnauthenticatedShardAccess?: boolean;
+
+    /**
+     * Replay `.global()` (D1) CDC changes for the admin apply endpoint
+     * (point-in-time recovery). When omitted, apply covers only shard-local tables.
+     */
+    applyGlobals?: GlobalCdcApplyFunction;
 
     /**
      * Read-only introspector for the auth store's users and sessions, backing
@@ -287,10 +366,58 @@ interface WorkerOptions {
     authorizeShard?: (identity: ResolvedIdentity | null, shardKey: string) => boolean | Promise<boolean>;
 
     /**
+     * Cron expression that triggers the built-in backup. When set alongside
+     * {@link WorkerOptions.backupStore} and {@link WorkerOptions.adminToken}, the
+     * worker's `scheduled()` entry runs a full export and writes an NDJSON
+     * snapshot + manifest sidecar to the backup store whenever a cron trigger
+     * with this exact expression fires. Must match an entry in the worker's
+     * wrangler `triggers.crons` (and the string is compared verbatim). Omit it
+     * and no automatic backup runs.
+     */
+    backupCron?: string;
+
+    /**
+     * Key prefix the scheduled backup writes under (default `"backups/"`). The
+     * NDJSON object lands at `&lt;prefix>cirrus-backup-&lt;id>.ndjson` and its manifest
+     * at the same key plus `.manifest.json`.
+     */
+    backupPrefix?: string;
+
+    /**
+     * Retention bound for scheduled backups: keep only the newest N snapshots
+     * under {@link WorkerOptions.backupPrefix}, pruning older NDJSON objects and
+     * their manifests after each run. Omit (or `0`) to keep every backup.
+     */
+    backupRetain?: number;
+
+    /**
+     * R2-like store the scheduled backup writes snapshots to. Pass the bound R2
+     * bucket (`env.BACKUPS`) directly — its shape satisfies {@link BackupStore}.
+     * Without it (or without {@link WorkerOptions.backupCron}) no automatic
+     * backup runs.
+     */
+    backupStore?: BackupStore;
+
+    /**
+     * Table allowlist for the scheduled backup. Omit to back up every table
+     * (shard-local + `.global()`). Mirrors the export endpoint's `tables`.
+     */
+    backupTables?: ReadonlyArray<string>;
+
+    /**
+     * Cron-trigger handlers keyed by their exact cron expression. The worker's
+     * `scheduled()` entry dispatches the handler whose key equals the firing
+     * trigger's `cron`. Independent of the built-in backup — a handler keyed on
+     * the same expression as {@link WorkerOptions.backupCron} runs alongside it.
+     */
+    crons?: Record<string, CronHandler>;
+
+    /**
      * D1 binding for `.global()` tables. Currently unused by the routing
      * layer; downstream packages will read it from `env.DB` directly.
      */
     d1?: unknown;
+
     /** Default shard key used when an envelope omits one. */
     defaultShardKey?: string;
 
@@ -396,6 +523,7 @@ interface WorkerOptions {
      * `instanceName` passed to `createScheduler` (both default to `default`).
      */
     schedulerInstanceName?: string;
+
     /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
     shardDO: ShardNamespaceLike;
 
@@ -407,6 +535,12 @@ interface WorkerOptions {
      * responds `STORAGE_NOT_CONFIGURED`.
      */
     storageList?: StorageListFunction;
+
+    /**
+     * Page the `.global()` (D1) change-data-capture log for the admin sync
+     * endpoint. When omitted, the sync feed covers only shard-local tables.
+     */
+    syncGlobals?: GlobalCdcSyncFunction;
 }
 
 interface RpcContext {
@@ -482,6 +616,8 @@ const MIGRATE_PATH = "/_cirrus/migrate";
 const SCHEDULER_DISPATCH_PATH = "/_cirrus/scheduler/dispatch";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
+const SYNC_PATH = "/_cirrus/admin/sync";
+const APPLY_PATH = "/_cirrus/admin/apply";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
@@ -1093,7 +1229,12 @@ const checkAdminWsToken = (request: Request, expected: string | undefined): bool
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
  * be re-exported directly as `export default createWorker(...)`.
  */
-const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response> } => {
+const createWorker = (
+    options: WorkerOptions,
+): {
+    fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
+    scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
+} => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
     // Fan-out and non-default shard routing are authorization-open when neither
@@ -1239,6 +1380,105 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         return forwardToShard(options.shardDO, shardKey, forwarded);
     };
 
+    type ExportRow = { doc: Record<string, unknown>; table: string };
+
+    /**
+     * Split a requested table list into shard-local vs `.global()` buckets.
+     * `tables === undefined` (every table) yields two empty lists — the callers
+     * treat that case specially.
+     */
+    const partitionExportTables = (tables: ReadonlyArray<string> | undefined): { globalTables: string[]; shardLocalTables: string[] } => {
+        const shardLocalTables: string[] = [];
+        const globalTables: string[] = [];
+
+        if (tables && tables.length > 0) {
+            for (const table of tables) {
+                const info = options.resolveTableSharding?.(table);
+
+                if (info?.mode.kind === "global") {
+                    globalTables.push(table);
+                } else {
+                    shardLocalTables.push(table);
+                }
+            }
+        }
+
+        return { globalTables, shardLocalTables };
+    };
+
+    /**
+     * Fan the shard-local export out via the coordinator and write each
+     * successful shard's rows. A failed shard is skipped (its error was already
+     * surfaced through the fan-out roll-up).
+     */
+    const exportShardLocalRows = async (
+        coordinator: QueryCoordinator,
+        forwardedHeaders: Record<string, string>,
+        tables: ReadonlyArray<string> | undefined,
+        shardLocalTables: ReadonlyArray<string>,
+        writeRow: (row: ExportRow) => void,
+    ): Promise<void> => {
+        // Skip only when the caller named tables and none are shard-local. When
+        // tables is undefined the per-shard exporter visits every shard-local table.
+        if (tables !== undefined && shardLocalTables.length === 0) {
+            return;
+        }
+
+        const exportTables = tables === undefined ? [] : shardLocalTables;
+        // We still need a table list to seed the registry probe. Fall back to
+        // `resolveTableSharding`'s keys if the caller passed none — best effort;
+        // a project without the resolver will simply not fan out automatically.
+        const probeFallback = tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
+        const probeTables = exportTables.length > 0 ? exportTables : probeFallback;
+
+        const result = await coordinator.orchestrateExport(options.shardDO, {
+            args: { tables: exportTables },
+            headers: forwardedHeaders,
+            tables: probeTables,
+        });
+
+        for (const shard of result.shards) {
+            if (shard.error) {
+                continue;
+            }
+
+            for (const row of shard.rows ?? []) {
+                writeRow(row);
+            }
+        }
+    };
+
+    /**
+     * Produce export rows — shard-local first (from `orchestrateExport`'s
+     * collected per-shard envelopes), then `.global()` rows (streamed from the
+     * `exportGlobals` helper) — invoking `writeRow` for each. `tables ===
+     * undefined` means "every table". Shared by the admin export endpoint (which
+     * streams the rows back as NDJSON) and the scheduled R2 backup (which writes
+     * them to the backup store).
+     */
+    const streamExportRows = async (
+        coordinator: QueryCoordinator,
+        forwardedHeaders: Record<string, string>,
+        tables: ReadonlyArray<string> | undefined,
+        writeRow: (row: ExportRow) => void,
+    ): Promise<void> => {
+        const { globalTables, shardLocalTables } = partitionExportTables(tables);
+
+        await exportShardLocalRows(coordinator, forwardedHeaders, tables, shardLocalTables, writeRow);
+
+        // Globals: stream rows from the D1 helper when configured.
+        const exportGlobalsFunction = options.exportGlobals;
+        const wantGlobals = tables === undefined || globalTables.length > 0;
+
+        if (wantGlobals && exportGlobalsFunction) {
+            const tablesArgument = tables === undefined ? [] : globalTables;
+
+            for await (const row of exportGlobalsFunction({ tables: tablesArgument })) {
+                writeRow(row);
+            }
+        }
+    };
+
     const handleExport = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
             throw new CirrusError("Export endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -1258,90 +1498,19 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
 
-        // Partition the requested tables into shard-local vs global. `null`
-        // tables means "every table" — we let the per-shard exporter decide.
-        const shardLocalTables: string[] = [];
-        const globalTables: string[] = [];
-
-        if (body.tables && body.tables.length > 0) {
-            for (const table of body.tables) {
-                const info = options.resolveTableSharding?.(table);
-
-                if (info?.mode.kind === "global") {
-                    globalTables.push(table);
-                } else {
-                    shardLocalTables.push(table);
-                }
-            }
-        }
-
-        const wantGlobals = body.tables === undefined || globalTables.length > 0;
-        const exportGlobalsFunction = options.exportGlobals;
-
-        type WriteRow = (row: { doc: Record<string, unknown>; table: string }) => void;
-
-        // Shard-local: fan the export out via the coordinator and write each
-        // successful shard's rows. A failed shard is skipped (its error was
-        // already surfaced through the fan-out roll-up).
-        const writeShardLocalRows = async (writeRow: WriteRow): Promise<void> => {
-            if (body.tables !== undefined && shardLocalTables.length === 0) {
-                return;
-            }
-
-            const exportTables = body.tables === undefined ? [] : shardLocalTables;
-            // When tables is undefined the per-shard exporter visits every
-            // shard-local table, but we still need a table list to seed the
-            // registry probe. Fall back to `resolveTableSharding`'s keys if the
-            // caller passed none — best effort; a project without the resolver
-            // will simply not fan out automatically.
-            const probeFallback = body.tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
-            const probeTables = exportTables.length > 0 ? exportTables : probeFallback;
-
-            const result = await coordinator.orchestrateExport(options.shardDO, {
-                args: { tables: exportTables },
-                headers: forwardedHeaders,
-                tables: probeTables,
-            });
-
-            for (const shard of result.shards) {
-                if (shard.error) {
-                    continue;
-                }
-
-                for (const row of shard.rows ?? []) {
-                    writeRow(row);
-                }
-            }
-        };
-
-        // Globals: stream rows from the D1 helper when configured.
-        const writeGlobalRows = async (writeRow: WriteRow): Promise<void> => {
-            if (!wantGlobals || !exportGlobalsFunction) {
-                return;
-            }
-
-            const tablesArgument = body.tables === undefined ? [] : globalTables;
-
-            for await (const row of exportGlobalsFunction({ tables: tablesArgument })) {
-                writeRow(row);
-            }
-        };
-
-        // Stream NDJSON: shard-local rows first (from `orchestrateExport`'s
-        // collected envelopes), then global rows (from the D1 helper). The
-        // shard fan-out is materialised because each shard returns a single
-        // envelope; we still write the response incrementally so a slow
-        // consumer never inflates worker memory.
+        // Stream NDJSON: shard-local rows first, then global rows. The shard
+        // fan-out is materialised because each shard returns a single envelope;
+        // we still write the response incrementally so a slow consumer never
+        // inflates worker memory.
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
                 const encoder = new TextEncoder();
-                const writeRow: WriteRow = (row) => {
+                const writeRow = (row: ExportRow): void => {
                     controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
                 };
 
                 try {
-                    await writeShardLocalRows(writeRow);
-                    await writeGlobalRows(writeRow);
+                    await streamExportRows(coordinator, forwardedHeaders, body.tables, writeRow);
                     controller.close();
                 } catch (error: unknown) {
                     controller.error(error);
@@ -1350,6 +1519,97 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         });
 
         return new Response(stream, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
+    };
+
+    /**
+     * Streaming-export feed (Fivetran/Airbyte-style). The caller posts a
+     * per-shard cursor map (`{ cursors: { shardKey: seq }, globalCursor }`) and
+     * gets back each shard's change page plus its new cursor, and the global
+     * (D1) page when `syncGlobals` is configured. Stateless: the consumer owns
+     * the cursors and re-posts them to resume, so the worker holds no offsets.
+     */
+    const handleCdcSync = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const coordinator = options.queryCoordinator;
+
+        if (!coordinator) {
+            throw new CirrusError("Sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const raw = (await request.json().catch(() => {
+            return {};
+        })) as Record<string, unknown>;
+        const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
+        const limit = typeof raw["limit"] === "number" ? raw["limit"] : undefined;
+        const globalCursor = typeof raw["globalCursor"] === "number" ? raw["globalCursor"] : 0;
+        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        // Shard discovery mirrors export: explicit tables, else every known table.
+        const probeTables = requestedTables ?? collectKnownTables(options.resolveTableSharding);
+
+        const shardResult = await coordinator.orchestrateCdcSync(options.shardDO, {
+            cursors,
+            headers: forwardedHeaders,
+            limit,
+            tables: probeTables,
+        });
+
+        const global = options.syncGlobals ? await options.syncGlobals({ limit, sinceSeq: globalCursor }) : undefined;
+
+        return Response.json({ global, shards: shardResult.shards }, { status: 200 });
+    };
+
+    /**
+     * Replay endpoint behind `cirrus backup restore --to &lt;time>`. Accepts
+     * per-shard pre-bucketed batches (the shape `/sync` emits, so the caller
+     * just forwards each shard's changes back to the same shard — no
+     * re-bucketing, which also sidesteps deletes carrying no shard-key field)
+     * plus optional `globalChanges`. Applies them via `applyCdcChanges` and
+     * returns the counts.
+     */
+    const handleApplyCdc = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Apply endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin apply endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const coordinator = options.queryCoordinator;
+
+        if (!coordinator) {
+            throw new CirrusError("Apply endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const raw = (await request.json().catch(() => {
+            return {};
+        })) as Record<string, unknown>;
+        const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
+        const batches = rawBatches
+            .map((batch) => batch as { changes?: unknown; shardKey?: unknown })
+            .filter(
+                (batch): batch is { changes: ReadonlyArray<Record<string, unknown>>; shardKey: string } =>
+                    typeof batch.shardKey === "string" && Array.isArray(batch.changes),
+            );
+        const globalChanges = Array.isArray(raw["globalChanges"]) ? (raw["globalChanges"] as ReadonlyArray<Record<string, unknown>>) : [];
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const shardResult = await coordinator.orchestrateApplyCdc(options.shardDO, { batches, headers: forwardedHeaders });
+
+        const globalApplied = globalChanges.length > 0 && options.applyGlobals ? await options.applyGlobals({ changes: globalChanges }) : 0;
+
+        return Response.json({ applied: shardResult.applied + globalApplied, failed: shardResult.failed, ok: shardResult.ok }, { status: 200 });
     };
 
     const handleImport = async (request: Request, env: unknown): Promise<Response> => {
@@ -1853,6 +2113,189 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         }
     };
 
+    /** Safety bound on the retention list loop — far above any realistic backup count. */
+    const MAX_PRUNE_PAGES = 1000;
+
+    /**
+     * Enforce {@link WorkerOptions.backupRetain} by keeping only the newest N
+     * snapshots under `prefix` and deleting the older NDJSON objects + their
+     * manifests. Backup keys embed an ISO timestamp (colons swapped for dashes),
+     * which sorts lexicographically by recency, so a descending key sort is a
+     * recency sort. A no-op when retention is unset or non-positive.
+     */
+    const pruneBackups = async (store: BackupStore, prefix: string): Promise<void> => {
+        const retain = options.backupRetain;
+
+        if (retain === undefined || retain <= 0) {
+            return;
+        }
+
+        const manifestKeys: string[] = [];
+        let cursor: string | undefined;
+
+        for (let page = 0; page < MAX_PRUNE_PAGES; page += 1) {
+            // eslint-disable-next-line no-await-in-loop -- R2 list is paged; each request resumes from the prior page's cursor.
+            const listing = await store.list({ cursor, prefix });
+
+            for (const object of listing.objects) {
+                if (object.key.endsWith(".manifest.json")) {
+                    manifestKeys.push(object.key);
+                }
+            }
+
+            if (!listing.truncated || listing.cursor === undefined) {
+                break;
+            }
+
+            cursor = listing.cursor;
+        }
+
+        // Newest first; everything past the retention window is pruned.
+        const stale = manifestKeys.toSorted((a, b) => b.localeCompare(a)).slice(retain);
+
+        await Promise.all(
+            stale.flatMap((manifestKey) => {
+                const ndjsonKey = manifestKey.slice(0, -".manifest.json".length);
+
+                return [store.delete(manifestKey), store.delete(ndjsonKey)];
+            }),
+        );
+    };
+
+    /**
+     * Run the built-in backup: export every selected table to NDJSON and write
+     * it (plus a manifest sidecar) to {@link WorkerOptions.backupStore}. The
+     * snapshot is keyed by the trigger's `scheduledTime` so it's named after the
+     * moment it represents. Requires `backupStore`, `queryCoordinator`, and
+     * `adminToken` — the export fans out to each shard's admin gate, which the
+     * bearer authenticates. Missing prerequisites throw so the platform records
+     * the failed cron invocation rather than silently skipping the backup.
+     */
+    const runScheduledBackup = async (controller: ScheduledControllerLike): Promise<void> => {
+        const store = options.backupStore;
+        const coordinator = options.queryCoordinator;
+
+        if (!store) {
+            throw new CirrusError("scheduled backup requires a `backupStore` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
+        }
+
+        if (!coordinator) {
+            throw new CirrusError("scheduled backup requires a `queryCoordinator` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
+        }
+
+        if (!options.adminToken || options.adminToken.length === 0) {
+            throw new CirrusError("scheduled backup requires an `adminToken` to authenticate the per-shard export gate", {
+                code: "BACKUP_NOT_CONFIGURED",
+                status: 500,
+            });
+        }
+
+        // The export fans out to each shard's `/rpc` admin op; the shard gate
+        // checks this bearer. No end-user identity is involved.
+        const forwardedHeaders: Record<string, string> = { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" };
+        const tables = options.backupTables;
+
+        // Stream the NDJSON straight into R2 so the whole snapshot is never held
+        // in worker memory at once. `put` resolves after the stream is fully
+        // consumed, so the row/byte counters are final by the time we write the
+        // manifest. Shard fan-out is materialised per shard (one envelope each),
+        // but the concatenated body still flows through the stream incrementally.
+        let rows = 0;
+        let bytes = 0;
+        let streamError: Error | undefined;
+
+        const stream = new ReadableStream<Uint8Array>({
+            async pull(streamController) {
+                const encoder = new TextEncoder();
+                const writeRow = (row: ExportRow): void => {
+                    const encoded = encoder.encode(`${JSON.stringify(row)}\n`);
+
+                    rows += 1;
+                    bytes += encoded.byteLength;
+                    streamController.enqueue(encoded);
+                };
+
+                try {
+                    await streamExportRows(coordinator, forwardedHeaders, tables, writeRow);
+                    streamController.close();
+                } catch (error: unknown) {
+                    // Capture the failure so it propagates past `put` — a stream
+                    // error alone would leave a truncated object with no signal.
+                    streamError = error instanceof Error ? error : new Error(String(error));
+                    streamController.error(error);
+                }
+            },
+        });
+
+        const prefix = options.backupPrefix ?? "backups/";
+        const timestamp = new Date(controller.scheduledTime).toISOString();
+        // Colons/periods are awkward in object keys; keep the raw id for the manifest.
+        const fileKey = `${prefix}cirrus-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
+        const manifestKey = `${fileKey}.manifest.json`;
+
+        await store.put(fileKey, stream, { httpMetadata: { contentType: "application/x-ndjson" } });
+
+        if (streamError !== undefined) {
+            throw streamError;
+        }
+
+        const manifest: BackupManifest = {
+            bytes,
+            createdAt: timestamp,
+            cron: controller.cron,
+            file: fileKey,
+            id: timestamp,
+            rows,
+            scheduledTime: controller.scheduledTime,
+            ...(tables ? { tables: tables.join(",") } : {}),
+        };
+
+        await store.put(manifestKey, `${JSON.stringify(manifest, undefined, 2)}\n`, { httpMetadata: { contentType: "application/json" } });
+
+        await pruneBackups(store, prefix);
+    };
+
+    /**
+     * The worker's `scheduled()` entry: dispatch the firing cron trigger to the
+     * matching {@link WorkerOptions.crons} handler (if any) and run the built-in
+     * backup when the trigger matches {@link WorkerOptions.backupCron}. Both run
+     * when a user handler shares the backup's expression. Errors from each are
+     * collected and rethrown together so one failure neither masks the other nor
+     * is silently swallowed — the platform sees the cron invocation fail.
+     */
+    const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike): Promise<void> => {
+        const errors: Error[] = [];
+        const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
+
+        const userHandler = options.crons?.[controller.cron];
+
+        if (userHandler) {
+            try {
+                await userHandler(controller, env, context);
+            } catch (error: unknown) {
+                errors.push(toError(error));
+            }
+        }
+
+        if (options.backupStore && options.backupCron !== undefined && options.backupCron === controller.cron) {
+            try {
+                await runScheduledBackup(controller);
+            } catch (error: unknown) {
+                errors.push(toError(error));
+            }
+        }
+
+        const [first] = errors;
+
+        if (errors.length === 1 && first) {
+            throw first;
+        }
+
+        if (errors.length > 1) {
+            throw new AggregateError(errors, `scheduled("${controller.cron}") had ${String(errors.length)} failure(s)`);
+        }
+    };
+
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
     // the request (and, where needed, env/url) and returns the response.
     type InternalRoute = (request: Request, env: unknown, url: URL) => Promise<Response> | Response;
@@ -1863,6 +2306,8 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         [MIGRATE_PATH]: (request, env) => handleMigrate(request, env),
         [EXPORT_PATH]: (request, env) => handleExport(request, env),
         [IMPORT_PATH]: (request, env) => handleImport(request, env),
+        [SYNC_PATH]: (request, env) => handleCdcSync(request, env),
+        [APPLY_PATH]: (request, env) => handleApplyCdc(request, env),
         [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
         [SCHEDULED_PATH]: (request) => handleScheduledList(request),
@@ -1934,6 +2379,9 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
                 return toErrorResponse(error);
             }
         },
+        async scheduled(controller, env, context) {
+            await handleScheduled(controller, env, context);
+        },
     };
 };
 
@@ -1948,6 +2396,9 @@ export type {
     AuthSession,
     AuthTimestamp,
     AuthUser,
+    BackupManifest,
+    BackupStore,
+    CronHandler,
     ExecutionContextLike,
     FunctionDescriptor,
     FunctionRegistryEntry,
@@ -1964,6 +2415,7 @@ export type {
     Route,
     RpcContext,
     RpcEnvelope,
+    ScheduledControllerLike,
     ShardingInfo,
     StorageListFunction as StorageListFn,
     StorageObject,

@@ -1,11 +1,21 @@
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
+import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration.js";
 import { runDataMigration } from "../src/data-migration.js";
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
-import type { RunShardMigrationArgs, RunShardWriteArgs, RunShardWriteResult, ShardDOState } from "../src/shard-do.js";
+import type { RankIndexDefinitionLike } from "../src/rank.js";
+import { rankKeyFromDoc } from "../src/rank.js";
+import type {
+    RunShardApplyCdcArgs,
+    RunShardApplyCdcResult,
+    RunShardMigrationArgs,
+    RunShardRankBeforeArgs,
+    RunShardWriteArgs,
+    RunShardWriteResult,
+    ShardDOState,
+} from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
 import createSqliteExec from "./_helpers/node-sqlite.js";
 
@@ -435,8 +445,7 @@ describe("shardDO admin row writes", () => {
     const rowCount = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "users"`)[0]?.["c"] ?? 0);
 
     it("inserts a row and returns its assigned id", async () => {
-        // 3 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
-        expect.assertions(3);
+        expect.assertions(4);
 
         const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
@@ -448,7 +457,7 @@ describe("shardDO admin row writes", () => {
 
         expect(body.result.op).toBe("insert");
 
-        expectTypeOf(body.result.id).toBeString();
+        expect(typeof body.result.id).toBe("string");
 
         expect(rowCount()).toBe(1);
     });
@@ -520,5 +529,281 @@ describe("shardDO admin row writes", () => {
 
         expect(response.status).toBe(404);
         await expect(response.json()).resolves.toMatchObject({ error: { code: "UNKNOWN_TABLE" } });
+    });
+});
+
+/** A global leaderboard rank index (`partitionBy: []`) on the `messages` table. */
+const rankByScoreDesc: RankIndexDefinitionLike = {
+    name: "leaderboard",
+    on: "messages",
+    sortBy: [{ direction: "desc", field: "score" }],
+};
+
+const messagesRankSchema: SchemaLike = {
+    tables: {
+        messages: {
+            indexes: [],
+            rankIndexes: [rankByScoreDesc],
+            shape: {
+                channelId: { kind: "string" },
+                score: { kind: "number" },
+            },
+        },
+    },
+};
+
+/**
+ * Drives the `__cirrus_admin__:rankBefore` op through a real schema-aware
+ * writer, mirroring the codegen-generated subclass. Proves the cross-shard
+ * rank's per-shard `{before, total}` count is served over the admin path.
+ */
+class RankableShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override async runShardRankBefore(args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
+        const writer = createShardContextDatabase({
+            broadcast: (delta) => {
+                this.recordChangedTable(delta.table);
+            },
+            schema: messagesRankSchema,
+            sql: this.sql as SqlExec,
+        });
+
+        return writer.rankBefore!(args.table, args.index, {
+            partitionKey: args.partitionKey,
+            rowId: args.rowId,
+            sortValues: args.sortValues,
+        });
+    }
+}
+
+describe("shardDO admin rankBefore", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, messagesRankSchema);
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const rankBeforeRequest = (args: Record<string, unknown>): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: ADMIN_FUNCTIONS.rankBefore }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    it("counts strictly-before rows for an explicit key on this shard", async () => {
+        expect.assertions(2);
+
+        // This shard owns a disjoint slice of the global leaderboard partition.
+        const seed = createShardContextDatabase({ schema: messagesRankSchema, sql: database.sql });
+
+        await seed.insert("messages", { _id: "m1", channelId: "c1", score: 90 }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m2", channelId: "c1", score: 70 }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m3", channelId: "c1", score: 20 }, { allowExplicitId: true });
+
+        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Rank a foreign row scored 75: desc order → m1(90) is strictly before
+        // it, m2(70)/m3(20) are after. before=1, total=3 (this shard's rows).
+        const key = rankKeyFromDoc(rankByScoreDesc, { _id: "x1", channelId: "c9", score: 75 });
+        const response = await shard.fetch(rankBeforeRequest({ index: "leaderboard", table: "messages", ...key }));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { before: number; total: number } }>();
+
+        expect(body.result).toEqual({ before: 1, total: 3 });
+    });
+
+    it("rejects a non-array sortValues (400)", async () => {
+        expect.assertions(1);
+
+        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(rankBeforeRequest({ index: "leaderboard", partitionKey: "", rowId: "x1", sortValues: 5, table: "messages" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("base ShardDO rejects rankBefore as not implemented (no override)", async () => {
+        expect.assertions(2);
+
+        class BareShard extends ShardDO {
+            // eslint-disable-next-line class-methods-use-this -- override stub; the admin-rank path never dispatches an RPC
+            public override async handleRpc(): Promise<unknown> {
+                return null;
+            }
+        }
+
+        const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(rankBeforeRequest({ index: "leaderboard", partitionKey: "", rowId: "x1", sortValues: [75], table: "messages" }));
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
+    });
+});
+
+describe("shardDO admin cdcSync", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+
+    const stateFor = (sql: unknown): ShardDOState => {
+        return {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: sql as ShardDOState["storage"]["sql"] },
+        };
+    };
+
+    const cdcRequest = (args: Record<string, unknown>): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: ADMIN_FUNCTIONS.cdcSync }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    it("pages this shard's changelog past sinceSeq", async () => {
+        expect.assertions(3);
+
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema, { cdc: true });
+
+        const writer = createShardContextDatabase({ cdc: true, schema: usersSchema, sql: database.sql });
+
+        await writer.insert("users", { _id: "u_1", name: "Ada", version: 1 }, { allowExplicitId: true });
+        await writer.patch("u_1", { name: "Ada Lovelace" });
+
+        const shard = new AdminShard(stateFor(database.sql), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(cdcRequest({ sinceSeq: 0 }));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { changes: { op: string }[]; cursor: number } }>();
+
+        expect(body.result.changes.map((change) => change.op)).toStrictEqual(["insert", "update"]);
+        expect(body.result.cursor).toBe(2);
+    });
+
+    it("returns an empty page that leaves the cursor untouched when the shard has no changelog", async () => {
+        expect.assertions(2);
+
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema); // CDC disabled — no __cdc_log table.
+
+        const shard = new AdminShard(stateFor(database.sql), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(cdcRequest({ sinceSeq: 7 }));
+        const body = await response.json<{ result: { changes: unknown[]; cursor: number } }>();
+
+        expect(body.result.changes).toStrictEqual([]);
+        expect(body.result.cursor).toBe(7);
+    });
+});
+
+/** Mirrors the codegen subclass: overrides runShardApplyCdc with a real writer. */
+class ApplyShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override async runShardApplyCdc(args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult> {
+        const writer = createShardContextDatabase({
+            broadcast: (delta) => {
+                this.recordChangedTable(delta.table);
+            },
+            schema: usersSchema,
+            sql: this.sql as SqlExec,
+        });
+
+        await applyCdcChanges(writer, args.changes);
+
+        return { applied: args.changes.length };
+    }
+}
+
+describe("shardDO admin applyCdc", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema);
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const applyRequest = (changes: unknown[]): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args: { changes }, functionPath: ADMIN_FUNCTIONS.applyCdc }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    const rowCount = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "users"`)[0]?.["c"] ?? 0);
+
+    it("replays an insert + a delete through the writer", async () => {
+        expect.assertions(3);
+
+        const shard = new ApplyShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const seed = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
+        const doomedId = await seed.insert("users", { name: "doomed", version: 1 });
+
+        const response = await shard.fetch(
+            applyRequest([
+                { doc: { _id: "u_keep", name: "Ada", version: 1 }, id: "u_keep", op: "insert", table: "users" },
+                { id: doomedId, op: "delete", table: "users" },
+            ]),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: RunShardApplyCdcResult }>();
+
+        expect(body.result.applied).toBe(2);
+        // The seeded row was deleted and the replayed row inserted — net one row.
+        expect(rowCount()).toBe(1);
+    });
+
+    it("rejects a malformed changes payload (400)", async () => {
+        expect.assertions(1);
+
+        const shard = new ApplyShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(applyRequest([{ id: "x", op: "bogus", table: "users" }]));
+
+        expect(response.status).toBe(400);
     });
 });

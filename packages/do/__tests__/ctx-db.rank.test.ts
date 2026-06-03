@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { backfillRankIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { RankIndexDefinitionLike } from "../src/rank.js";
+import { rankKeyFromDoc } from "../src/rank.js";
 import createSqliteExec from "./_helpers/node-sqlite.js";
 
 /**
@@ -296,6 +297,94 @@ describe("ctx-db rank", () => {
 
             await expect(writer.rank("messages", "nope", { row: "anything" })).rejects.toThrow(/unknown rankIndex/);
             await expect(writer.rankPage("messages", "nope")).rejects.toThrow(/unknown rankIndex/);
+        });
+    });
+
+    describe("rankBefore + rankKeyFromDoc", () => {
+        it("rankKeyFromDoc derives the partition key, raw sort values, and id from a doc", () => {
+            expect.assertions(2);
+
+            const channelDoc = { _creationTime: 200, _id: "m7", archived: false, channelId: "c1", score: 0 };
+
+            expect(rankKeyFromDoc(byChannelByCreation, channelDoc)).toEqual({
+                partitionKey: JSON.stringify({ channelId: "c1" }),
+                rowId: "m7",
+                sortValues: [200],
+            });
+
+            // partitionBy: [] → the single global partition keyed on "".
+            expect(rankKeyFromDoc(byScoreDesc, channelDoc)).toEqual({ partitionKey: "", rowId: "m7", sortValues: [0] });
+        });
+
+        it("rankBefore agrees with rank() for a locally-owned row", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter(makeSchema(byScoreDesc));
+
+            await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 50 }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m3", archived: false, channelId: "c1", score: 30 }, { allowExplicitId: true });
+
+            // For an owned row, rankBefore(key) === { before: position - 1, total }.
+            for (const id of ["m1", "m2", "m3"]) {
+                // eslint-disable-next-line no-await-in-loop -- sequential reads against one DB; assertions accumulate
+                const ranked = await writer.rank("messages", "leaderboard", { row: id });
+                // eslint-disable-next-line no-await-in-loop -- ditto
+                const doc = await writer.get(id);
+                const key = rankKeyFromDoc(byScoreDesc, doc!);
+
+                // eslint-disable-next-line no-await-in-loop -- ditto
+                await expect(writer.rankBefore!("messages", "leaderboard", key)).resolves.toEqual({
+                    before: ranked!.position - 1,
+                    total: ranked!.total,
+                });
+            }
+        });
+
+        it("rankBefore counts on a peer companion that does NOT own the row being ranked", async () => {
+            expect.assertions(2);
+
+            // A global leaderboard partition (partitionBy: []) split across two
+            // shards. The "peer" writer holds a disjoint row set — the row we
+            // rank lives on another shard, so a by-id lookup would miss it, but
+            // rankBefore counts strictly-before the EXPLICIT key regardless.
+            const peer = setupWriter(makeSchema(byScoreDesc));
+
+            await peer.insert("messages", { _id: "p1", archived: false, channelId: "c1", score: 90 }, { allowExplicitId: true });
+            await peer.insert("messages", { _id: "p2", archived: false, channelId: "c1", score: 70 }, { allowExplicitId: true });
+            await peer.insert("messages", { _id: "p3", archived: false, channelId: "c1", score: 20 }, { allowExplicitId: true });
+
+            // Rank a foreign row scored 75: desc order → p1(90) is strictly
+            // before it, p2(70)/p3(20) are after. before=1, total=3 (the peer's
+            // own partition rows).
+            const foreign = { _id: "x1", archived: false, channelId: "c9", score: 75 };
+
+            await expect(peer.rankBefore!("messages", "leaderboard", rankKeyFromDoc(byScoreDesc, foreign))).resolves.toEqual({ before: 1, total: 3 });
+
+            // A foreign row that would top the board: nothing strictly before it.
+            const top = { _id: "x2", archived: false, channelId: "c9", score: 999 };
+
+            await expect(peer.rankBefore!("messages", "leaderboard", rankKeyFromDoc(byScoreDesc, top))).resolves.toEqual({ before: 0, total: 3 });
+        });
+
+        it("rankBefore restrictsCounts throws COUNT_RLS_UNSUPPORTED — same seam as rank()", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter(makeSchema(byScoreDesc));
+
+            await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 }, { allowExplicitId: true });
+
+            await expect(
+                writer.rankBefore!("messages", "leaderboard", { partitionKey: "", restrictsCounts: true, rowId: "x1", sortValues: [5] }),
+            ).rejects.toMatchObject({ code: "COUNT_RLS_UNSUPPORTED", name: "CirrusError" });
+        });
+
+        it("rankBefore throws on an unknown rankIndex name", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter(makeSchema(byScoreDesc));
+
+            await expect(writer.rankBefore!("messages", "nope", { partitionKey: "", rowId: "x", sortValues: [] })).rejects.toThrow(/unknown rankIndex/);
         });
     });
 });

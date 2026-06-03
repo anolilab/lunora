@@ -16,6 +16,8 @@ export {
     selectExportTables,
     validateImportRow,
 } from "./admin-export-import.js";
+export type { AggregateTally } from "./aggregate-tally.js";
+export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally.js";
 export type {
     AggregateIndexDefinitionLike,
     AggregateOp,
@@ -35,6 +37,7 @@ export {
 } from "./aggregates.js";
 export type {
     BroadcastDelta,
+    CdcChange,
     Clock,
     ColumnMetaLike,
     CountArgs,
@@ -54,7 +57,16 @@ export type {
     WriteEvent,
     WriteHook,
 } from "./ctx-db.js";
-export { backfillAggregateIndexes, backfillRankIndexes, createShardCtxDb, runShardMigrations } from "./ctx-db.js";
+export {
+    applyCdcChanges,
+    backfillAggregateIndexes,
+    backfillRankIndexes,
+    CDC_LOG_TABLE,
+    createShardCtxDb,
+    readCdcChanges,
+    runShardMigrations,
+    trimCdcChanges,
+} from "./ctx-db.js";
 export type {
     DataMigrationDocument,
     DataMigrationLike,
@@ -81,13 +93,17 @@ export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache.js";
 export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache.js";
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations.js";
 export { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
+export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text.js";
 export type { SessionRecord } from "./session-do.js";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
 export type {
     HibernatableWebSocket,
+    RunShardApplyCdcArgs,
+    RunShardApplyCdcResult,
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
+    RunShardRankBeforeArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
     ShardDOOptions,

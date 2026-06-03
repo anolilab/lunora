@@ -56,6 +56,37 @@ This runs:
 CI should run `cirrus codegen --check` first so a stale `_generated/` is a
 build failure, not a deploy that silently uses old types.
 
+## Streaming logs
+
+Tail a deployed Worker's live logs with:
+
+```bash
+pnpm cirrus logs                     # pretty-printed live tail
+pnpm cirrus logs --format json       # one JSON object per line (pipe to jq)
+pnpm cirrus logs --status error      # only failed invocations
+pnpm cirrus logs --search "userId"   # substring filter on log messages
+```
+
+This wraps `wrangler tail`, so it needs a deployed Worker and your wrangler
+config; pass a Worker name as the first argument to override the configured
+one, and `--env <name>` to target an environment.
+
+For durable, off-Cloudflare log sinks (Datadog, an HTTP endpoint, R2), forward
+tail events to a **consumer Worker** via `tail_consumers` in `wrangler.jsonc`:
+
+```jsonc
+{
+    // ...
+    "tail_consumers": [{ "service": "log-forwarder" }],
+}
+```
+
+Each entry names a Worker that receives this Worker's logs, exceptions, and
+fetch metadata. `@cirrus/config` exports a `withTailConsumer(config, consumer)`
+helper that appends an entry idempotently (deduped by `service` + `environment`),
+and the wrangler validator flags any `tail_consumers` entry missing its
+`service`.
+
 ## See also
 
 - [Limits](/docs/limits)

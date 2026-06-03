@@ -6,8 +6,13 @@
 // Client Components. In a Next.js / RSC app, import these from your own
 // `"use client"` files (see the provider/hook examples in the docs); server-side
 // data loading lives in the socket-free `@cirrus/react/server` entry.
+export { Authenticated, AuthLoading, Unauthenticated } from "./auth-gates.js";
+export type { AuthState } from "./auth-state.js";
+export { useAuthState } from "./auth-state.js";
 export type { CirrusProviderProps } from "./cirrus-provider.js";
 export { CirrusProvider, useCirrus } from "./cirrus-provider.js";
+export type { CirrusQueryOptions } from "./query-options.js";
+export { cirrusQueryOptions } from "./query-options.js";
 export type {
     ArgsOf,
     CirrusClient,

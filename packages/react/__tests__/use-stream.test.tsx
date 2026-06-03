@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { useStream } from "../src/use-stream.js";
 
-const makeRef = (reference: string): FunctionReference => {
+const makeRef = (reference: string): FunctionReference<"stream"> => {
     return { __cirrusRef: reference };
 };
 

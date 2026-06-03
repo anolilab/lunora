@@ -5,7 +5,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { WranglerConfig } from "../src/wrangler-validator.js";
-import { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject } from "../src/wrangler-validator.js";
+import {
+    REQUIRED_COMPATIBILITY_DATE,
+    REQUIRED_FLAG,
+    validateWrangler,
+    validateWranglerConfig,
+    validateWranglerProject,
+    withTailConsumer,
+} from "../src/wrangler-validator.js";
 
 const SHARD_BINDING_ERROR_RE = /SHARD.+ShardDO/u;
 const WRANGLER_NOT_FOUND_RE = /wrangler\.jsonc not found/u;
@@ -176,6 +183,38 @@ describe("wrangler-validator", () => {
             expect(report.errors).toEqual([]);
         });
 
+        it("accepts a well-formed tail_consumers entry", () => {
+            expect.assertions(2);
+
+            const wrangler: WranglerConfig = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                tail_consumers: [{ service: "log-forwarder" }],
+            };
+
+            const report = validateWranglerConfig(wrangler);
+
+            expect(report.valid).toBe(true);
+            expect(report.errors).toEqual([]);
+        });
+
+        it("reports a tail_consumers entry missing its service", () => {
+            expect.assertions(2);
+
+            const wrangler: WranglerConfig = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                tail_consumers: [{ environment: "production" }],
+            };
+
+            const report = validateWranglerConfig(wrangler);
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("tail_consumers[0]"))).toBe(true);
+        });
+
         it("validateWrangler is an alias for validateWranglerConfig", () => {
             expect.assertions(1);
 
@@ -189,6 +228,37 @@ describe("wrangler-validator", () => {
 
             expect(report.valid).toBe(false);
             expect(report.errors.length).toBeGreaterThan(0);
+        });
+    });
+
+    describe("withTailConsumer", () => {
+        it("appends a tail consumer when none is wired", () => {
+            expect.assertions(2);
+
+            const wrangler: WranglerConfig = { compatibility_date: REQUIRED_COMPATIBILITY_DATE };
+            const next = withTailConsumer(wrangler, { service: "log-forwarder" });
+
+            expect(next.tail_consumers).toEqual([{ service: "log-forwarder" }]);
+            // The input is left untouched (pure).
+            expect(wrangler.tail_consumers).toBeUndefined();
+        });
+
+        it("is idempotent for the same service + environment", () => {
+            expect.assertions(1);
+
+            const wrangler: WranglerConfig = { tail_consumers: [{ environment: "production", service: "log-forwarder" }] };
+            const next = withTailConsumer(wrangler, { environment: "production", service: "log-forwarder" });
+
+            expect(next).toBe(wrangler);
+        });
+
+        it("adds a distinct entry when the environment differs", () => {
+            expect.assertions(1);
+
+            const wrangler: WranglerConfig = { tail_consumers: [{ environment: "production", service: "log-forwarder" }] };
+            const next = withTailConsumer(wrangler, { environment: "staging", service: "log-forwarder" });
+
+            expect(next.tail_consumers).toHaveLength(2);
         });
     });
 

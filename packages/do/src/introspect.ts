@@ -15,12 +15,15 @@ const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
  * the values stay emittable under `--isolatedDeclarations`.
  */
 const ADMIN_FUNCTIONS = {
+    applyCdc: "__cirrus_admin__:applyCdc",
+    cdcSync: "__cirrus_admin__:cdcSync",
     exportShard: "__cirrus_admin__:exportShard",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
     migrationStatus: "__cirrus_admin__:migrationStatus",
+    rankBefore: "__cirrus_admin__:rankBefore",
     readTablePage: "__cirrus_admin__:readTablePage",
     runMigration: "__cirrus_admin__:runMigration",
     writeRow: "__cirrus_admin__:writeRow",

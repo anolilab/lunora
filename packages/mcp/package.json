@@ -1,0 +1,50 @@
+{
+    "name": "@cirrus/mcp",
+    "version": "0.0.0",
+    "description": "Model Context Protocol server exposing a Cirrus deployment to AI agents",
+    "type": "module",
+    "engines": {
+        "node": "^22.15.0 || >=24.10.0"
+    },
+    "sideEffects": false,
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "bin": {
+        "cirrus-mcp": "./dist/bin.mjs"
+    },
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs",
+            "require": "./dist/index.cjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "scripts": {
+        "build": "packem build",
+        "build:prod": "packem build",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@cirrus/client": "workspace:*",
+        "@modelcontextprotocol/sdk": "catalog:mcp"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "esbuild": "catalog:build",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    }
+}

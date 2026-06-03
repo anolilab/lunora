@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { FanOutRequest, MigrationFanOutRequest, ShardRegistry } from "../src/query-coordinator.js";
+import type { FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator.js";
 import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator.js";
 import type { ShardNamespaceLike } from "../src/resolve-shard.js";
 
@@ -237,6 +237,31 @@ describe("merge strategies", () => {
 
         expect(result.data).toEqual({ from: "a" });
     });
+
+    it("rank — sums per-shard {before,total} into {position: Σbefore+1, total: Σtotal}", async () => {
+        expect.assertions(1);
+
+        const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const perShard: Record<string, { before: number; total: number }> = {
+            a: { before: 2, total: 5 },
+            b: { before: 0, total: 3 },
+            c: { before: 4, total: 6 },
+        };
+
+        const spy = createShardSpy((shardKey) => json(perShard[shardKey] ?? { before: 0, total: 0 }));
+
+        const result = await coordinator.fanOut(
+            spy.namespace,
+            buildRequest({
+                fanOut: { merge: { kind: "rank" }, table: "messages" },
+            }),
+        );
+
+        // Σbefore = 6 → position 7; Σtotal = 14.
+        expect(result.data).toEqual({ position: 7, total: 14 });
+    });
 });
 
 describe("error handling", () => {
@@ -452,6 +477,94 @@ describe("orchestrateMigration", () => {
         expect(result.changed).toBe(0);
         expect(result.processed).toBe(0);
         expect(result.shards[0]?.result).toMatchObject({ migrations: [{ id: "backfill", status: "completed" }] });
+    });
+});
+
+describe("orchestrateRank", () => {
+    const rankRequest = (overrides: Partial<RankFanOutRequest> = {}): RankFanOutRequest => {
+        return {
+            headers: { authorization: "Bearer admin" },
+            index: "leaderboard",
+            partitionKey: "",
+            rowId: "u1",
+            sortValues: [100],
+            table: "scores",
+            ...overrides,
+        };
+    };
+
+    /** Mimic a shard's admin `rankBefore` envelope: `{ result: { before, total } }`. */
+    const rankResult = (before: number, total: number): Response => json({ result: { before, total } });
+
+    it("forwards the explicit key + admin bearer to every shard", async () => {
+        expect.assertions(5);
+
+        const registry = createStaticShardRegistry({ scores: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+        const spy = createShardSpy(() => rankResult(0, 1));
+
+        await coordinator.orchestrateRank(spy.namespace, rankRequest());
+
+        expect(spy.calls).toHaveLength(2);
+        expect(spy.calls.every((c) => c.body.functionPath === "__cirrus_admin__:rankBefore")).toBe(true);
+        expect(spy.calls.every((c) => c.headers.authorization === "Bearer admin")).toBe(true);
+        expect(spy.calls.every((c) => c.body.args.rowId === "u1")).toBe(true);
+        expect(spy.calls.every((c) => Array.isArray(c.body.args.sortValues) && (c.body.args.sortValues as number[])[0] === 100)).toBe(true);
+    });
+
+    it("sums per-shard {before,total} into the global position + total", async () => {
+        expect.assertions(5);
+
+        const registry = createStaticShardRegistry({ scores: ["a", "b", "c"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const counts: Record<string, [number, number]> = { a: [2, 5], b: [0, 3], c: [4, 6] };
+        const spy = createShardSpy((shardKey) => {
+            const [before, total] = counts[shardKey] ?? [0, 0];
+
+            return rankResult(before, total);
+        });
+
+        const result = await coordinator.orchestrateRank(spy.namespace, rankRequest());
+
+        expect(result.ok).toBe(3);
+        expect(result.failed).toBe(0);
+        expect(result.position).toBe(7);
+        expect(result.total).toBe(14);
+        expect(result.shards[0]).toMatchObject({ result: { before: 2, total: 5 }, shardKey: "a" });
+    });
+
+    it("no live shards yields position 1, total 0", async () => {
+        expect.assertions(2);
+
+        const registry = createStaticShardRegistry({ scores: [] });
+        const coordinator = createQueryCoordinator({ registry });
+        const spy = createShardSpy(() => rankResult(1, 1));
+
+        const result = await coordinator.orchestrateRank(spy.namespace, rankRequest());
+
+        expect(spy.calls).toHaveLength(0);
+        expect(result).toEqual({ failed: 0, ok: 0, partial: false, position: 1, shards: [], total: 0 });
+    });
+
+    it("a failed shard surfaces as an error and only contributes the reachable shards' counts", async () => {
+        expect.assertions(6);
+
+        const registry = createStaticShardRegistry({ scores: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy((shardKey) => (shardKey === "b" ? new Response("boom", { status: 500 }) : rankResult(3, 4)));
+
+        const result = await coordinator.orchestrateRank(spy.namespace, rankRequest());
+
+        expect(result.ok).toBe(1);
+        expect(result.failed).toBe(1);
+        // A failed shard makes the rank an under-count — surfaced via `partial`.
+        expect(result.partial).toBe(true);
+        // Only shard "a" counted: Σbefore = 3 → position 4; Σtotal = 4.
+        expect(result.position).toBe(4);
+        expect(result.total).toBe(4);
+        expect(result.shards.find((s) => s.shardKey === "b")?.error?.message).toContain("500");
     });
 });
 

@@ -29,17 +29,21 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @cirrus/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
+import type { AggregateTally } from "./aggregate-tally.js";
+import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally.js";
 import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates.js";
-import { CountRlsUnsupportedError, mergeWhere, selectIndexForCount, selectIndexForGroupBy } from "./aggregates.js";
+import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates.js";
 import { SCAN_DEP } from "./dependency-tracker.js";
 import NotFoundError from "./not-found-error.js";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
 import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
-import type { RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult } from "./rank.js";
+import type { RankBeforeOptions, RankBeforeResult, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult } from "./rank.js";
 import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank.js";
 import type { ReactiveCache } from "./reactive-cache.js";
 import type { RelationDefinitionLike } from "./relations.js";
 import { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
+import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text.js";
+import serializeSqlValue from "./serialize-sql.js";
 import { ConflictError } from "./transaction.js";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 import { hasTrigger, runTriggers } from "./triggers.js";
@@ -184,6 +188,14 @@ interface CtxDbOptions {
      * Leave undefined to keep the legacy zero-cost behavior.
      */
     cache?: ReactiveCache;
+
+    /**
+     * Opt into change-data-capture: when `true`, every committed write appends a
+     * post-image entry to the `__cdc_log` table (created by `runShardMigrations`
+     * when its matching `cdc` flag is set). Backs streaming export and
+     * replay-PITR. Leave undefined for zero-cost legacy behaviour.
+     */
+    cdc?: boolean;
     clock?: Clock;
 
     /**
@@ -319,6 +331,25 @@ interface DatabaseWriterLike {
     rank: (tableName: string, indexName: string, options: RankOptions) => Promise<null | RankResult>;
 
     /**
+     * Per-shard primitive behind the cross-shard `rank()` fan-out. Counts this
+     * shard's rows strictly-before the EXPLICIT key in `options` (built off a
+     * row doc via `rankKeyFromDoc`), plus the local partition total — so a peer
+     * shard that doesn't own the row still contributes a correct count. The
+     * coordinator sums `{before, total}` across shards into `{position, total}`.
+     *
+     * Unlike `rank()` there is no by-id companion lookup: the caller already
+     * holds the row, and a rankIndex partition can span shards (e.g. a global
+     * leaderboard `.shardBy("userId")` with `partitionBy: []`). Honors the
+     * `restrictsCounts` RLS seam identically to `rank()`.
+     *
+     * Optional on the interface: the DO writer (this file) implements it; the
+     * D1 twin (`@cirrus/d1`) omits it for now — cross-shard rank over a
+     * `.global()` table is a follow-up, so a D1 writer that doesn't supply it
+     * still structurally satisfies `DatabaseWriterLike`.
+     */
+    rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
+
+    /**
      * Walk the rank companion in declared sort order — sorted pagination
      * accelerator. `options.where` may pin the partition (`partitionBy` keys),
      * in which case only that partition is walked; otherwise we walk every
@@ -330,16 +361,6 @@ interface DatabaseWriterLike {
 }
 
 const DOC_COLUMN = "__doc__";
-
-/**
- * Name of the counter table backing an `aggregateIndex` decl. Kept distinct
- * from any user table (`__agg_` infix is reserved) so `runShardMigrations` can
- * create it alongside the document table without collision. The schema is a
- * single `__key__` column (the canonical JSON-encoded `by`-tuple) plus a
- * floating `__value__` column. We keep counts as REAL so the same physical
- * shape carries sum/min/max/avg later.
- */
-const aggregateTableName = (table: string, indexName: string): string => `${table}__agg_${indexName}`;
 
 /**
  * Encode an array of cursor values as a base64 JSON string. Matches the
@@ -424,36 +445,6 @@ const normalizeCountArgument = (argument: RestrictableQueryOptions | undefined |
     return { where: argument as WhereInput };
 };
 
-/** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
-const compareStrings = (a: string, b: string): number => {
-    if (a < b) {
-        return -1;
-    }
-
-    return a > b ? 1 : 0;
-};
-
-/**
- * Encode a `by`-key tuple into a stable string. We use canonical-key JSON so
- * the same `{ a: 1, b: 2 }` lookup never misses for an insert that stored it
- * as `{ b: 2, a: 1 }`. Empty `by` (whole-table aggregate) keys on the empty
- * string.
- */
-const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, unknown>): string => {
-    if (by.length === 0) {
-        return "";
-    }
-
-    const ordered: Record<string, unknown> = {};
-
-    for (const field of [...by].toSorted(compareStrings)) {
-        // eslint-disable-next-line unicorn/no-null -- canonical JSON aggregate key: a missing field must serialize as null (stable across runs), not be dropped by JSON.stringify
-        ordered[field] = source[field] ?? null;
-    }
-
-    return JSON.stringify(ordered);
-};
-
 /**
  * Closed allowlist mapping each reducer `op` to the literal SQL function it may
  * emit. `AggregateOp` is a compile-time type only — a caller reaching the
@@ -496,85 +487,6 @@ const jsonPath = (field: string): string => {
     }
 
     return `json_extract(${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
-};
-
-/**
- * Name of the FTS5 shadow table backing a search index. Kept distinct from any
- * user table (the `__fts_` infix is reserved) so `runShardMigrations` can create
- * it alongside the document table without collision.
- */
-const ftsTableName = (table: string, indexName: string): string => `${table}__fts_${indexName}`;
-
-/**
- * Split a search string into lowercased alphanumeric tokens. The Unicode
- * `\p{L}\p{N}` class guarantees tokens carry no SQL/FTS metacharacters, so they
- * need no escaping beyond the literal-phrase quoting {@link buildFtsMatch} adds.
- */
-const tokenizeSearch = (query: string): string[] => query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-
-/**
- * Render tokens as an FTS5 MATCH expression: each token is a quoted literal
- * phrase (neutralizes reserved words), the final token gains a trailing `*` for
- * prefix matching (asterisk outside the quotes), and they AND together so every
- * token must be present — mirroring the fallback scorer's conjunction semantics.
- */
-const buildFtsMatch = (tokens: ReadonlyArray<string>): string =>
-    tokens.map((token, index) => (index === tokens.length - 1 ? `"${token}"*` : `"${token}"`)).join(" AND ");
-
-/** Coerce a search/filter field value to the text FTS indexes and the scorer scans. */
-const stringifySearchText = (value: unknown): string => {
-    if (typeof value === "string") {
-        return value;
-    }
-
-    if (value === null || value === undefined) {
-        return "";
-    }
-
-    if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-        return String(value);
-    }
-
-    // Objects/arrays (and any other non-primitive) are serialized as JSON so
-    // they contribute real text to the scan instead of `[object Object]`.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify is typed `=> string` but returns undefined for a function/symbol value; the ?? keeps the scan text a string at runtime
-    return JSON.stringify(value) ?? "";
-};
-
-/**
- * Score a document's indexed text against the query tokens with AND semantics:
- * every non-final token must appear exactly, the final token matches as a
- * prefix. Returns 0 (no match) unless all tokens are present; otherwise the sum
- * of occurrences, giving a coarse term-frequency relevance order for the
- * LIKE-scan fallback used when FTS5 is unavailable.
- */
-const scoreDocument = (text: string, tokens: ReadonlyArray<string>): number => {
-    const documentTokens = tokenizeSearch(text);
-
-    if (documentTokens.length === 0) {
-        return 0;
-    }
-
-    let score = 0;
-
-    for (const [index, token] of tokens.entries()) {
-        const isLast = index === tokens.length - 1;
-        let occurrences = 0;
-
-        for (const documentToken of documentTokens) {
-            if (isLast ? documentToken.startsWith(token) : documentToken === token) {
-                occurrences += 1;
-            }
-        }
-
-        if (occurrences === 0) {
-            return 0;
-        }
-
-        score += occurrences;
-    }
-
-    return score;
 };
 
 /**
@@ -727,22 +639,6 @@ const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilt
     };
 
     return builder;
-};
-
-const serializeSqlValue = (value: unknown): unknown => {
-    if (typeof value === "boolean") {
-        return value ? 1 : 0;
-    }
-
-    if (value === null || typeof value === "string" || typeof value === "number") {
-        return value;
-    }
-
-    if (typeof value === "bigint") {
-        return value.toString();
-    }
-
-    return JSON.stringify(value);
 };
 
 /**
@@ -1254,6 +1150,215 @@ const syncRankIndexEntry = (
     runSql(sql, `INSERT INTO ${quoteIdentifier(rankTable)} (${columnList}) VALUES (${placeholders})`, id, partitionKey, ...sortValues);
 };
 
+/**
+ * Count rows strictly-before `(sortValues, rowId)` within `partitionKey`, plus
+ * the partition's total — the shared core of both the local `rank()` (which
+ * resolves the key by id) and the cross-shard `rankBefore()` (which is handed
+ * the key explicitly). One source of truth for the lexicographic strict-less
+ * SQL so the two paths can never drift.
+ *
+ * `serializedSortValues[i]` must be the already-{@link serializeSqlValue}d
+ * value for the i-th sort key — i.e. the exact bytes stored in `__sort_k&lt;i>__`
+ * by {@link syncRankIndexEntry} — so the per-key comparison matches the
+ * companion's BLOB column regardless of which shard supplied the value.
+ *
+ * Lexicographic strict-less under per-key direction: for keys
+ * `[(k0, dir0), (k1, dir1), ...]` plus the `__id__` tiebreak,
+ * (k0 < v0)
+ * OR (k0 = v0 AND k1 < v1)
+ * OR (k0 = v0 AND k1 = v1 AND __id__ < rowId)
+ * where `&lt;` flips to `>` for desc keys.
+ */
+const countRankBefore = (
+    sql: SqlExec,
+    rankTable: string,
+    sortColumns: ReadonlyArray<string>,
+    sortBy: RankIndexDefinitionLike["sortBy"],
+    partitionKey: string,
+    serializedSortValues: ReadonlyArray<unknown>,
+    rowId: string,
+): { before: number; total: number } => {
+    const beforeBranches: string[] = [];
+    const beforeParams: unknown[] = [];
+
+    for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
+        const conditions: string[] = [];
+
+        for (let prefix = 0; prefix < pivot; prefix += 1) {
+            conditions.push(`${quoteIdentifier(sortColumns[prefix] as string)} IS ?`);
+            beforeParams.push(serializedSortValues[prefix]);
+        }
+
+        const column = sortColumns[pivot];
+        const sortKey = sortBy[pivot];
+
+        if (column !== undefined && sortKey !== undefined) {
+            const operator = sortKey.direction === "desc" ? ">" : "<";
+
+            conditions.push(`${quoteIdentifier(column)} ${operator} ?`);
+            beforeParams.push(serializedSortValues[pivot]);
+        } else {
+            // Final pivot is the `__id__` ASC tiebreak.
+            conditions.push(`${quoteIdentifier(RANK_TIEBREAK)} < ?`);
+            beforeParams.push(rowId);
+        }
+
+        const [firstCondition] = conditions;
+
+        beforeBranches.push(conditions.length === 1 && firstCondition !== undefined ? firstCondition : `(${conditions.join(" AND ")})`);
+    }
+
+    const beforeWhere = beforeBranches.join(" OR ");
+    const beforeRow = runSql<{ c: number }>(
+        sql,
+        `SELECT COUNT(*) AS c FROM ${quoteIdentifier(rankTable)} WHERE "__partition__" = ? AND (${beforeWhere})`,
+        partitionKey,
+        ...beforeParams,
+    ).one();
+
+    const totalRow = runSql<{ c: number }>(sql, `SELECT COUNT(*) AS c FROM ${quoteIdentifier(rankTable)} WHERE "__partition__" = ?`, partitionKey).one();
+
+    return { before: beforeRow.c, total: totalRow.c };
+};
+
+/** Reserved append-only changelog table backing CDC streaming export and replay-PITR. */
+const CDC_LOG_TABLE = "__cdc_log";
+
+/** One change-data-capture entry: a committed mutation, in monotonic `seq` order. */
+interface CdcChange {
+    /** Post-image document for insert/update; absent for delete (the `id` identifies the removed row). */
+    doc?: Record<string, unknown>;
+    id: string;
+    op: "delete" | "insert" | "update";
+    /** Monotonic per-shard cursor — strictly increasing, never reused. */
+    seq: number;
+    table: string;
+    /** Wall-clock millis when the change committed (the ctx-db `clock`). */
+    ts: number;
+}
+
+/**
+ * Create the `__cdc_log` table. `seq` is an `AUTOINCREMENT` primary key, giving
+ * each shard a monotonic cursor that streaming-export consumers and replay-PITR
+ * page through; `doc` holds the post-image JSON for insert/update and is `NULL`
+ * for delete. Only created when CDC is enabled, so non-CDC apps pay nothing.
+ */
+const migrateCdcLog = (sql: SqlExec): void => {
+    runSql(
+        sql,
+        `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(CDC_LOG_TABLE)} (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            "table" TEXT NOT NULL,
+            id TEXT NOT NULL,
+            op TEXT NOT NULL,
+            doc TEXT
+        )`,
+    );
+};
+
+/**
+ * Append one committed mutation to the changelog. Called inside the same DO
+ * transaction as the row write, so the change is durable iff the write is.
+ */
+const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op: CdcChange["op"], doc: Record<string, unknown> | undefined): void => {
+    runSql(
+        sql,
+        `INSERT INTO ${quoteIdentifier(CDC_LOG_TABLE)} (ts, "table", id, op, doc) VALUES (?, ?, ?, ?, ?)`,
+        ts,
+        table,
+        id,
+        op,
+        // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct post-image for a delete; the `id` column identifies the removed row.
+        doc === undefined ? null : JSON.stringify(doc),
+    );
+};
+
+/**
+ * Read changelog entries newer than `sinceSeq` in commit order, up to `limit`
+ * (clamped to [1, 10000]). Returns the rows plus the cursor to resume from (the
+ * last `seq`, or `sinceSeq` when the page is empty).
+ */
+const readCdcChanges = (sql: SqlExec, options: { limit?: number; sinceSeq?: number } = {}): { changes: CdcChange[]; cursor: number } => {
+    const sinceSeq = options.sinceSeq ?? 0;
+    const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
+
+    const rows = runSql<{ doc: null | string; id: string; op: string; seq: number; table: string; ts: number }>(
+        sql,
+        `SELECT seq, ts, "table", id, op, doc FROM ${quoteIdentifier(CDC_LOG_TABLE)} WHERE seq > ? ORDER BY seq ASC LIMIT ?`,
+        sinceSeq,
+        limit,
+    ).toArray();
+
+    const changes = rows.map((row): CdcChange => {
+        const base = { id: row.id, op: row.op as CdcChange["op"], seq: row.seq, table: row.table, ts: row.ts };
+
+        return row.doc === null ? base : { ...base, doc: JSON.parse(row.doc) as Record<string, unknown> };
+    });
+
+    return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };
+};
+
+/**
+ * Drop changelog entries at or below a checkpointed `throughSeq` — retention
+ * after a consumer has durably advanced past them, so the log can't grow
+ * unbounded.
+ */
+const trimCdcChanges = (sql: SqlExec, throughSeq: number): void => {
+    runSql(sql, `DELETE FROM ${quoteIdentifier(CDC_LOG_TABLE)} WHERE seq <= ?`, throughSeq);
+};
+
+/**
+ * Replay a CDC change against a live writer: insert/update post-images become
+ * an upsert (insert with the explicit id, falling back to replace when the row
+ * already exists), deletes remove the row. This is the engine behind
+ * point-in-time recovery — apply a base snapshot, then replay the changelog up
+ * to the target moment in commit order.
+ */
+const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Promise<void> => {
+    if (change.op === "delete") {
+        await writer.delete(change.id);
+
+        return;
+    }
+
+    const document = change.doc ?? {};
+
+    try {
+        await writer.insert(change.table, document, { allowExplicitId: true });
+    } catch (error: unknown) {
+        if (!(error instanceof ConflictError)) {
+            throw error;
+        }
+
+        // Row already exists — replace its fields. Drop only `_id` (replace
+        // takes the id as its first argument). KEEP `_creationTime`: replace
+        // reads it from the doc to preserve the row's original creation time,
+        // so stripping it would silently reset it to the replay-time clock.
+        const fields: Record<string, unknown> = {};
+
+        for (const [key, value] of Object.entries(document)) {
+            if (key !== "_id") {
+                fields[key] = value;
+            }
+        }
+
+        await writer.replace(change.id, fields);
+    }
+};
+
+/**
+ * Replay an ordered batch of CDC changes against a writer (see
+ * {@link applyCdcChange}). Applied sequentially so per-row order is preserved —
+ * a later update never races the insert it depends on.
+ */
+const applyCdcChanges = async (writer: DatabaseWriterLike, changes: ReadonlyArray<CdcChange>): Promise<void> => {
+    for (const change of changes) {
+        // eslint-disable-next-line no-await-in-loop -- replay MUST be sequential: per-row commit order is the correctness contract.
+        await applyCdcChange(writer, change);
+    }
+};
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
@@ -1265,6 +1370,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const scheduler = options.scheduler ?? throwingScheduler;
     const { globalDb } = options;
+    const cdcEnabled = options.cdc ?? false;
+
+    /** Append a post-image to the changelog when CDC is enabled; a no-op otherwise. */
+    const recordCdc = (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): void => {
+        if (cdcEnabled) {
+            appendCdcChange(sql, clock(), table, id, op, doc);
+        }
+    };
 
     /** True when `tableName` is declared `.global()` (i.e. lives in D1, not this DO). */
     const isGlobalTable = (tableName: string): boolean => schema.tables[tableName]?.shardMode?.kind === "global";
@@ -1362,7 +1475,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         const aggTable = aggregateTableName(tableName, index.name);
         const by = index.by ?? [];
-        const tallies = new Map<string, number>();
+        const tallies = new Map<string, AggregateTally>();
         const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
 
         for (const row of rows) {
@@ -1378,39 +1491,242 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const encoded = encodeAggregateKey(by, record);
 
-            tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
+            foldAggregateTally(tallies, encoded, index, record);
         }
 
         runSql(sql, `DELETE FROM ${quoteIdentifier(aggTable)}`);
 
-        for (const [encoded, count] of tallies) {
-            runSql(sql, `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)`, encoded, count);
+        for (const [encoded, tally] of tallies) {
+            runSql(sql, `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)`, encoded, tally.value, tally.count);
         }
 
         backfilled.add(cacheKey);
     };
 
     /**
-     * Apply a `+delta` counter step for the row `doc` matches under `index`.
-     * Inserts (`+1`), deletes (`-1`), and updates (`-1` for the previous row's
-     * group, `+1` for the new) all share the same maintenance hook.
+     * Recompute a min/max group's stored extreme from the source table, scoped
+     * to the group's `by`-tuple and the index's static `where`. Used on the slow
+     * path when the removed/old value *was* the stored extreme (so we can't tell
+     * the new extreme without looking): a single `MIN`/`MAX(json_extract(...))`
+     * over the group answers it. Runs AFTER the physical row write, so it sees
+     * the post-write source. Returns the extreme (`null` when no numeric row
+     * survives); the caller pins `__count__` from its own tracked tally.
      */
-    const stepAggregate = (tableName: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>, delta: number): void => {
-        if (index.where && !matchesStaticWhere(record, index.where)) {
+    const recomputeExtreme = (tableName: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>): { value: null | number } => {
+        const by = index.by ?? [];
+        const sqlFunction = aggregateSqlFunction(index.op);
+        const field = index.field ?? "";
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+
+        for (const key of by) {
+            // eslint-disable-next-line unicorn/no-null -- canonical key tuple: a missing by-field is matched as NULL, mirroring encodeAggregateKey's null-fill
+            const value = serializeSqlValue(record[key] ?? null);
+
+            if (value === null) {
+                conditions.push(`${jsonPath(key)} IS NULL`);
+            } else {
+                conditions.push(`${jsonPath(key)} = ?`);
+                params.push(value);
+            }
+        }
+
+        for (const [key, expected] of Object.entries(index.where ?? {})) {
+            const literal = expected !== null && typeof expected === "object" && !Array.isArray(expected) ? (expected as { eq: unknown }).eq : expected;
+            const value = serializeSqlValue(literal);
+
+            if (value === null) {
+                conditions.push(`${jsonPath(key)} IS NULL`);
+            } else {
+                conditions.push(`${jsonPath(key)} = ?`);
+                params.push(value);
+            }
+        }
+
+        const whereSql = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+        const ref = jsonPath(field);
+        const row = runSql<{ value: null | number }>(
+            sql,
+            `SELECT ${sqlFunction}(${ref}) AS value FROM ${quoteIdentifier(tableName)}${whereSql}`,
+            ...params,
+        ).one();
+
+        // eslint-disable-next-line unicorn/no-null -- empty min/max group stores NULL value
+        return { value: row.value ?? null };
+    };
+
+    /**
+     * Op-aware companion maintenance for a single index. `previous`/`next` are
+     * the row's pre/post images (either may be absent for delete/insert); a
+     * patch passes both. The contribution of a row to its group depends on the
+     * index `op`, and the row only contributes when it passes the index's static
+     * `where`:
+     *
+     * - **count**: `__value__` and `__count__` both move by ±1 (value mirrors count).
+     * - **sum**: `__value__` += ±field, `__count__` += ±1 (numeric rows only).
+     * - **avg**: `__value__` accumulates the running sum, `__count__` the divisor; the reader divides. Same ±field/±1 steps as sum.
+     * - **min/max**: `__count__` += ±1. The extreme is bumped cheaply on the +side (a new value more extreme than the stored one wins, or seeds an empty group); when a removed/old value *was* the stored extreme — or the group empties — we recompute from the source table.
+     *
+     * An update is decomposed into remove-old then add-new, so the same code
+     * path handles the by-key/field-value change that a patch/replace can cause.
+     */
+    /* eslint-disable sonarjs/cognitive-complexity -- op-aware (count/sum/avg/min/max) maintenance over remove-old + add-new branches; splitting it would scatter the single companion-row update across helpers and read worse */
+    const applyAggregateDelta = (
+        tableName: string,
+        index: AggregateIndexDefinitionLike,
+        previous: Record<string, unknown> | undefined,
+        next: Record<string, unknown> | undefined,
+    ): void => {
+        const aggTable = aggregateTableName(tableName, index.name);
+        const { op } = index;
+        const field = index.field ?? "";
+
+        // Drop a companion row once its group is empty (`__count__` hit 0) so the
+        // indexed groupBy walk matches SQL `GROUP BY`, which omits empty groups —
+        // a left-behind zeroed/NULL row would surface as a phantom group.
+        const pruneIfEmpty = (encodedKey: string): void => {
+            runSql(sql, `DELETE FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ? AND "__count__" <= 0`, encodedKey);
+        };
+
+        const removes = previous && (!index.where || matchesStaticWhere(previous, index.where)) ? previous : undefined;
+        const adds = next && (!index.where || matchesStaticWhere(next, index.where)) ? next : undefined;
+
+        if (!removes && !adds) {
             return;
         }
 
-        const aggTable = aggregateTableName(tableName, index.name);
-        const encoded = encodeAggregateKey(index.by ?? [], record);
+        if (op === "count") {
+            // The +1/−1 steps can collapse to a single delta per group.
+            for (const [record, delta] of [
+                [removes, -1],
+                [adds, 1],
+            ] as const) {
+                if (!record) {
+                    continue;
+                }
 
-        runSql(
-            sql,
-            `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
-             ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__"`,
-            encoded,
-            delta,
-        );
+                const encoded = encodeAggregateKey(index.by ?? [], record);
+
+                runSql(
+                    sql,
+                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)
+                     ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__", "__count__" = "__count__" + excluded."__count__"`,
+                    encoded,
+                    delta,
+                    delta,
+                );
+            }
+
+            if (removes) {
+                pruneIfEmpty(encodeAggregateKey(index.by ?? [], removes));
+            }
+
+            return;
+        }
+
+        if (op === "sum" || op === "avg") {
+            for (const [record, sign] of [
+                [removes, -1],
+                [adds, 1],
+            ] as const) {
+                if (!record) {
+                    continue;
+                }
+
+                const numeric = coerceAggregateNumber(record[field]);
+
+                if (numeric === undefined) {
+                    continue;
+                }
+
+                const encoded = encodeAggregateKey(index.by ?? [], record);
+
+                runSql(
+                    sql,
+                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)
+                     ON CONFLICT("__key__") DO UPDATE SET "__value__" = COALESCE("__value__", 0) + excluded."__value__", "__count__" = "__count__" + excluded."__count__"`,
+                    encoded,
+                    sign * numeric,
+                    sign,
+                );
+            }
+
+            if (removes) {
+                pruneIfEmpty(encodeAggregateKey(index.by ?? [], removes));
+            }
+
+            return;
+        }
+
+        // min/max: maintain `__count__` always; bump `__value__` cheaply on the
+        // add side, recompute on the remove side when the stored extreme leaves.
+        if (removes) {
+            const encoded = encodeAggregateKey(index.by ?? [], removes);
+            const removedValue = coerceAggregateNumber(removes[field]);
+            const existing = runSql<{ count: number; value: null | number }>(
+                sql,
+                `SELECT "__value__" AS value, "__count__" AS count FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
+                encoded,
+            ).toArray()[0];
+            const remainingCount = (existing?.count ?? 0) - 1;
+
+            if (remainingCount <= 0) {
+                // Group emptied — drop the companion row so the indexed groupBy
+                // walk matches SQL `GROUP BY` (which omits empty groups).
+                runSql(sql, `DELETE FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, encoded);
+            } else if (existing && removedValue !== undefined && existing.value !== null && removedValue === existing.value) {
+                // The departing row carried the stored extreme, so we can't keep
+                // it without looking — recompute the group's extreme from the
+                // source table. Companion maintenance runs AFTER the physical
+                // row write (the row is gone on delete; on a shrinking update the
+                // source already holds the new value), so the recompute sees the
+                // post-write state and returns the correct surviving extreme. We
+                // still pin `__count__` to the tracked `remainingCount` rather
+                // than the recompute (which counts numeric `field`s, not rows).
+                const recomputed = recomputeExtreme(tableName, index, removes);
+
+                runSql(
+                    sql,
+                    `UPDATE ${quoteIdentifier(aggTable)} SET "__value__" = ?, "__count__" = ? WHERE "__key__" = ?`,
+                    recomputed.value,
+                    remainingCount,
+                    encoded,
+                );
+            } else {
+                // The departing row wasn't the extreme — the stored value stands.
+                runSql(sql, `UPDATE ${quoteIdentifier(aggTable)} SET "__count__" = "__count__" - 1 WHERE "__key__" = ?`, encoded);
+            }
+        }
+
+        if (adds) {
+            const encoded = encodeAggregateKey(index.by ?? [], adds);
+            const addedValue = coerceAggregateNumber(adds[field]);
+
+            // A non-numeric value contributes nothing to the extreme but still
+            // counts toward the group (so an empty-group check stays accurate).
+            if (addedValue === undefined) {
+                runSql(
+                    sql,
+                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, 1)
+                     ON CONFLICT("__key__") DO UPDATE SET "__count__" = "__count__" + 1`,
+                    encoded,
+                    // eslint-disable-next-line unicorn/no-null -- seeds an extreme-less group with NULL value
+                    null,
+                );
+            } else {
+                const op2 = op === "min" ? "MIN" : "MAX";
+
+                runSql(
+                    sql,
+                    `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, 1)
+                     ON CONFLICT("__key__") DO UPDATE SET "__value__" = ${op2}(COALESCE("__value__", excluded."__value__"), excluded."__value__"), "__count__" = "__count__" + 1`,
+                    encoded,
+                    addedValue,
+                );
+            }
+        }
     };
+    /* eslint-enable sonarjs/cognitive-complexity */
 
     /**
      * Pre-write hook: ensure every aggregate counter on `tableName` is rebuilt
@@ -1443,13 +1759,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         for (const index of indexes) {
-            if (previous) {
-                stepAggregate(tableName, index, previous, -1);
-            }
-
-            if (next) {
-                stepAggregate(tableName, index, next, 1);
-            }
+            applyAggregateDelta(tableName, index, previous, next);
         }
     };
 
@@ -1649,15 +1959,30 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             onRead(tableName, SCAN_DEP);
 
-            // No indexed fast-path for non-count reducers: the `__agg_`
-            // counter stores a *row count* per `by`-group (stepped by ±1 and
-            // backfilled by tallying +1/row, regardless of the index's
-            // declared `op`). Reading it for sum/avg/min/max would return the
-            // row COUNT, not the reduction. Until the counter is made
-            // reducer-aware, sum/avg/min/max always fall through to the SQL
-            // scan below, which computes the correct value. `count` never
-            // reaches here (it early-returns to `writer.count` above, which
-            // does use the counter).
+            // Indexed fast-path: the `__agg_` companion is now reducer-aware
+            // (`__value__` holds the sum / running sum / extreme, `__count__`
+            // the row count), so a matching `(by, field, op)` index answers
+            // sum/avg/min/max in one row lookup. We only attempt it when no
+            // baseWhere is set — the RLS predicate isn't a pure equality
+            // conjunction, so it falls through to the SQL scan below.
+            if (definition.aggregateIndexes && !aggOptions.baseWhere) {
+                const planned = selectIndexForAggregate(definition.aggregateIndexes, aggOptions.op, aggOptions.field, aggOptions.where);
+
+                if (planned) {
+                    ensureBackfilled(tableName, planned.index);
+
+                    const encoded = encodeAggregateKey(planned.index.by ?? [], planned.key);
+                    const aggTable = aggregateTableName(tableName, planned.index.name);
+                    const indexed = runSql<{ count: number; value: null | number }>(
+                        sql,
+                        `SELECT "__value__" AS value, "__count__" AS count FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
+                        encoded,
+                    ).toArray()[0];
+
+                    return readAggregateValue(aggOptions.op, indexed);
+                }
+            }
+
             const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
             const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
             const aggregateSql = aggregateSqlFunction(aggOptions.op);
@@ -1804,6 +2129,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             cache?.invalidate(tableName, id);
 
+            recordCdc(tableName, id, "delete");
             broadcast({ key: id, op: "delete", table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "delete")) {
@@ -1956,16 +2282,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             // Indexed path: when no baseWhere is set and an aggregateIndex's
             // `by` exactly matches `groupOptions.by`, every group answer is
-            // already in the companion table — read every row and decode the
-            // key. One SELECT, no SQL `GROUP BY`. baseWhere falls through to
-            // scan so RLS composes uniformly.
-            //
-            // Restricted to `count`: the `__agg_` counter stores a *row count*
-            // per group regardless of the index's declared `op` (see
-            // `stepAggregate`/`ensureBackfilled`), so reading it for
-            // sum/avg/min/max would return counts. Non-count reducers fall
-            // through to the correct SQL `GROUP BY` scan below.
-            if (agg.op === "count" && definition.aggregateIndexes && !groupOptions.baseWhere) {
+            // already in the reducer-aware companion table — read each row's
+            // `__value__`/`__count__` and project via `readAggregateValue`.
+            // One SELECT, no SQL `GROUP BY`. baseWhere falls through to scan so
+            // RLS composes uniformly. Covers every op (count/sum/avg/min/max)
+            // now that the companion is op-aware.
+            if (definition.aggregateIndexes && !groupOptions.baseWhere) {
                 const planned = selectIndexForGroupBy(definition.aggregateIndexes, agg.op, agg.field, groupOptions.by, groupOptions.where);
 
                 if (planned) {
@@ -1976,21 +2298,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     const indexedResult: GroupByEntry[] = [];
 
                     if (partialKeys.length === (planned.index.by ?? []).length && partialKeys.length > 0) {
-                        // Request fully constrains the by-tuple → single counter row lookup.
+                        // Request fully constrains the by-tuple → single companion row lookup.
                         const encoded = encodeAggregateKey(planned.index.by ?? [], planned.partial);
-                        const rowsIndexed = runSql<{ value: null | number }>(
+                        const rowsIndexed = runSql<{ count: number; value: null | number }>(
                             sql,
-                            `SELECT "__value__" AS value FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
+                            `SELECT "__value__" AS value, "__count__" AS count FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`,
                             encoded,
                         ).toArray();
 
                         if (rowsIndexed.length > 0) {
-                            const value = rowsIndexed[0]?.value;
-
                             indexedResult.push({
                                 key: { ...planned.partial },
-                                // eslint-disable-next-line unicorn/no-null -- GroupByEntry.value is AggregateResult (`null | number`): null is the documented "empty group" value
-                                value: value ?? null,
+                                value: readAggregateValue(agg.op, rowsIndexed[0]),
                             });
                         }
 
@@ -2000,17 +2319,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // Unfiltered (or partially-filtered, future work) → walk
                     // the whole companion. Each row's __key__ is the
                     // canonical-JSON encoding written by encodeAggregateKey.
-                    const rowsIndexed = runSql<{ key: string; value: null | number }>(
+                    const rowsIndexed = runSql<{ count: number; key: string; value: null | number }>(
                         sql,
-                        `SELECT "__key__" AS key, "__value__" AS value FROM ${quoteIdentifier(aggTable)}`,
+                        `SELECT "__key__" AS key, "__value__" AS value, "__count__" AS count FROM ${quoteIdentifier(aggTable)}`,
                     ).toArray();
 
                     for (const row of rowsIndexed) {
                         const decoded = JSON.parse(row.key) as Record<string, unknown>;
-                        const { value } = row;
 
-                        // eslint-disable-next-line unicorn/no-null -- GroupByEntry.value is AggregateResult (`null | number`): null is the documented "empty group" value
-                        indexedResult.push({ key: decoded, value: value ?? null });
+                        indexedResult.push({ key: decoded, value: readAggregateValue(agg.op, row) });
                     }
 
                     return indexedResult;
@@ -2120,6 +2437,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // the new row id was never read by anything.
             cache?.invalidate(tableName, id);
 
+            recordCdc(tableName, id, "insert", documentWithMeta);
             broadcast({ key: id, op: "insert", row: documentWithMeta, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "insert")) {
@@ -2191,6 +2509,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // row's per-id deps AND the `*scan` bucket on this table.
             cache?.invalidate(tableName, id);
 
+            recordCdc(tableName, id, "update", merged);
             broadcast({ key: id, op: "update", row: merged, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
@@ -2211,7 +2530,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return buildReader(sql, schema, tableName);
         },
 
-        // eslint-disable-next-line @typescript-eslint/require-await, sonarjs/cognitive-complexity -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
+        // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
         async rank(tableName, indexName, rankOptions) {
             const definition = schema.tables[tableName];
 
@@ -2279,58 +2598,55 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 partitionKey = requestedKey;
             }
 
-            // Count rows strictly before this one under the declared sort.
-            // Lexicographic strict-less under per-key direction: for keys
-            // `[(k0, dir0), (k1, dir1), ...]` plus the `__id__` tiebreak,
-            //   (k0 < v0)
-            // OR (k0 = v0 AND k1 < v1)
-            // OR (k0 = v0 AND k1 = v1 AND __id__ < ownId)
-            // where `<` flips to `>` for desc keys.
-            const beforeBranches: string[] = [];
-            const beforeParams: unknown[] = [];
+            // The companion stores already-serialized sort values, so feed the
+            // `own` row's columns straight into the shared strict-before helper.
+            const ownSortValues = sortColumns.map((column) => own[column]);
+            const { before, total } = countRankBefore(sql, rankTable, sortColumns, index.sortBy, partitionKey, ownSortValues, rowId);
 
-            for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
-                const conditions: string[] = [];
+            return { position: before + 1, total };
+        },
 
-                for (const prefixColumn of sortColumns.slice(0, pivot)) {
-                    conditions.push(`${quoteIdentifier(prefixColumn)} IS ?`);
-                    beforeParams.push(own[prefixColumn]);
-                }
+        // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the body is synchronous SQLite
+        async rankBefore(tableName, indexName, rankBeforeOptions) {
+            const definition = schema.tables[tableName];
 
-                const column = sortColumns[pivot];
-                const sortKey = index.sortBy[pivot];
-
-                if (column !== undefined && sortKey !== undefined) {
-                    const operator = sortKey.direction === "desc" ? ">" : "<";
-
-                    conditions.push(`${quoteIdentifier(column)} ${operator} ?`);
-                    beforeParams.push(own[column]);
-                } else {
-                    // Final pivot is the `__id__` ASC tiebreak.
-                    conditions.push(`${quoteIdentifier(RANK_TIEBREAK)} < ?`);
-                    beforeParams.push(rowId);
-                }
-
-                const [firstCondition] = conditions;
-
-                beforeBranches.push(conditions.length === 1 && firstCondition !== undefined ? firstCondition : `(${conditions.join(" AND ")})`);
+            if (!definition) {
+                throw new Error(`unknown table: ${tableName}`);
             }
 
-            const beforeWhere = beforeBranches.join(" OR ");
-            const beforeRow = runSql<{ c: number }>(
-                sql,
-                `SELECT COUNT(*) AS c FROM ${quoteIdentifier(rankTable)} WHERE "__partition__" = ? AND (${beforeWhere})`,
-                partitionKey,
-                ...beforeParams,
-            ).one();
+            const index = definition.rankIndexes?.find((i) => i.name === indexName);
 
-            const totalRow = runSql<{ c: number }>(
-                sql,
-                `SELECT COUNT(*) AS c FROM ${quoteIdentifier(rankTable)} WHERE "__partition__" = ?`,
-                partitionKey,
-            ).one();
+            if (!index) {
+                throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
+            }
 
-            return { position: beforeRow.c + 1, total: totalRow.c };
+            // Same RLS coupling-seam as rank()/count(): a restricted-count ctx
+            // can't be trusted to return a correct strictly-before count.
+            if (rankBeforeOptions.restrictsCounts) {
+                throw new CountRlsUnsupportedError(tableName);
+            }
+
+            // Same SCAN_DEP semantics as rank() — the count shifts on any
+            // insert/delete in the partition.
+            onRead(tableName, SCAN_DEP);
+
+            ensureRankBackfilled(tableName, index);
+
+            const rankTable = rankTableName(tableName, index.name);
+            const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
+
+            // Encoding contract (see `rankKeyFromDoc` in rank.ts): the caller
+            // derived `partitionKey` from `encodePartitionKey(index.partitionBy,
+            // doc)` and `sortValues[i]` from the raw `doc[sortBy[i].field]`.
+            // `syncRankIndexEntry` stores `__sort_k<i>__` as
+            // `serializeSqlValue(doc[field] ?? null)`, so we apply the same
+            // serialization here before comparing — this is the only step that
+            // lets a PEER shard (which never stored this row) count correctly
+            // against the explicit key.
+            // eslint-disable-next-line unicorn/no-null -- mirror the trigger seam: a missing sort field serializes as a NULL column value, not undefined
+            const serialized = index.sortBy.map((_, i) => serializeSqlValue(rankBeforeOptions.sortValues[i] ?? null));
+
+            return countRankBefore(sql, rankTable, sortColumns, index.sortBy, rankBeforeOptions.partitionKey, serialized, rankBeforeOptions.rowId);
         },
 
         // eslint-disable-next-line @typescript-eslint/require-await, sonarjs/cognitive-complexity -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
@@ -2521,6 +2837,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             cache?.invalidate(tableName, id);
 
+            recordCdc(tableName, id, "update", replaced);
             broadcast({ key: id, op: "update", row: replaced, table: tableName });
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
@@ -2602,7 +2919,27 @@ const migrateAggregateIndexes = (sql: SqlExec, tableName: string, definition: Ta
     for (const index of definition.aggregateIndexes) {
         const aggTable = aggregateTableName(tableName, index.name);
 
-        runSql(sql, `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} ("__key__" TEXT PRIMARY KEY, "__value__" REAL NOT NULL)`);
+        // `__value__` is nullable now (an empty min/max group stores NULL); the
+        // pre-reducer-aware shape declared it `NOT NULL` and carried only a row
+        // count. `CREATE TABLE IF NOT EXISTS` won't reshape a table that already
+        // exists, so the defensive `ADD COLUMN` below upgrades a companion
+        // persisted by an older alpha build.
+        runSql(
+            sql,
+            `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(aggTable)} ("__key__" TEXT PRIMARY KEY, "__value__" REAL, "__count__" INTEGER NOT NULL DEFAULT 0)`,
+        );
+
+        // Alpha-era companion-rebuild caveat: a DO persisted before `__count__`
+        // existed gets the column added here (defaulted 0). The first read/write
+        // that touches the index re-runs the full backfill (`ensureBackfilled`),
+        // so the seeded 0s are overwritten with real per-op values — no stale
+        // count survives. We pragma-check rather than blindly ALTER so a fresh
+        // table (created above with the column) doesn't raise "duplicate column".
+        const columns = runSql<{ name: string }>(sql, `PRAGMA table_info(${quoteIdentifier(aggTable)})`).toArray();
+
+        if (!columns.some((column) => column.name === "__count__")) {
+            runSql(sql, `ALTER TABLE ${quoteIdentifier(aggTable)} ADD COLUMN "__count__" INTEGER NOT NULL DEFAULT 0`);
+        }
     }
 };
 
@@ -2641,7 +2978,7 @@ const migrateRankIndexes = (sql: SqlExec, tableName: string, definition: TableDe
     }
 };
 
-const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
+const runShardMigrations = (sql: SqlExec, schema: SchemaLike, options: { cdc?: boolean } = {}): void => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind === "global") {
             continue;
@@ -2661,6 +2998,10 @@ const runShardMigrations = (sql: SqlExec, schema: SchemaLike): void => {
         migrateAggregateIndexes(sql, tableName, definition);
         migrateRankIndexes(sql, tableName, definition);
     }
+
+    if (options.cdc) {
+        migrateCdcLog(sql);
+    }
 };
 
 /**
@@ -2676,7 +3017,7 @@ const backfillAggregateIndex = (sql: SqlExec, tableName: string, index: Aggregat
     }
 
     const by = index.by ?? [];
-    const tallies = new Map<string, number>();
+    const tallies = new Map<string, AggregateTally>();
     const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`).toArray();
 
     for (const row of rows) {
@@ -2688,17 +3029,11 @@ const backfillAggregateIndex = (sql: SqlExec, tableName: string, index: Aggregat
 
         const encoded = encodeAggregateKey(by, record);
 
-        tallies.set(encoded, (tallies.get(encoded) ?? 0) + 1);
+        foldAggregateTally(tallies, encoded, index, record);
     }
 
-    for (const [encoded, count] of tallies) {
-        runSql(
-            sql,
-            `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__") VALUES (?, ?)
-             ON CONFLICT("__key__") DO UPDATE SET "__value__" = "__value__" + excluded."__value__"`,
-            encoded,
-            count,
-        );
+    for (const [encoded, tally] of tallies) {
+        runSql(sql, `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)`, encoded, tally.value, tally.count);
     }
 };
 
@@ -2773,10 +3108,21 @@ const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     }
 };
 
-export { backfillAggregateIndexes, backfillRankIndexes, createShardCtxDb, runShardMigrations };
+export {
+    applyCdcChanges,
+    backfillAggregateIndexes,
+    backfillRankIndexes,
+    CDC_LOG_TABLE,
+    createShardCtxDb,
+    migrateCdcLog,
+    readCdcChanges,
+    runShardMigrations,
+    trimCdcChanges,
+};
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 export type {
     BroadcastDelta,
+    CdcChange,
     Clock,
     ColumnMetaLike,
     CountArgs,

@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference } from "@cirrus/client";
+import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { CirrusClient } from "@cirrus/client";
 import type { QueryClient } from "@tanstack/react-query";
 
@@ -99,6 +99,56 @@ export const prefetchQuery = async <F extends FunctionReference>(
     });
 };
 
+/** Per-call options shared by the one-shot `fetch*` helpers. */
+export interface ServerCallOptions {
+    /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
+    shardKey?: string;
+}
+
+/**
+ * Run a query once on the server and return its result — the standalone
+ * counterpart to `prefetchQuery`/`preloadQuery` for when you just want the data
+ * inline in a Server Component (e.g. to compute metadata or branch on a value)
+ * rather than seed a cache or hand a `Preloaded` to the client.
+ *
+ * Builds a fresh request-scoped client per call (see `createServerClient`), so
+ * pass `token` to run as the signed-in user. For several reads in one request,
+ * prefer holding one `createServerClient` and calling `.query()` yourself to
+ * avoid rebuilding the transport each time. Errors propagate.
+ */
+export const fetchQuery = async <F extends FunctionReference>(
+    options: ServerClientOptions,
+    function_: F,
+    args: ArgsOf<F>,
+    callOptions: ServerCallOptions = {},
+): Promise<ReturnOf<F>> => createServerClient(options).query<F>(function_, args, { shardKey: callOptions.shardKey });
+
+/**
+ * Run a mutation once on the server and return its result. Server-side calls go
+ * straight over HTTP RPC — the offline queue and optimistic-update machinery are
+ * client-only and never engage here. Errors propagate.
+ */
+export const fetchMutation = async <F extends FunctionReference>(
+    options: ServerClientOptions,
+    function_: F,
+    args: ArgsOf<F>,
+    callOptions: ServerCallOptions = {},
+): Promise<ReturnOf<F>> => createServerClient(options).mutation<F>(function_, args, { shardKey: callOptions.shardKey });
+
+/**
+ * Run an action once on the server and return its result. Errors propagate.
+ */
+export const fetchAction = async <F extends FunctionReference>(
+    options: ServerClientOptions,
+    function_: F,
+    args: ArgsOf<F>,
+    callOptions: ServerCallOptions = {},
+): Promise<ReturnOf<F>> => createServerClient(options).action<F>(function_, args, { shardKey: callOptions.shardKey });
+
+// The TanStack options factory is transport-free, so it works server-side too:
+// `await queryClient.ensureQueryData(cirrusQueryOptions(serverClient, fn, args))`.
+export type { CirrusQueryOptions } from "./query-options.js";
+export { cirrusQueryOptions } from "./query-options.js";
 export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@cirrus/client";
 // Re-exported so callers can do all server-side data loading from one import.
 // `preloadQuery`/`preloadedQueryResult` are the explicit-token flow; `dehydrate`

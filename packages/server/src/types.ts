@@ -605,9 +605,9 @@ interface ActionCtx {
     readonly auth: AuthState;
     readonly db: DatabaseWriter;
     readonly fetch: typeof globalThis.fetch;
-    readonly runAction: <R>(reference: RegisteredAction<ArgsValidator, R>, args: Record<string, unknown>) => Promise<R>;
-    readonly runMutation: <R>(reference: RegisteredMutation<ArgsValidator, R>, args: Record<string, unknown>) => Promise<R>;
-    readonly runQuery: <R>(reference: RegisteredQuery<ArgsValidator, R>, args: Record<string, unknown>) => Promise<R>;
+    readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly storage: Storage;
     readonly vectors: VectorSearch;

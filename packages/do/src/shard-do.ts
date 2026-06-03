@@ -4,7 +4,8 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { ExportRow, ImportShardResult } from "./admin-export-import.js";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import.js";
-import type { SqlExec } from "./ctx-db.js";
+import type { CdcChange, SqlExec } from "./ctx-db.js";
+import { CDC_LOG_TABLE, readCdcChanges } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
@@ -159,6 +160,20 @@ interface RunShardWriteResult {
     op: "delete" | "insert" | "patch" | "replace";
 }
 
+/**
+ * Arguments accepted by the `__cirrus_admin__:rankBefore` admin RPC. The query
+ * coordinator fans this out to every shard to count, for the row identified by
+ * `rowId`, how many rows precede it under `index` within `partitionKey`; the
+ * coordinator sums the per-shard `{before, total}` into a global rank.
+ */
+interface RunShardRankBeforeArgs {
+    index: string;
+    partitionKey: string;
+    rowId: string;
+    sortValues: unknown[];
+    table: string;
+}
+
 /** Per-subscription memo used to suppress no-op pushes. */
 interface SubscriptionMemo {
     lastJson: string;
@@ -280,6 +295,115 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
     }
 
     return { doc: record, id, op, table };
+};
+
+/**
+ * Validate the `__cirrus_admin__:rankBefore` payload. `table`, `index`,
+ * `partitionKey`, and `rowId` must be non-empty strings and `sortValues` must
+ * be an array; anything else throws a 400 `CirrusError` so the cross-shard
+ * coordinator surfaces a uniform error rather than a downstream SQL failure.
+ */
+const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeArgs => {
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+    const index = typeof args["index"] === "string" ? args["index"] : "";
+    const rowId = typeof args["rowId"] === "string" ? args["rowId"] : "";
+
+    if (table.trim() === "") {
+        throw Object.assign(new Error("rankBefore: `table` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    if (index.trim() === "") {
+        throw Object.assign(new Error("rankBefore: `index` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    // `partitionKey` is the encoded partition tuple — `""` is legitimate for a
+    // rankIndex with no `partitionBy`, so only the type is enforced, not
+    // non-emptiness.
+    if (typeof args["partitionKey"] !== "string") {
+        throw Object.assign(new Error("rankBefore: `partitionKey` must be a string"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    if (rowId.trim() === "") {
+        throw Object.assign(new Error("rankBefore: `rowId` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    if (!Array.isArray(args["sortValues"])) {
+        throw Object.assign(new Error("rankBefore: `sortValues` must be an array"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    return { index, partitionKey: args["partitionKey"], rowId, sortValues: args["sortValues"], table };
+};
+
+/** Arguments accepted by the `__cirrus_admin__:cdcSync` admin RPC. */
+interface RunShardCdcSyncArgs {
+    limit?: number;
+    sinceSeq: number;
+}
+
+/** Arguments accepted by the `__cirrus_admin__:applyCdc` admin RPC. */
+interface RunShardApplyCdcArgs {
+    changes: ReadonlyArray<CdcChange>;
+}
+
+/** Result of an `applyCdc` replay batch. */
+interface RunShardApplyCdcResult {
+    applied: number;
+}
+
+/**
+ * Validate the `__cirrus_admin__:applyCdc` payload. `changes` must be an array
+ * of CDC entries (`{ table, id, op, doc? }`); each is shape-checked just enough
+ * to reject obvious garbage before it reaches the writer.
+ */
+const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs => {
+    const raw = args["changes"];
+
+    if (!Array.isArray(raw)) {
+        throw Object.assign(new Error("applyCdc: `changes` must be an array"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    const changes = raw.map((entry, index): CdcChange => {
+        const record = entry as Record<string, unknown>;
+        const { op } = record;
+        const table = typeof record["table"] === "string" ? record["table"] : "";
+        const id = typeof record["id"] === "string" ? record["id"] : "";
+
+        if (table === "" || id === "" || (op !== "insert" && op !== "update" && op !== "delete")) {
+            throw Object.assign(new Error(`applyCdc: changes[${String(index)}] must have a table, id, and op of insert|update|delete`), {
+                code: "BAD_REQUEST",
+                name: "CirrusError",
+                status: 400,
+            });
+        }
+
+        const document = typeof record["doc"] === "object" && record["doc"] !== null ? (record["doc"] as Record<string, unknown>) : undefined;
+
+        return {
+            doc: document,
+            id,
+            op,
+            seq: typeof record["seq"] === "number" ? record["seq"] : 0,
+            table,
+            ts: typeof record["ts"] === "number" ? record["ts"] : 0,
+        };
+    });
+
+    return { changes };
+};
+
+/**
+ * Validate the `__cirrus_admin__:cdcSync` payload. `sinceSeq` is the caller's
+ * per-shard cursor (defaults to 0 = from the beginning); `limit` is an optional
+ * page cap. Both are coerced to finite non-negative integers.
+ */
+const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs => {
+    const toCount = (value: unknown): number | undefined => {
+        const n = typeof value === "number" ? value : Number(value);
+
+        return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
+    };
+
+    return { limit: toCount(args["limit"]), sinceSeq: toCount(args["sinceSeq"]) ?? 0 };
 };
 
 const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
@@ -991,6 +1115,55 @@ abstract class ShardDO {
     }
 
     /**
+     * Count, for the row identified by `rowId`, how many rows precede it under
+     * `index` within `partitionKey` on this shard (`before`) and the partition's
+     * total (`total`). The cross-shard coordinator fans this out to every shard
+     * and sums the results into a global rank.
+     *
+     * The base class can't build a schema-aware writer without the user's
+     * `schema.ts`, so it has no rank shadow tables to count against; the
+     * codegen-generated subclass overrides this to call `rankBefore(...)` on a
+     * live `createShardCtxDb(...)` writer.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
+        return Promise.reject(
+            Object.assign(new Error("rankBefore is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "CirrusError", status: 500 }),
+        );
+    }
+
+    /**
+     * Page this shard's change-data-capture log past `sinceSeq`. Read-only and
+     * schema-free — it only touches the `__cdc_log` table — so the base class
+     * implements it directly (no codegen override needed). Returns an empty
+     * page that leaves the cursor untouched when CDC was never enabled on this
+     * shard, so the coordinator tolerates shards that predate CDC.
+     */
+    protected runShardCdcSync(args: RunShardCdcSyncArgs): { changes: CdcChange[]; cursor: number } {
+        const sql = this.sql as SqlExec;
+        const present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
+
+        if (!present) {
+            return { changes: [], cursor: args.sinceSeq };
+        }
+
+        return readCdcChanges(sql, { limit: args.limit, sinceSeq: args.sinceSeq });
+    }
+
+    /**
+     * Replay a batch of CDC changes into this shard (point-in-time recovery).
+     * Schema-aware — it builds a `createShardCtxDb` writer — so the base class
+     * can't implement it; the codegen-generated subclass overrides this to call
+     * `applyCdcChanges(writer, args.changes)`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult> {
+        return Promise.reject(
+            Object.assign(new Error("applyCdc is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "CirrusError", status: 500 }),
+        );
+    }
+
+    /**
      * Register a subscription on the given socket. Stored via
      * `ws.serializeAttachment` so it survives hibernation.
      *
@@ -1399,6 +1572,34 @@ abstract class ShardDO {
 
                 // The write went through the writer, which records the touched
                 // table; flush so live subscribers re-run against the new value.
+                await this.flushChangedTables();
+
+                return jsonResponse({ result }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.rankBefore) {
+                // Read-only: counts rows preceding `rowId` in the partition. No
+                // writer mutation, so nothing to flush — the cross-shard
+                // coordinator sums the `{before, total}` from every shard.
+                const result = await this.runShardRankBefore(parseRankBeforeArgs(args));
+
+                return jsonResponse({ result }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.cdcSync) {
+                // Read-only: page this shard's change-data-capture log past the
+                // caller's per-shard cursor. The coordinator collects each
+                // shard's `{ changes, cursor }` into one streaming-export batch.
+                const result = this.runShardCdcSync(parseCdcSyncArgs(args));
+
+                return jsonResponse({ result }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.applyCdc) {
+                // Replay a CDC batch into this shard (point-in-time recovery).
+                // The writer mutates rows, so flush touched tables afterward.
+                const result = await this.runShardApplyCdc(parseApplyCdcArgs(args));
+
                 await this.flushChangedTables();
 
                 return jsonResponse({ result }, 200);
@@ -1856,9 +2057,12 @@ abstract class ShardDO {
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
 export type {
     HibernatableWebSocket,
+    RunShardApplyCdcArgs,
+    RunShardApplyCdcResult,
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
+    RunShardRankBeforeArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
     ShardDOOptions,

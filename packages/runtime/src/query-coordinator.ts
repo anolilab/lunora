@@ -61,6 +61,13 @@ const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, Readon
  * `avg` is intentionally absent in v1 — a correct cross-shard average
  * requires shipping `(sum, count)` per shard, not the post-shard mean.
  * Use two separate fan-outs (`sum` + `count`) and divide in the caller.
+ *
+ * `rank` — cross-shard `rank()` over a partition that spans shards (e.g. a
+ * global leaderboard `.shardBy("userId")` with `rankIndex(partitionBy: [])`).
+ * Each shard's `__cirrus_admin__:rankBefore` returns `{before, total}` (its
+ * local rows strictly-before the explicit key, plus its local partition
+ * total); the merge sums them into `{position: Σbefore + 1, total: Σtotal}` —
+ * the 1-based global position and global partition size.
  */
 type MergeStrategy =
     | { kind: "concat" }
@@ -68,6 +75,7 @@ type MergeStrategy =
     | { kind: "first" }
     | { kind: "max" }
     | { kind: "min" }
+    | { kind: "rank" }
     | { kind: "sum" }
     | { kind: "groupBy"; op?: "max" | "min" | "sum" };
 
@@ -237,8 +245,70 @@ interface MigrationFanOutResult {
     status: "completed" | "failed" | "in_progress";
 }
 
+/**
+ * Cross-shard rank request. Like {@link MigrationFanOutRequest} there is no
+ * caller-supplied merge — per-shard payloads are `{before, total}` objects, so
+ * {@link QueryCoordinator.orchestrateRank} rolls them up with the fixed
+ * `{position: Σbefore + 1, total: Σtotal}` semantics {@link mergeRank} defines.
+ *
+ * The key tuple (`partitionKey`/`sortValues`/`rowId`) is built off the row doc
+ * via `@cirrus/do`'s `rankKeyFromDoc(index, doc)` and forwarded verbatim to
+ * each shard's `__cirrus_admin__:rankBefore` admin RPC; `headers` must carry
+ * the admin bearer the shard's admin gate requires.
+ */
+interface RankFanOutRequest {
+    headers?: Record<string, string>;
+    /** Rank index name on `table`. */
+    index: string;
+    /** Canonical-JSON partition tuple — `encodePartitionKey(index.partitionBy, doc)`. */
+    partitionKey: string;
+    /** The `__id__` tiebreak value — `doc._id`. */
+    rowId: string;
+    /** Serialized sort-key values in `index.sortBy` order, as produced by `rankKeyFromDoc` (wire-safe + byte-matching the stored columns). */
+    sortValues: ReadonlyArray<unknown>;
+    /** Table whose live shard keys the rank fans out across. */
+    table: string;
+}
+
+interface RankFanOutResult {
+    /** Shards that errored or timed out. */
+    failed: number;
+    /** Shards that returned a 2xx `{before, total}`. */
+    ok: number;
+    /** `true` when at least one shard failed/timed out, so `position`/`total` are under-counts (failed shards' rows missing). A caller needing an exact global rank should treat this as an error, not trust the numbers. */
+    partial: boolean;
+    /** 1-based global position within the partition (`Σbefore + 1`). */
+    position: number;
+    /** Per-shard outcomes, in registry order. */
+    shards: ReadonlyArray<ShardRankOutcome>;
+    /** Global partition total (`Σtotal`). */
+    total: number;
+}
+
+/** One shard's rank outcome: its `{before, total}` payload, or an error. */
+interface ShardRankOutcome {
+    error?: { message: string; timedOut: boolean };
+    result?: { before: number; total: number };
+    shardKey: string;
+}
+
 interface QueryCoordinator {
     fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
+
+    /**
+     * Fan the `__cirrus_admin__:applyCdc` admin RPC out by forwarding each
+     * pre-bucketed per-shard batch of CDC changes, rolling up the applied/failed
+     * counts. The replay half of point-in-time recovery.
+     */
+    orchestrateApplyCdc: (namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest) => Promise<ApplyCdcFanOutResult>;
+
+    /**
+     * Fan the `__cirrus_admin__:cdcSync` admin RPC out to every live shard,
+     * each resumed from its own cursor in `request.cursors` (shardKey → seq).
+     * Returns the per-shard change pages plus their new cursors so the caller
+     * can checkpoint each shard independently — the streaming-export feed.
+     */
+    orchestrateCdcSync: (namespace: ShardNamespaceLike, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
 
     /**
      * Fan an export admin RPC out to every live shard, returning the
@@ -257,6 +327,14 @@ interface QueryCoordinator {
     orchestrateImport: (namespace: ShardNamespaceLike, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
     /** Fan a migration admin RPC out to every live shard of a table and roll up the per-shard outcomes. */
     orchestrateMigration: (namespace: ShardNamespaceLike, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
+
+    /**
+     * Fan the `__cirrus_admin__:rankBefore` admin RPC out to every live shard of
+     * a table and roll up the per-shard `{before, total}` payloads into the
+     * global rank (`{position: Σbefore + 1, total: Σtotal}`). The cross-shard
+     * `rank()` path for a partition that spans shards.
+     */
+    orchestrateRank: (namespace: ShardNamespaceLike, request: RankFanOutRequest) => Promise<RankFanOutResult>;
     readonly registry: ShardRegistry;
 }
 
@@ -294,6 +372,34 @@ interface ExportFanOutResult {
 }
 
 /**
+ * Cross-shard change-data-capture request. `tables` drives shard discovery (the
+ * union of their live shard keys, like export); `cursors` maps each shard key
+ * to the `seq` it was last read through (absent → from the beginning). `limit`
+ * caps each shard's page.
+ */
+interface CdcSyncFanOutRequest {
+    cursors?: Record<string, number>;
+    headers?: Record<string, string>;
+    limit?: number;
+    tables: ReadonlyArray<string>;
+}
+
+/** Per-shard CDC page: the changes plus the new cursor to resume this shard from. */
+interface ShardCdcOutcome {
+    changes?: ReadonlyArray<Record<string, unknown>>;
+    /** New per-shard cursor; on error it echoes the shard's prior cursor so a retry resumes cleanly. */
+    cursor: number;
+    error?: { message: string; timedOut: boolean };
+    shardKey: string;
+}
+
+interface CdcSyncFanOutResult {
+    failed: number;
+    ok: number;
+    shards: ReadonlyArray<ShardCdcOutcome>;
+}
+
+/**
  * Cross-shard import request. Rows have already been bucketed by the runtime
  * into one batch per shard key — the coordinator's job is to forward each
  * batch and roll up the per-shard insert counts + errors.
@@ -328,6 +434,23 @@ interface ImportFanOutResult {
     inserted: Record<string, number>;
     ok: number;
     shards: ReadonlyArray<ShardImportOutcome>;
+}
+
+/**
+ * Cross-shard CDC replay request (point-in-time recovery). Changes are
+ * pre-bucketed by the runtime into one batch per shard key — the coordinator
+ * forwards each batch to `__cirrus_admin__:applyCdc` and rolls up the counts.
+ */
+interface ApplyCdcFanOutRequest {
+    batches: ReadonlyArray<{ changes: ReadonlyArray<Record<string, unknown>>; shardKey: string }>;
+    headers?: Record<string, string>;
+}
+
+interface ApplyCdcFanOutResult {
+    /** Total changes applied across shards. */
+    applied: number;
+    failed: number;
+    ok: number;
 }
 
 const DEFAULT_CONCURRENCY = 16;
@@ -398,6 +521,50 @@ const rollUpMigration = (results: ReadonlyArray<ShardRpcOutcome>): MigrationFanO
     return { changed, failed, ok, processed, shards, status: rollUpStatus(anyFailed, anyInProgress || failed > 0) };
 };
 
+/** Read a `{before, total}` payload defensively off an unwrapped rankBefore result. */
+const readRankCounts = (payload: unknown): { before: number; total: number } => {
+    const run = (payload ?? {}) as { before?: unknown; total?: unknown };
+
+    return {
+        before: typeof run.before === "number" && Number.isFinite(run.before) ? run.before : 0,
+        total: typeof run.total === "number" && Number.isFinite(run.total) ? run.total : 0,
+    };
+};
+
+/**
+ * Fold per-shard `rankBefore` outcomes into a {@link RankFanOutResult}: sum the
+ * strictly-before counts (+1 for the 1-based position) and the partition totals
+ * across shards, collecting each shard's `{before, total}` payload (or error).
+ * A failed shard contributes nothing to the sums — the partial result still
+ * surfaces, with the failure recorded per shard.
+ */
+const rollUpRank = (results: ReadonlyArray<ShardRpcOutcome>): RankFanOutResult => {
+    const shards: ShardRankOutcome[] = [];
+    let ok = 0;
+    let failed = 0;
+    let before = 0;
+    let total = 0;
+
+    for (const result of results) {
+        if (result.kind === "err") {
+            failed += 1;
+            shards.push({ error: { message: result.message, timedOut: result.timedOut }, shardKey: result.shardKey });
+            continue;
+        }
+
+        ok += 1;
+
+        const counts = readRankCounts(unwrapResult(result.value));
+
+        before += counts.before;
+        total += counts.total;
+
+        shards.push({ result: counts, shardKey: result.shardKey });
+    }
+
+    return { failed, ok, partial: failed > 0, position: before + 1, shards, total };
+};
+
 /**
  * Roll per-shard export outcomes into a flat list. The DO admin handler
  * returns `{result: {rows: [...]}}` — `unwrapResult` peels the envelope and we
@@ -426,6 +593,57 @@ const rollUpExport = (results: ReadonlyArray<ShardRpcOutcome>): ExportFanOutResu
     }
 
     return { failed, ok, shards };
+};
+
+/** Roll up per-shard `cdcSync` outcomes, preserving each shard's prior cursor on error. */
+const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceSeq: number }>): CdcSyncFanOutResult => {
+    const shards: ShardCdcOutcome[] = [];
+    let ok = 0;
+    let failed = 0;
+
+    for (const { outcome, sinceSeq } of results) {
+        if (outcome.kind === "err") {
+            failed += 1;
+            // Echo the prior cursor so a retry re-reads from the same point.
+            shards.push({ cursor: sinceSeq, error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey: outcome.shardKey });
+            continue;
+        }
+
+        ok += 1;
+
+        // payload is an untrusted unwrapped RPC value cast to a shape; the cast
+        // claims non-nullish but a malformed shard could return anything, so
+        // guard both fields (the disable silences the cast-driven false alarm).
+        const payload = unwrapResult(outcome.value) as undefined | { changes?: ReadonlyArray<Record<string, unknown>>; cursor?: number };
+        const changes = Array.isArray(payload?.changes) ? payload.changes : [];
+        const cursor = typeof payload?.cursor === "number" ? payload.cursor : sinceSeq;
+
+        shards.push({ changes, cursor, shardKey: outcome.shardKey });
+    }
+
+    return { failed, ok, shards };
+};
+
+/** Sum the per-shard `applyCdc` outcomes into a single roll-up. */
+const rollUpApplyCdc = (results: ReadonlyArray<ShardRpcOutcome>): ApplyCdcFanOutResult => {
+    let ok = 0;
+    let failed = 0;
+    let applied = 0;
+
+    for (const outcome of results) {
+        if (outcome.kind === "err") {
+            failed += 1;
+            continue;
+        }
+
+        ok += 1;
+
+        const payload = unwrapResult(outcome.value) as undefined | { applied?: number };
+
+        applied += typeof payload?.applied === "number" ? payload.applied : 0;
+    }
+
+    return { applied, failed, ok };
 };
 
 /** Sum the per-shard import counts/errors into a single roll-up. */
@@ -753,6 +971,48 @@ const mergeSum = (values: ReadonlyArray<unknown>): number => {
     return total;
 };
 
+/** Merged cross-shard rank: 1-based global position within the partition, plus the global partition total. */
+interface RankMergeResult {
+    position: number;
+    total: number;
+}
+
+/**
+ * Fold per-shard `{before, total}` payloads into the global rank. Summing the
+ * strictly-before counts across shards and adding 1 gives the 1-based global
+ * position; summing the per-shard partition totals gives the global partition
+ * size. Non-`{before,total}` / failed payloads contribute nothing (a failed
+ * shard already surfaced through `errors[]`).
+ *
+ * NOTE: this reads `before`/`total` off the RAW per-shard value — the generic
+ * `fanOut` contract, where shards return bare query results. The admin
+ * `__cirrus_admin__:rankBefore` op wraps its payload in `{result}`, so
+ * `orchestrateRank`/`rollUpRank` (not this) is the path for that op; it
+ * `unwrapResult`s first. Don't point a `{kind:"rank"}` `fanOut` at the admin op.
+ */
+const mergeRank = (values: ReadonlyArray<unknown>): RankMergeResult => {
+    let before = 0;
+    let total = 0;
+
+    for (const v of values) {
+        if (v === null || typeof v !== "object") {
+            continue;
+        }
+
+        const payload = v as { before?: unknown; total?: unknown };
+
+        if (typeof payload.before === "number" && Number.isFinite(payload.before)) {
+            before += payload.before;
+        }
+
+        if (typeof payload.total === "number" && Number.isFinite(payload.total)) {
+            total += payload.total;
+        }
+    }
+
+    return { position: before + 1, total };
+};
+
 const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direction?: "asc" | "desc"; k: number }): ReadonlyArray<Record<string, unknown>> => {
     const collected: { row: Record<string, unknown>; score: number }[] = [];
 
@@ -800,6 +1060,10 @@ const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrate
 
         case "min": {
             return mergeNumeric(values, (best, candidate) => Math.min(best, candidate));
+        }
+
+        case "rank": {
+            return mergeRank(values);
         }
 
         case "sum": {
@@ -885,6 +1149,64 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpExport(results);
         },
+        async orchestrateCdcSync(namespace: ShardNamespaceLike, request: CdcSyncFanOutRequest): Promise<CdcSyncFanOutResult> {
+            // Discover shards like export — the union of every requested table's
+            // live shard keys. Unlike export, each shard resumes from its own
+            // cursor, so (like import) we can't reuse `runBoundedFanOut`'s
+            // same-args-to-all model; we drive a per-shard-args worker loop.
+            const union = new Set<string>();
+            const perTableKeys = await Promise.all(request.tables.map(async (table) => options.registry.listShardKeys(table)));
+
+            for (const keys of perTableKeys) {
+                for (const key of keys) {
+                    union.add(key);
+                }
+            }
+
+            const shardKeys = [...union];
+            const cursors = request.cursors ?? {};
+            const results: { outcome: ShardRpcOutcome; sinceSeq: number }[] = Array.from({ length: shardKeys.length });
+            let cursor = 0;
+
+            const concurrency = Math.min(maxConcurrency, shardKeys.length);
+
+            const worker = async (): Promise<void> => {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
+                while (true) {
+                    const index = cursor;
+
+                    cursor += 1;
+
+                    const shardKey = shardKeys[index];
+
+                    if (index >= shardKeys.length || shardKey === undefined) {
+                        return;
+                    }
+
+                    const sinceSeq = cursors[shardKey] ?? 0;
+
+                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
+                    const outcome = await callOneShard(
+                        namespace,
+                        shardKey,
+                        prepareShardRpc({
+                            args: { limit: request.limit, sinceSeq },
+                            functionPath: "__cirrus_admin__:cdcSync",
+                            headers: request.headers,
+                        }),
+                        perShardTimeoutMs,
+                    );
+
+                    results[index] = { outcome, sinceSeq };
+                }
+            };
+
+            if (concurrency > 0) {
+                await Promise.all(Array.from({ length: concurrency }, () => worker()));
+            }
+
+            return rollUpCdcSync(results);
+        },
         async orchestrateImport(namespace: ShardNamespaceLike, request: ImportFanOutRequest): Promise<ImportFanOutResult> {
             // Each shard gets its own pre-bucketed batch — we can't reuse
             // `runBoundedFanOut` because that helper sends the same args to
@@ -929,12 +1251,79 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpImport(outcomes);
         },
+        async orchestrateApplyCdc(namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest): Promise<ApplyCdcFanOutResult> {
+            // Per-shard pre-bucketed batches — same worker-loop shape as
+            // orchestrateImport (each shard gets distinct args, so we can't use
+            // runBoundedFanOut's same-args-to-all model).
+            const { batches } = request;
+            const outcomes: ShardRpcOutcome[] = Array.from({ length: batches.length });
+            let cursor = 0;
+
+            const concurrency = Math.min(maxConcurrency, batches.length);
+
+            const worker = async (): Promise<void> => {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
+                while (true) {
+                    const index = cursor;
+
+                    cursor += 1;
+
+                    const batch = batches[index];
+
+                    if (index >= batches.length || batch === undefined) {
+                        return;
+                    }
+
+                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes batches sequentially while `concurrency` workers run in parallel
+                    outcomes[index] = await callOneShard(
+                        namespace,
+                        batch.shardKey,
+                        prepareShardRpc({
+                            args: { changes: [...batch.changes] },
+                            functionPath: "__cirrus_admin__:applyCdc",
+                            headers: request.headers,
+                        }),
+                        perShardTimeoutMs,
+                    );
+                }
+            };
+
+            if (concurrency > 0) {
+                await Promise.all(Array.from({ length: concurrency }, () => worker()));
+            }
+
+            return rollUpApplyCdc(outcomes);
+        },
         async orchestrateMigration(namespace: ShardNamespaceLike, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
 
             const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
 
             return rollUpMigration(results);
+        },
+        async orchestrateRank(namespace: ShardNamespaceLike, request: RankFanOutRequest): Promise<RankFanOutResult> {
+            const keys = await options.registry.listShardKeys(request.table);
+
+            // Every shard receives the same explicit key tuple — the row's
+            // partition/sort values + id — and counts its own rows
+            // strictly-before it. `rankBefore` works on a peer shard that
+            // doesn't store the row, so the partition total stays correct even
+            // when the partition spans shards.
+            const rankRequest: ShardRpcRequest = {
+                args: {
+                    index: request.index,
+                    partitionKey: request.partitionKey,
+                    rowId: request.rowId,
+                    sortValues: [...request.sortValues],
+                    table: request.table,
+                },
+                functionPath: "__cirrus_admin__:rankBefore",
+                headers: request.headers,
+            };
+
+            const results = await runBoundedFanOut(namespace, keys, rankRequest, maxConcurrency, perShardTimeoutMs);
+
+            return rollUpRank(results);
         },
         registry: options.registry,
     };
@@ -954,9 +1343,12 @@ export type {
     MigrationFanOutResult,
     QueryCoordinator,
     QueryCoordinatorOptions,
+    RankFanOutRequest,
+    RankFanOutResult,
     ShardError,
     ShardExportOutcome,
     ShardImportOutcome,
     ShardMigrationOutcome,
+    ShardRankOutcome,
     ShardRegistry,
 };

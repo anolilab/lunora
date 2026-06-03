@@ -36,6 +36,7 @@
  */
 
 import type { RestrictableQueryOptions } from "./aggregates.js";
+import serializeSqlValue from "./serialize-sql.js";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
 const compareStrings = (a: string, b: string): number => {
@@ -106,6 +107,31 @@ interface RankResult {
  */
 interface RankOptions extends RestrictableQueryOptions {
     row: Record<string, unknown> | string;
+}
+
+/**
+ * Args for the cross-shard `rankBefore()` primitive. Unlike `rank()`, the key
+ * is supplied explicitly (built off the row doc via `rankKeyFromDocument`) so
+ * a PEER shard — one that doesn't store the row being ranked — can still count
+ * its local rows strictly-before that key. Scope is fixed by the explicit
+ * `partitionKey`; unlike `rank()` there is no `where`/`baseWhere` (the caller
+ * pins the partition up front), only the `restrictsCounts` RLS seam.
+ */
+interface RankBeforeOptions {
+    /** Canonical-JSON partition tuple — `encodePartitionKey(index.partitionBy, doc)`. */
+    partitionKey: string;
+    /** Mirrors `rank()`/`count()`: a restricted ctx can't be trusted for a strict-before count. */
+    restrictsCounts?: boolean;
+    /** The `__id__` tiebreak value — `doc._id`. */
+    rowId: string;
+    /** Sort-key values in `index.sortBy` order. `rankKeyFromDocument` serializes them to the stored `__sort_k&lt;i>__` form; `rankBefore` re-applies `serializeSqlValue` idempotently, so raw values from a direct caller work too. */
+    sortValues: ReadonlyArray<unknown>;
+}
+
+/** Per-shard `rankBefore()` payload: rows strictly-before the key locally, plus the local partition total. */
+interface RankBeforeResult {
+    before: number;
+    total: number;
 }
 
 /** Args for `rankPage()` — sorted pagination over the index's companion table. */
@@ -235,5 +261,54 @@ const resolveRankPartition = (index: RankIndexDefinitionLike, where: Record<stri
  */
 const rankTableName = (table: string, indexName: string): string => `${table}__rank_${indexName}`;
 
-export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName };
-export type { RankDirection, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult, RankSortKeyLike };
+/**
+ * The fan-out key tuple for a single doc under a rankIndex, derived purely from
+ * the doc (no companion lookup). A caller holding the full row builds this to
+ * ask peer shards "count your local rows strictly before this one" via
+ * `rankBefore` — the cross-shard `rank()` path for a partition that spans
+ * multiple shards (e.g. a global leaderboard sharded by user).
+ *
+ * The values mirror what the trigger seam (`syncRankIndexEntry`) stores:
+ *
+ * - `partitionKey` === `encodePartitionKey(index.partitionBy ?? [], doc)`, the same canonical-JSON tuple filed in `__partition__`.
+ * - `sortValues[i]` === `serializeSqlValue(doc[index.sortBy[i].field])` — the same transform `syncRankIndexEntry` applies to the stored `__sort_k&lt;i>__` column, so the comparison is byte-for-byte (and JSON-safe for the cross-shard wire) regardless of which shard owns the row. `rankBefore` re-applies it idempotently, so a direct caller passing raw values still works.
+ * - `rowId` === `doc._id`, the `__id__` tiebreak.
+ */
+const rankKeyFromDocument = (
+    index: RankIndexDefinitionLike,
+    document_: Record<string, unknown>,
+): { partitionKey: string; rowId: string; sortValues: unknown[] } => {
+    return {
+        partitionKey: encodePartitionKey(index.partitionBy ?? [], document_),
+        rowId: document_["_id"] as string,
+        // Serialize each sort value the same way `syncRankIndexEntry` writes the
+        // stored `__sort_k<i>__` column, so a peer shard's comparison matches
+        // byte-for-byte. This also makes the values JSON-safe for the
+        // cross-shard RPC wire — `serializeSqlValue` turns bigint/Date/object
+        // into a string|number|null, where raw bigint would crash JSON.stringify
+        // and a raw Date would serialize to a different shape than the store.
+        // eslint-disable-next-line unicorn/no-null -- mirrors syncRankIndexEntry: a missing field serializes via `?? null` so the stored and wire bytes agree
+        sortValues: index.sortBy.map((key) => serializeSqlValue(document_[key.field] ?? null)),
+    };
+};
+
+export {
+    encodePartitionKey,
+    matchesRankStaticWhere,
+    RANK_TIEBREAK,
+    rankKeyFromDocument as rankKeyFromDoc,
+    rankTableName,
+    resolveRankPartition,
+    sortColumnName,
+};
+export type {
+    RankBeforeOptions,
+    RankBeforeResult,
+    RankDirection,
+    RankIndexDefinitionLike,
+    RankOptions,
+    RankPage,
+    RankPageOptions,
+    RankResult,
+    RankSortKeyLike,
+};
