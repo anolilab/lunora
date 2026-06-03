@@ -78,8 +78,13 @@ describe("c.query.stream() terminal", () => {
         // The for-await loop on the caller side breaks at the first aborted
         // check after a yield, so we see [0,1,2] (the cancel fires after 2).
         expect(observed).toEqual([0, 1, 2]);
-        // The wrapper bails out of the user iterator early, so the producer
-        // never reaches index 3 even though its loop counted to 10.
+        // The producer aborts itself in the SAME step that yields 2 (the
+        // `ac.abort()` runs after `yield index` returns). On the next pull it
+        // resumes from that point, runs `yields.push(3)` and `yield 3` before
+        // the wrapper's abort check fires and drops chunk 3 without forwarding
+        // it. So the producer reaches index 3 but no further — an external
+        // (non-self) cancel is caught *before* the next `.next()` and never
+        // resumes the producer at all.
         expect(yields).toEqual([0, 1, 2, 3]);
     });
 
