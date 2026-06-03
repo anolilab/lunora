@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations, trimCdcChanges } from "../src/ctx-db.js";
+import type { CdcChange, DatabaseWriterLike } from "../src/ctx-db.js";
+import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations, trimCdcChanges } from "../src/ctx-db.js";
 import { messagesSchema } from "./_helpers/fake-sql.js";
 import createSqliteExec from "./_helpers/node-sqlite.js";
 
@@ -113,5 +113,73 @@ describe("ctx-db change-data-capture", () => {
         expect(remaining.changes.map((change) => change.id)).toStrictEqual(["b"]);
         // Trimming does not reset the monotonic cursor — `b` keeps seq 2.
         expect(remaining.changes[0]?.seq).toBe(2);
+    });
+});
+
+describe("applyCdcChanges (replay-PITR engine)", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const change = (overrides: Partial<CdcChange> & Pick<CdcChange, "id" | "op">): CdcChange => {
+        return { seq: 0, table: "messages", ts: 0, ...overrides };
+    };
+
+    it("replays an insert post-image as a fresh row", async () => {
+        expect.assertions(1);
+
+        const writer = setupWriter(false);
+
+        await applyCdcChanges(writer, [change({ doc: { _id: "m_1", authorId: "u1", channelId: "c1", text: "hi" }, id: "m_1", op: "insert" })]);
+
+        const row = await writer.get("m_1");
+
+        expect(row).toMatchObject({ text: "hi" });
+    });
+
+    it("upserts (replaces) when the row already exists", async () => {
+        expect.assertions(1);
+
+        const writer = setupWriter(false);
+
+        await writer.insert("messages", { _id: "m_1", authorId: "u1", channelId: "c1", text: "original" }, { allowExplicitId: true });
+        await applyCdcChanges(writer, [change({ doc: { _id: "m_1", authorId: "u1", channelId: "c1", text: "replayed" }, id: "m_1", op: "update" })]);
+
+        const row = await writer.get("m_1");
+
+        expect(row).toMatchObject({ text: "replayed" });
+    });
+
+    it("replays a delete by removing the row", async () => {
+        expect.assertions(1);
+
+        const writer = setupWriter(false);
+
+        await writer.insert("messages", { _id: "m_1", authorId: "u1", channelId: "c1", text: "doomed" }, { allowExplicitId: true });
+        await applyCdcChanges(writer, [change({ id: "m_1", op: "delete" })]);
+
+        const row = await writer.get("m_1");
+
+        expect(row).toBeNull();
+    });
+
+    it("reconstructs final state from a snapshot-less ordered changelog", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter(false);
+
+        await applyCdcChanges(writer, [
+            change({ doc: { _id: "m_1", authorId: "u1", channelId: "c1", text: "v1" }, id: "m_1", op: "insert" }),
+            change({ doc: { _id: "m_2", authorId: "u1", channelId: "c1", text: "keep" }, id: "m_2", op: "insert" }),
+            change({ doc: { _id: "m_1", authorId: "u1", channelId: "c1", text: "v2" }, id: "m_1", op: "update" }),
+            change({ id: "m_2", op: "delete" }),
+        ]);
+
+        await expect(writer.get("m_1")).resolves.toMatchObject({ text: "v2" });
+        await expect(writer.get("m_2")).resolves.toBeNull();
     });
 });

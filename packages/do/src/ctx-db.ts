@@ -1308,6 +1308,56 @@ const trimCdcChanges = (sql: SqlExec, throughSeq: number): void => {
     runSql(sql, `DELETE FROM ${quoteIdentifier(CDC_LOG_TABLE)} WHERE seq <= ?`, throughSeq);
 };
 
+/**
+ * Replay a CDC change against a live writer: insert/update post-images become
+ * an upsert (insert with the explicit id, falling back to replace when the row
+ * already exists), deletes remove the row. This is the engine behind
+ * point-in-time recovery — apply a base snapshot, then replay the changelog up
+ * to the target moment in commit order.
+ */
+const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Promise<void> => {
+    if (change.op === "delete") {
+        await writer.delete(change.id);
+
+        return;
+    }
+
+    const document = change.doc ?? {};
+
+    try {
+        await writer.insert(change.table, document, { allowExplicitId: true });
+    } catch (error: unknown) {
+        if (!(error instanceof ConflictError)) {
+            throw error;
+        }
+
+        // Row already exists — replace its user fields. The system columns
+        // (`_id` is the lock key, `_creationTime` is immutable on replace) are
+        // dropped so `replace` sees only declared fields.
+        const fields: Record<string, unknown> = {};
+
+        for (const [key, value] of Object.entries(document)) {
+            if (key !== "_id" && key !== "_creationTime") {
+                fields[key] = value;
+            }
+        }
+
+        await writer.replace(change.id, fields);
+    }
+};
+
+/**
+ * Replay an ordered batch of CDC changes against a writer (see
+ * {@link applyCdcChange}). Applied sequentially so per-row order is preserved —
+ * a later update never races the insert it depends on.
+ */
+const applyCdcChanges = async (writer: DatabaseWriterLike, changes: ReadonlyArray<CdcChange>): Promise<void> => {
+    for (const change of changes) {
+        // eslint-disable-next-line no-await-in-loop -- replay MUST be sequential: per-row commit order is the correctness contract.
+        await applyCdcChange(writer, change);
+    }
+};
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { sql } = options;
     const { schema } = options;
@@ -3057,7 +3107,17 @@ const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     }
 };
 
-export { backfillAggregateIndexes, backfillRankIndexes, CDC_LOG_TABLE, createShardCtxDb, migrateCdcLog, readCdcChanges, runShardMigrations, trimCdcChanges };
+export {
+    applyCdcChanges,
+    backfillAggregateIndexes,
+    backfillRankIndexes,
+    CDC_LOG_TABLE,
+    createShardCtxDb,
+    migrateCdcLog,
+    readCdcChanges,
+    runShardMigrations,
+    trimCdcChanges,
+};
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 export type {
     BroadcastDelta,
