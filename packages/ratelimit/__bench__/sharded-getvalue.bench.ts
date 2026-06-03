@@ -5,19 +5,19 @@ import { RateLimiter } from "../src/index.js";
 
 /**
  * `getValue()` returns the units admittable right now for a `(name, key)`
- * pair — projected forward to the current clock (token-bucket refill, etc.)
- * and **aggregated across shards** when a limit is sharded. Sharding splits
- * a hot key across N independent sub-buckets to avoid contention; the read
- * cost grows linearly with N because we have to sum every shard.
+ * pair — projected forward to the current clock (token-bucket refill, etc.).
+ * For a sharded limit it reads only the **single** shard `limit()` would route
+ * this key to (summing siblings would over-report, since this key only ever
+ * consumes from one of them). So the read is one store lookup regardless of
+ * shard count; the extra per-shard work is just the `hashToShard` route step.
  *
- * - **unsharded** — one bucket; one store lookup.
- * - **shards=8** — eight buckets; eight store lookups + sum.
- * - **shards=32** — same scaling pushed harder.
+ * - **unsharded** — one bucket; one lookup, no routing hash.
+ * - **shards=8** — one lookup + a route hash over the storage key.
+ * - **shards=32** — same single lookup; `% shards` is the only difference.
  *
- * Memory store so the bench measures the aggregation overhead, not store IO.
- * `limit()` uses random routing so warmth across shards is uneven; we prime
- * a synthetic value into every shard via direct store access to keep the
- * compare apples-to-apples.
+ * Memory store so the bench measures the routing/projection overhead, not
+ * store IO. Each limiter is primed against the routed key so getValue() hits
+ * the real "with prior value" projection path users see in production.
  */
 
 const PERIOD_MS = 1000;
@@ -39,9 +39,9 @@ const NOW = 1_700_000_000_000;
 
 const buildLimiter = <Names extends string>(config: RateLimitConfigMap<Names>) => new RateLimiter({ config, now: () => NOW });
 
-// Prime each limiter so the shards have data — getValue() projecting from
-// "no prior" is the cheap case; with prior values we hit the real
-// aggregation path users see in production.
+// Prime each limiter so the routed shard has data — getValue() projecting
+// from "no prior" is the cheap case; with a prior value we hit the real
+// projection path users see in production.
 const prime = async <Names extends string>(limiter: RateLimiter<Names>, name: Names, hits: number): Promise<void> => {
     for (let index = 0; index < hits; index += 1) {
         // eslint-disable-next-line no-await-in-loop -- ordered stateful calls
@@ -58,15 +58,15 @@ await prime(sharded8, "hits", 100);
 await prime(sharded32, "hits", 100);
 
 describe("RateLimiter.getValue — sharded vs unsharded", () => {
-    bench("unsharded: 1 bucket → 1 store lookup", async () => {
+    bench("unsharded: 1 lookup, no routing hash", async () => {
         await unsharded.getValue("hits", { key: "user-42" });
     });
 
-    bench("shards=8: 8 buckets → 8 lookups + sum", async () => {
+    bench("shards=8: 1 lookup + route hash", async () => {
         await sharded8.getValue("hits", { key: "user-42" });
     });
 
-    bench("shards=32: 32 buckets → 32 lookups + sum", async () => {
+    bench("shards=32: 1 lookup + route hash", async () => {
         await sharded32.getValue("hits", { key: "user-42" });
     });
 });
