@@ -1008,6 +1008,7 @@ const emitShard = (schema: SchemaIR): string => {
         "MigrationRunResult",
         "QueryArgs",
         ...(hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : []),
+        "RunShardApplyCdcArgs",
         "RunShardMigrationArgs",
         "RunShardRankBeforeArgs",
         "RunShardWriteArgs",
@@ -1022,7 +1023,7 @@ const emitShard = (schema: SchemaIR): string => {
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`,
-        `import { createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`,
+        `import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`,
     ];
 
     if (hasVectors) {
@@ -1135,6 +1136,7 @@ const vectorsStub: VectorSearchLike = {
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
                 },
+                cdc: config.cdc ?? false,
                 onRead: options.onRead,
                 onWrite,
                 scheduler,
@@ -1145,6 +1147,7 @@ const vectorsStub: VectorSearchLike = {
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
                 },
+                cdc: config.cdc ?? false,
                 onRead: options.onRead,
                 scheduler,
                 schema: schema as unknown as SchemaLike,
@@ -1229,6 +1232,8 @@ interface FunctionReference {
 const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringify(tableReferences, undefined, 4)};
 
 export interface ShardDOConfig {
+    /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
+    cdc?: boolean;
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${d1ConfigField}
 }
@@ -1360,6 +1365,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
                 },
+                cdc: config.cdc ?? false,
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -1406,6 +1412,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
                 },
+                cdc: config.cdc ?? false,
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -1443,6 +1450,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
                 },
+                cdc: config.cdc ?? false,
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -1461,12 +1469,32 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             });
         }
 
+        protected override async runShardApplyCdc(args: RunShardApplyCdcArgs): Promise<{ applied: number }> {
+            this.ensureMigrated();
+
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table);
+                },
+                cdc: config.cdc ?? false,
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+
+            await applyCdcChanges(writer, args.changes);
+
+            return { applied: args.changes.length };
+        }
+
         private ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
 
-            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike);
+            runShardMigrations(this.sql as SqlExec, schema as unknown as SchemaLike, { cdc: config.cdc ?? false });
             this.migrated = true;
         }
 

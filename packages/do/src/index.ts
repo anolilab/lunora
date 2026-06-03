@@ -37,6 +37,7 @@ export {
 } from "./aggregates.js";
 export type {
     BroadcastDelta,
+    CdcChange,
     Clock,
     ColumnMetaLike,
     CountArgs,
@@ -56,7 +57,16 @@ export type {
     WriteEvent,
     WriteHook,
 } from "./ctx-db.js";
-export { backfillAggregateIndexes, backfillRankIndexes, createShardCtxDb, runShardMigrations } from "./ctx-db.js";
+export {
+    applyCdcChanges,
+    backfillAggregateIndexes,
+    backfillRankIndexes,
+    CDC_LOG_TABLE,
+    createShardCtxDb,
+    readCdcChanges,
+    runShardMigrations,
+    trimCdcChanges,
+} from "./ctx-db.js";
 export type {
     DataMigrationDocument,
     DataMigrationLike,
@@ -88,6 +98,8 @@ export type { SessionRecord } from "./session-do.js";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
 export type {
     HibernatableWebSocket,
+    RunShardApplyCdcArgs,
+    RunShardApplyCdcResult,
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
