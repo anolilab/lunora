@@ -163,19 +163,50 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     const index = options.index ?? "by_key";
     const keyField = options.keyField ?? "key";
 
-    const find = async (storageKey: string): Promise<Record<string, unknown> | null> =>
-        db
+    // The limiter's hot path is get() immediately followed by set() under the
+    // DO input gate (read-modify-write). Caching the row id (or its absence)
+    // resolved by the get()'s find() lets the following set()/delete() patch or
+    // insert directly, halving the index lookups per consuming limit() (was
+    // find-in-get + find-in-set; now one find total). The cache is invalidated
+    // on every write so a subsequent get() re-reads, never serving stale state.
+    const idCache = new Map<string, Id<string> | null>();
+
+    const find = async (storageKey: string): Promise<Record<string, unknown> | null> => {
+        const row = await db
             .query(table)
             .withIndex(index, (q) => q.eq(keyField, storageKey))
             .first();
 
+        idCache.set(storageKey, row ? (row._id as Id<string>) : null);
+
+        return row;
+    };
+
+    // The row id resolved by the most recent find(): the id when a row matched,
+    // `null` when it didn't, or `undefined` when no lookup is cached (the caller
+    // must find()). Re-running find() only when the cache is cold is what saves
+    // the redundant lookup on the get()→set() hot path.
+    const resolveId = async (storageKey: string): Promise<Id<string> | null> => {
+        const cached = idCache.get(storageKey);
+
+        if (idCache.has(storageKey)) {
+            return cached ?? null;
+        }
+
+        await find(storageKey);
+
+        return idCache.get(storageKey) ?? null;
+    };
+
     return {
         delete: async (storageKey) => {
-            const row = await find(storageKey);
+            const id = await resolveId(storageKey);
 
-            if (row) {
-                await db.delete(row._id as Id<string>);
+            if (id !== null) {
+                await db.delete(id);
             }
+
+            idCache.delete(storageKey);
         },
         get: async (storageKey) => {
             const row = await find(storageKey);
@@ -193,14 +224,18 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
             return value;
         },
         set: async (storageKey, value) => {
-            const row = await find(storageKey);
+            const id = await resolveId(storageKey);
             const document: Record<string, unknown> = { [keyField]: storageKey, ts: value.ts, value: value.value };
 
             if (value.prev !== undefined) {
                 document.prev = value.prev;
             }
 
-            await (row ? db.patch(row._id as Id<string>, document) : db.insert(table, document));
+            if (id !== null) {
+                await db.patch(id, document);
+            } else {
+                idCache.set(storageKey, await db.insert(table, document));
+            }
         },
     };
 };
