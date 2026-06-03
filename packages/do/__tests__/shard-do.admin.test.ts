@@ -652,3 +652,64 @@ describe("shardDO admin rankBefore", () => {
         await expect(response.json()).resolves.toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
     });
 });
+
+describe("shardDO admin cdcSync", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+
+    const stateFor = (sql: unknown): ShardDOState => {
+        return {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: sql as ShardDOState["storage"]["sql"] },
+        };
+    };
+
+    const cdcRequest = (args: Record<string, unknown>): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: ADMIN_FUNCTIONS.cdcSync }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    it("pages this shard's changelog past sinceSeq", async () => {
+        expect.assertions(3);
+
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema, { cdc: true });
+
+        const writer = createShardContextDatabase({ cdc: true, schema: usersSchema, sql: database.sql });
+
+        await writer.insert("users", { _id: "u_1", name: "Ada", version: 1 }, { allowExplicitId: true });
+        await writer.patch("u_1", { name: "Ada Lovelace" });
+
+        const shard = new AdminShard(stateFor(database.sql), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(cdcRequest({ sinceSeq: 0 }));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { changes: { op: string }[]; cursor: number } }>();
+
+        expect(body.result.changes.map((change) => change.op)).toStrictEqual(["insert", "update"]);
+        expect(body.result.cursor).toBe(2);
+    });
+
+    it("returns an empty page that leaves the cursor untouched when the shard has no changelog", async () => {
+        expect.assertions(2);
+
+        database = createSqliteExec();
+        runShardMigrations(database.sql, usersSchema); // CDC disabled — no __cdc_log table.
+
+        const shard = new AdminShard(stateFor(database.sql), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(cdcRequest({ sinceSeq: 7 }));
+        const body = await response.json<{ result: { changes: unknown[]; cursor: number } }>();
+
+        expect(body.result.changes).toStrictEqual([]);
+        expect(body.result.cursor).toBe(7);
+    });
+});

@@ -4,7 +4,8 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { ExportRow, ImportShardResult } from "./admin-export-import.js";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import.js";
-import type { SqlExec } from "./ctx-db.js";
+import type { CdcChange, SqlExec } from "./ctx-db.js";
+import { CDC_LOG_TABLE, readCdcChanges } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
@@ -331,6 +332,27 @@ const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeA
     }
 
     return { index, partitionKey: args["partitionKey"], rowId, sortValues: args["sortValues"], table };
+};
+
+/** Arguments accepted by the `__cirrus_admin__:cdcSync` admin RPC. */
+interface RunShardCdcSyncArgs {
+    limit?: number;
+    sinceSeq: number;
+}
+
+/**
+ * Validate the `__cirrus_admin__:cdcSync` payload. `sinceSeq` is the caller's
+ * per-shard cursor (defaults to 0 = from the beginning); `limit` is an optional
+ * page cap. Both are coerced to finite non-negative integers.
+ */
+const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs => {
+    const toCount = (value: unknown): number | undefined => {
+        const n = typeof value === "number" ? value : Number(value);
+
+        return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
+    };
+
+    return { limit: toCount(args["limit"]), sinceSeq: toCount(args["sinceSeq"]) ?? 0 };
 };
 
 const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
@@ -1060,6 +1082,24 @@ abstract class ShardDO {
     }
 
     /**
+     * Page this shard's change-data-capture log past `sinceSeq`. Read-only and
+     * schema-free — it only touches the `__cdc_log` table — so the base class
+     * implements it directly (no codegen override needed). Returns an empty
+     * page that leaves the cursor untouched when CDC was never enabled on this
+     * shard, so the coordinator tolerates shards that predate CDC.
+     */
+    protected runShardCdcSync(args: RunShardCdcSyncArgs): { changes: CdcChange[]; cursor: number } {
+        const sql = this.sql as SqlExec;
+        const present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
+
+        if (!present) {
+            return { changes: [], cursor: args.sinceSeq };
+        }
+
+        return readCdcChanges(sql, { limit: args.limit, sinceSeq: args.sinceSeq });
+    }
+
+    /**
      * Register a subscription on the given socket. Stored via
      * `ws.serializeAttachment` so it survives hibernation.
      *
@@ -1478,6 +1518,15 @@ abstract class ShardDO {
                 // writer mutation, so nothing to flush — the cross-shard
                 // coordinator sums the `{before, total}` from every shard.
                 const result = await this.runShardRankBefore(parseRankBeforeArgs(args));
+
+                return jsonResponse({ result }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.cdcSync) {
+                // Read-only: page this shard's change-data-capture log past the
+                // caller's per-shard cursor. The coordinator collects each
+                // shard's `{ changes, cursor }` into one streaming-export batch.
+                const result = this.runShardCdcSync(parseCdcSyncArgs(args));
 
                 return jsonResponse({ result }, 200);
             }
