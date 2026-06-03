@@ -145,6 +145,10 @@ export const fetchAction = async <F extends FunctionReference>(
     callOptions: ServerCallOptions = {},
 ): Promise<ReturnOf<F>> => createServerClient(options).action<F>(function_, args, { shardKey: callOptions.shardKey });
 
+// The TanStack options factory is transport-free, so it works server-side too:
+// `await queryClient.ensureQueryData(cirrusQueryOptions(serverClient, fn, args))`.
+export type { CirrusQueryOptions } from "./query-options.js";
+export { cirrusQueryOptions } from "./query-options.js";
 export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@cirrus/client";
 // Re-exported so callers can do all server-side data loading from one import.
 // `preloadQuery`/`preloadedQueryResult` are the explicit-token flow; `dehydrate`

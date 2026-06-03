@@ -11,6 +11,8 @@ export type { AuthState } from "./auth-state.js";
 export { useAuthState } from "./auth-state.js";
 export type { CirrusProviderProps } from "./cirrus-provider.js";
 export { CirrusProvider, useCirrus } from "./cirrus-provider.js";
+export type { CirrusQueryOptions } from "./query-options.js";
+export { cirrusQueryOptions } from "./query-options.js";
 export type {
     ArgsOf,
     CirrusClient,

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider.js";
 import { cirrusQueryKey } from "../src/query-key.js";
+import { cirrusQueryOptions } from "../src/query-options.js";
 import { createServerClient, fetchAction, fetchMutation, fetchQuery, prefetchQuery, preloadedQueryResult, preloadQuery } from "../src/server.js";
 import useQuery from "../src/use-query.js";
 import { createMockClient } from "./mock-client.js";
@@ -169,6 +170,45 @@ describe("fetchQuery / fetchMutation / fetchAction", () => {
         );
 
         expect(value).toStrictEqual({ ok: true });
+    });
+});
+
+describe("cirrusQueryOptions", () => {
+    it("builds queryFn/queryKey keyed identically to the first-class hooks", async () => {
+        expect.assertions(3);
+
+        const fetchImpl = mockFetch({ count: 5 });
+        const client = createServerClient({ fetch: fetchImpl as unknown as typeof fetch, url: "https://app.example.dev" });
+        const reference = queryRef<Record<string, never>, { count: number }>("posts:count");
+
+        const options = cirrusQueryOptions(client, reference, {});
+
+        // The key must match what useQuery / prefetchQuery use, so the adapter
+        // shares cache identity with the first-class hooks.
+        expect(options.queryKey).toStrictEqual(cirrusQueryKey(reference, {}, undefined));
+        expect(options.staleTime).toBe(Number.POSITIVE_INFINITY);
+
+        const value = await options.queryFn();
+
+        expect(value).toStrictEqual({ count: 5 });
+    });
+
+    it("threads shardKey into both the key and the call", async () => {
+        expect.assertions(2);
+
+        const fetchImpl = mockFetch({ ok: true });
+        const client = createServerClient({ fetch: fetchImpl as unknown as typeof fetch, url: "https://app.example.dev" });
+        const reference = queryRef<Record<string, never>, { ok: boolean }>("rooms:get");
+
+        const options = cirrusQueryOptions(client, reference, {}, { shardKey: "room-7" });
+
+        expect(options.queryKey).toStrictEqual(cirrusQueryKey(reference, {}, "room-7"));
+
+        await options.queryFn();
+
+        const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body as string) as { shardKey?: string };
+
+        expect(body.shardKey).toBe("room-7");
     });
 });
 
