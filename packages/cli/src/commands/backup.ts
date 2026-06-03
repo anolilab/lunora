@@ -151,7 +151,7 @@ interface WireChange {
 
 interface SyncPage {
     global?: { changes?: ReadonlyArray<WireChange>; cursor?: number };
-    shards?: ReadonlyArray<{ changes?: ReadonlyArray<WireChange>; cursor?: number; shardKey?: string }>;
+    shards?: ReadonlyArray<{ changes?: ReadonlyArray<WireChange>; cursor?: number; error?: { message?: string }; shardKey?: string }>;
 }
 
 interface ReplayBatch {
@@ -222,7 +222,11 @@ const postReplayPage = async (fetchImpl: StreamingFetchLike, baseUrl: string, he
         throw new Error(`apply failed (${String(response.status)}): ${await response.text()}`);
     }
 
-    const result = (await response.json()) as { applied?: number };
+    const result = (await response.json()) as { applied?: number; failed?: number };
+
+    if ((result.failed ?? 0) > 0) {
+        throw new Error(`apply reported ${String(result.failed)} failed shard(s) — aborting point-in-time restore to avoid a partial replay`);
+    }
 
     return result.applied ?? 0;
 };
@@ -244,7 +248,18 @@ const replayCdcTo = async (options: BackupCommandOptions, baseUrl: string, token
         }
 
         // eslint-disable-next-line no-await-in-loop -- sequential paging (see above).
-        const collected = collectReplayPage((await syncResponse.json()) as SyncPage, cursors, globalCursor, toMs);
+        const data = (await syncResponse.json()) as SyncPage;
+        // A per-shard error means that shard's history is missing from this page;
+        // replaying anyway would silently skip it, so abort the restore instead.
+        const failedShard = (data.shards ?? []).find((shard) => shard.error !== undefined);
+
+        if (failedShard !== undefined) {
+            throw new Error(
+                `sync reported a failed shard "${failedShard.shardKey ?? "?"}": ${failedShard.error?.message ?? "unknown"} — aborting point-in-time restore to avoid a partial replay`,
+            );
+        }
+
+        const collected = collectReplayPage(data, cursors, globalCursor, toMs);
 
         cursors = collected.cursors;
         globalCursor = collected.globalCursor;
@@ -317,11 +332,19 @@ const runBackupRestore = async (options: BackupCommandOptions, directory: string
         return { code: 1 };
     }
 
-    const applied = await replayCdcTo(options, baseUrl, token, toMs);
+    try {
+        const applied = await replayCdcTo(options, baseUrl, token, toMs);
 
-    options.logger.success(`replayed ${String(applied)} change(s) up to ${options.to}`);
+        options.logger.success(`replayed ${String(applied)} change(s) up to ${options.to}`);
 
-    return { code: 0 };
+        return { code: 0 };
+    } catch (error: unknown) {
+        // A failed/partial replay must not leave the operator thinking the
+        // point-in-time restore succeeded — surface it as a non-zero exit.
+        options.logger.error(error instanceof Error ? error.message : String(error));
+
+        return { code: 1 };
+    }
 };
 
 const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {

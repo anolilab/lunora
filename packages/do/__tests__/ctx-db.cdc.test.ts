@@ -141,17 +141,22 @@ describe("applyCdcChanges (replay-PITR engine)", () => {
         expect(row).toMatchObject({ text: "hi" });
     });
 
-    it("upserts (replaces) when the row already exists", async () => {
-        expect.assertions(1);
+    it("upserts (replaces) when the row already exists, preserving _creationTime", async () => {
+        expect.assertions(2);
 
         const writer = setupWriter(false);
 
         await writer.insert("messages", { _id: "m_1", authorId: "u1", channelId: "c1", text: "original" }, { allowExplicitId: true });
-        await applyCdcChanges(writer, [change({ doc: { _id: "m_1", authorId: "u1", channelId: "c1", text: "replayed" }, id: "m_1", op: "update" })]);
+        // The post-image carries the row's original _creationTime; a replay-upsert
+        // must preserve it, not reset it to the replay-time clock.
+        await applyCdcChanges(writer, [
+            change({ doc: { _creationTime: 1_650_000_000_000, _id: "m_1", authorId: "u1", channelId: "c1", text: "replayed" }, id: "m_1", op: "update" }),
+        ]);
 
         const row = await writer.get("m_1");
 
         expect(row).toMatchObject({ text: "replayed" });
+        expect(row?.["_creationTime"]).toBe(1_650_000_000_000);
     });
 
     it("replays a delete by removing the row", async () => {

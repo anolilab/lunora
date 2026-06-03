@@ -1059,7 +1059,15 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const cdcEnabled = options.cdc ?? false;
 
-    /** Append a post-image to the changelog when CDC is enabled; a no-op otherwise. */
+    /**
+     * Append a post-image to the changelog when CDC is enabled; a no-op
+     * otherwise. Like the aggregate/rank/search companion writes on this
+     * backend, the append is a separate statement after the row write (D1 has
+     * no multi-statement transaction here), so a crash between the two can leave
+     * a committed write without its changelog entry — the same at-least-once
+     * companion caveat the other D1 sync hooks carry. The DO backend appends
+     * inside the row write's transaction and so is atomic.
+     */
     const recordCdc = async (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): Promise<void> => {
         if (cdcEnabled) {
             await appendD1CdcChange(exec, clock(), table, id, op, doc);

@@ -1331,13 +1331,14 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
             throw error;
         }
 
-        // Row already exists — replace its user fields. The system columns
-        // (`_id` is the lock key, `_creationTime` is immutable on replace) are
-        // dropped so `replace` sees only declared fields.
+        // Row already exists — replace its fields. Drop only `_id` (replace
+        // takes the id as its first argument). KEEP `_creationTime`: replace
+        // reads it from the doc to preserve the row's original creation time,
+        // so stripping it would silently reset it to the replay-time clock.
         const fields: Record<string, unknown> = {};
 
         for (const [key, value] of Object.entries(document)) {
-            if (key !== "_id" && key !== "_creationTime") {
+            if (key !== "_id") {
                 fields[key] = value;
             }
         }

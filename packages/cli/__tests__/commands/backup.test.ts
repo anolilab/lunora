@@ -280,4 +280,75 @@ describe("cirrus backup restore --to (point-in-time recovery)", () => {
 
         expect(result.code).toBe(1);
     });
+
+    it("aborts (does not report success) when a /sync shard errors during replay", async () => {
+        expect.assertions(2);
+
+        const { logger } = capturingLogger();
+
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        let appliedCalled = false;
+        const fetchImpl: StreamingFetchLike = async (url) => {
+            if (url.endsWith("/_cirrus/admin/import")) {
+                return {
+                    body: null,
+                    json: async () => {
+                        return { inserted: { users: 1 } };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            }
+
+            if (url.endsWith("/_cirrus/admin/sync")) {
+                // A shard failed — its history is missing from this page.
+                return {
+                    body: null,
+                    json: async () => {
+                        return { shards: [{ error: { message: "shard timeout" }, shardKey: "c1" }] };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            }
+
+            appliedCalled = true;
+
+            return {
+                body: null,
+                json: async () => {
+                    return { applied: 0 };
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        };
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl,
+            logger,
+            subcommand: "restore",
+            target: created.entry?.id,
+            to: "2026-06-03T12:00:00.000Z",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        // A partial feed must fail the restore, not silently succeed.
+        expect(result.code).toBe(1);
+        expect(appliedCalled).toBe(false);
+    });
 });
