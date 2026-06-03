@@ -108,6 +108,28 @@ interface RankOptions extends RestrictableQueryOptions {
     row: Record<string, unknown> | string;
 }
 
+/**
+ * Args for the cross-shard `rankBefore()` primitive. Unlike `rank()`, the key
+ * is supplied explicitly (built off the row doc via `rankKeyFromDocument`) so
+ * a PEER shard — one that doesn't store the row being ranked — can still count
+ * its local rows strictly-before that key. The restrictable half carries the
+ * same RLS seam as `rank()`/`count()`.
+ */
+interface RankBeforeOptions extends RestrictableQueryOptions {
+    /** Canonical-JSON partition tuple — `encodePartitionKey(index.partitionBy, doc)`. */
+    partitionKey: string;
+    /** The `__id__` tiebreak value — `doc._id`. */
+    rowId: string;
+    /** Raw (un-serialized) sort-key values in `index.sortBy` order — `doc[sortBy[i].field]`. */
+    sortValues: ReadonlyArray<unknown>;
+}
+
+/** Per-shard `rankBefore()` payload: rows strictly-before the key locally, plus the local partition total. */
+interface RankBeforeResult {
+    before: number;
+    total: number;
+}
+
 /** Args for `rankPage()` — sorted pagination over the index's companion table. */
 interface RankPageOptions extends RestrictableQueryOptions {
     /** Opaque cursor from the prior page's `continueCursor`; `null`/omitted starts at the first page. */
@@ -235,5 +257,47 @@ const resolveRankPartition = (index: RankIndexDefinitionLike, where: Record<stri
  */
 const rankTableName = (table: string, indexName: string): string => `${table}__rank_${indexName}`;
 
-export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName };
-export type { RankDirection, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult, RankSortKeyLike };
+/**
+ * The fan-out key tuple for a single doc under a rankIndex, derived purely from
+ * the doc (no companion lookup). A caller holding the full row builds this to
+ * ask peer shards "count your local rows strictly before this one" via
+ * `rankBefore` — the cross-shard `rank()` path for a partition that spans
+ * multiple shards (e.g. a global leaderboard sharded by user).
+ *
+ * The values mirror what the trigger seam (`syncRankIndexEntry`) stores:
+ *
+ * - `partitionKey` === `encodePartitionKey(index.partitionBy ?? [], doc)`, the same canonical-JSON tuple filed in `__partition__`.
+ * - `sortValues[i]` === `doc[index.sortBy[i].field]` (raw, un-serialized) — `rankBefore` runs each value through the same `serializeSqlValue` the trigger applies before binding it against the stored `__sort_k&lt;i>__` column, so the comparison is apples-to-apples regardless of which shard owns the row.
+ * - `rowId` === `doc._id`, the `__id__` tiebreak.
+ */
+const rankKeyFromDocument = (
+    index: RankIndexDefinitionLike,
+    document_: Record<string, unknown>,
+): { partitionKey: string; rowId: string; sortValues: unknown[] } => {
+    return {
+        partitionKey: encodePartitionKey(index.partitionBy ?? [], document_),
+        rowId: document_["_id"] as string,
+        sortValues: index.sortBy.map((key) => document_[key.field]),
+    };
+};
+
+export {
+    encodePartitionKey,
+    matchesRankStaticWhere,
+    RANK_TIEBREAK,
+    rankKeyFromDocument as rankKeyFromDoc,
+    rankTableName,
+    resolveRankPartition,
+    sortColumnName,
+};
+export type {
+    RankBeforeOptions,
+    RankBeforeResult,
+    RankDirection,
+    RankIndexDefinitionLike,
+    RankOptions,
+    RankPage,
+    RankPageOptions,
+    RankResult,
+    RankSortKeyLike,
+};

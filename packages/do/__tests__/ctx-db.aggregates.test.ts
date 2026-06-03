@@ -41,6 +41,56 @@ const activeByProject: AggregateIndexDefinitionLike = {
     where: { archived: false },
 };
 
+const sumSeqByProject: AggregateIndexDefinitionLike = {
+    by: ["projectId"],
+    field: "seq",
+    name: "sumSeqByProject",
+    on: "todos",
+    op: "sum",
+};
+
+const avgSeqByProject: AggregateIndexDefinitionLike = {
+    by: ["projectId"],
+    field: "seq",
+    name: "avgSeqByProject",
+    on: "todos",
+    op: "avg",
+};
+
+const minSeqByProject: AggregateIndexDefinitionLike = {
+    by: ["projectId"],
+    field: "seq",
+    name: "minSeqByProject",
+    on: "todos",
+    op: "min",
+};
+
+const maxSeqByProject: AggregateIndexDefinitionLike = {
+    by: ["projectId"],
+    field: "seq",
+    name: "maxSeqByProject",
+    on: "todos",
+    op: "max",
+};
+
+/** Whole-table sum (no `by`). */
+const sumSeqTotal: AggregateIndexDefinitionLike = {
+    by: [],
+    field: "seq",
+    name: "sumSeqTotal",
+    on: "todos",
+    op: "sum",
+};
+
+const activeSumSeqByProject: AggregateIndexDefinitionLike = {
+    by: ["projectId"],
+    field: "seq",
+    name: "activeSumSeqByProject",
+    on: "todos",
+    op: "sum",
+    where: { archived: false },
+};
+
 const makeSchema = (...indexes: AggregateIndexDefinitionLike[]): SchemaLike => {
     return {
         tables: {
@@ -293,6 +343,281 @@ describe("ctx-db aggregates", () => {
             const tally = Object.fromEntries(groups.map((g) => [g.key["projectId"], g.value]));
 
             expect(tally).toEqual({ p1: 3, p2: 4 });
+        });
+    });
+
+    describe("reducer-aware aggregate indexes", () => {
+        describe("sum", () => {
+            it("reads the maintained sum without scanning the source", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(sumSeqByProject));
+
+                await seed(writer);
+
+                // Wipe the source rows — a correct read returns the maintained value.
+                harness.raw(`DELETE FROM "todos"`);
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(6);
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p2" } })).resolves.toBe(4);
+            });
+
+            it("maintains the running sum across insert/patch/replace/delete", async () => {
+                expect.assertions(4);
+
+                const writer = setupWriter(makeSchema(sumSeqByProject));
+
+                await seed(writer);
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(6);
+
+                await writer.patch("t1", { seq: 10 }); // p1: 6 - 1 + 10 = 15
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(15);
+
+                await writer.replace("t2", { archived: false, projectId: "p1", seq: 5 }); // p1: 15 - 2 + 5 = 18
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(18);
+
+                await writer.delete("t3"); // p1: 18 - 3 = 15
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(15);
+            });
+
+            it("moves the running sum when a patch changes the `by`-key", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(sumSeqByProject));
+
+                await seed(writer);
+
+                await writer.patch("t4", { projectId: "p1" }); // p2 → p1: p1 6+4=10, p2 empty
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(10);
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p2" } })).resolves.toBeNull();
+            });
+
+            it("honors the index static `where`", async () => {
+                expect.assertions(1);
+
+                const writer = setupWriter(makeSchema(activeSumSeqByProject));
+
+                await seed(writer);
+
+                harness.raw(`DELETE FROM "todos"`);
+
+                // Only active p1 rows (seq 1,2,0) contribute → 3 (the archived t3 is excluded).
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(3);
+            });
+
+            it("whole-table sum keys on the empty tuple", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(sumSeqTotal));
+
+                await seed(writer);
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum" })).resolves.toBe(10);
+
+                await writer.delete("t4"); // 10 - 4 = 6
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum" })).resolves.toBe(6);
+            });
+        });
+
+        describe("avg", () => {
+            it("reads sum/count as the maintained average", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(avgSeqByProject));
+
+                await seed(writer);
+
+                harness.raw(`DELETE FROM "todos"`);
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "avg", where: { projectId: "p1" } })).resolves.toBe(1.5);
+                await expect(writer.aggregate("todos", { field: "seq", op: "avg", where: { projectId: "p2" } })).resolves.toBe(4);
+            });
+
+            it("recomputes the average as the divisor shrinks to zero", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(avgSeqByProject));
+
+                await seed(writer);
+
+                await writer.delete("t4"); // p2 now empty
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "avg", where: { projectId: "p2" } })).resolves.toBeNull();
+
+                await writer.patch("t1", { seq: 7 }); // p1 seqs 7,2,3,0 → avg 3
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "avg", where: { projectId: "p1" } })).resolves.toBe(3);
+            });
+        });
+
+        describe("min/max", () => {
+            it("reads the maintained extreme without scanning", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(minSeqByProject, maxSeqByProject));
+
+                await seed(writer);
+
+                harness.raw(`DELETE FROM "todos"`);
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(0);
+                await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(3);
+            });
+
+            it("keeps the stored extreme on a fast-path delete (non-extreme row leaves)", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(minSeqByProject, maxSeqByProject));
+
+                await seed(writer);
+
+                await writer.delete("t2"); // p1 drops seq 2 — neither the min (0) nor max (3)
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(0);
+                await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(3);
+            });
+
+            it("recomputes the extreme when the stored extreme is deleted", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(minSeqByProject, maxSeqByProject));
+
+                await seed(writer);
+
+                await writer.delete("t5"); // removes seq 0 (the p1 min) → new min is 1
+                await writer.delete("t3"); // removes seq 3 (the p1 max) → new max is 2
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(1);
+                await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(2);
+            });
+
+            it("recomputes the extreme on a shrinking update", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(maxSeqByProject));
+
+                await seed(writer);
+
+                await writer.patch("t3", { seq: 1 }); // the stored p1 max (3) shrinks to 1 → new max is 2
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(2);
+
+                await writer.patch("t1", { seq: 9 }); // a growing update wins the fast path
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(9);
+            });
+
+            it("returns null when the group empties out", async () => {
+                expect.assertions(1);
+
+                const writer = setupWriter(makeSchema(minSeqByProject));
+
+                await seed(writer);
+
+                await writer.delete("t4"); // p2's only row
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p2" } })).resolves.toBeNull();
+            });
+        });
+
+        describe("groupBy per op (indexed, no scan)", () => {
+            it("groupBy(sum) reads each group's maintained sum", async () => {
+                expect.assertions(1);
+
+                const writer = setupWriter(makeSchema(sumSeqByProject));
+
+                await seed(writer);
+
+                harness.raw(`DELETE FROM "todos"`);
+
+                const groups = await writer.groupBy("todos", { agg: { field: "seq", op: "sum" }, by: ["projectId"] });
+                const tally = Object.fromEntries(groups.map((g) => [g.key["projectId"], g.value]));
+
+                expect(tally).toEqual({ p1: 6, p2: 4 });
+            });
+
+            it("groupBy(avg) reads each group's maintained average", async () => {
+                expect.assertions(1);
+
+                const writer = setupWriter(makeSchema(avgSeqByProject));
+
+                await seed(writer);
+
+                harness.raw(`DELETE FROM "todos"`);
+
+                const groups = await writer.groupBy("todos", { agg: { field: "seq", op: "avg" }, by: ["projectId"] });
+                const tally = Object.fromEntries(groups.map((g) => [g.key["projectId"], g.value]));
+
+                expect(tally).toEqual({ p1: 1.5, p2: 4 });
+            });
+
+            it("groupBy(min)/groupBy(max) read each group's maintained extreme", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(minSeqByProject, maxSeqByProject));
+
+                await seed(writer);
+
+                harness.raw(`DELETE FROM "todos"`);
+
+                const mins = await writer.groupBy("todos", { agg: { field: "seq", op: "min" }, by: ["projectId"] });
+                const maxes = await writer.groupBy("todos", { agg: { field: "seq", op: "max" }, by: ["projectId"] });
+
+                expect(Object.fromEntries(mins.map((g) => [g.key["projectId"], g.value]))).toEqual({ p1: 0, p2: 4 });
+                expect(Object.fromEntries(maxes.map((g) => [g.key["projectId"], g.value]))).toEqual({ p1: 3, p2: 4 });
+            });
+        });
+
+        describe("lazy backfill computes per-op values", () => {
+            it("backfills sum/avg/min/max from an existing table on first read", async () => {
+                expect.assertions(4);
+
+                let writer = setupWriter(makeSchema());
+
+                await seed(writer);
+
+                const schemaWithIndexes = makeSchema(sumSeqByProject, avgSeqByProject, minSeqByProject, maxSeqByProject);
+
+                runShardMigrations(harness.sql, schemaWithIndexes);
+                writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithIndexes, sql: harness.sql });
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(6);
+                await expect(writer.aggregate("todos", { field: "seq", op: "avg", where: { projectId: "p1" } })).resolves.toBe(1.5);
+                await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(0);
+                await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(3);
+            });
+
+            it("backfillAggregateIndexes() seeds per-op values up-front", async () => {
+                expect.assertions(2);
+
+                let writer = setupWriter(makeSchema());
+
+                await seed(writer);
+
+                const schemaWithIndex = makeSchema(sumSeqByProject);
+
+                runShardMigrations(harness.sql, schemaWithIndex);
+                backfillAggregateIndexes(harness.sql, schemaWithIndex);
+
+                // eslint-disable-next-line no-secrets/no-secrets -- companion table name (table__agg_index), not a credential
+                const rows = harness.raw(`SELECT "__value__", "__count__" FROM "todos__agg_sumSeqByProject" WHERE "__key__" = '{"projectId":"p1"}'`) as {
+                    __count__: number;
+                    __value__: number;
+                }[];
+
+                expect(rows[0]).toMatchObject({ __count__: 4, __value__: 6 });
+
+                writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema: schemaWithIndex, sql: harness.sql });
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(6);
+            });
         });
     });
 

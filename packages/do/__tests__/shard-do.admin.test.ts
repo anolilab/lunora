@@ -5,7 +5,9 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration.js";
 import { runDataMigration } from "../src/data-migration.js";
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
-import type { RunShardMigrationArgs, RunShardWriteArgs, RunShardWriteResult, ShardDOState } from "../src/shard-do.js";
+import type { RankIndexDefinitionLike } from "../src/rank.js";
+import { rankKeyFromDoc } from "../src/rank.js";
+import type { RunShardMigrationArgs, RunShardRankBeforeArgs, RunShardWriteArgs, RunShardWriteResult, ShardDOState } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
 import createSqliteExec from "./_helpers/node-sqlite.js";
 
@@ -520,5 +522,134 @@ describe("shardDO admin row writes", () => {
 
         expect(response.status).toBe(404);
         await expect(response.json()).resolves.toMatchObject({ error: { code: "UNKNOWN_TABLE" } });
+    });
+});
+
+/** A global leaderboard rank index (`partitionBy: []`) on the `messages` table. */
+const rankByScoreDesc: RankIndexDefinitionLike = {
+    name: "leaderboard",
+    on: "messages",
+    sortBy: [{ direction: "desc", field: "score" }],
+};
+
+const messagesRankSchema: SchemaLike = {
+    tables: {
+        messages: {
+            indexes: [],
+            rankIndexes: [rankByScoreDesc],
+            shape: {
+                channelId: { kind: "string" },
+                score: { kind: "number" },
+            },
+        },
+    },
+};
+
+/**
+ * Drives the `__cirrus_admin__:rankBefore` op through a real schema-aware
+ * writer, mirroring the codegen-generated subclass. Proves the cross-shard
+ * rank's per-shard `{before, total}` count is served over the admin path.
+ */
+class RankableShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override async runShardRankBefore(args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
+        const writer = createShardContextDatabase({
+            broadcast: (delta) => {
+                this.recordChangedTable(delta.table);
+            },
+            schema: messagesRankSchema,
+            sql: this.sql as SqlExec,
+        });
+
+        return writer.rankBefore!(args.table, args.index, {
+            partitionKey: args.partitionKey,
+            rowId: args.rowId,
+            sortValues: args.sortValues,
+        });
+    }
+}
+
+describe("shardDO admin rankBefore", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, messagesRankSchema);
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const rankBeforeRequest = (args: Record<string, unknown>): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: ADMIN_FUNCTIONS.rankBefore }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    it("counts strictly-before rows for an explicit key on this shard", async () => {
+        expect.assertions(2);
+
+        // This shard owns a disjoint slice of the global leaderboard partition.
+        const seed = createShardContextDatabase({ schema: messagesRankSchema, sql: database.sql });
+
+        await seed.insert("messages", { _id: "m1", channelId: "c1", score: 90 }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m2", channelId: "c1", score: 70 }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m3", channelId: "c1", score: 20 }, { allowExplicitId: true });
+
+        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Rank a foreign row scored 75: desc order → m1(90) is strictly before
+        // it, m2(70)/m3(20) are after. before=1, total=3 (this shard's rows).
+        const key = rankKeyFromDoc(rankByScoreDesc, { _id: "x1", channelId: "c9", score: 75 });
+        const response = await shard.fetch(rankBeforeRequest({ index: "leaderboard", table: "messages", ...key }));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { before: number; total: number } }>();
+
+        expect(body.result).toEqual({ before: 1, total: 3 });
+    });
+
+    it("rejects a non-array sortValues (400)", async () => {
+        expect.assertions(1);
+
+        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(rankBeforeRequest({ index: "leaderboard", partitionKey: "", rowId: "x1", sortValues: 5, table: "messages" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("base ShardDO rejects rankBefore as not implemented (no override)", async () => {
+        expect.assertions(2);
+
+        class BareShard extends ShardDO {
+            // eslint-disable-next-line class-methods-use-this -- override stub; the admin-rank path never dispatches an RPC
+            public override async handleRpc(): Promise<unknown> {
+                return null;
+            }
+        }
+
+        const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(rankBeforeRequest({ index: "leaderboard", partitionKey: "", rowId: "x1", sortValues: [75], table: "messages" }));
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
     });
 });
