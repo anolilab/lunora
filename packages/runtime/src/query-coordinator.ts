@@ -296,6 +296,14 @@ interface QueryCoordinator {
     fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
 
     /**
+     * Fan the `__cirrus_admin__:cdcSync` admin RPC out to every live shard,
+     * each resumed from its own cursor in `request.cursors` (shardKey → seq).
+     * Returns the per-shard change pages plus their new cursors so the caller
+     * can checkpoint each shard independently — the streaming-export feed.
+     */
+    orchestrateCdcSync: (namespace: ShardNamespaceLike, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
+
+    /**
      * Fan an export admin RPC out to every live shard, returning the
      * per-shard `{rows}` payloads alongside any per-shard errors. Each shard
      * returns a JSON envelope (not a streaming body) so this method is the
@@ -354,6 +362,34 @@ interface ExportFanOutResult {
     failed: number;
     ok: number;
     shards: ReadonlyArray<ShardExportOutcome>;
+}
+
+/**
+ * Cross-shard change-data-capture request. `tables` drives shard discovery (the
+ * union of their live shard keys, like export); `cursors` maps each shard key
+ * to the `seq` it was last read through (absent → from the beginning). `limit`
+ * caps each shard's page.
+ */
+interface CdcSyncFanOutRequest {
+    cursors?: Record<string, number>;
+    headers?: Record<string, string>;
+    limit?: number;
+    tables: ReadonlyArray<string>;
+}
+
+/** Per-shard CDC page: the changes plus the new cursor to resume this shard from. */
+interface ShardCdcOutcome {
+    changes?: ReadonlyArray<Record<string, unknown>>;
+    /** New per-shard cursor; on error it echoes the shard's prior cursor so a retry resumes cleanly. */
+    cursor: number;
+    error?: { message: string; timedOut: boolean };
+    shardKey: string;
+}
+
+interface CdcSyncFanOutResult {
+    failed: number;
+    ok: number;
+    shards: ReadonlyArray<ShardCdcOutcome>;
 }
 
 /**
@@ -530,6 +566,35 @@ const rollUpExport = (results: ReadonlyArray<ShardRpcOutcome>): ExportFanOutResu
         const rows = Array.isArray(payload?.rows) ? payload.rows : [];
 
         shards.push({ rows, shardKey: result.shardKey });
+    }
+
+    return { failed, ok, shards };
+};
+
+/** Roll up per-shard `cdcSync` outcomes, preserving each shard's prior cursor on error. */
+const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceSeq: number }>): CdcSyncFanOutResult => {
+    const shards: ShardCdcOutcome[] = [];
+    let ok = 0;
+    let failed = 0;
+
+    for (const { outcome, sinceSeq } of results) {
+        if (outcome.kind === "err") {
+            failed += 1;
+            // Echo the prior cursor so a retry re-reads from the same point.
+            shards.push({ cursor: sinceSeq, error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey: outcome.shardKey });
+            continue;
+        }
+
+        ok += 1;
+
+        // payload is an untrusted unwrapped RPC value cast to a shape; the cast
+        // claims non-nullish but a malformed shard could return anything, so
+        // guard both fields (the disable silences the cast-driven false alarm).
+        const payload = unwrapResult(outcome.value) as undefined | { changes?: ReadonlyArray<Record<string, unknown>>; cursor?: number };
+        const changes = Array.isArray(payload?.changes) ? payload.changes : [];
+        const cursor = typeof payload?.cursor === "number" ? payload.cursor : sinceSeq;
+
+        shards.push({ changes, cursor, shardKey: outcome.shardKey });
     }
 
     return { failed, ok, shards };
@@ -1037,6 +1102,64 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             const results = await runBoundedFanOut(namespace, shardKeys, exportRequest, maxConcurrency, perShardTimeoutMs);
 
             return rollUpExport(results);
+        },
+        async orchestrateCdcSync(namespace: ShardNamespaceLike, request: CdcSyncFanOutRequest): Promise<CdcSyncFanOutResult> {
+            // Discover shards like export — the union of every requested table's
+            // live shard keys. Unlike export, each shard resumes from its own
+            // cursor, so (like import) we can't reuse `runBoundedFanOut`'s
+            // same-args-to-all model; we drive a per-shard-args worker loop.
+            const union = new Set<string>();
+            const perTableKeys = await Promise.all(request.tables.map(async (table) => options.registry.listShardKeys(table)));
+
+            for (const keys of perTableKeys) {
+                for (const key of keys) {
+                    union.add(key);
+                }
+            }
+
+            const shardKeys = [...union];
+            const cursors = request.cursors ?? {};
+            const results: { outcome: ShardRpcOutcome; sinceSeq: number }[] = Array.from({ length: shardKeys.length });
+            let cursor = 0;
+
+            const concurrency = Math.min(maxConcurrency, shardKeys.length);
+
+            const worker = async (): Promise<void> => {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
+                while (true) {
+                    const index = cursor;
+
+                    cursor += 1;
+
+                    const shardKey = shardKeys[index];
+
+                    if (index >= shardKeys.length || shardKey === undefined) {
+                        return;
+                    }
+
+                    const sinceSeq = cursors[shardKey] ?? 0;
+
+                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
+                    const outcome = await callOneShard(
+                        namespace,
+                        shardKey,
+                        prepareShardRpc({
+                            args: { limit: request.limit, sinceSeq },
+                            functionPath: "__cirrus_admin__:cdcSync",
+                            headers: request.headers,
+                        }),
+                        perShardTimeoutMs,
+                    );
+
+                    results[index] = { outcome, sinceSeq };
+                }
+            };
+
+            if (concurrency > 0) {
+                await Promise.all(Array.from({ length: concurrency }, () => worker()));
+            }
+
+            return rollUpCdcSync(results);
         },
         async orchestrateImport(namespace: ShardNamespaceLike, request: ImportFanOutRequest): Promise<ImportFanOutResult> {
             // Each shard gets its own pre-bucketed batch — we can't reuse

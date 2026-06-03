@@ -27,6 +27,7 @@ describe("createWorker — admin export endpoint", () => {
         const worker = createWorker({
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -56,6 +57,7 @@ describe("createWorker — admin export endpoint", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -77,6 +79,7 @@ describe("createWorker — admin export endpoint", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -114,6 +117,7 @@ describe("createWorker — admin export endpoint", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: orchestrateExport as never,
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -164,6 +168,7 @@ describe("createWorker — admin export endpoint", () => {
             exportGlobals: exportGlobals as never,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: orchestrateExport as never,
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -232,6 +237,7 @@ describe("createWorker — admin import endpoint", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
                 orchestrateMigration: vi.fn<() => never>(),
@@ -253,6 +259,7 @@ describe("createWorker — admin import endpoint", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
                 orchestrateMigration: vi.fn<() => never>(),
@@ -303,6 +310,7 @@ describe("createWorker — admin import endpoint", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
                 orchestrateMigration: vi.fn<() => never>(),
@@ -351,6 +359,7 @@ describe("createWorker — admin import endpoint", () => {
             importGlobals: importGlobals as never,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
                 orchestrateMigration: vi.fn<() => never>(),
@@ -391,6 +400,7 @@ describe("createWorker — admin import endpoint", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
                 orchestrateMigration: vi.fn<() => never>(),
@@ -450,6 +460,7 @@ describe("import streaming — large body", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: orchestrateImport as never,
                 orchestrateMigration: vi.fn<() => never>(),
@@ -501,6 +512,7 @@ describe("import streaming — large body", () => {
             adminToken: ADMIN_TOKEN,
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateExport: orchestrateExport as never,
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
