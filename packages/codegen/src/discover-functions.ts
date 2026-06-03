@@ -442,6 +442,12 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string): Functi
  * same identifier (e.g. `foo/bar.ts` and `foo-bar.ts` both → `foo_bar`).
  * Without this guard, emit silently produces duplicate `ApiTypes` keys and an
  * ambiguous dispatch table.
+ *
+ * Migrations are intentionally NOT considered here: the emitted `CIRRUS_MIGRATIONS`
+ * table keys on the migration `id` (uniqueness-checked separately during migration
+ * discovery), not on the sanitized namespace, and `emitServer` aliases imports by
+ * exact `filePath`. So a migration-only file that sanitizes to the same namespace
+ * as a function file cannot collide — only function↔function pairs can.
  */
 const assertNoNamespaceCollision = (functions: ReadonlyArray<FunctionIR>): void => {
     const namespaceOrigins = new Map<string, string>();

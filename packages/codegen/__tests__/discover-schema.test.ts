@@ -104,6 +104,44 @@ describe("discoverSchema", () => {
         expect(messages?.searchIndexes[0]).toMatchObject({ field: "text", name: "by_text" });
     });
 
+    it("parses a literal `unique: true` on an index", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                users: defineTable({
+                    email: v.string(),
+                })
+                    .index("by_email", ["email"], { unique: true }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const users = schema.tables.find((table) => table.name === "users");
+
+        expect(users?.indexes).toEqual([{ fields: ["email"], name: "by_email", unique: true }]);
+    });
+
+    it("throws when `unique` is a non-literal expression instead of silently dropping it", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            const isUnique = true;
+            export const schema = defineSchema({
+                users: defineTable({
+                    email: v.string(),
+                })
+                    .index("by_email", ["email"], { unique: isUnique }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/`unique` must be a literal/u);
+    });
+
     it("captures an inline .vectorize() index hoisted into schema.vectorIndexes (Shape A)", () => {
         expect.assertions(2);
 

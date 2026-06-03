@@ -162,7 +162,17 @@ const parseIndexCall = (args: ReadonlyArray<Node>): IndexIR => {
         const property = optionsExpression.getProperty("unique");
 
         if (property && Node.isPropertyAssignment(property)) {
-            unique = property.getInitializer()?.getText() === "true";
+            const initializer = property.getInitializer();
+
+            // `unique` must be a literal `true`/`false`. A computed value
+            // (`unique: !!x`, `Boolean(...)`, a referenced const) can't be
+            // resolved statically here, so we fail loudly rather than silently
+            // dropping a `uniqueIndex` from the emitted metadata.
+            if (initializer && !Node.isTrueLiteral(initializer) && !Node.isFalseLiteral(initializer)) {
+                throw new Error(`@cirrus/codegen: \`unique\` must be a literal \`true\` or \`false\`, got ${JSON.stringify(initializer.getText())}`);
+            }
+
+            unique = initializer ? Node.isTrueLiteral(initializer) : false;
         }
     }
 
