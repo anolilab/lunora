@@ -78,6 +78,42 @@ describe("createStorage", () => {
         });
     });
 
+    it("upload() rejects an oversized ArrayBuffer", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        await expect(storage.upload("big.bin", new ArrayBuffer(16), { maxSize: 8 })).rejects.toThrow(/exceeds maxSize/);
+        expect(bucket.puts).toHaveLength(0);
+    });
+
+    it("upload() rejects an oversized Blob", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        await expect(storage.upload("big.txt", new Blob(["0123456789"]), { maxSize: 4 })).rejects.toThrow(/exceeds maxSize/);
+        expect(bucket.puts).toHaveLength(0);
+    });
+
+    it("upload() does NOT enforce maxSize for a ReadableStream (documented bypass)", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // A ReadableStream's byte count isn't known synchronously, so maxSize is
+        // intentionally skipped. Callers streaming uploads must pre-buffer or
+        // rely on R2 multipart enforcement. This test codifies that the stream
+        // is NOT rejected so the documented limitation can't silently regress.
+        const stream = new Blob(["streamed body well over the limit"]).stream();
+
+        await expect(storage.upload("stream.bin", stream, { maxSize: 4 })).resolves.toMatchObject({ key: "stream.bin" });
+        expect(bucket.puts).toHaveLength(1);
+    });
+
     it("download() returns the R2 object body or null", async () => {
         expect.assertions(3);
 
