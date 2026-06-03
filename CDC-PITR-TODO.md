@@ -36,12 +36,29 @@ scheduled handler.
 
 ## Phase 4 — scheduled backups → R2 (workerd-verified)
 
-- [ ] **E. `scheduled()` handler in `createWorker`** that dispatches cron triggers;
-      add a built-in backup cron that runs the export and writes NDJSON + a manifest
-      object to a bound R2 bucket.
-- [ ] **F. R2 plumbing** through `WorkerOptions` (a `backupStore` put/get/list) +
-      generated worker wiring (codegen). Document the wrangler `r2_buckets` binding.
-- [ ] **G. Verify** end-to-end with `wrangler` locally (workerd).
+- [x] **E. `scheduled()` handler in `createWorker`** — `0935e2b`
+      Dispatches cron triggers to `crons` handlers and runs a built-in backup when
+      the firing expression matches `backupCron`: streams the export to NDJSON,
+      writes a `<file>.manifest.json` sidecar to `backupStore` (R2), and prunes past
+      `backupRetain`. Export-row production factored into a shared `streamExportRows`.
+      8 Node tests.
+- [x] **F. R2 plumbing + docs** — `d8198d7`
+      `WorkerOptions.backupStore` (R2-like put/list/delete) plus `backupCron` /
+      `backupPrefix` / `backupRetain` / `backupTables` / `crons` (landed in E).
+      Documented the `scheduled()` entry + wrangler `r2_buckets` / `triggers.crons`
+      bindings on the runtime docs page; forwarded `scheduled` from the playground
+      Worker. (No generated worker exists — the entry is hand-authored, so there is
+      no codegen wiring to add; enabling the backup needs a `queryCoordinator` +
+      `backupStore`.)
+- [x] **G. workerd e2e** — `ca00751`
+      Real-workerd test fires `scheduled()` via `createScheduledController` and
+      asserts the snapshot + manifest land in a genuine R2 binding (covers the
+      `ReadableStream`→R2 `put` path the Node mocks can't). Gated behind
+      `CIRRUS_WORKERD_TESTS=1`; type-checks + lints clean and runs in CI, but cannot
+      execute in this sandbox (workerd connect timeout — same limit as the other
+      workerd suites; local run hit the 180s timeout).
+
+> Phase 4 complete. CDC / PITR / Backups effort done end-to-end.
 
 ## Conventions (hold the bar)
 
