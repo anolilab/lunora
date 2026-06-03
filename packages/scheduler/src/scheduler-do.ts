@@ -102,8 +102,10 @@ interface CancelRequestBody {
  */
 class SchedulerDO {
     private static indexKey(scheduledFor: number, id: string): string {
-        // Zero-pad so the lexical order matches numerical order.
-        return `t:${String(scheduledFor).padStart(15, "0")}:${id}`;
+        // Zero-pad so the lexical order matches numerical order. Use the shared
+        // padTime()/TIME_PAD so the pad width has a single source of truth and
+        // can't drift from the rest of the module (alarm()/rescheduleAlarm()).
+        return `t:${padTime(scheduledFor)}:${id}`;
     }
 
     private static json(body: unknown, status: number = 200): Response {
@@ -165,7 +167,7 @@ class SchedulerDO {
             prefix: "t:",
         });
 
-        /* eslint-disable no-await-in-loop -- sequential by design: a Durable Object's storage is single-threaded local state, and the claim-before-dispatch protocol below requires each job's index/marker writes to complete in order so an alarm re-fire can't double-dispatch. */
+        /* eslint-disable no-await-in-loop -- sequential by design: a Durable Object's storage is single-threaded local state, and the claim-before-dispatch protocol below requires each job's index write to complete in order so an alarm re-fire can't double-dispatch. */
         for (const [indexKey, recordId] of indexEntries.entries()) {
             const dueAt = Number.parseInt(indexKey.slice(2, indexKey.indexOf(":", 2)), 10);
 
@@ -179,22 +181,19 @@ class SchedulerDO {
         }
 
         for (const record of due) {
-            // Claim the job BEFORE dispatching: drop the time-index entry and
-            // write a `dispatched:<id>` marker. If the alarm re-fires (or this
-            // run is interrupted and retried) the index entry is gone, so the
-            // job won't be picked up again. recordRetry() will recreate a
-            // fresh index entry on failure.
+            // Claim the job BEFORE dispatching by dropping its time-index entry.
+            // If the alarm re-fires (or this run is interrupted and retried) the
+            // index entry is gone, so the job won't be picked up again, while
+            // the `id:` header and any `retry:` row survive for cleanup/retry.
+            // recordRetry() recreates a fresh index entry on failure.
             await this.state.storage.delete(SchedulerDO.indexKey(record.scheduledFor, record.id));
-            await this.state.storage.put(`dispatched:${record.id}`, { dispatchedAt: Date.now() });
 
             const ok = await this.dispatch(record);
 
             if (ok) {
-                await this.state.storage.delete(`${HEADER_PREFIX}${record.id}`);
-                await this.state.storage.delete(`${RETRY_PREFIX}${record.id}`);
-                await this.state.storage.delete(`dispatched:${record.id}`);
+                // Single batched delete: one storage round-trip instead of two.
+                await this.state.storage.delete([`${HEADER_PREFIX}${record.id}`, `${RETRY_PREFIX}${record.id}`]);
             } else {
-                await this.state.storage.delete(`dispatched:${record.id}`);
                 await this.recordRetry(record);
             }
         }
@@ -222,13 +221,21 @@ class SchedulerDO {
      *
      * The dispatch target is taken from `env.CIRRUS_ORIGIN_URL` (NOT from the
      * stored record) to prevent SSRF via a forged `originUrl` on the schedule
-     * request.
+     * request. If that env var is missing at fire time (a deploy/binding
+     * regression — schedule time already enforced its presence) we return
+     * `false` so the record is retried rather than silently dropped.
      */
     protected async dispatch(record: ScheduleRecord): Promise<boolean> {
-        const originUrl = typeof this.env.CIRRUS_ORIGIN_URL === "string" ? this.env.CIRRUS_ORIGIN_URL : undefined;
+        const originUrl = typeof this.env.CIRRUS_ORIGIN_URL === "string" && this.env.CIRRUS_ORIGIN_URL.length > 0 ? this.env.CIRRUS_ORIGIN_URL : undefined;
 
         if (!originUrl) {
-            return true;
+            // The origin was configured at schedule time (handleSchedule()
+            // refuses to enqueue without it) but is now missing — a deploy or
+            // binding regression. Treat it as a transient failure (return
+            // false) so alarm() routes the record through recordRetry() and
+            // preserves it for a later fire, rather than deleting an unfired
+            // job as if it had succeeded.
+            return false;
         }
 
         const body = JSON.stringify({
@@ -364,24 +371,24 @@ class SchedulerDO {
      * After {@link MAX_RETRY_ATTEMPTS} attempts the record is parked under a
      * `dead:` key for manual inspection.
      */
-    private async recordRetry(record: ScheduleRecord & { attempts?: number }): Promise<void> {
+    private async recordRetry(record: ScheduleRecord): Promise<void> {
         const attempts = (record.attempts ?? 0) + 1;
 
         if (attempts > MAX_RETRY_ATTEMPTS) {
             await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
             // Park is terminal; clear the pending retry row AND the live header
-            // row. Leaving `id:<id>` behind would keep the dead job visible in
-            // listRecords()/`/list` (and the dashboard) as a scheduled job that
-            // can never fire — only the `dead:` record should survive.
-            await this.state.storage.delete(`${RETRY_PREFIX}${record.id}`);
-            await this.state.storage.delete(`${HEADER_PREFIX}${record.id}`);
+            // row in one batched delete. Leaving `id:<id>` behind would keep the
+            // dead job visible in listRecords()/`/list` (and the dashboard) as a
+            // scheduled job that can never fire — only the `dead:` record should
+            // survive.
+            await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
 
             return;
         }
 
         const delayMs = RETRY_BASE_DELAY_MS * 2 ** (attempts - 1);
         const nextScheduledFor = Date.now() + delayMs;
-        const retryRecord: ScheduleRecord & { attempts: number } = {
+        const retryRecord: ScheduleRecord = {
             ...record,
             attempts,
             scheduledFor: nextScheduledFor,
