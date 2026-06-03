@@ -61,6 +61,13 @@ const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, Readon
  * `avg` is intentionally absent in v1 — a correct cross-shard average
  * requires shipping `(sum, count)` per shard, not the post-shard mean.
  * Use two separate fan-outs (`sum` + `count`) and divide in the caller.
+ *
+ * `rank` — cross-shard `rank()` over a partition that spans shards (e.g. a
+ * global leaderboard `.shardBy("userId")` with `rankIndex(partitionBy: [])`).
+ * Each shard's `__cirrus_admin__:rankBefore` returns `{before, total}` (its
+ * local rows strictly-before the explicit key, plus its local partition
+ * total); the merge sums them into `{position: Σbefore + 1, total: Σtotal}` —
+ * the 1-based global position and global partition size.
  */
 type MergeStrategy =
     | { kind: "concat" }
@@ -68,6 +75,7 @@ type MergeStrategy =
     | { kind: "first" }
     | { kind: "max" }
     | { kind: "min" }
+    | { kind: "rank" }
     | { kind: "sum" }
     | { kind: "groupBy"; op?: "max" | "min" | "sum" };
 
@@ -237,6 +245,51 @@ interface MigrationFanOutResult {
     status: "completed" | "failed" | "in_progress";
 }
 
+/**
+ * Cross-shard rank request. Like {@link MigrationFanOutRequest} there is no
+ * caller-supplied merge — per-shard payloads are `{before, total}` objects, so
+ * {@link QueryCoordinator.orchestrateRank} rolls them up with the fixed
+ * `{position: Σbefore + 1, total: Σtotal}` semantics {@link mergeRank} defines.
+ *
+ * The key tuple (`partitionKey`/`sortValues`/`rowId`) is built off the row doc
+ * via `@cirrus/do`'s `rankKeyFromDoc(index, doc)` and forwarded verbatim to
+ * each shard's `__cirrus_admin__:rankBefore` admin RPC; `headers` must carry
+ * the admin bearer the shard's admin gate requires.
+ */
+interface RankFanOutRequest {
+    headers?: Record<string, string>;
+    /** Rank index name on `table`. */
+    index: string;
+    /** Canonical-JSON partition tuple — `encodePartitionKey(index.partitionBy, doc)`. */
+    partitionKey: string;
+    /** The `__id__` tiebreak value — `doc._id`. */
+    rowId: string;
+    /** Raw sort-key values in `index.sortBy` order — `doc[sortBy[i].field]`. */
+    sortValues: ReadonlyArray<unknown>;
+    /** Table whose live shard keys the rank fans out across. */
+    table: string;
+}
+
+interface RankFanOutResult {
+    /** Shards that errored or timed out. */
+    failed: number;
+    /** Shards that returned a 2xx `{before, total}`. */
+    ok: number;
+    /** 1-based global position within the partition (`Σbefore + 1`). */
+    position: number;
+    /** Per-shard outcomes, in registry order. */
+    shards: ReadonlyArray<ShardRankOutcome>;
+    /** Global partition total (`Σtotal`). */
+    total: number;
+}
+
+/** One shard's rank outcome: its `{before, total}` payload, or an error. */
+interface ShardRankOutcome {
+    error?: { message: string; timedOut: boolean };
+    result?: { before: number; total: number };
+    shardKey: string;
+}
+
 interface QueryCoordinator {
     fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
 
@@ -257,6 +310,14 @@ interface QueryCoordinator {
     orchestrateImport: (namespace: ShardNamespaceLike, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
     /** Fan a migration admin RPC out to every live shard of a table and roll up the per-shard outcomes. */
     orchestrateMigration: (namespace: ShardNamespaceLike, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
+
+    /**
+     * Fan the `__cirrus_admin__:rankBefore` admin RPC out to every live shard of
+     * a table and roll up the per-shard `{before, total}` payloads into the
+     * global rank (`{position: Σbefore + 1, total: Σtotal}`). The cross-shard
+     * `rank()` path for a partition that spans shards.
+     */
+    orchestrateRank: (namespace: ShardNamespaceLike, request: RankFanOutRequest) => Promise<RankFanOutResult>;
     readonly registry: ShardRegistry;
 }
 
@@ -396,6 +457,50 @@ const rollUpMigration = (results: ReadonlyArray<ShardRpcOutcome>): MigrationFanO
     }
 
     return { changed, failed, ok, processed, shards, status: rollUpStatus(anyFailed, anyInProgress || failed > 0) };
+};
+
+/** Read a `{before, total}` payload defensively off an unwrapped rankBefore result. */
+const readRankCounts = (payload: unknown): { before: number; total: number } => {
+    const run = (payload ?? {}) as { before?: unknown; total?: unknown };
+
+    return {
+        before: typeof run.before === "number" && Number.isFinite(run.before) ? run.before : 0,
+        total: typeof run.total === "number" && Number.isFinite(run.total) ? run.total : 0,
+    };
+};
+
+/**
+ * Fold per-shard `rankBefore` outcomes into a {@link RankFanOutResult}: sum the
+ * strictly-before counts (+1 for the 1-based position) and the partition totals
+ * across shards, collecting each shard's `{before, total}` payload (or error).
+ * A failed shard contributes nothing to the sums — the partial result still
+ * surfaces, with the failure recorded per shard.
+ */
+const rollUpRank = (results: ReadonlyArray<ShardRpcOutcome>): RankFanOutResult => {
+    const shards: ShardRankOutcome[] = [];
+    let ok = 0;
+    let failed = 0;
+    let before = 0;
+    let total = 0;
+
+    for (const result of results) {
+        if (result.kind === "err") {
+            failed += 1;
+            shards.push({ error: { message: result.message, timedOut: result.timedOut }, shardKey: result.shardKey });
+            continue;
+        }
+
+        ok += 1;
+
+        const counts = readRankCounts(unwrapResult(result.value));
+
+        before += counts.before;
+        total += counts.total;
+
+        shards.push({ result: counts, shardKey: result.shardKey });
+    }
+
+    return { failed, ok, position: before + 1, shards, total };
 };
 
 /**
@@ -753,6 +858,42 @@ const mergeSum = (values: ReadonlyArray<unknown>): number => {
     return total;
 };
 
+/** Merged cross-shard rank: 1-based global position within the partition, plus the global partition total. */
+interface RankMergeResult {
+    position: number;
+    total: number;
+}
+
+/**
+ * Fold per-shard `{before, total}` payloads into the global rank. Summing the
+ * strictly-before counts across shards and adding 1 gives the 1-based global
+ * position; summing the per-shard partition totals gives the global partition
+ * size. Non-`{before,total}` / failed payloads contribute nothing (a failed
+ * shard already surfaced through `errors[]`).
+ */
+const mergeRank = (values: ReadonlyArray<unknown>): RankMergeResult => {
+    let before = 0;
+    let total = 0;
+
+    for (const v of values) {
+        if (v === null || typeof v !== "object") {
+            continue;
+        }
+
+        const payload = v as { before?: unknown; total?: unknown };
+
+        if (typeof payload.before === "number" && Number.isFinite(payload.before)) {
+            before += payload.before;
+        }
+
+        if (typeof payload.total === "number" && Number.isFinite(payload.total)) {
+            total += payload.total;
+        }
+    }
+
+    return { position: before + 1, total };
+};
+
 const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direction?: "asc" | "desc"; k: number }): ReadonlyArray<Record<string, unknown>> => {
     const collected: { row: Record<string, unknown>; score: number }[] = [];
 
@@ -800,6 +941,10 @@ const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrate
 
         case "min": {
             return mergeNumeric(values, (best, candidate) => Math.min(best, candidate));
+        }
+
+        case "rank": {
+            return mergeRank(values);
         }
 
         case "sum": {
@@ -936,6 +1081,30 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpMigration(results);
         },
+        async orchestrateRank(namespace: ShardNamespaceLike, request: RankFanOutRequest): Promise<RankFanOutResult> {
+            const keys = await options.registry.listShardKeys(request.table);
+
+            // Every shard receives the same explicit key tuple — the row's
+            // partition/sort values + id — and counts its own rows
+            // strictly-before it. `rankBefore` works on a peer shard that
+            // doesn't store the row, so the partition total stays correct even
+            // when the partition spans shards.
+            const rankRequest: ShardRpcRequest = {
+                args: {
+                    index: request.index,
+                    partitionKey: request.partitionKey,
+                    rowId: request.rowId,
+                    sortValues: [...request.sortValues],
+                    table: request.table,
+                },
+                functionPath: "__cirrus_admin__:rankBefore",
+                headers: request.headers,
+            };
+
+            const results = await runBoundedFanOut(namespace, keys, rankRequest, maxConcurrency, perShardTimeoutMs);
+
+            return rollUpRank(results);
+        },
         registry: options.registry,
     };
 };
@@ -954,9 +1123,12 @@ export type {
     MigrationFanOutResult,
     QueryCoordinator,
     QueryCoordinatorOptions,
+    RankFanOutRequest,
+    RankFanOutResult,
     ShardError,
     ShardExportOutcome,
     ShardImportOutcome,
     ShardMigrationOutcome,
+    ShardRankOutcome,
     ShardRegistry,
 };
