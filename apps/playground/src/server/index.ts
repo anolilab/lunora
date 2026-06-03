@@ -2,7 +2,7 @@ import type { CirrusAuth } from "@cirrus/auth";
 import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
-import type { AuthIntrospector, ExecutionContextLike, GlobalIntrospector, Route, ShardNamespaceLike } from "@cirrus/runtime";
+import type { AuthIntrospector, ExecutionContextLike, GlobalIntrospector, Route, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
@@ -322,5 +322,15 @@ export default {
         worker ??= buildWorker(env);
 
         return worker.fetch(request, env, context);
+    },
+    // Cron Triggers (wrangler `triggers.crons`) land here. The runtime
+    // dispatches them to any registered `crons` handlers and runs the built-in
+    // R2 backup when the firing expression matches `backupCron` — see
+    // `@cirrus/runtime`'s "Scheduled backups". Enabling the backup additionally
+    // needs a `queryCoordinator` + `backupStore` on `buildWorker`.
+    async scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
+        worker ??= buildWorker(env);
+
+        await worker.scheduled(controller, env, context);
     },
 };

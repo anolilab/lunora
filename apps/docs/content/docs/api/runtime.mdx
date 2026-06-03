@@ -25,8 +25,9 @@ export { MyShardDO };
 
 ## `createWorker(options)`
 
-Returns a `{ fetch }` object suitable for the Worker's default export.
-Internally it:
+Returns a `{ fetch, scheduled }` object suitable for the Worker's default
+export — `fetch` handles HTTP/WebSocket traffic, `scheduled` handles Cron
+Triggers (see [Scheduled backups](#scheduled-backups)). Internally it:
 
 1. Decodes the RPC envelope (`POST /_cirrus/rpc`).
 2. Routes to the right `ShardDO` via [`resolveShard`](#resolveShard).
@@ -73,6 +74,63 @@ const { stub } = resolveShard(env, "SHARD", channelId);
 Structural type aliases over the corresponding `@cloudflare/workers-types`
 shapes — they exist so unit tests can pass plain mock objects without
 pulling in the full Workers types.
+
+## Scheduled backups
+
+`createWorker` returns a `scheduled` handler alongside `fetch`. Export both
+from your Worker so Wrangler can deliver Cron Triggers:
+
+```ts
+const worker = createWorker({
+    adminToken: env.CIRRUS_ADMIN_TOKEN,
+    queryCoordinator, // required — the backup fans the export out across shards
+    shardDO: env.SHARD,
+    // Built-in backup: on this cron, export every table to NDJSON and write
+    // it (plus a manifest sidecar) to the bound R2 bucket.
+    backupStore: env.BACKUPS, // any R2 bucket binding
+    backupCron: "0 3 * * *", // must match a wrangler triggers.crons entry
+    backupRetain: 14, // keep the newest 14 snapshots; prune older ones
+    // backupPrefix: "backups/", // key prefix (default)
+    // backupTables: ["users"],  // omit to back up every table
+});
+
+export default {
+    fetch: worker.fetch,
+    scheduled: worker.scheduled,
+};
+```
+
+Each run writes two objects under `backupPrefix`:
+
+- `cirrus-backup-<id>.ndjson` — the snapshot, one `{ table, doc }` per line
+  (the same NDJSON shape the `/_cirrus/admin/export` endpoint and
+  `cirrus backup create` produce).
+- `cirrus-backup-<id>.ndjson.manifest.json` — a `BackupManifest`
+  (`{ id, createdAt, cron, file, rows, bytes, scheduledTime, tables? }`).
+
+The `id` is the trigger's `scheduledTime` as an ISO timestamp, so a snapshot
+is named after the moment it represents. The backup requires `adminToken`
+(it authenticates the per-shard export gate), `queryCoordinator`, and
+`backupStore`; a misconfigured run throws so the failed Cron invocation is
+recorded rather than silently skipped.
+
+Register your own cron handlers via `crons` (keyed by the exact expression);
+they run independently of — and, on a shared expression, alongside — the
+built-in backup.
+
+### Wrangler bindings
+
+```jsonc
+{
+    "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "my-app-backups" }],
+    "triggers": { "crons": ["0 3 * * *"] },
+}
+```
+
+The `crons` array must contain the exact `backupCron` string; Wrangler only
+delivers triggers it declares. To restore a scheduled snapshot, download the
+NDJSON object and feed it to `cirrus backup restore <file>` (optionally with
+`--to <time>` for point-in-time replay).
 
 ## `CirrusError` / `toErrorResponse` / `CirrusErrorBody`
 
