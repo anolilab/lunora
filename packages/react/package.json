@@ -53,13 +53,13 @@
         "esbuild": "catalog:build",
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
-        "react-doctor": "0.2.14",
+        "react-doctor": "0.2.16",
         "react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@tanstack/react-query": "^5.100.14",
+        "@tanstack/react-query": "^5.101.0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7"
     },
