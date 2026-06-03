@@ -323,6 +323,7 @@ describe("createWorker", () => {
             queryCoordinator: {
                 fanOut: fanOut as never,
                 orchestrateExport: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
                 orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: fanOut as never,
@@ -361,6 +362,7 @@ describe("createWorker", () => {
             queryCoordinator: {
                 fanOut,
                 orchestrateExport: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
                 orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -396,6 +398,7 @@ describe("createWorker", () => {
             queryCoordinator: {
                 fanOut: fanOut as never,
                 orchestrateExport: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
                 orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -431,6 +434,7 @@ describe("createWorker", () => {
             queryCoordinator: {
                 fanOut,
                 orchestrateExport: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
                 orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -489,6 +493,7 @@ describe("createWorker — migration endpoint", () => {
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
                 orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: orchestrateMigration as never,
@@ -539,6 +544,7 @@ describe("createWorker — migration endpoint", () => {
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
                 orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -565,6 +571,7 @@ describe("createWorker — migration endpoint", () => {
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
                 orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),
@@ -586,6 +593,7 @@ describe("createWorker — migration endpoint", () => {
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
                 orchestrateExport: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
                 orchestrateCdcSync: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),

@@ -296,6 +296,13 @@ interface QueryCoordinator {
     fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
 
     /**
+     * Fan the `__cirrus_admin__:applyCdc` admin RPC out by forwarding each
+     * pre-bucketed per-shard batch of CDC changes, rolling up the applied/failed
+     * counts. The replay half of point-in-time recovery.
+     */
+    orchestrateApplyCdc: (namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest) => Promise<ApplyCdcFanOutResult>;
+
+    /**
      * Fan the `__cirrus_admin__:cdcSync` admin RPC out to every live shard,
      * each resumed from its own cursor in `request.cursors` (shardKey → seq).
      * Returns the per-shard change pages plus their new cursors so the caller
@@ -427,6 +434,23 @@ interface ImportFanOutResult {
     inserted: Record<string, number>;
     ok: number;
     shards: ReadonlyArray<ShardImportOutcome>;
+}
+
+/**
+ * Cross-shard CDC replay request (point-in-time recovery). Changes are
+ * pre-bucketed by the runtime into one batch per shard key — the coordinator
+ * forwards each batch to `__cirrus_admin__:applyCdc` and rolls up the counts.
+ */
+interface ApplyCdcFanOutRequest {
+    batches: ReadonlyArray<{ changes: ReadonlyArray<Record<string, unknown>>; shardKey: string }>;
+    headers?: Record<string, string>;
+}
+
+interface ApplyCdcFanOutResult {
+    /** Total changes applied across shards. */
+    applied: number;
+    failed: number;
+    ok: number;
 }
 
 const DEFAULT_CONCURRENCY = 16;
@@ -598,6 +622,28 @@ const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceS
     }
 
     return { failed, ok, shards };
+};
+
+/** Sum the per-shard `applyCdc` outcomes into a single roll-up. */
+const rollUpApplyCdc = (results: ReadonlyArray<ShardRpcOutcome>): ApplyCdcFanOutResult => {
+    let ok = 0;
+    let failed = 0;
+    let applied = 0;
+
+    for (const outcome of results) {
+        if (outcome.kind === "err") {
+            failed += 1;
+            continue;
+        }
+
+        ok += 1;
+
+        const payload = unwrapResult(outcome.value) as undefined | { applied?: number };
+
+        applied += typeof payload?.applied === "number" ? payload.applied : 0;
+    }
+
+    return { applied, failed, ok };
 };
 
 /** Sum the per-shard import counts/errors into a single roll-up. */
@@ -1204,6 +1250,49 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             }
 
             return rollUpImport(outcomes);
+        },
+        async orchestrateApplyCdc(namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest): Promise<ApplyCdcFanOutResult> {
+            // Per-shard pre-bucketed batches — same worker-loop shape as
+            // orchestrateImport (each shard gets distinct args, so we can't use
+            // runBoundedFanOut's same-args-to-all model).
+            const { batches } = request;
+            const outcomes: ShardRpcOutcome[] = Array.from({ length: batches.length });
+            let cursor = 0;
+
+            const concurrency = Math.min(maxConcurrency, batches.length);
+
+            const worker = async (): Promise<void> => {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
+                while (true) {
+                    const index = cursor;
+
+                    cursor += 1;
+
+                    const batch = batches[index];
+
+                    if (index >= batches.length || batch === undefined) {
+                        return;
+                    }
+
+                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes batches sequentially while `concurrency` workers run in parallel
+                    outcomes[index] = await callOneShard(
+                        namespace,
+                        batch.shardKey,
+                        prepareShardRpc({
+                            args: { changes: [...batch.changes] },
+                            functionPath: "__cirrus_admin__:applyCdc",
+                            headers: request.headers,
+                        }),
+                        perShardTimeoutMs,
+                    );
+                }
+            };
+
+            if (concurrency > 0) {
+                await Promise.all(Array.from({ length: concurrency }, () => worker()));
+            }
+
+            return rollUpApplyCdc(outcomes);
         },
         async orchestrateMigration(namespace: ShardNamespaceLike, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);

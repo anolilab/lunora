@@ -204,3 +204,35 @@ describe("orchestrateCdcSync", () => {
         expect(result.shards[0]?.cursor).toBe(42);
     });
 });
+
+describe("orchestrateApplyCdc", () => {
+    it("forwards each per-shard batch and sums the applied counts", async () => {
+        expect.assertions(3);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({}) });
+        const spy = createShardSpy((_shardKey, body) => json({ result: { applied: (body.args["changes"] as unknown[]).length } }));
+
+        const result = await coordinator.orchestrateApplyCdc(spy.namespace, {
+            batches: [
+                { changes: [{ id: "a" }, { id: "b" }], shardKey: "c1" },
+                { changes: [{ id: "c" }], shardKey: "c2" },
+            ],
+        });
+
+        expect(result.ok).toBe(2);
+        expect(result.applied).toBe(3);
+        expect(spy.calls.every((call) => call.body.functionPath === "__cirrus_admin__:applyCdc")).toBe(true);
+    });
+
+    it("counts a shard error as failed without throwing", async () => {
+        expect.assertions(2);
+
+        const coordinator = createQueryCoordinator({ perShardTimeoutMs: 100, registry: createStaticShardRegistry({}) });
+        const spy = createShardSpy(() => Response.json({ error: { code: "BOOM", message: "x" } }, { status: 500 }));
+
+        const result = await coordinator.orchestrateApplyCdc(spy.namespace, { batches: [{ changes: [{ id: "a" }], shardKey: "c1" }] });
+
+        expect(result.failed).toBe(1);
+        expect(result.applied).toBe(0);
+    });
+});
