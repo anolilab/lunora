@@ -2,7 +2,7 @@
  * Compile-time only: this file is included by `tsc --noEmit` to exercise the
  * type surface. It is also imported by a no-op test so vitest counts it.
  */
-import type { CirrusRouteHandler, EmptyArgs, Id, Infer, RegisteredQuery } from "../src/index.js";
+import type { ActionCtx, CirrusRouteHandler, EmptyArgs, Id, Infer, RegisteredQuery } from "../src/index.js";
 import { defineSchema, defineTable, httpRoute, initCirrus, mutation, query, v } from "../src/index.js";
 
 type Assert<T extends true> = T;
@@ -104,4 +104,22 @@ const routeOutputMismatch = httpRoute
 
 type Check13 = Assert<Equal<typeof routeOutputMismatch, CirrusRouteHandler>>;
 
-export type { Check1, Check2, Check3, Check4, Check5, Check6, Check7, Check8, Check9, Check10, Check11, Check11b, Check12, Check13 };
+// Server-to-server callers: `ctx.runQuery` / `runMutation` infer both the args
+// type and the result type from the passed function reference — no loose
+// `Record<string, unknown>` args, no manual return annotation.
+declare const actionCtx: ActionCtx;
+
+const ranQuery = actionCtx.runQuery(list, { limit: 3 });
+const ranMutation = actionCtx.runMutation(send, { text: "hi" });
+
+type Check14 = Assert<Equal<Awaited<typeof ranQuery>, number>>;
+type Check15 = Assert<Equal<Awaited<typeof ranMutation>, string>>;
+
+// A wrong arg type is a compile error now that args are inferred from the
+// reference's validator (the result type still flows, hence Check16).
+// @ts-expect-error - limit must be a number, per the query's args validator
+const ranBadArgs = actionCtx.runQuery(list, { limit: "nope" });
+
+type Check16 = Assert<Equal<Awaited<typeof ranBadArgs>, number>>;
+
+export type { Check1, Check2, Check3, Check4, Check5, Check6, Check7, Check8, Check9, Check10, Check11, Check11b, Check12, Check13, Check14, Check15, Check16 };
