@@ -17,7 +17,13 @@ export const DEFAULT_AUTH_BASE_PATH: string = "/api/auth";
 export const handleAuthRequest = async (auth: CirrusAuth, request: Request, basePath: string = DEFAULT_AUTH_BASE_PATH): Promise<Response | undefined> => {
     const url = new URL(request.url);
 
-    if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
+    // Normalize a caller-supplied trailing slash (e.g. "/api/auth/") so the
+    // prefix match below doesn't become "/api/auth//" — which would never
+    // match real nested routes like "/api/auth/get-session" and would silently
+    // fall through to a 404.
+    const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
+
+    if (url.pathname !== base && !url.pathname.startsWith(`${base}/`)) {
         return undefined;
     }
 
