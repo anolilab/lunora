@@ -142,7 +142,12 @@ const classifyArgvToken = (token: string, next: string | undefined, buckets: Arg
 
     buckets.options.push(token);
 
-    if (optionTakesValue(token) && next !== undefined && !isOptionToken(next)) {
+    // A value-taking option consumes the very next token as its value, even
+    // when that value is dash-leading (e.g. `--search -foo`) — standard getopt
+    // semantics. The `--` separator is the one exception: it's handled by the
+    // caller and never belongs to an option. Boolean options (and the `=` form)
+    // report `optionTakesValue === false`, so they never grab the next token.
+    if (optionTakesValue(token) && next !== undefined && next !== "--") {
         buckets.options.push(next);
 
         return 2;
