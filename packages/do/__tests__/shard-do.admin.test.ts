@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
@@ -437,8 +437,7 @@ describe("shardDO admin row writes", () => {
     const rowCount = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "users"`)[0]?.["c"] ?? 0);
 
     it("inserts a row and returns its assigned id", async () => {
-        // 3 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
-        expect.assertions(3);
+        expect.assertions(4);
 
         const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
@@ -450,7 +449,7 @@ describe("shardDO admin row writes", () => {
 
         expect(body.result.op).toBe("insert");
 
-        expectTypeOf(body.result.id).toBeString();
+        expect(typeof body.result.id).toBe("string");
 
         expect(rowCount()).toBe(1);
     });
