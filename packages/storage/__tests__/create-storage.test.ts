@@ -117,6 +117,20 @@ describe("createStorage", () => {
         expect(result.cursor).toBe("next-cursor");
     });
 
+    it("list() forwards the R2 truncated flag", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+
+        bucket.list = vi.fn<R2BucketLike["list"]>(async () => ({ cursor: "c", objects: [], truncated: true }));
+
+        const storage = createStorage({ bucket });
+        const result = await storage.list();
+
+        expect(result.truncated).toBe(true);
+        expect(result.cursor).toBe("c");
+    });
+
     it("getUrl() requires publicBaseUrl", () => {
         expect.assertions(1);
 
