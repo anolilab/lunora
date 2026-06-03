@@ -16,6 +16,7 @@ import { runEnvCommand } from "./commands/env.js";
 import { runInfoCommand } from "./commands/info.js";
 import type { Template } from "./commands/init.js";
 import { runInitCommand } from "./commands/init.js";
+import { runLogsCommand } from "./commands/logs.js";
 import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "./commands/migrate.js";
 import { runResetCommand } from "./commands/reset.js";
 import { runRpcCommand } from "./commands/run.js";
@@ -28,6 +29,7 @@ const COMMANDS = [
     "dev",
     "codegen",
     "deploy",
+    "logs",
     "run",
     "reset",
     "migrate",
@@ -292,6 +294,31 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         },
         name: "deploy",
         options: [{ description: "Cloudflare environment name", name: "env", type: String }],
+    });
+
+    cli.addCommand({
+        argument: { description: "Worker name (defaults to wrangler config)", name: "worker", type: String },
+        description: "Stream live logs from a deployed Worker via wrangler tail",
+        execute: async ({ argument, options: parsed }) => {
+            const result = await runLogsCommand({
+                cwd,
+                env: toStringOrUndefined(parsed.env),
+                format: toStringOrUndefined(parsed.format),
+                logger,
+                search: toStringOrUndefined(parsed.search),
+                status: toStringOrUndefined(parsed.status),
+                worker: argument[0] ?? toStringOrUndefined(parsed.worker),
+            });
+
+            exitCode.value = result.code;
+        },
+        name: "logs",
+        options: [
+            { description: "Cloudflare environment name", name: "env", type: String },
+            { description: "Output format: pretty (default) | json", name: "format", type: String },
+            { description: "Filter by status: ok | error | canceled", name: "status", type: String },
+            { description: "Substring filter on log messages", name: "search", type: String },
+        ],
     });
 
     cli.addCommand({
@@ -624,6 +651,8 @@ Commands:
   dev  [--port <n>] [--no-vite] Run the dev server (Vite + wrangler, or wrangler alone)
   codegen                       Run codegen for cirrus/ functions and schema
   deploy [--env <name>]         Codegen, validate wrangler, then wrangler deploy
+  logs [worker]                 Stream live logs from a deployed Worker via wrangler tail
+       [--env <name>] [--format <pretty|json>] [--status <s>] [--search <q>]
   run <fn> [--args <json>]      Send a single RPC to a running Cirrus Worker
        [--shard <key>] [--url <url>]
   migrate generate [name]       Diff cirrus/schema.ts against the snapshot and emit migration SQL
