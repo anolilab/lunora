@@ -8,6 +8,12 @@ import type { CirrusAuth, CirrusAuthOptions } from "./create-auth.js";
  * flag — closes a TOCTOU race: concurrent callers that arrive before the first
  * run resolves all await the same promise instead of each launching the DDL
  * runner. A rejected run is evicted (below) so a transient failure can retry.
+ *
+ * INVARIANT: the cache is keyed by *object identity*, not value. Two distinct
+ * `options` objects targeting the same DB do NOT share an entry — so this only
+ * deduplicates when the SAME long-lived options object is reused (the Workers
+ * isolate-reuse case). A caller that builds `createAuth({...})` per request
+ * gets a fresh options reference every time and the diff re-runs on each call.
  */
 const migrating = new WeakMap<object, Promise<void>>();
 
