@@ -226,4 +226,49 @@ describe("createVectorSyncHook", () => {
         expect(vectors.upserts).toEqual([]);
         expect(vectors.deletes).toEqual([]);
     });
+
+    it("throws a descriptive error when an inline source field is non-string", async () => {
+        expect.assertions(2);
+
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", name: "messages-body" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        // A JSON column holding an object would otherwise embed "[object Object]"
+        // and silently produce an unsearchable vector.
+        await expect(hook({ doc: { body: { nested: true } }, id: "m1", op: "insert", table: "messages" })).rejects.toThrow(/expects a string source/);
+        // The bad write must not partially fan out.
+        expect(vectors.upserts).toEqual([]);
+    });
+
+    it("compensates with deletes across every affected index then re-throws the original error", async () => {
+        expect.assertions(3);
+
+        const original = new Error("embedder boom");
+        const vectors = fakeVectorSearch();
+
+        // Second upsert (standalone) rejects after the first inline upsert.
+        (vectors.upsert as ReturnType<typeof vi.fn>).mockImplementation(async (indexName: string, input: unknown) => {
+            vectors.upserts.push([indexName, input]);
+
+            if (indexName === "docs-fulltext") {
+                throw original;
+            }
+        });
+
+        const schema: SchemaLike = {
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-fulltext": { embed, select: (row) => String(row.body), table: "docs" } },
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await expect(hook({ doc: { body: "hi" }, id: "d1", op: "insert", table: "docs" })).rejects.toBe(original);
+
+        // Compensation purges this row's id from every index sourced from the table.
+        expect(vectors.deletes).toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).toContainEqual(["docs-fulltext", ["d1"]]);
+    });
 });
