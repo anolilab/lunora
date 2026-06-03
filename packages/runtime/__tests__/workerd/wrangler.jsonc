@@ -10,4 +10,6 @@
         "bindings": [{ "name": "SHARD", "class_name": "TestShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TestShardDO"] }],
+    "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "cirrus-runtime-test-backups" }],
+    "triggers": { "crons": ["0 3 * * *"] },
 }

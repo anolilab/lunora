@@ -10,13 +10,41 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
-import type { Route } from "../../src/create-worker.js";
+import type { Route, ScheduledControllerLike } from "../../src/create-worker.js";
 import { createWorker } from "../../src/create-worker.js";
 import { CirrusError } from "../../src/errors.js";
+import type { QueryCoordinator } from "../../src/query-coordinator.js";
 
 interface Env {
+    BACKUPS: R2Bucket;
     SHARD: DurableObjectNamespace<TestShardDO>;
 }
+
+/** The cron the test worker's built-in backup is wired to (mirrors `triggers.crons`). */
+const BACKUP_CRON = "0 3 * * *";
+
+/**
+ * Coordinator stub whose `orchestrateExport` returns two canned rows so the
+ * scheduled backup has something to stream into R2. The rest of the surface is
+ * unused by the backup path.
+ */
+const backupCoordinator = {
+    orchestrateExport: async () => {
+        return {
+            failed: 0,
+            ok: 1,
+            shards: [
+                {
+                    rows: [
+                        { doc: { _id: "u1", email: "a@b.com" }, table: "users" },
+                        { doc: { _id: "u2", email: "c@d.com" }, table: "users" },
+                    ],
+                    shardKey: "__root__",
+                },
+            ],
+        };
+    },
+} as unknown as QueryCoordinator;
 
 /**
  * Echo-style Durable Object: returns a JSON document describing exactly
@@ -68,25 +96,36 @@ const throwsGenericRoute: Route = () => {
     throw new Error("internal-detail-that-must-not-leak");
 };
 
-export type { Env };
-export { TestShardDO };
+const buildTestWorker = (env: Env): ReturnType<typeof createWorker> =>
+    createWorker({
+        // Authenticates the per-shard export gate the scheduled backup fans out to.
+        adminToken: "test-admin",
+        // Built-in backup → real R2 binding, exercised by the `scheduled()` test.
+        backupCron: BACKUP_CRON,
+        backupStore: env.BACKUPS,
+        queryCoordinator: backupCoordinator,
+        routes: {
+            "/boom-cirrus": throwsCirrusRoute,
+            "/boom-generic": throwsGenericRoute,
+            "GET /healthz": healthzRoute,
+            // Same path, different method — exercise the "METHOD path" key form.
+            "POST /echo-method": echoMethodRoute,
+        },
+        shardDO: {
+            get: (id) => env.SHARD.get(id as DurableObjectId),
+            idFromName: (name) => env.SHARD.idFromName(name),
+        },
+    });
 
-export default {
+const handler = {
     async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
-        const worker = createWorker({
-            routes: {
-                "/boom-cirrus": throwsCirrusRoute,
-                "/boom-generic": throwsGenericRoute,
-                "GET /healthz": healthzRoute,
-                // Same path, different method — exercise the "METHOD path" key form.
-                "POST /echo-method": echoMethodRoute,
-            },
-            shardDO: {
-                get: (id) => env.SHARD.get(id as DurableObjectId),
-                idFromName: (name) => env.SHARD.idFromName(name),
-            },
-        });
-
-        return worker.fetch(request, env, context);
+        return buildTestWorker(env).fetch(request, env, context);
+    },
+    async scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContext): Promise<void> {
+        await buildTestWorker(env).scheduled(controller, env, context);
     },
 };
+
+export type { Env };
+export { TestShardDO };
+export default handler;
