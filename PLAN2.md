@@ -10,6 +10,8 @@ This document is the parity backlog: what kitcn has that Cirrus lacks, ranked by
 
 **Analysis date**: 2026-05-28. Cirrus side verified against actual source in `packages/*`, not package descriptions.
 
+**Status update 2026-06-03:** Tiers 1, and most of 2–3, have since landed and are test-covered. The matrix below is updated; see 'Remaining gaps (verified 2026-06-03)' at the end for what's actually left.
+
 ---
 
 ## Executive summary
@@ -25,40 +27,40 @@ This document is the parity backlog: what kitcn has that Cirrus lacks, ranked by
 
 Legend: ✅ implemented · 🟡 partial · ❌ missing (Cirrus side). Evidence cites Cirrus source.
 
-| #   | Capability                                                                 | kitcn | Cirrus | Evidence (Cirrus)                                                 |
-| --- | -------------------------------------------------------------------------- | ----- | ------ | ----------------------------------------------------------------- |
-| 1   | tRPC-style procedure builder (`.input()`/`.use()`/`.query()`)              | ✅    | ❌     | `packages/server/src/functions.ts` — flat `query({args,handler})` |
-| 2   | Server-side middleware chain (auth, ctx extension)                         | ✅    | ❌     | `packages/server/src/types.ts` — fixed ctx, no `.use()`           |
-| 3   | Server-side typed callers (`createXCaller(ctx)`)                           | ✅    | 🟡     | `ActionCtx.run*` only, actions-only                               |
-| 4   | Drizzle-style ORM query builder (`where`/`orderBy`/`with`/`limit`)         | ✅    | ❌     | `packages/server/src/drizzle.ts` (re-export only)                 |
-| 5   | Column builders + modifiers (`.notNull()`, `.default()`, `.$onUpdateFn()`) | ✅    | 🟡     | `packages/values/src/v.ts` — validators only, no modifiers        |
-| 6   | Column types: date, timestamp, vector, enum                                | ✅    | 🟡     | `packages/values/src/v.ts` — missing date/timestamp/vector        |
-| 7   | Table relations (1-n, n-1) + relation queries (`with`, `_count`)           | ✅    | ❌     | `TableDefinition` has no relation decls                           |
-| 8   | Constraints: unique, FK, cascade actions                                   | ✅    | 🟡     | unique index only; no FK/cascade                                  |
-| 9   | Indexes + index-range queries                                              | ✅    | ✅     | `packages/do/src/ctx-db.ts` `.withIndex()`                        |
-| 10  | Cursor pagination for queries                                              | ✅    | 🟡     | R2 list only; no DB cursor                                        |
-| 11  | Streaming query results                                                    | ✅    | ❌     | request/response + WS deltas only                                 |
-| 12  | Row-Level Security (policies, roles, evaluator)                            | ✅    | ❌     | identity-only auth state                                          |
-| 13  | Schema triggers / lifecycle hooks (before/after CRUD)                      | ✅    | ❌     | direct writes, no hooks                                           |
-| 14  | Online data migrations (`defineMigration`, up/down, batch, dry-run)        | ✅    | 🟡     | `packages/d1` — SQL schema migrations only                        |
-| 15  | Aggregates: `aggregateIndex`, `count()`, `aggregate()`, `groupBy()`        | ✅    | 🟡     | cross-shard merge strategies only                                 |
-| 16  | Ranked index / `rank()` (btree, sorted pagination, random access)          | ✅    | ❌     | none                                                              |
-| 17  | Rate limiting (algorithms, deny list, React hook)                          | ✅    | ❌     | no package                                                        |
-| 18  | Vector search / vector columns                                             | ✅    | ❌     | FTS search index only                                             |
-| 19  | React `useInfiniteQuery`                                                   | ✅    | ❌     | `packages/react/src/index.ts`                                     |
-| 20  | TanStack Query integration                                                 | ✅    | ❌     | custom `QueryCache` instead                                       |
-| 21  | Typed HTTP/REST router (`.get().searchParams().output()`, Hono, webhooks)  | ✅    | ❌     | RPC + WS only                                                     |
-| 22  | RSC / SSR server helpers                                                   | ✅    | ❌     | client-only hooks                                                 |
-| 23  | Solid.js client                                                            | ✅    | ❌     | React only                                                        |
-| 24  | Plugin system (`definePlugin`, `defineSchemaExtension`, plugin middleware) | ✅    | ❌     | no extension mechanism                                            |
-| 25  | shadcn-style `add` registry (scaffold into user project)                   | ✅    | ❌     | no registry                                                       |
-| 26  | CLI: `analyze`, `env`, `info`, `verify`, `view`, `docs`                    | ✅    | ❌     | `packages/cli` has 7 core cmds                                    |
-| 27  | Init templates: TanStack Start, Expo                                       | ✅    | 🟡     | next/vite/standalone only                                         |
-| 28  | Auth: organizations/teams, admin (ban/impersonate), billing (Polar)        | ✅    | 🟡     | thin better-auth wrapper                                          |
-| 29  | Mail (Resend, templates, queue)                                            | ✅    | ✅     | `packages/mail`                                                   |
-| 30  | Storage (R2, signed URLs)                                                  | ✅    | ✅     | `packages/storage`                                                |
-| 31  | Scheduler (runAfter/runAt, cron)                                           | ✅    | ✅     | `packages/scheduler`                                              |
-| 32  | Codegen (api/dataModel/server)                                             | ✅    | ✅     | `packages/codegen`                                                |
+| #   | Capability                                                                 | kitcn | Cirrus | Evidence (Cirrus)                                                                                                                                                                                                                               |
+| --- | -------------------------------------------------------------------------- | ----- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | tRPC-style procedure builder (`.input()`/`.use()`/`.query()`)              | ✅    | ✅     | `packages/server/src/builder/*` — `initCirrus`, `.input/.use/.query/.mutation/.action` (landed 2026-06-03)                                                                                                                                      |
+| 2   | Server-side middleware chain (auth, ctx extension)                         | ✅    | ✅     | `packages/server/src/builder/*` — `.use()` chain, typed `next({ ctx })`                                                                                                                                                                         |
+| 3   | Server-side typed callers (`createXCaller(ctx)`)                           | ✅    | 🟡     | `ActionCtx.run*` + builder exist; full `createXCaller` still 🟡                                                                                                                                                                                 |
+| 4   | Drizzle-style ORM query builder (`where`/`orderBy`/`with`/`limit`)         | ✅    | ✅     | `packages/do/src/ctx-db.ts`, `packages/d1/src/d1-ctx-db.ts` — where/orderBy/keyset cursor/count/findMany/findFirst                                                                                                                              |
+| 5   | Column builders + modifiers (`.notNull()`, `.default()`, `.$onUpdateFn()`) | ✅    | ✅     | `packages/values/src/v.ts` — `.default/.unique/.$defaultFn/.$onUpdateFn/.nullable/.$type`                                                                                                                                                       |
+| 6   | Column types: date, timestamp, vector, enum                                | ✅    | ✅     | `packages/values/src/v.ts` — date/timestamp; vector via `@cirrus/vectors`; enum via `v.union`                                                                                                                                                   |
+| 7   | Table relations (1-n, n-1) + relation queries (`with`, `_count`)           | ✅    | ✅     | `packages/do/src/relations.ts` (one/many/nested `with`/`_count`, `onDelete` cascade/set null/restrict), wired in ctx-db.ts + d1-ctx-db.ts; cross-backend relation loading throws by design (relations.ts:112)                                   |
+| 8   | Constraints: unique, FK, cascade actions                                   | ✅    | ✅     | unique + FK `onDelete` cascade/set-null/restrict (`packages/do/src/relations.ts`)                                                                                                                                                               |
+| 9   | Indexes + index-range queries                                              | ✅    | ✅     | `packages/do/src/ctx-db.ts` `.withIndex()`                                                                                                                                                                                                      |
+| 10  | Cursor pagination for queries                                              | ✅    | ✅     | keyset cursor pagination in `packages/do/src/ctx-db.ts`                                                                                                                                                                                         |
+| 11  | Streaming query results                                                    | ✅    | ✅     | `.stream()` terminal + SSE in the HTTP router (`packages/server/src/http.ts`)                                                                                                                                                                   |
+| 12  | Row-Level Security (policies, roles, evaluator)                            | ✅    | 🟡     | `packages/server/src/rls/middleware.ts` — policy defs, read filtering (baseWhere AND-merge), default-deny write rejection (WITH-CHECK), roles, `COUNT_RLS_UNSUPPORTED`, DO+D1 seam (`query-args.ts`); ~85-90%, permissions/grant deferred to v2 |
+| 13  | Schema triggers / lifecycle hooks (before/after CRUD)                      | ✅    | ✅     | `packages/do/src/triggers.ts` — before/after insert/update/delete                                                                                                                                                                               |
+| 14  | Online data migrations (`defineMigration`, up/down, batch, dry-run)        | ✅    | 🟡     | `packages/do/src/data-migration.ts` — per-DO state tracking + `runDataMigration`; full batch/dry-run API maturity unverified                                                                                                                    |
+| 15  | Aggregates: `aggregateIndex`, `count()`, `aggregate()`, `groupBy()`        | ✅    | 🟡     | `count()` is O(1) via `__agg_` counter tables (incremental, DO+D1), `groupBy(count)`, cross-shard sum/max/min merge; but sum/avg/min/max still SCAN (counter is count-only)                                                                     |
+| 16  | Ranked index / `rank()` (btree, sorted pagination, random access)          | ✅    | 🟡     | `packages/do/src/rank.ts` + ctx-db.ts — `rank()`/`rankPage()` (btree companion, keyset); per-shard complete, cross-shard merge not yet in coordinator                                                                                           |
+| 17  | Rate limiting (algorithms, deny list, React hook)                          | ✅    | ✅     | `packages/ratelimit` — token-bucket/sliding/fixed window, stores, middleware, `useRateLimit`                                                                                                                                                    |
+| 18  | Vector search / vector columns                                             | ✅    | ✅     | `packages/vectors` — `createVectors`, `.vectorize()`, `defineVectorIndex`                                                                                                                                                                       |
+| 19  | React `useInfiniteQuery`                                                   | ✅    | ✅     | `packages/react` — `useInfiniteQuery`                                                                                                                                                                                                           |
+| 20  | TanStack Query integration                                                 | ✅    | ❌     | custom `QueryCache` instead                                                                                                                                                                                                                     |
+| 21  | Typed HTTP/REST router (`.get().searchParams().output()`, Hono, webhooks)  | ✅    | ✅     | `packages/server/src/http.ts` — `httpRouter`/`httpRoute` `.get/.post/…searchParams/.params/.body/.output/.handler/.stream`, Hono                                                                                                                |
+| 22  | RSC / SSR server helpers                                                   | ✅    | 🟡     | `/server` entry exists; integration partial                                                                                                                                                                                                     |
+| 23  | Solid.js client                                                            | ✅    | ❌     | React only (deferred by design)                                                                                                                                                                                                                 |
+| 24  | Plugin system (`definePlugin`, `defineSchemaExtension`, plugin middleware) | ✅    | 🟡     | `definePlugin` basic                                                                                                                                                                                                                            |
+| 25  | shadcn-style `add` registry (scaffold into user project)                   | ✅    | ❌     | no registry                                                                                                                                                                                                                                     |
+| 26  | CLI: `analyze`, `env`, `info`, `verify`, `view`, `docs`                    | ✅    | 🟡     | extra cmds partial                                                                                                                                                                                                                              |
+| 27  | Init templates: TanStack Start, Expo                                       | ✅    | 🟡     | next/vite/standalone only                                                                                                                                                                                                                       |
+| 28  | Auth: organizations/teams, admin (ban/impersonate), billing (Polar)        | ✅    | 🟡     | thin better-auth wrapper; org/teams partial                                                                                                                                                                                                     |
+| 29  | Mail (Resend, templates, queue)                                            | ✅    | ✅     | `packages/mail`                                                                                                                                                                                                                                 |
+| 30  | Storage (R2, signed URLs)                                                  | ✅    | ✅     | `packages/storage`                                                                                                                                                                                                                              |
+| 31  | Scheduler (runAfter/runAt, cron)                                           | ✅    | ✅     | `packages/scheduler`                                                                                                                                                                                                                            |
+| 32  | Codegen (api/dataModel/server)                                             | ✅    | ✅     | `packages/codegen`                                                                                                                                                                                                                              |
 
 **Cirrus-unique (not in kitcn):** DO sharding (`.shardBy()`), cross-shard query coordinator with merge strategies, global D1 tables (`.global()`), offline mutation queue, first-class optimistic updates, D1 bookmark read-your-writes, Vite-first DX with dev overlay.
 
@@ -69,6 +71,8 @@ Legend: ✅ implemented · 🟡 partial · ❌ missing (Cirrus side). Evidence c
 These are foundational; later tiers depend on them. Build in order.
 
 ### 1.1 cRPC procedure builder + middleware `[matrix #1, #2, #3]`
+
+✅ Landed 2026-06-03 — `packages/server/src/builder/*`.
 
 **What kitcn has.** A chainable builder created once per app:
 
@@ -95,6 +99,8 @@ Procedures chain `.input(schema)`, `.use(mw)`, `.output(schema)`, `.query()/.mut
 
 ### 1.2 ORM query layer `[matrix #4, #5, #6, #8, #10]`
 
+✅ Landed 2026-06-03 — `packages/do/src/ctx-db.ts`, `packages/d1/src/d1-ctx-db.ts`, `packages/values/src/v.ts`.
+
 **What kitcn has.** `ctx.orm.query.todos.findMany({ where: { projectId }, with: { author: true }, orderBy, limit, cursor })`, `findFirstOrThrow`, plus writes `ctx.orm.insert(t).values(...)` / `update` / `delete`. Column modifiers: `.notNull()`, `.default()`, `.unique()`, `.$onUpdateFn()`, `.$defaultFn()`, `.$type<T>()`, `timestamp().defaultNow()`. Inference via `$inferSelect` / `$inferInsert`. Constraints (unique, FK, cascade) enforced by ORM mutations.
 
 **Cirrus today.** Real query API is `tableReader.withIndex(name, range).filter().take()` (`packages/do/src/ctx-db.ts`) — index + in-memory filter + limit. No where-chaining, orderBy, relations, or column modifiers. Validators (`v.*`) exist but lack date/timestamp/vector and builder modifiers (`packages/values/src/v.ts`).
@@ -102,6 +108,8 @@ Procedures chain `.input(schema)`, `.use(mw)`, `.output(schema)`, `.query()/.mut
 **Cirrus mapping.** Query builder compiles to DO-SQLite (`SQLiteStorage`) for shard-local tables and to D1 SQL for `.global()` tables — two backends behind one API. This is real runtime work, not just types. Constraints (unique/FK) enforced at the ORM write layer, since raw `ctx.db` bypasses them (mirror kitcn's documented rule).
 
 ### 1.3 Relations `[matrix #7]`
+
+✅ Landed 2026-06-03 — `packages/do/src/relations.ts` (cross-backend relation loading throws by design).
 
 **What kitcn has.** Relation declarations on schema, `with` loading, `_count` relation aggregation, FK `.references(() => t.id, { onDelete: 'cascade' | 'set null' | 'restrict' })`, self-referencing and bidirectional pointers.
 
@@ -111,6 +119,8 @@ Procedures chain `.input(schema)`, `.use(mw)`, `.output(schema)`, `.query()/.mut
 
 ### 1.4 Schema triggers / lifecycle hooks `[matrix #13]`
 
+✅ Landed 2026-06-03 — `packages/do/src/triggers.ts`.
+
 **What kitcn has.** `.triggers({...})` on schema extension for cross-row side effects on insert/update/delete (the documented home for denormalization, counters, audit).
 
 **Cirrus today.** Direct CRUD, no hook invocation.
@@ -118,6 +128,8 @@ Procedures chain `.input(schema)`, `.use(mw)`, `.output(schema)`, `.query()/.mut
 **Cirrus mapping.** Fire inside the DO transaction for shard-local writes (atomic). Triggers that touch _other_ shards must enqueue async work (Cloudflare Queues) — not transactional; document the boundary.
 
 ### 1.5 Online data migrations `[matrix #14]`
+
+🟡 Partial 2026-06-03 — `packages/do/src/data-migration.ts` (per-DO state tracking + `runDataMigration`) exists; full batch/dry-run API maturity unverified.
 
 **What kitcn has.** `defineMigration({ id, up: { table, migrateOne }, down })`, `defineMigrationSet`, CLI `migrate create|up|down` with `--steps`/`--to`/`--prod`, `batchSize`, `writeMode: safe_bypass|normal`, `dryRun`.
 
@@ -131,9 +143,13 @@ Procedures chain `.input(schema)`, `.use(mw)`, `.output(schema)`, `.query()/.mut
 
 ### 2.1 TanStack Query integration + `useInfiniteQuery` `[matrix #19, #20]`
 
+✅ Landed 2026-06-03 (`useInfiniteQuery` only) — `packages/react`. TanStack Query adapter (#20) still uses the bespoke `QueryCache` — see Remaining gaps.
+
 kitcn builds the React client on TanStack Query (`queryOptions`, `infiniteQueryOptions`, SSR hydration via SuperJSON, `staleTime: Infinity` since the socket pushes updates). Cirrus ships its own `QueryCache` (`packages/react`). **Decision needed:** adopt TanStack as the cache substrate (ecosystem gravity, devtools, SSR hydration) vs. keep the bespoke cache (fewer deps, full control of optimistic+offline). Either way, add `useInfiniteQuery`.
 
 ### 2.2 Typed HTTP / REST router `[matrix #21]`
+
+✅ Landed 2026-06-03 — `packages/server/src/http.ts`.
 
 cRPC HTTP routes: `publicRoute.get('/api/todos').searchParams(z…).output(z…).query(...)`, Hono integration, webhooks, streaming. Cirrus has RPC + WS but no typed REST surface. **High practical value** for inbound webhooks (Stripe, Resend, OAuth callbacks) — those need real HTTP endpoints. Depends on Tier 1.1 (builder).
 
@@ -155,17 +171,25 @@ Full `src/solid/` parallel to React in kitcn. Cirrus is React-only by design dec
 
 ### 3.1 Aggregates + ranked index `[matrix #15, #16]`
 
+🟡 Partial 2026-06-03 — `count()` is O(1) via `__agg_` counter tables (DO+D1) and `rank()`/`rankPage()` ship in `packages/do/src/rank.ts`; but sum/avg/min/max still SCAN (counter is count-only) and cross-shard rank merge is not yet in the coordinator. See Remaining gaps.
+
 `aggregateIndex` → O(1) `count()`/`aggregate()`/`groupBy()` with no-scan filter planning; `rankIndex` + `rank()` (btree) for rankings, random access, sorted pagination; auto-backfill on dev. Cirrus only has cross-shard _merge_ strategies (sum/topK) — single-shard counts must enumerate rows. **Convex-coupled:** kitcn uses native count syscalls; on Cirrus this is a btree/counter structure maintained in DO-SQLite via triggers (ties to 1.4). Highest-effort item; sequence after the ORM + triggers land.
 
 ### 3.2 Row-Level Security `[matrix #12]`
+
+🟡 Landed 2026-06-03 (~85-90%) — `packages/server/src/rls/middleware.ts` (policy defs, read filtering, default-deny write rejection, roles, `COUNT_RLS_UNSUPPORTED`, DO+D1 seam); permissions/grant deferred to v2.
 
 `orm/rls/` — policies, roles, evaluator, role tables. Cirrus auth is identity-only. Implement as middleware (1.1) + ORM query rewriting (1.2). Note kitcn's documented constraint: `count()` is unsupported in RLS-restricted contexts (`COUNT_RLS_UNSUPPORTED`).
 
 ### 3.3 Rate limiting `[matrix #17]`
 
+✅ Landed 2026-06-03 — `packages/ratelimit`.
+
 `kitcn/ratelimit`: token-bucket / sliding-window algorithms, deny list, React `useRateLimit` hook, store. Natural fit as Cirrus middleware (1.1) with state in a DO (counter) or KV. Self-contained once the builder exists.
 
 ### 3.4 Vector search / vector columns `[matrix #18]`
+
+✅ Landed 2026-06-03 — `packages/vectors` (`createVectors`, `.vectorize()`, `defineVectorIndex`).
 
 kitcn `vector()` column builder. Cirrus has FTS search indexes but no vector type. On Cloudflare maps to **Vectorize**; design a `v.vector()` / vector column + query surface backed by Vectorize bindings.
 
@@ -217,3 +241,20 @@ Phase A is the keystone — it is the abstraction the majority of remaining item
 ## Already at parity — no action
 
 Mail/Resend (`packages/mail`), R2 storage + signed URLs (`packages/storage`), scheduler + cron (`packages/scheduler`), codegen (`packages/codegen`), Vite plugin (`packages/vite`), wrangler config validation (`packages/config`), and core CLI (`init`/`dev`/`deploy`/`codegen`/`run`/`reset`/`migrate`).
+
+---
+
+## Remaining gaps (verified 2026-06-03)
+
+After the Tier 1–3 landings above, these are the genuine remaining gaps, confirmed by source read + passing test suites (`@cirrus/do` 384 pass + 1 todo, `@cirrus/server` 129 pass, `@cirrus/codegen` 81 pass):
+
+- **D1 full-text search.** FTS works on the DO backend only; D1 / `.global()` tables have no FTS5 surface yet (being implemented separately now).
+- **Reducer-aware aggregates.** `count()` is genuinely O(1) via incremental `__agg_` counter tables, but `sum`/`avg`/`min`/`max` still SCAN — the counter structure is count-only. Real O(1) reducer-backed aggregates remain unimplemented.
+- **Cross-shard rank merge.** `rank()`/`rankPage()` are per-shard complete, but the cross-shard merge is not yet wired into the Query Coordinator.
+- **`SearchIndexName<T>` typing.** The type is not wired into the reader signature.
+- **`baseWhere` on the typed read facade.** RLS `baseWhere` injection is only exposed on `count`; the typed read facade does not surface it.
+- **`definePolicies` duplicate detection.** Duplicate-`(table, on)` detection is still a TODO.
+- **Cross-backend relation loading.** Relations that cross the DO/D1 backend boundary throw by design (`relations.ts:112`).
+- **TanStack Query adapter (#20).** Still a bespoke `QueryCache`; no TanStack adapter.
+- **Solid.js client (#23).** Deferred by design.
+- **shadcn-style `add` registry (#25).** No per-feature registry.

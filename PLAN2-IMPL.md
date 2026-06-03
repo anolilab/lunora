@@ -1,5 +1,7 @@
 # Cirrus — Plan 2 Implementation Spec: Phase A (Keystone)
 
+**Status 2026-06-03: COMPLETE.** This Phase-A spec (builder + ORM) shipped; the "seams left for later" (relations, triggers, aggregates, RLS) have since been implemented too. Retained as historical design record.
+
 Code-level spec for the two foundational items from [PLAN2.md](./PLAN2.md):
 
 - **1.1 — cRPC-style procedure builder + middleware** (`@cirrus/server`, `@cirrus/codegen`)
