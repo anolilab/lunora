@@ -1009,6 +1009,7 @@ const emitShard = (schema: SchemaIR): string => {
         "QueryArgs",
         ...(hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : []),
         "RunShardMigrationArgs",
+        "RunShardRankBeforeArgs",
         "RunShardWriteArgs",
         "RunShardWriteResult",
         "SchedulerLike",
@@ -1431,6 +1432,33 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             await writer.patch(args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "patch" };
+        }
+
+        protected override async runShardRankBefore(args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
+            this.ensureMigrated();
+
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table);
+                },
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+
+            // \`rankBefore\` is optional on \`DatabaseWriterLike\` (the D1 twin omits it),
+            // but the shard writer from \`createShardCtxDb\` always defines it.
+            if (!writer.rankBefore) {
+                throw Object.assign(new Error("rankBefore is unavailable on the shard writer"), { name: "CirrusError", code: "NOT_IMPLEMENTED", status: 500 });
+            }
+
+            return writer.rankBefore(args.table, args.index, {
+                partitionKey: args.partitionKey,
+                rowId: args.rowId,
+                sortValues: args.sortValues,
+            });
         }
 
         private ensureMigrated(): void {
