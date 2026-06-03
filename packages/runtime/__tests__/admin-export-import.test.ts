@@ -665,3 +665,54 @@ describe("admin sync (CDC streaming export)", () => {
         expect(body.global).toBeUndefined();
     });
 });
+
+describe("admin apply (CDC replay)", () => {
+    it("replays per-shard batches plus globals and sums the applied counts", async () => {
+        expect.assertions(3);
+
+        const orchestrateApplyCdc = vi.fn(async (_namespace: unknown, request: { batches: ReadonlyArray<unknown> }) => {
+            return { applied: request.batches.length, failed: 0, ok: request.batches.length };
+        });
+        const applyGlobals = vi.fn(async () => 2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            applyGlobals,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc,
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/apply", {
+                body: JSON.stringify({
+                    batches: [
+                        { changes: [{ id: "a" }], shardKey: "c1" },
+                        { changes: [{ id: "b" }], shardKey: "c2" },
+                    ],
+                    globalChanges: [{ id: "g" }],
+                }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ applied: number }>();
+
+        // 2 shard batches (mock returns batches.length) + 2 globals.
+        expect(body.applied).toBe(4);
+        expect(applyGlobals).toHaveBeenCalledTimes(1);
+    });
+});

@@ -115,6 +115,14 @@ type GlobalExportFunction = (request: { tables: ReadonlyArray<string> }) => Asyn
  */
 type GlobalCdcSyncFunction = (request: { limit?: number; sinceSeq: number }) => Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }>;
 
+/**
+ * Replay a batch of `.global()` (D1) CDC changes for the admin apply endpoint
+ * (point-in-time recovery). Wire it to `applyCdcChanges` on a D1 writer;
+ * returns the number applied. When omitted, the apply endpoint replays only
+ * shard-local changes.
+ */
+type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
+
 /** Bulk import of `.global()` rows. Returns insert counts + errors merged across tables. */
 type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; startLine?: number }) => Promise<{
     conflicts: number;
@@ -255,6 +263,12 @@ interface WorkerOptions {
     allowUnauthenticatedShardAccess?: boolean;
 
     /**
+     * Replay `.global()` (D1) CDC changes for the admin apply endpoint
+     * (point-in-time recovery). When omitted, apply covers only shard-local tables.
+     */
+    applyGlobals?: GlobalCdcApplyFunction;
+
+    /**
      * Read-only introspector for the auth store's users and sessions, backing
      * the dashboard's users panel via `GET /_cirrus/admin/auth/users` and
      * `/_cirrus/admin/auth/sessions`. Omit it and those endpoints respond
@@ -298,6 +312,7 @@ interface WorkerOptions {
      * layer; downstream packages will read it from `env.DB` directly.
      */
     d1?: unknown;
+
     /** Default shard key used when an envelope omits one. */
     defaultShardKey?: string;
 
@@ -497,6 +512,7 @@ const SCHEDULER_DISPATCH_PATH = "/_cirrus/scheduler/dispatch";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
 const SYNC_PATH = "/_cirrus/admin/sync";
+const APPLY_PATH = "/_cirrus/admin/apply";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
@@ -1414,6 +1430,50 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         return Response.json({ global, shards: shardResult.shards }, { status: 200 });
     };
 
+    /**
+     * Replay endpoint behind `cirrus backup restore --to &lt;time>`. Accepts
+     * per-shard pre-bucketed batches (the shape `/sync` emits, so the caller
+     * just forwards each shard's changes back to the same shard — no
+     * re-bucketing, which also sidesteps deletes carrying no shard-key field)
+     * plus optional `globalChanges`. Applies them via `applyCdcChanges` and
+     * returns the counts.
+     */
+    const handleApplyCdc = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Apply endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin apply endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const coordinator = options.queryCoordinator;
+
+        if (!coordinator) {
+            throw new CirrusError("Apply endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const raw = (await request.json().catch(() => {
+            return {};
+        })) as Record<string, unknown>;
+        const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
+        const batches = rawBatches
+            .map((batch) => batch as { changes?: unknown; shardKey?: unknown })
+            .filter(
+                (batch): batch is { changes: ReadonlyArray<Record<string, unknown>>; shardKey: string } =>
+                    typeof batch.shardKey === "string" && Array.isArray(batch.changes),
+            );
+        const globalChanges = Array.isArray(raw["globalChanges"]) ? (raw["globalChanges"] as ReadonlyArray<Record<string, unknown>>) : [];
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const shardResult = await coordinator.orchestrateApplyCdc(options.shardDO, { batches, headers: forwardedHeaders });
+
+        const globalApplied = globalChanges.length > 0 && options.applyGlobals ? await options.applyGlobals({ changes: globalChanges }) : 0;
+
+        return Response.json({ applied: shardResult.applied + globalApplied, failed: shardResult.failed, ok: shardResult.ok }, { status: 200 });
+    };
+
     const handleImport = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
             throw new CirrusError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -1926,6 +1986,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         [EXPORT_PATH]: (request, env) => handleExport(request, env),
         [IMPORT_PATH]: (request, env) => handleImport(request, env),
         [SYNC_PATH]: (request, env) => handleCdcSync(request, env),
+        [APPLY_PATH]: (request, env) => handleApplyCdc(request, env),
         [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
         [SCHEDULED_PATH]: (request) => handleScheduledList(request),
