@@ -90,6 +90,8 @@ catalogs:
   mail:
     "@visulima/email": 1.0.0-alpha.32
     "@react-email/render": 2.0.8
+  mcp:
+    "@modelcontextprotocol/sdk": ^1.29.0
   docs:
     "fumadocs-core": ^16.9.3
     "fumadocs-ui": ^16.9.3
