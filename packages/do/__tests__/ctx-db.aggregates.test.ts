@@ -612,6 +612,25 @@ describe("ctx-db aggregates", () => {
                 expect(Object.fromEntries(mins.map((g) => [g.key["projectId"], g.value]))).toEqual({ p1: 0, p2: 4 });
                 expect(Object.fromEntries(maxes.map((g) => [g.key["projectId"], g.value]))).toEqual({ p1: 3, p2: 4 });
             });
+
+            it("drops an emptied min/max group from the indexed walk (DELETE on empty, not a NULL row)", async () => {
+                expect.assertions(2);
+
+                const writer = setupWriter(makeSchema(minSeqByProject, maxSeqByProject));
+
+                await seed(writer);
+                await writer.delete("t4"); // p2's only row → the min/max group empties
+
+                // Force the indexed walk: a leftover NULL-valued companion row
+                // would surface p2 as a phantom group here.
+                harness.raw(`DELETE FROM "todos"`);
+
+                const mins = await writer.groupBy("todos", { agg: { field: "seq", op: "min" }, by: ["projectId"] });
+                const maxes = await writer.groupBy("todos", { agg: { field: "seq", op: "max" }, by: ["projectId"] });
+
+                expect(mins.map((g) => g.key["projectId"])).toEqual(["p1"]);
+                expect(maxes.map((g) => g.key["projectId"])).toEqual(["p1"]);
+            });
         });
 
         describe("lazy backfill computes per-op values", () => {

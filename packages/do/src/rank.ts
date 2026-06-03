@@ -271,7 +271,7 @@ const rankTableName = (table: string, indexName: string): string => `${table}__r
  * The values mirror what the trigger seam (`syncRankIndexEntry`) stores:
  *
  * - `partitionKey` === `encodePartitionKey(index.partitionBy ?? [], doc)`, the same canonical-JSON tuple filed in `__partition__`.
- * - `sortValues[i]` === `doc[index.sortBy[i].field]` (raw, un-serialized) — `rankBefore` runs each value through the same `serializeSqlValue` the trigger applies before binding it against the stored `__sort_k&lt;i>__` column, so the comparison is apples-to-apples regardless of which shard owns the row.
+ * - `sortValues[i]` === `serializeSqlValue(doc[index.sortBy[i].field])` — the same transform `syncRankIndexEntry` applies to the stored `__sort_k&lt;i>__` column, so the comparison is byte-for-byte (and JSON-safe for the cross-shard wire) regardless of which shard owns the row. `rankBefore` re-applies it idempotently, so a direct caller passing raw values still works.
  * - `rowId` === `doc._id`, the `__id__` tiebreak.
  */
 const rankKeyFromDocument = (
