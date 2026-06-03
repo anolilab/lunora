@@ -2565,7 +2565,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 return null;
             }
 
-            let partitionKey = own["__partition__"] as string;
+            const partitionKey = own["__partition__"] as string;
 
             const effective = mergeWhere(rankOptions.baseWhere, rankOptions.where);
             const partitionFromWhere = resolveRankPartition(index, effective);
@@ -2577,8 +2577,6 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                     // eslint-disable-next-line unicorn/no-null -- rank's public return is `RankResult | null`; a partition mismatch reads as null.
                     return null;
                 }
-
-                partitionKey = requestedKey;
             }
 
             const { branches: beforeBranches, params: beforeParams } = buildRankBeforeBranches(index, sortColumns, own, rowId);
