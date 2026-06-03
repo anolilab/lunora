@@ -4,7 +4,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { initCirrus } from "../src/builder/index.js";
 import { mutation, query } from "../src/functions.js";
 import { defineComponent, definePlugin, defineSchemaExtension, mergeSchemaExtension } from "../src/plugin.js";
-import { defineSchema, defineTable } from "../src/schema.js";
+import { defineSchema, defineTable, defineVectorIndex } from "../src/schema.js";
 
 describe("defineSchemaExtension", () => {
     it("returns the key and tables", () => {
@@ -111,7 +111,70 @@ describe("mergeSchemaExtension", () => {
 
         const merged = mergeSchemaExtension(base, extension);
 
-        expect(merged.vectorIndexes).toBe(base.vectorIndexes);
+        // The merge returns a fresh object (never mutates the input), so the
+        // base vector indexes are preserved by value, not reference.
+        expect(merged.vectorIndexes).toStrictEqual(base.vectorIndexes);
+    });
+
+    it("merges vectorIndexes contributed by the extension", () => {
+        expect.assertions(2);
+
+        const base = defineSchema(
+            { docs: defineTable({ body: v.string() }) },
+            {
+                base_idx: defineVectorIndex({
+                    dimensions: 3,
+                    embed: async () => [0, 0, 0],
+                    metric: "cosine",
+                    source: { select: (row) => String(row["body"]), table: "docs" },
+                }),
+            },
+        );
+        const extension = defineSchemaExtension("x", {
+            tables: { x_thing: defineTable({ body: v.string() }) },
+            vectorIndexes: {
+                x_idx: defineVectorIndex({
+                    dimensions: 3,
+                    embed: async () => [0, 0, 0],
+                    metric: "cosine",
+                    source: { select: (row) => String(row["body"]), table: "x_thing" },
+                }),
+            },
+        });
+
+        const merged = mergeSchemaExtension(base, extension);
+
+        expect(merged.vectorIndexes).toHaveProperty("base_idx");
+        expect(merged.vectorIndexes).toHaveProperty("x_idx");
+    });
+
+    it("throws on a vector-index name collision", () => {
+        expect.assertions(1);
+
+        const base = defineSchema(
+            { docs: defineTable({ body: v.string() }) },
+            {
+                shared: defineVectorIndex({
+                    dimensions: 3,
+                    embed: async () => [0, 0, 0],
+                    metric: "cosine",
+                    source: { select: (row) => String(row["body"]), table: "docs" },
+                }),
+            },
+        );
+        const colliding = defineSchemaExtension("x", {
+            tables: { x_thing: defineTable({ body: v.string() }) },
+            vectorIndexes: {
+                shared: defineVectorIndex({
+                    dimensions: 3,
+                    embed: async () => [0, 0, 0],
+                    metric: "cosine",
+                    source: { select: (row) => String(row["body"]), table: "x_thing" },
+                }),
+            },
+        });
+
+        expect(() => mergeSchemaExtension(base, colliding)).toThrow(/vector index "shared" already exists/);
     });
 });
 
