@@ -353,6 +353,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                     subcommand: sub,
                     tables: toStringOrUndefined(parsed.tables),
                     target: argument[1],
+                    to: toStringOrUndefined(parsed.to),
                     token: toStringOrUndefined(parsed.token),
                     url: toStringOrUndefined(parsed.url),
                 });
@@ -367,6 +368,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         options: [
             { description: "Backup directory (default .cirrus-backups)", name: "dir", type: String },
             { description: "Comma-separated table allowlist (create)", name: "tables", type: String },
+            { description: "Point-in-time recovery: replay CDC up to an ISO time (restore)", name: "to", type: String },
             { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
             { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
             { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
@@ -718,8 +720,9 @@ Commands:
           [--tables <t1,t2,...>] [--prod] [--url <url>] [--token <t>]
   import <path> [--table <n>]   Bulk-insert NDJSON rows via the admin endpoint
           [--batch-size <n>] [--prod] [--url <url>] [--token <t>]
-  backup create|list           Managed snapshot backups (export/import based)
-         | restore <id|file>   [--dir <d>] [--tables <t1,t2>] [--prod] [--url <url>] [--token <t>]
+  backup create|list           Managed snapshot backups (export/import based);
+         | restore <id|file>   restore --to <iso-time> replays CDC for point-in-time recovery
+         [--to <time>]         [--dir <d>] [--tables <t1,t2>] [--prod] [--url <url>] [--token <t>]
   reset [--all] [--yes]         Clear local Miniflare state (and .cirrus-cache with --all)
   verify                        Validate wrangler.jsonc + run codegen in dry-run mode
   info [--json]                 Print resolved project config (packages, wrangler, schema)

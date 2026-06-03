@@ -152,3 +152,132 @@ describe("cirrus backup", () => {
         expect(result.code).toBe(1);
     });
 });
+
+describe("cirrus backup restore --to (point-in-time recovery)", () => {
+    it("imports the snapshot then replays the CDC feed up to the target time", async () => {
+        expect.assertions(4);
+
+        const { logger } = capturingLogger();
+
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        const applyBodies: { batches: { changes: unknown[]; shardKey: string }[] }[] = [];
+        let syncCalls = 0;
+
+        const fetchImpl: StreamingFetchLike = async (url, init) => {
+            if (url.endsWith("/_cirrus/admin/import")) {
+                return {
+                    body: null,
+                    json: async () => {
+                        return { inserted: { users: 1 } };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            }
+
+            if (url.endsWith("/_cirrus/admin/sync")) {
+                syncCalls += 1;
+                // First page has changes (ts below the target); second page is
+                // drained (cursor unchanged) so replay stops.
+                const page =
+                    syncCalls === 1
+                        ? {
+                              shards: [
+                                  {
+                                      changes: [
+                                          { id: "a", ts: 100 },
+                                          { id: "b", ts: 100 },
+                                      ],
+                                      cursor: 2,
+                                      shardKey: "c1",
+                                  },
+                              ],
+                          }
+                        : { shards: [{ changes: [], cursor: 2, shardKey: "c1" }] };
+
+                return { body: null, json: async () => page, ok: true, status: 200, text: async () => "" };
+            }
+
+            // /_cirrus/admin/apply
+            applyBodies.push(JSON.parse(init?.body ?? "{}"));
+
+            return {
+                body: null,
+                json: async () => {
+                    return { applied: 2 };
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        };
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl,
+            logger,
+            subcommand: "restore",
+            target: created.entry?.id,
+            to: "2026-06-03T12:00:00.000Z",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(0);
+        // One apply call carrying the one shard's two fresh changes.
+        expect(applyBodies).toHaveLength(1);
+        expect(applyBodies[0]?.batches[0]?.shardKey).toBe("c1");
+        expect(applyBodies[0]?.batches[0]?.changes).toHaveLength(2);
+    });
+
+    it("rejects an invalid --to timestamp", async () => {
+        expect.assertions(1);
+
+        const { logger } = capturingLogger();
+
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        const importOnly: StreamingFetchLike = async () => {
+            return {
+                body: null,
+                json: async () => {
+                    return { inserted: { users: 1 } };
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        };
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: importOnly,
+            logger,
+            subcommand: "restore",
+            target: created.entry?.id,
+            to: "not-a-date",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+    });
+});
