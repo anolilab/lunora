@@ -1521,9 +1521,16 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
         for (const index of indexes) {
             // Skip when the user hasn't materialized the counter companion
-            // table — the SCAN fallback still answers correctly.
-            // eslint-disable-next-line no-await-in-loop -- counter steps run sequentially on the single shared D1 connection so the -prev/+next writes don't interleave across indexes.
-            const exists = await counterTableExists(tableName, index.name);
+            // table — the SCAN fallback still answers correctly. The pre-write
+            // `ensureBackfilledForTable` hook always runs immediately before
+            // this sync (see insert/patch/replace/delete), populating
+            // `backfilled` with the authoritative existence answer under the
+            // same cache key. Read that instead of re-probing `sqlite_master`
+            // on the hot path; fall back to a fresh probe only on a Map miss.
+            const cacheKey = `${tableName}::${index.name}`;
+            const cached = backfilled.get(cacheKey);
+            // eslint-disable-next-line no-await-in-loop -- probe runs only on a cache miss, sequentially on the single shared D1 connection so the -prev/+next writes don't interleave across indexes.
+            const exists = cached ?? (await counterTableExists(tableName, index.name));
 
             if (!exists) {
                 continue;
@@ -1645,8 +1652,15 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         }
 
         for (const index of indexes) {
-            // eslint-disable-next-line no-await-in-loop -- rank syncs run sequentially on the single shared D1 connection so DELETE/INSERT pairs don't interleave across indexes.
-            const exists = await rankTableExists(tableName, index.name);
+            // The pre-write `ensureRankBackfilledForTable` hook always runs
+            // immediately before this sync, populating `rankBackfilled` with
+            // the authoritative existence answer under the same cache key.
+            // Read that instead of re-probing `sqlite_master` on the hot path;
+            // fall back to a fresh probe only on a Map miss.
+            const cacheKey = `${tableName}::rank::${index.name}`;
+            const cached = rankBackfilled.get(cacheKey);
+            // eslint-disable-next-line no-await-in-loop -- probe runs only on a cache miss, sequentially on the single shared D1 connection so DELETE/INSERT pairs don't interleave across indexes.
+            const exists = cached ?? (await rankTableExists(tableName, index.name));
 
             if (!exists) {
                 continue;
