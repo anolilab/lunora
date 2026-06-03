@@ -544,11 +544,11 @@ describe("orchestrateRank", () => {
         const result = await coordinator.orchestrateRank(spy.namespace, rankRequest());
 
         expect(spy.calls).toHaveLength(0);
-        expect(result).toEqual({ failed: 0, ok: 0, position: 1, shards: [], total: 0 });
+        expect(result).toEqual({ failed: 0, ok: 0, partial: false, position: 1, shards: [], total: 0 });
     });
 
     it("a failed shard surfaces as an error and only contributes the reachable shards' counts", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const registry = createStaticShardRegistry({ scores: ["a", "b"] });
         const coordinator = createQueryCoordinator({ registry });
@@ -559,6 +559,8 @@ describe("orchestrateRank", () => {
 
         expect(result.ok).toBe(1);
         expect(result.failed).toBe(1);
+        // A failed shard makes the rank an under-count — surfaced via `partial`.
+        expect(result.partial).toBe(true);
         // Only shard "a" counted: Σbefore = 3 → position 4; Σtotal = 4.
         expect(result.position).toBe(4);
         expect(result.total).toBe(4);

@@ -275,6 +275,8 @@ interface RankFanOutResult {
     failed: number;
     /** Shards that returned a 2xx `{before, total}`. */
     ok: number;
+    /** `true` when at least one shard failed/timed out, so `position`/`total` are under-counts (failed shards' rows missing). A caller needing an exact global rank should treat this as an error, not trust the numbers. */
+    partial: boolean;
     /** 1-based global position within the partition (`Σbefore + 1`). */
     position: number;
     /** Per-shard outcomes, in registry order. */
@@ -500,7 +502,7 @@ const rollUpRank = (results: ReadonlyArray<ShardRpcOutcome>): RankFanOutResult =
         shards.push({ result: counts, shardKey: result.shardKey });
     }
 
-    return { failed, ok, position: before + 1, shards, total };
+    return { failed, ok, partial: failed > 0, position: before + 1, shards, total };
 };
 
 /**
@@ -870,6 +872,12 @@ interface RankMergeResult {
  * position; summing the per-shard partition totals gives the global partition
  * size. Non-`{before,total}` / failed payloads contribute nothing (a failed
  * shard already surfaced through `errors[]`).
+ *
+ * NOTE: this reads `before`/`total` off the RAW per-shard value — the generic
+ * `fanOut` contract, where shards return bare query results. The admin
+ * `__cirrus_admin__:rankBefore` op wraps its payload in `{result}`, so
+ * `orchestrateRank`/`rollUpRank` (not this) is the path for that op; it
+ * `unwrapResult`s first. Don't point a `{kind:"rank"}` `fanOut` at the admin op.
  */
 const mergeRank = (values: ReadonlyArray<unknown>): RankMergeResult => {
     let before = 0;
