@@ -16,6 +16,8 @@ export {
     selectExportTables,
     validateImportRow,
 } from "./admin-export-import.js";
+export type { AggregateTally } from "./aggregate-tally.js";
+export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally.js";
 export type {
     AggregateIndexDefinitionLike,
     AggregateOp,
@@ -81,6 +83,7 @@ export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache.js";
 export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache.js";
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations.js";
 export { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
+export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text.js";
 export type { SessionRecord } from "./session-do.js";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
 export type {

@@ -29,6 +29,8 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @cirrus/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
+import type { AggregateTally } from "./aggregate-tally.js";
+import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally.js";
 import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates.js";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates.js";
 import { SCAN_DEP } from "./dependency-tracker.js";
@@ -40,6 +42,7 @@ import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableNam
 import type { ReactiveCache } from "./reactive-cache.js";
 import type { RelationDefinitionLike } from "./relations.js";
 import { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
+import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text.js";
 import serializeSqlValue from "./serialize-sql.js";
 import { ConflictError } from "./transaction.js";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
@@ -352,19 +355,6 @@ interface DatabaseWriterLike {
 const DOC_COLUMN = "__doc__";
 
 /**
- * Name of the counter table backing an `aggregateIndex` decl. Kept distinct
- * from any user table (`__agg_` infix is reserved) so `runShardMigrations` can
- * create it alongside the document table without collision. The schema is a
- * `__key__` column (the canonical JSON-encoded `by`-tuple), a floating
- * `__value__` column (op-aware: the count, running sum, or stored extreme —
- * `NULL` for an empty min/max group), and a `__count__` integer (rows in the
- * group, used as `avg`'s divisor and for empty-group / extreme-recompute
- * detection). We keep `__value__` as REAL so the one physical shape carries
- * count/sum/min/max/avg.
- */
-const aggregateTableName = (table: string, indexName: string): string => `${table}__agg_${indexName}`;
-
-/**
  * Encode an array of cursor values as a base64 JSON string. Matches the
  * format `decodeCursor` (`query-args.ts`) round-trips, so rank-page cursors
  * decode through the same helper as the keyset cursors that drive
@@ -415,110 +405,6 @@ const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record
     return true;
 };
 
-/**
- * Coerce a doc field to the numeric value a reducer contributes, or `undefined`
- * when the value isn't numeric. Mirrors how the SQL scan path treats `SUM`/
- * `AVG`/`MIN`/`MAX` over `json_extract` — a `null`/non-numeric field is skipped
- * (it neither shifts the running value nor counts toward `avg`'s divisor), so
- * the maintained companion matches the scan answer for the typical
- * always-numeric column and degrades the same way for a stray non-number.
- */
-const coerceAggregateNumber = (value: unknown): number | undefined => {
-    if (typeof value === "number") {
-        return Number.isFinite(value) ? value : undefined;
-    }
-
-    return undefined;
-};
-
-/** A backfill accumulator for one companion group: the op-aware value + row count. */
-interface AggregateTally {
-    count: number;
-    value: null | number;
-}
-
-/**
- * Fold one source row into the per-group {@link AggregateTally} during a
- * backfill scan, op-aware so the seeded `__value__`/`__count__` match what the
- * incremental `applyAggregateDelta` maintains:
- *
- * - **count**: value = count = row tally.
- * - **sum/avg**: value = running sum of numeric `field`s, count = numeric-row tally.
- * - **min/max**: value = extreme of numeric `field`s (`null` until one appears), count = row tally (so an all-non-numeric group still reads as non-empty).
- *
- * The caller pre-filters rows through the index's static `where`.
- */
-const foldAggregateTally = (
-    tallies: Map<string, AggregateTally>,
-    encoded: string,
-    index: AggregateIndexDefinitionLike,
-    record: Record<string, unknown>,
-): void => {
-    // eslint-disable-next-line unicorn/no-null -- empty group's running value seeds as null; the count op overwrites it below
-    const tally = tallies.get(encoded) ?? { count: 0, value: null };
-
-    if (index.op === "count") {
-        tally.count += 1;
-        tally.value = tally.count;
-        tallies.set(encoded, tally);
-
-        return;
-    }
-
-    const numeric = coerceAggregateNumber(record[index.field ?? ""]);
-
-    if (index.op === "sum" || index.op === "avg") {
-        if (numeric !== undefined) {
-            tally.value = (tally.value ?? 0) + numeric;
-            tally.count += 1;
-        }
-
-        tallies.set(encoded, tally);
-
-        return;
-    }
-
-    // min/max: every row counts toward the group; only numeric ones move the extreme.
-    tally.count += 1;
-
-    if (numeric !== undefined) {
-        if (tally.value === null) {
-            tally.value = numeric;
-        } else {
-            tally.value = index.op === "min" ? Math.min(tally.value, numeric) : Math.max(tally.value, numeric);
-        }
-    }
-
-    tallies.set(encoded, tally);
-};
-
-/**
- * Project a maintained companion row onto the scalar an `aggregate()` reader
- * returns for `op`. Mirrors the SQL scan's empty-group contract: an absent /
- * empty group is `null`; `avg` divides the running sum by the row count (`null`
- * when the divisor is 0); `sum`/`min`/`max` return `__value__` verbatim
- * (`min`/`max` already store `NULL` for an empty group).
- */
-const readAggregateValue = (op: string, row: { count: number; value: null | number } | undefined): null | number => {
-    if (op === "count") {
-        // count keeps its pre-reducer-aware contract: `__value__` is the count,
-        // an absent / emptied group reads as 0 (not null).
-        return row?.value ?? 0;
-    }
-
-    if (!row || row.count === 0) {
-        // eslint-disable-next-line unicorn/no-null -- AggregateResult is `null | number`: null is the documented "no rows matched" result
-        return null;
-    }
-
-    if (op === "avg") {
-        // eslint-disable-next-line unicorn/no-null -- guarded above, but keep the empty-divisor branch explicit for the type narrowing
-        return row.value === null ? null : row.value / row.count;
-    }
-
-    return row.value;
-};
-
 /** Marker keys distinguishing a restrictable-query option set from a bare `WhereInput` tree. */
 const COUNT_OPTION_KEYS = new Set(["baseWhere", "restrictsCounts", "where"]);
 
@@ -549,36 +435,6 @@ const normalizeCountArgument = (argument: RestrictableQueryOptions | undefined |
     }
 
     return { where: argument as WhereInput };
-};
-
-/** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
-const compareStrings = (a: string, b: string): number => {
-    if (a < b) {
-        return -1;
-    }
-
-    return a > b ? 1 : 0;
-};
-
-/**
- * Encode a `by`-key tuple into a stable string. We use canonical-key JSON so
- * the same `{ a: 1, b: 2 }` lookup never misses for an insert that stored it
- * as `{ b: 2, a: 1 }`. Empty `by` (whole-table aggregate) keys on the empty
- * string.
- */
-const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, unknown>): string => {
-    if (by.length === 0) {
-        return "";
-    }
-
-    const ordered: Record<string, unknown> = {};
-
-    for (const field of [...by].toSorted(compareStrings)) {
-        // eslint-disable-next-line unicorn/no-null -- canonical JSON aggregate key: a missing field must serialize as null (stable across runs), not be dropped by JSON.stringify
-        ordered[field] = source[field] ?? null;
-    }
-
-    return JSON.stringify(ordered);
 };
 
 /**
@@ -623,85 +479,6 @@ const jsonPath = (field: string): string => {
     }
 
     return `json_extract(${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
-};
-
-/**
- * Name of the FTS5 shadow table backing a search index. Kept distinct from any
- * user table (the `__fts_` infix is reserved) so `runShardMigrations` can create
- * it alongside the document table without collision.
- */
-const ftsTableName = (table: string, indexName: string): string => `${table}__fts_${indexName}`;
-
-/**
- * Split a search string into lowercased alphanumeric tokens. The Unicode
- * `\p{L}\p{N}` class guarantees tokens carry no SQL/FTS metacharacters, so they
- * need no escaping beyond the literal-phrase quoting {@link buildFtsMatch} adds.
- */
-const tokenizeSearch = (query: string): string[] => query.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-
-/**
- * Render tokens as an FTS5 MATCH expression: each token is a quoted literal
- * phrase (neutralizes reserved words), the final token gains a trailing `*` for
- * prefix matching (asterisk outside the quotes), and they AND together so every
- * token must be present — mirroring the fallback scorer's conjunction semantics.
- */
-const buildFtsMatch = (tokens: ReadonlyArray<string>): string =>
-    tokens.map((token, index) => (index === tokens.length - 1 ? `"${token}"*` : `"${token}"`)).join(" AND ");
-
-/** Coerce a search/filter field value to the text FTS indexes and the scorer scans. */
-const stringifySearchText = (value: unknown): string => {
-    if (typeof value === "string") {
-        return value;
-    }
-
-    if (value === null || value === undefined) {
-        return "";
-    }
-
-    if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-        return String(value);
-    }
-
-    // Objects/arrays (and any other non-primitive) are serialized as JSON so
-    // they contribute real text to the scan instead of `[object Object]`.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify is typed `=> string` but returns undefined for a function/symbol value; the ?? keeps the scan text a string at runtime
-    return JSON.stringify(value) ?? "";
-};
-
-/**
- * Score a document's indexed text against the query tokens with AND semantics:
- * every non-final token must appear exactly, the final token matches as a
- * prefix. Returns 0 (no match) unless all tokens are present; otherwise the sum
- * of occurrences, giving a coarse term-frequency relevance order for the
- * LIKE-scan fallback used when FTS5 is unavailable.
- */
-const scoreDocument = (text: string, tokens: ReadonlyArray<string>): number => {
-    const documentTokens = tokenizeSearch(text);
-
-    if (documentTokens.length === 0) {
-        return 0;
-    }
-
-    let score = 0;
-
-    for (const [index, token] of tokens.entries()) {
-        const isLast = index === tokens.length - 1;
-        let occurrences = 0;
-
-        for (const documentToken of documentTokens) {
-            if (isLast ? documentToken.startsWith(token) : documentToken === token) {
-                occurrences += 1;
-            }
-        }
-
-        if (occurrences === 0) {
-            return 0;
-        }
-
-        score += occurrences;
-    }
-
-    return score;
 };
 
 /**
