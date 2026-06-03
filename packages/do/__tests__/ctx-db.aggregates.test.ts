@@ -344,6 +344,27 @@ describe("ctx-db aggregates", () => {
 
             expect(tally).toEqual({ p1: 3, p2: 4 });
         });
+
+        it("drops a group from the indexed groupBy once it empties (matches SQL GROUP BY)", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter(makeSchema(byProject, sumSeqByProject));
+
+            await seed(writer);
+            await writer.delete("t4"); // p2's only row → the group empties
+
+            // Force the indexed walk: with the source table gone, only the
+            // companion can answer — so a surviving phantom row would show up.
+            harness.raw(`DELETE FROM "todos"`);
+
+            const counts = await writer.groupBy("todos", { by: ["projectId"] });
+
+            expect(counts.map((g) => g.key["projectId"])).toEqual(["p1"]);
+
+            const sums = await writer.groupBy("todos", { agg: { field: "seq", op: "sum" }, by: ["projectId"] });
+
+            expect(sums.map((g) => g.key["projectId"])).toEqual(["p1"]);
+        });
     });
 
     describe("reducer-aware aggregate indexes", () => {
@@ -524,6 +545,24 @@ describe("ctx-db aggregates", () => {
                 await writer.delete("t4"); // p2's only row
 
                 await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p2" } })).resolves.toBeNull();
+            });
+
+            it("moves the extreme between groups when a patch changes the `by`-key", async () => {
+                expect.assertions(4);
+
+                const writer = setupWriter(makeSchema(minSeqByProject, maxSeqByProject));
+
+                await seed(writer);
+
+                // t5 carries p1's min (seq 0); move it to p2. p1's min must
+                // recompute (the stored extreme left), and p2 must seed the new
+                // value — exercising recompute-on-old + seed-on-new across groups.
+                await writer.patch("t5", { projectId: "p2" });
+
+                await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(1);
+                await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(3);
+                await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p2" } })).resolves.toBe(0);
+                await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p2" } })).resolves.toBe(4);
             });
         });
 

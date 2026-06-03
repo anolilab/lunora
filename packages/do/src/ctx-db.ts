@@ -40,6 +40,7 @@ import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableNam
 import type { ReactiveCache } from "./reactive-cache.js";
 import type { RelationDefinitionLike } from "./relations.js";
 import { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
+import serializeSqlValue from "./serialize-sql.js";
 import { ConflictError } from "./transaction.js";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 import { hasTrigger, runTriggers } from "./triggers.js";
@@ -855,22 +856,6 @@ const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilt
     return builder;
 };
 
-const serializeSqlValue = (value: unknown): unknown => {
-    if (typeof value === "boolean") {
-        return value ? 1 : 0;
-    }
-
-    if (value === null || typeof value === "string" || typeof value === "number") {
-        return value;
-    }
-
-    if (typeof value === "bigint") {
-        return value.toString();
-    }
-
-    return JSON.stringify(value);
-};
-
 /**
  * Run a search via the FTS5 shadow table: MATCH the query against the indexed
  * text column, JOIN back to the document table on the stored id, narrow by any
@@ -1665,6 +1650,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const { op } = index;
         const field = index.field ?? "";
 
+        // Drop a companion row once its group is empty (`__count__` hit 0) so the
+        // indexed groupBy walk matches SQL `GROUP BY`, which omits empty groups —
+        // a left-behind zeroed/NULL row would surface as a phantom group.
+        const pruneIfEmpty = (encodedKey: string): void => {
+            runSql(sql, `DELETE FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ? AND "__count__" <= 0`, encodedKey);
+        };
+
         const removes = previous && (!index.where || matchesStaticWhere(previous, index.where)) ? previous : undefined;
         const adds = next && (!index.where || matchesStaticWhere(next, index.where)) ? next : undefined;
 
@@ -1692,6 +1684,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     delta,
                     delta,
                 );
+            }
+
+            if (removes) {
+                pruneIfEmpty(encodeAggregateKey(index.by ?? [], removes));
             }
 
             return;
@@ -1724,6 +1720,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 );
             }
 
+            if (removes) {
+                pruneIfEmpty(encodeAggregateKey(index.by ?? [], removes));
+            }
+
             return;
         }
 
@@ -1740,9 +1740,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const remainingCount = (existing?.count ?? 0) - 1;
 
             if (remainingCount <= 0) {
-                // Group emptied — clear the extreme so a future add seeds afresh.
-                // eslint-disable-next-line unicorn/no-null -- empty min/max group stores NULL value
-                runSql(sql, `UPDATE ${quoteIdentifier(aggTable)} SET "__value__" = ?, "__count__" = 0 WHERE "__key__" = ?`, null, encoded);
+                // Group emptied — drop the companion row so the indexed groupBy
+                // walk matches SQL `GROUP BY` (which omits empty groups).
+                runSql(sql, `DELETE FROM ${quoteIdentifier(aggTable)} WHERE "__key__" = ?`, encoded);
             } else if (existing && removedValue !== undefined && existing.value !== null && removedValue === existing.value) {
                 // The departing row carried the stored extreme, so we can't keep
                 // it without looking — recompute the group's extreme from the

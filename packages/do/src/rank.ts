@@ -36,6 +36,7 @@
  */
 
 import type { RestrictableQueryOptions } from "./aggregates.js";
+import serializeSqlValue from "./serialize-sql.js";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
 const compareStrings = (a: string, b: string): number => {
@@ -112,15 +113,18 @@ interface RankOptions extends RestrictableQueryOptions {
  * Args for the cross-shard `rankBefore()` primitive. Unlike `rank()`, the key
  * is supplied explicitly (built off the row doc via `rankKeyFromDocument`) so
  * a PEER shard — one that doesn't store the row being ranked — can still count
- * its local rows strictly-before that key. The restrictable half carries the
- * same RLS seam as `rank()`/`count()`.
+ * its local rows strictly-before that key. Scope is fixed by the explicit
+ * `partitionKey`; unlike `rank()` there is no `where`/`baseWhere` (the caller
+ * pins the partition up front), only the `restrictsCounts` RLS seam.
  */
-interface RankBeforeOptions extends RestrictableQueryOptions {
+interface RankBeforeOptions {
     /** Canonical-JSON partition tuple — `encodePartitionKey(index.partitionBy, doc)`. */
     partitionKey: string;
+    /** Mirrors `rank()`/`count()`: a restricted ctx can't be trusted for a strict-before count. */
+    restrictsCounts?: boolean;
     /** The `__id__` tiebreak value — `doc._id`. */
     rowId: string;
-    /** Raw (un-serialized) sort-key values in `index.sortBy` order — `doc[sortBy[i].field]`. */
+    /** Sort-key values in `index.sortBy` order. `rankKeyFromDocument` serializes them to the stored `__sort_k&lt;i>__` form; `rankBefore` re-applies `serializeSqlValue` idempotently, so raw values from a direct caller work too. */
     sortValues: ReadonlyArray<unknown>;
 }
 
@@ -277,7 +281,14 @@ const rankKeyFromDocument = (
     return {
         partitionKey: encodePartitionKey(index.partitionBy ?? [], document_),
         rowId: document_["_id"] as string,
-        sortValues: index.sortBy.map((key) => document_[key.field]),
+        // Serialize each sort value the same way `syncRankIndexEntry` writes the
+        // stored `__sort_k<i>__` column, so a peer shard's comparison matches
+        // byte-for-byte. This also makes the values JSON-safe for the
+        // cross-shard RPC wire — `serializeSqlValue` turns bigint/Date/object
+        // into a string|number|null, where raw bigint would crash JSON.stringify
+        // and a raw Date would serialize to a different shape than the store.
+        // eslint-disable-next-line unicorn/no-null -- mirrors syncRankIndexEntry: a missing field serializes via `?? null` so the stored and wire bytes agree
+        sortValues: index.sortBy.map((key) => serializeSqlValue(document_[key.field] ?? null)),
     };
 };
 
