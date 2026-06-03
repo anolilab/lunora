@@ -264,7 +264,7 @@ interface RankFanOutRequest {
     partitionKey: string;
     /** The `__id__` tiebreak value — `doc._id`. */
     rowId: string;
-    /** Raw sort-key values in `index.sortBy` order — `doc[sortBy[i].field]`. */
+    /** Serialized sort-key values in `index.sortBy` order, as produced by `rankKeyFromDoc` (wire-safe + byte-matching the stored columns). */
     sortValues: ReadonlyArray<unknown>;
     /** Table whose live shard keys the rank fans out across. */
     table: string;
