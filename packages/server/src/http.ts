@@ -208,7 +208,11 @@ const coerceScalar = (kind: ValidatorKind, raw: string): unknown => {
             return raw;
         }
         case "number": {
-            return Number(raw);
+            // `Number("")` is `0`, so an empty-but-present numeric param
+            // (`?limit=`) would silently satisfy `v.number()` as 0. Map the
+            // empty string to NaN so the validator rejects it like any other
+            // malformed value rather than coercing to a surprising 0.
+            return raw === "" ? Number.NaN : Number(raw);
         }
         default: {
             return raw;
@@ -459,14 +463,31 @@ const buildStreamHandler =
         const encoder = new TextEncoder();
         const ac = new AbortController();
 
-        request.signal.addEventListener("abort", () => {
+        // Already disconnected before we even started — return a closed stream
+        // and never construct the pump or run the user handler.
+        if (request.signal.aborted) {
             ac.abort();
-        });
+
+            return new Response(new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }), {
+                headers: {
+                    "cache-control": "no-cache, no-transform",
+                    "content-type": "text/event-stream; charset=utf-8",
+                    "x-accel-buffering": "no",
+                },
+            });
+        }
+
+        const onAbort = (): void => {
+            ac.abort();
+        };
+
+        request.signal.addEventListener("abort", onAbort, { once: true });
 
         const stream = new ReadableStream<Uint8Array>({
             cancel() {
                 // The downstream consumer dropped the stream — propagate the
                 // cancel to the user iterator so any in-flight work bails out.
+                request.signal.removeEventListener("abort", onAbort);
                 ac.abort();
             },
             async start(controller) {
@@ -500,6 +521,7 @@ const buildStreamHandler =
 
                     controller.enqueue(encoder.encode(sseFrame(payload, "error")));
                 } finally {
+                    request.signal.removeEventListener("abort", onAbort);
                     controller.close();
                 }
             },

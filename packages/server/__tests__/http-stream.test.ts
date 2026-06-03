@@ -103,6 +103,28 @@ describe("httpRoute stream() terminal", () => {
         expect(error?.data).toMatchObject({ code: "FORBIDDEN", message: "nope" });
     });
 
+    it("short-circuits a pre-aborted request without running the user handler", async () => {
+        expect.assertions(2);
+
+        let started = false;
+        const route = httpRoute.get("/api/ticks").stream(async function* ticksGen() {
+            started = true;
+            yield { tick: 1 };
+        });
+
+        const ac = new AbortController();
+
+        ac.abort();
+
+        const request = new Request("https://x/api/ticks", { signal: ac.signal });
+        const response = await dispatch(route, "GET", "/api/ticks", request);
+        const { events } = await readSse(response);
+
+        // The handler is never constructed/driven, so the stream closes empty.
+        expect(started).toBe(false);
+        expect(events).toEqual([]);
+    });
+
     it("returns 400 when search-param decoding fails (rejection happens before the stream starts)", async () => {
         expect.assertions(1);
 
