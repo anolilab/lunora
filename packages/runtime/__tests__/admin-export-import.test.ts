@@ -565,3 +565,89 @@ describe("import streaming — large body", () => {
         expect(lineCount).toBe(10_000);
     });
 });
+
+describe("admin sync (CDC streaming export)", () => {
+    it("returns per-shard pages plus the global page and forwards the cursor map", async () => {
+        expect.assertions(4);
+
+        const orchestrateCdcSync = vi.fn(async (_namespace: unknown, _request: { cursors?: Record<string, number> }) => {
+            return {
+                failed: 0,
+                ok: 1,
+                shards: [{ changes: [{ id: "m1", op: "insert", seq: 5 }], cursor: 5, shardKey: "c1" }],
+            };
+        });
+        const syncGlobals = vi.fn(async () => {
+            return { changes: [{ id: "u1", op: "insert", seq: 2 }], cursor: 2 };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync,
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+            syncGlobals,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/sync", {
+                body: JSON.stringify({ cursors: { c1: 4 }, globalCursor: 1, tables: ["messages"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ global: { cursor: number }; shards: { cursor: number; shardKey: string }[] }>();
+
+        expect(body.shards[0]).toMatchObject({ cursor: 5, shardKey: "c1" });
+        expect(body.global.cursor).toBe(2);
+        // The caller's per-shard cursor map reaches the coordinator verbatim.
+        expect(orchestrateCdcSync.mock.calls[0]?.[1]).toMatchObject({ cursors: { c1: 4 } });
+    });
+
+    it("omits the global page when syncGlobals is not configured", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateCdcSync: async () => {
+                    return { failed: 0, ok: 0, shards: [] };
+                },
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/sync", {
+                body: JSON.stringify({}),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const body = await response.json<{ global?: unknown }>();
+
+        expect(response.status).toBe(200);
+        expect(body.global).toBeUndefined();
+    });
+});

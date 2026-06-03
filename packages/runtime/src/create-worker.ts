@@ -108,6 +108,13 @@ type AdminTableResolver = (table: string) => ShardingInfo | undefined;
  */
 type GlobalExportFunction = (request: { tables: ReadonlyArray<string> }) => AsyncIterable<{ doc: Record<string, unknown>; table: string }>;
 
+/**
+ * Read a page of the `.global()` (D1) change-data-capture log past `sinceSeq`
+ * for the admin sync endpoint. Wire it to `@cirrus/d1`'s `readD1CdcChanges`.
+ * When omitted, the sync endpoint returns only shard-local changes.
+ */
+type GlobalCdcSyncFunction = (request: { limit?: number; sinceSeq: number }) => Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }>;
+
 /** Bulk import of `.global()` rows. Returns insert counts + errors merged across tables. */
 type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; startLine?: number }) => Promise<{
     conflicts: number;
@@ -396,6 +403,7 @@ interface WorkerOptions {
      * `instanceName` passed to `createScheduler` (both default to `default`).
      */
     schedulerInstanceName?: string;
+
     /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
     shardDO: ShardNamespaceLike;
 
@@ -407,6 +415,12 @@ interface WorkerOptions {
      * responds `STORAGE_NOT_CONFIGURED`.
      */
     storageList?: StorageListFunction;
+
+    /**
+     * Page the `.global()` (D1) change-data-capture log for the admin sync
+     * endpoint. When omitted, the sync feed covers only shard-local tables.
+     */
+    syncGlobals?: GlobalCdcSyncFunction;
 }
 
 interface RpcContext {
@@ -482,6 +496,7 @@ const MIGRATE_PATH = "/_cirrus/migrate";
 const SCHEDULER_DISPATCH_PATH = "/_cirrus/scheduler/dispatch";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
+const SYNC_PATH = "/_cirrus/admin/sync";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
@@ -1352,6 +1367,53 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         return new Response(stream, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
     };
 
+    /**
+     * Streaming-export feed (Fivetran/Airbyte-style). The caller posts a
+     * per-shard cursor map (`{ cursors: { shardKey: seq }, globalCursor }`) and
+     * gets back each shard's change page plus its new cursor, and the global
+     * (D1) page when `syncGlobals` is configured. Stateless: the consumer owns
+     * the cursors and re-posts them to resume, so the worker holds no offsets.
+     */
+    const handleCdcSync = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const coordinator = options.queryCoordinator;
+
+        if (!coordinator) {
+            throw new CirrusError("Sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const raw = (await request.json().catch(() => {
+            return {};
+        })) as Record<string, unknown>;
+        const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
+        const limit = typeof raw["limit"] === "number" ? raw["limit"] : undefined;
+        const globalCursor = typeof raw["globalCursor"] === "number" ? raw["globalCursor"] : 0;
+        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        // Shard discovery mirrors export: explicit tables, else every known table.
+        const probeTables = requestedTables ?? collectKnownTables(options.resolveTableSharding);
+
+        const shardResult = await coordinator.orchestrateCdcSync(options.shardDO, {
+            cursors,
+            headers: forwardedHeaders,
+            limit,
+            tables: probeTables,
+        });
+
+        const global = options.syncGlobals ? await options.syncGlobals({ limit, sinceSeq: globalCursor }) : undefined;
+
+        return Response.json({ global, shards: shardResult.shards }, { status: 200 });
+    };
+
     const handleImport = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
             throw new CirrusError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -1863,6 +1925,7 @@ const createWorker = (options: WorkerOptions): { fetch: (request: Request, env: 
         [MIGRATE_PATH]: (request, env) => handleMigrate(request, env),
         [EXPORT_PATH]: (request, env) => handleExport(request, env),
         [IMPORT_PATH]: (request, env) => handleImport(request, env),
+        [SYNC_PATH]: (request, env) => handleCdcSync(request, env),
         [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
         [SCHEDULED_PATH]: (request) => handleScheduledList(request),
