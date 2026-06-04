@@ -217,4 +217,65 @@ describe("createStorage", () => {
         expect(url.searchParams.get("sig")).toMatch(/^[\w-]+$/);
         expect(Number(url.searchParams.get("exp"))).toBeGreaterThan(Math.floor(Date.now() / 1000));
     });
+
+    it("generateUploadUrl() mints a PUT URL pinning the content-type", async () => {
+        expect.assertions(3);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket, publicBaseUrl: "https://cdn.test", signingSecret: "shh" });
+
+        const url = new URL(await storage.generateUploadUrl("uploads/x.png", { contentType: "image/png", expiresInSeconds: 60 }));
+
+        expect(url.searchParams.get("method")).toBe("PUT");
+        expect(url.searchParams.get("ct")).toBe("image/png");
+        expect(url.searchParams.get("sig")).toMatch(/^[\w-]+$/);
+    });
+
+    it("store() forwards to upload() with the content-type", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        const result = await storage.store("docs/readme.txt", new ArrayBuffer(4), { contentType: "text/plain" });
+
+        expect(result).toEqual({ etag: "etag-new", key: "docs/readme.txt" });
+        expect(bucket.puts[0]?.options).toMatchObject({ httpMetadata: { contentType: "text/plain" } });
+    });
+
+    it("download()/list() surface a hex sha256 from R2 checksums", async () => {
+        expect.assertions(3);
+
+        // 0x01,0x02,0x03,0xff -> "010203ff"
+        const checksum = new Uint8Array([1, 2, 3, 255]).buffer;
+        const bucket = fakeBucket();
+
+        vi.spyOn(bucket, "get").mockImplementation(
+            async (key) =>
+                ({
+                    arrayBuffer: async () => new ArrayBuffer(0),
+                    body: null,
+                    checksums: { sha256: checksum },
+                    etag: "etag-1",
+                    httpMetadata: { contentType: "text/plain" },
+                    key,
+                    size: 4,
+                    text: async () => "ok",
+                }) satisfies R2ObjectBodyLike,
+        );
+        vi.spyOn(bucket, "list").mockImplementation(async () => {
+            return { objects: [{ checksums: { sha256: checksum }, etag: "e", key: "a", size: 4 }] };
+        });
+
+        const storage = createStorage({ bucket });
+
+        const object = await storage.download("uploads/x.png");
+
+        expect(object?.sha256).toBe("010203ff");
+        expect(object?.etag).toBe("etag-1");
+
+        const listed = await storage.list();
+
+        expect(listed.objects[0]?.sha256).toBe("010203ff");
+    });
 });

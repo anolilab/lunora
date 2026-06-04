@@ -105,6 +105,49 @@ describe("signedUrl", () => {
         expect(result.method).toBe("PUT");
     });
 
+    it("pins contentType into a PUT signature and round-trips it", async () => {
+        expect.assertions(4);
+
+        const url = await buildSignedUrl({
+            baseUrl: "https://cdn.test",
+            contentType: "image/png",
+            expiresInSeconds: 60,
+            key: "uploads/x.png",
+            method: "PUT",
+            secret: "shh",
+        });
+
+        expect(new URL(url).searchParams.get("ct")).toBe("image/png");
+
+        const result = await verifySignedUrl(url, "shh");
+
+        expect(result.valid).toBe(true);
+        expect(result.contentType).toBe("image/png");
+
+        // Tampering with the pinned content-type breaks the signature.
+        const tampered = new URL(url);
+
+        tampered.searchParams.set("ct", "text/html");
+
+        await expect(verifySignedUrl(tampered.toString(), "shh")).resolves.toMatchObject({ valid: false });
+    });
+
+    it("ignores contentType for GET URLs (no body to pin)", async () => {
+        expect.assertions(2);
+
+        const url = await buildSignedUrl({
+            baseUrl: "https://cdn.test",
+            contentType: "image/png",
+            expiresInSeconds: 60,
+            key: "x.png",
+            method: "GET",
+            secret: "shh",
+        });
+
+        expect(new URL(url).searchParams.has("ct")).toBe(false);
+        await expect(verifySignedUrl(url, "shh")).resolves.toMatchObject({ valid: true });
+    });
+
     it("returns malformed for an unsupported method", async () => {
         expect.assertions(2);
 

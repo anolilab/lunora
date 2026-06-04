@@ -10,6 +10,36 @@ const MAX_LIST_LIMIT = 1000;
 /** Default page size for `list()` — chosen to bound a default call's response shape. */
 const DEFAULT_LIST_LIMIT = 100;
 
+/** Lowercase hex-encode an `ArrayBuffer` (used to surface R2's sha256 checksum). */
+const toHex = (buffer: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buffer);
+    let out = "";
+
+    for (const byte of bytes) {
+        out += byte.toString(16).padStart(2, "0");
+    }
+
+    return out;
+};
+
+/**
+ * Surface R2's SHA-256 checksum as a hex `sha256` field on the object metadata.
+ * Mutates the object in place (rather than spreading) because a real
+ * `R2Object`/`R2ObjectBody` carries methods like `arrayBuffer()`/`body` on its
+ * prototype — a shallow `{ ...object }` copy would drop them. A no-op when R2
+ * carries no checksum, so the field stays absent rather than `undefined`-valued.
+ */
+const withSha256 = <T extends R2ObjectLike>(object: T): T => {
+    const raw = object.checksums?.sha256;
+
+    if (raw !== undefined) {
+        // eslint-disable-next-line no-param-reassign -- intentional in-place set: a real R2Object/R2ObjectBody carries methods on its prototype that a `{ ...object }` copy would drop
+        object.sha256 = toHex(raw);
+    }
+
+    return object;
+};
+
 /** Trailing-slash trimmer for `publicBaseUrl` — a linear scan (no regex backtracking). */
 const trimTrailingSlashes = (value: string): string => {
     let end = value.length;
@@ -126,7 +156,11 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
     const download = async (key: string): Promise<R2ObjectBodyLike | null> => {
         validateKey(key);
 
-        return options.bucket.get(key);
+        const object = await options.bucket.get(key);
+
+        // `withSha256` is a no-op (and a pass-through) for a null result, so a
+        // single call covers both the hit and miss cases without a `null` literal.
+        return object && withSha256(object);
     };
 
     const deleteObject = async (key: string): Promise<void> => {
@@ -148,7 +182,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
 
         // Forward R2's `truncated` flag so callers can paginate with a clean
         // `while (truncated)` loop instead of inferring "more" from `cursor`.
-        return { cursor: result.cursor, objects: result.objects, truncated: result.truncated };
+        return { cursor: result.cursor, objects: result.objects.map((object) => withSha256(object)), truncated: result.truncated };
     };
 
     const getUrl = (key: string): string => {
@@ -183,6 +217,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
 
         return buildSignedUrl({
             baseUrl: options.publicBaseUrl,
+            contentType: signedOptions.contentType,
             expiresInSeconds: signedOptions.expiresInSeconds,
             key,
             method: signedOptions.method,
@@ -190,5 +225,17 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         });
     };
 
-    return { delete: deleteObject, download, getSignedUrl, getUrl, list, upload };
+    // Convex-compatible aliases over the primitives above. `generateUploadUrl`
+    // mints a signed PUT (optionally pinning the content-type into the
+    // signature); `store` is `upload` under Convex's name.
+    const generateUploadUrl = async (key: string, uploadUrlOptions: { contentType?: string; expiresInSeconds?: number } = {}): Promise<string> =>
+        getSignedUrl(key, { contentType: uploadUrlOptions.contentType, expiresInSeconds: uploadUrlOptions.expiresInSeconds, method: "PUT" });
+
+    const store = async (
+        key: string,
+        body: ReadableStream | ArrayBuffer | Blob,
+        storeOptions: { contentType?: string } = {},
+    ): Promise<{ etag: string; key: string }> => upload(key, body, { contentType: storeOptions.contentType });
+
+    return { delete: deleteObject, download, generateUploadUrl, getSignedUrl, getUrl, list, store, upload };
 };

@@ -53,7 +53,16 @@ const importHmacKey = async (secret: string): Promise<CryptoKey> => {
 
 // Host is lowercased so a signature minted for `Example.com` verifies against
 // `example.com` — DNS is case-insensitive, but the URL parser preserves case.
-const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: number): string => `${method}\n${host.toLowerCase()}\n${key}\n${String(exp)}`;
+//
+// `contentType` (a PUT-only pin) is appended as a fifth line only when present,
+// so a plain GET/PUT signature canonicalizes byte-for-byte the way it always
+// has — existing URLs (no `ct`) keep verifying. When present, the uploader's
+// request `Content-Type` is bound into the signature.
+const canonicalize = (method: "GET" | "PUT", host: string, key: string, exp: number, contentType?: string): string => {
+    const base = `${method}\n${host.toLowerCase()}\n${key}\n${String(exp)}`;
+
+    return contentType === undefined ? base : `${base}\n${contentType}`;
+};
 
 const extractHost = (input: string): string => {
     // Tolerate a bare host-or-base by trying URL first; fall back to splitting
@@ -101,10 +110,14 @@ export const buildSignedUrl = async (
         throw new Error(`@cirrus/storage: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
     }
 
+    // contentType is a PUT-only pin: a GET URL has no request body to constrain,
+    // so drop it for GET to keep GET canonicals unchanged.
+    const contentType = method === "PUT" ? args.contentType : undefined;
+
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const host = extractHost(args.baseUrl);
     const cryptoKey = await importHmacKey(args.secret);
-    const signature = await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(canonicalize(method, host, args.key, exp)));
+    const signature = await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(canonicalize(method, host, args.key, exp, contentType)));
     const sig = toBase64Url(new Uint8Array(signature));
 
     const base = args.baseUrl.endsWith("/") ? args.baseUrl.slice(0, -1) : args.baseUrl;
@@ -113,10 +126,14 @@ export const buildSignedUrl = async (
         .map((segment) => encodeURIComponent(segment))
         .join("/");
 
-    return `${base}/${safeKey}?exp=${String(exp)}&method=${method}&sig=${sig}`;
+    const ctParameter = contentType === undefined ? "" : `&ct=${encodeURIComponent(contentType)}`;
+
+    return `${base}/${safeKey}?exp=${String(exp)}&method=${method}&sig=${sig}${ctParameter}`;
 };
 
 export interface VerifyResult {
+    /** The pinned upload `Content-Type` carried by a PUT URL, when present. */
+    contentType?: string;
     key?: string;
     method?: "GET" | "PUT";
 
@@ -158,6 +175,9 @@ export const verifySignedUrl = async (input: string | URL, secret: string, optio
     // runtime check (a `as "GET" | "PUT"` cast would make the linter — and the
     // type system — treat the guard as dead code).
     const method = url.searchParams.get("method") ?? "GET";
+    // A PUT-only content-type pin. Absent → undefined, which canonicalizes the
+    // legacy (no-`ct`) form so old URLs keep verifying.
+    const contentType = url.searchParams.get("ct") ?? undefined;
 
     if (!sig || !Number.isInteger(exp)) {
         return { reason: "malformed", valid: false };
@@ -194,11 +214,16 @@ export const verifySignedUrl = async (input: string | URL, secret: string, optio
     // build-side host whenever the verified URL is the minted URL.
     const host = options?.expectedHost === undefined ? url.host : extractHost(options.expectedHost);
     const cryptoKey = await importHmacKey(secret);
-    const valid = await crypto.subtle.verify("HMAC", cryptoKey, sigBytes as unknown as BufferSource, textEncoder.encode(canonicalize(method, host, key, exp)));
+    const valid = await crypto.subtle.verify(
+        "HMAC",
+        cryptoKey,
+        sigBytes as unknown as BufferSource,
+        textEncoder.encode(canonicalize(method, host, key, exp, contentType)),
+    );
 
     if (!valid) {
         return { reason: "bad_signature", valid: false };
     }
 
-    return { key, method, valid: true };
+    return { contentType, key, method, valid: true };
 };
