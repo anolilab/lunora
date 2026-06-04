@@ -4,6 +4,7 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { useEffect, useReducer, useRef } from "react";
 
 import { useCirrus } from "./cirrus-provider.js";
+import { stableStringify } from "./query-key.js";
 
 /** The lifecycle of a stream the hook is observing. */
 type UseStreamStatus = "complete" | "error" | "idle" | "streaming";
@@ -55,20 +56,6 @@ const reducer = <T>(state: State<T>, action: Action<T>): State<T> => {
             return state;
         }
     }
-};
-
-const stableStringify = (value: unknown): string => {
-    if (value === null || typeof value !== "object") {
-        return JSON.stringify(value);
-    }
-
-    if (Array.isArray(value)) {
-        return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-    }
-
-    const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => a.localeCompare(b));
-
-    return `{${entries.map(([key, value_]) => `${JSON.stringify(key)}:${stableStringify(value_)}`).join(",")}}`;
 };
 
 /**

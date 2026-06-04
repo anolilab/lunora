@@ -4,26 +4,8 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { useEffect, useRef, useState } from "react";
 
 import { useCirrus } from "./cirrus-provider.js";
+import { stableStringify } from "./query-key.js";
 import type { UseQueryOptions, UseSubscriptionResult } from "./types.js";
-
-/**
- * JSON.stringify with deterministic key ordering for plain objects. Keeps
- * the subscription cache key stable across rerenders where the consumer
- * happens to construct `args` with a different key order.
- */
-const stableStringify = (value: unknown): string => {
-    if (value === null || typeof value !== "object") {
-        return JSON.stringify(value);
-    }
-
-    if (Array.isArray(value)) {
-        return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-    }
-
-    const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => a.localeCompare(b));
-
-    return `{${entries.map(([key, value_]) => `${JSON.stringify(key)}:${stableStringify(value_)}`).join(",")}}`;
-};
 
 /**
  * Subscribe to a real-time stream from the server. Unlike `useQuery`, this
