@@ -444,6 +444,9 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
+      '@cirrus/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
       '@cirrus/codegen':
         specifier: workspace:*
         version: link:../../packages/codegen

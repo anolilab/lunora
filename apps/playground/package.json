@@ -8,9 +8,9 @@
         "build": "vite build",
         "deploy": "wrangler deploy",
         "dev": "vite",
-        "lint:eslint": "eslint .",
-        "lint:eslint:fix": "eslint . --fix",
-        "lint:types": "tsc --noEmit",
+        "lint:eslint": "cirrus codegen && eslint .",
+        "lint:eslint:fix": "cirrus codegen && eslint . --fix",
+        "lint:types": "cirrus codegen && tsc --noEmit",
         "test": "vitest run"
     },
     "dependencies": {
@@ -30,6 +30,7 @@
         "react-dom": "catalog:frontend"
     },
     "devDependencies": {
+        "@cirrus/cli": "workspace:*",
         "@cirrus/codegen": "workspace:*",
         "@cirrus/config": "workspace:*",
         "@cloudflare/workers-types": "catalog:cloudflare",

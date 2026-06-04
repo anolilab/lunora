@@ -7,9 +7,9 @@
     "scripts": {
         "build": "next build",
         "dev": "next dev",
-        "lint:eslint": "eslint .",
-        "lint:eslint:fix": "eslint . --fix",
-        "lint:types": "tsc --noEmit",
+        "lint:eslint": "fumadocs-mdx && eslint .",
+        "lint:eslint:fix": "fumadocs-mdx && eslint . --fix",
+        "lint:types": "fumadocs-mdx && tsc --noEmit",
         "start": "next start"
     },
     "dependencies": {
