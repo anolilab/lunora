@@ -561,6 +561,13 @@ interface RpcContext {
 const MAX_BODY_BYTES = 1_048_576;
 
 /**
+ * Shared, stateless `TextEncoder` for NDJSON export/backup streaming. `encode()`
+ * is reusable across calls, so a single module-scope instance avoids allocating
+ * a fresh encoder per export/backup stream.
+ */
+const NDJSON_ENCODER = new TextEncoder();
+
+/**
  * Read a request body fully into text while enforcing a hard byte budget as the
  * bytes arrive. `Content-Length` is forgeable — a chunked request omits it
  * (so the header guard sees `0`) and a non-numeric value makes the header guard
@@ -1575,15 +1582,15 @@ const createWorker = (
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
 
-        // Stream NDJSON: shard-local rows first, then global rows. The shard
-        // fan-out is materialised because each shard returns a single envelope;
-        // we still write the response incrementally so a slow consumer never
-        // inflates worker memory.
+        // Stream NDJSON: shard-local rows first, then global rows. Caveat: each
+        // shard returns a single materialised envelope, and the whole fan-out is
+        // collected before the stream drains, so peak worker memory still scales
+        // with the total shard-local row count — the streaming only keeps the
+        // *response* from being buffered, it does not bound the source data.
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
-                const encoder = new TextEncoder();
                 const writeRow = (row: ExportRow): void => {
-                    controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
+                    controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
                 };
 
                 try {
@@ -2268,20 +2275,21 @@ const createWorker = (
         const forwardedHeaders: Record<string, string> = { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" };
         const tables = options.backupTables;
 
-        // Stream the NDJSON straight into R2 so the whole snapshot is never held
-        // in worker memory at once. `put` resolves after the stream is fully
-        // consumed, so the row/byte counters are final by the time we write the
-        // manifest. Shard fan-out is materialised per shard (one envelope each),
-        // but the concatenated body still flows through the stream incrementally.
+        // Stream the NDJSON straight into R2 so the concatenated body is never
+        // held in worker memory at once. `put` resolves after the stream is
+        // fully consumed, so the row/byte counters are final by the time we
+        // write the manifest. Caveat: the shard fan-out is materialised per
+        // shard (one envelope each) and collected before the stream drains, so
+        // peak memory still scales with the total shard-local row count — the
+        // streaming bounds the response bytes, not the source data.
         let rows = 0;
         let bytes = 0;
         let streamError: Error | undefined;
 
         const stream = new ReadableStream<Uint8Array>({
             async pull(streamController) {
-                const encoder = new TextEncoder();
                 const writeRow = (row: ExportRow): void => {
-                    const encoded = encoder.encode(`${JSON.stringify(row)}\n`);
+                    const encoded = NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`);
 
                     rows += 1;
                     bytes += encoded.byteLength;
