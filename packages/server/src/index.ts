@@ -31,7 +31,7 @@ export type {
     HttpRouteHandlerOptions,
     HttpStreamHandlerOptions,
 } from "./http.js";
-export { httpAction, httpRoute, httpRouter } from "./http.js";
+export { httpAction, httpRoute, httpRouter, serveStorageObject } from "./http.js";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";
 export { defineMigration } from "./migration.js";
 export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, SchemaExtension } from "./plugin.js";
@@ -80,6 +80,7 @@ export type {
     RegisteredQuery,
     RegisteredStream,
     RelationDefinition,
+    ScheduledJob,
     Scheduler,
     Schema,
     SearchFilterBuilder,

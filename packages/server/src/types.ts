@@ -308,7 +308,33 @@ interface AuthState {
     readonly userId: string | null;
 }
 
+/**
+ * A pending scheduled invocation as surfaced by {@link Scheduler.list} /
+ * {@link Scheduler.get}. A clean public mirror of `@cirrus/scheduler`'s internal
+ * `ScheduleRecord` — re-declared here so the public ctx surface carries no
+ * dependency on the scheduler package's internal types.
+ */
+interface ScheduledJob {
+    args: Record<string, unknown>;
+    /** Number of dispatch attempts already made (absent until the first retry). */
+    attempts?: number;
+    /** When the job was enqueued (epoch ms). */
+    enqueuedAt: number;
+    functionPath: string;
+    id: string;
+    /** When the job is scheduled to fire (epoch ms). */
+    scheduledFor: number;
+    /** Routing hint forwarded so dispatch lands on the right shard. */
+    shardKey?: string;
+}
+
 interface Scheduler {
+    /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
+    cancel: (id: string) => Promise<{ cancelled: boolean }>;
+    /** Resolve a single pending job by id, or `null` when absent. */
+    get: (id: string) => Promise<ScheduledJob | null>;
+    /** List all pending scheduled jobs. */
+    list: () => Promise<ScheduledJob[]>;
     runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
     runAt: (timestampMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
 }
@@ -524,6 +550,19 @@ interface ReadOnlyStorage {
 
 interface Storage extends ReadOnlyStorage {
     delete: (key: string) => Promise<void>;
+
+    /**
+     * Mint a short-lived signed `PUT` URL a client can upload directly to,
+     * optionally pinning the `Content-Type` the uploader must send. Mirrors
+     * Convex's `storage.generateUploadUrl`.
+     */
+    generateUploadUrl: (key: string, options?: { contentType?: string; expiresInSeconds?: number }) => Promise<string>;
+
+    /**
+     * Upload `body` to `key` from the server, returning the stored object's key
+     * and etag. Mirrors Convex's `storage.store`.
+     */
+    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: { contentType?: string }) => Promise<{ etag: string; key: string }>;
 }
 
 interface VectorMatch {
@@ -688,6 +727,7 @@ export type {
     RegisteredQuery,
     RegisteredStream,
     RelationDefinition,
+    ScheduledJob,
     Scheduler,
     Schema,
     SearchFilterBuilder,

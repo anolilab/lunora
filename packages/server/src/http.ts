@@ -555,7 +555,163 @@ const httpRoute: HttpRoute = {
     put: makeRouteFactory("PUT"),
 };
 
-export { httpAction, httpRoute, httpRouter };
+/**
+ * Structural view of an R2 object body, as returned by `@cirrus/storage`'s
+ * `download()`. Re-declared here (not imported) so `@cirrus/server` takes no
+ * runtime dependency on `@cirrus/storage`; the real binding satisfies the shape.
+ */
+interface StorageObjectBody {
+    /** Read the whole body into memory — the fallback when range slicing isn't supported. */
+    arrayBuffer: () => Promise<ArrayBuffer>;
+    /** The object body stream (`null` for a zero-byte object). */
+    body: ReadableStream | null;
+    etag: string;
+    httpMetadata?: { contentType?: string };
+    key: string;
+    /** Hex SHA-256, when R2 carries a checksum (surfaced by `@cirrus/storage`). */
+    sha256?: string;
+    size: number;
+}
+
+/** The minimal storage surface {@link serveStorageObject} needs: a metadata-rich `download`. */
+interface StorageDownloader {
+    download: (key: string) => Promise<StorageObjectBody | null>;
+}
+
+/** Any ctx that carries a {@link StorageDownloader} on `.storage` (Query/Mutation/Action ctx all do). */
+interface ContextWithStorage {
+    storage: StorageDownloader;
+}
+
+/** Hoisted so the single-range matcher isn't recompiled on every request. */
+const SINGLE_BYTE_RANGE_RE = /^bytes=(\d*)-(\d*)$/;
+
+/**
+ * Outcome of parsing a `Range` header. `kind: "full"` → no/ignorable range
+ * (serve the whole object as 200); `kind: "partial"` → a resolved inclusive
+ * `[start, end]` (serve 206); `kind: "unsatisfiable"` → syntactically valid but
+ * out of bounds (serve 416).
+ */
+type RangeResult = { end: number; kind: "partial"; start: number } | { kind: "full" } | { kind: "unsatisfiable" };
+
+/**
+ * Parse a single-range `Range: bytes=start-end` header against a known object
+ * `size`. Only a single byte range is supported; a multi-range request
+ * (`bytes=0-1,3-4`) is ignored and the full object is served — the common
+ * media-streaming case is a single range, and multipart/byteranges responses
+ * add disproportionate complexity.
+ */
+const parseRange = (header: null | string, size: number): RangeResult => {
+    if (header === null) {
+        return { kind: "full" };
+    }
+
+    const match = SINGLE_BYTE_RANGE_RE.exec(header.trim());
+
+    if (!match) {
+        // Multi-range or malformed — ignore and serve the whole object.
+        return { kind: "full" };
+    }
+
+    const startRaw = match[1] ?? "";
+    const endRaw = match[2] ?? "";
+
+    if (startRaw === "" && endRaw === "") {
+        return { kind: "full" };
+    }
+
+    let start: number;
+    let end: number;
+
+    if (startRaw === "") {
+        // Suffix range `bytes=-N`: the final N bytes.
+        const suffix = Number(endRaw);
+
+        if (suffix === 0) {
+            return { kind: "unsatisfiable" };
+        }
+
+        start = Math.max(0, size - suffix);
+        end = size - 1;
+    } else {
+        start = Number(startRaw);
+        end = endRaw === "" ? size - 1 : Math.min(Number(endRaw), size - 1);
+    }
+
+    if (start > end || start >= size) {
+        return { kind: "unsatisfiable" };
+    }
+
+    return { end, kind: "partial", start };
+};
+
+/**
+ * Stream a stored object as an HTTP {@link Response} from an `httpAction`
+ * handler, with correct `Content-Type`, `ETag`, and `Accept-Ranges: bytes`.
+ * Honors a single-range `Range` request → **206 Partial Content** with
+ * `Content-Range` + `Content-Length`; otherwise **200**. A missing object is a
+ * **404**; an out-of-bounds range is a **416** with a `Content-Range` of
+ * `bytes` star-slash-size.
+ *
+ * Range slicing is done by buffering the body (`arrayBuffer()`) and slicing the
+ * requested window. The `@cirrus/storage` `download()` returns the whole object
+ * body (R2's binding does not expose a partial-read API through that helper), so
+ * a range request still fetches the full object server-side — the saving is on
+ * the wire to the client, not on the R2 read. For very large objects prefer a
+ * signed URL (`ctx.storage.getSignedUrl`) so the client ranges against R2/CDN
+ * directly.
+ */
+const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request): Promise<Response> => {
+    const object = await context.storage.download(key);
+
+    if (!object) {
+        return new Response("Not Found", { status: 404 });
+    }
+
+    const contentType = object.httpMetadata?.contentType ?? "application/octet-stream";
+    const baseHeaders: Record<string, string> = {
+        "accept-ranges": "bytes",
+        "content-type": contentType,
+        etag: object.etag,
+    };
+
+    if (object.sha256 !== undefined) {
+        // RFC 3230 / Cloudflare-style digest hint so clients can verify integrity.
+        baseHeaders.digest = `sha-256=${object.sha256}`;
+    }
+
+    const range = parseRange(request.headers.get("range"), object.size);
+
+    if (range.kind === "unsatisfiable") {
+        return new Response("Range Not Satisfiable", {
+            headers: { ...baseHeaders, "content-range": `bytes */${String(object.size)}` },
+            status: 416,
+        });
+    }
+
+    if (range.kind === "full") {
+        return new Response(object.body, {
+            headers: { ...baseHeaders, "content-length": String(object.size) },
+            status: 200,
+        });
+    }
+
+    // Single range: buffer + slice. See the doc comment for why this fetches the
+    // whole object server-side.
+    const buffer = await object.arrayBuffer();
+    const slice = buffer.slice(range.start, range.end + 1);
+
+    return new Response(slice, {
+        headers: {
+            ...baseHeaders,
+            "content-length": String(slice.byteLength),
+            "content-range": `bytes ${String(range.start)}-${String(range.end)}/${String(object.size)}`,
+        },
+        status: 206,
+    });
+};
+
+export { httpAction, httpRoute, httpRouter, serveStorageObject };
 
 export type {
     CirrusHttpApp,
