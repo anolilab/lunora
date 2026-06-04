@@ -650,14 +650,23 @@ describe("admin sync (CDC streaming export)", () => {
     it("returns per-shard pages plus the global page and forwards the cursor map", async () => {
         expect.assertions(4);
 
-        const orchestrateCdcSync = vi.fn(async (_namespace: unknown, _request: { cursors?: Record<string, number> }) => {
+        const orchestrateCdcSync = vi.fn<
+            (
+                namespace: unknown,
+                request: { cursors?: Record<string, number> },
+            ) => Promise<{
+                failed: number;
+                ok: number;
+                shards: { changes: { id: string; op: string; seq: number }[]; cursor: number; shardKey: string }[];
+            }>
+        >(async (_namespace, _request) => {
             return {
                 failed: 0,
                 ok: 1,
                 shards: [{ changes: [{ id: "m1", op: "insert", seq: 5 }], cursor: 5, shardKey: "c1" }],
             };
         });
-        const syncGlobals = vi.fn(async () => {
+        const syncGlobals = vi.fn<() => Promise<{ changes: { id: string; op: string; seq: number }[]; cursor: number }>>(async () => {
             return { changes: [{ id: "u1", op: "insert", seq: 2 }], cursor: 2 };
         });
 
@@ -775,10 +784,12 @@ describe("admin apply (CDC replay)", () => {
     it("replays per-shard batches plus globals and sums the applied counts", async () => {
         expect.assertions(3);
 
-        const orchestrateApplyCdc = vi.fn(async (_namespace: unknown, request: { batches: ReadonlyArray<unknown> }) => {
+        const orchestrateApplyCdc = vi.fn<
+            (namespace: unknown, request: { batches: ReadonlyArray<unknown> }) => Promise<{ applied: number; failed: number; ok: number }>
+        >(async (_namespace, request) => {
             return { applied: request.batches.length, failed: 0, ok: request.batches.length };
         });
-        const applyGlobals = vi.fn(async () => 2);
+        const applyGlobals = vi.fn<() => Promise<number>>(async () => 2);
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,

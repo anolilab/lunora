@@ -735,7 +735,7 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
 };
 
 /** Merge `kind`s the coordinator understands; anything else is rejected at the edge. */
-const KNOWN_MERGE_KINDS = new Set(["concat", "topK", "first", "max", "min", "rank", "sum", "groupBy"]);
+const KNOWN_MERGE_KINDS = new Set(["concat", "first", "groupBy", "max", "min", "rank", "sum", "topK"]);
 
 /**
  * Validate the client-supplied fan-out spec on the public RPC path. `fanOut`
