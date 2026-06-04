@@ -45,7 +45,11 @@ const toAddress = (input: string): { email: string; name?: string } => {
         const name = (match[1] ?? "").trim();
         const email = (match[2] ?? "").trim();
 
-        if (name && email) {
+        // An angle-bracket form was supplied. Trust the captured address even
+        // when the display name is empty (`<a@b.c>`) — otherwise the bare-email
+        // fallback below would treat the whole `<a@b.c>` literal as the address
+        // and forward an invalid bracketed mailbox to the provider.
+        if (email) {
             if (name.length > MAX_NAME_LENGTH) {
                 throw new Error(`@cirrus/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
             }
@@ -54,10 +58,13 @@ const toAddress = (input: string): { email: string; name?: string } => {
                 throw new Error(`@cirrus/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
             }
 
-            assertSafeAddressField("name", name);
+            if (name) {
+                assertSafeAddressField("name", name);
+            }
+
             assertSafeAddressField("email", email);
 
-            return { email, name };
+            return name ? { email, name } : { email };
         }
     }
 
@@ -80,6 +87,33 @@ const toAddressList = (input: string | string[] | undefined): { email: string; n
     const list = Array.isArray(input) ? input : [input];
 
     return list.map((entry) => toAddress(entry));
+};
+
+/**
+ * Run every address field through the same parse + length + CR/LF/comma
+ * rejection that the Resend transport applies, but discard the parsed result.
+ * Called from `buildPayload` so custom transports and the queue path get the
+ * exact same validation the default transport does — without changing the
+ * string wire shape the payload carries.
+ */
+const assertSafeAddresses = (payload: {
+    bcc?: string | string[];
+    cc?: string | string[];
+    from?: string;
+    replyTo?: string;
+    to?: string | string[];
+}): void => {
+    toAddressList(payload.to);
+    toAddressList(payload.cc);
+    toAddressList(payload.bcc);
+
+    if (payload.from !== undefined) {
+        toAddress(payload.from);
+    }
+
+    if (payload.replyTo !== undefined) {
+        toAddress(payload.replyTo);
+    }
 };
 
 /**
@@ -184,10 +218,23 @@ const createMailer = (options: CirrusMailOptions): Mailer => {
             }
         }
 
+        const from = options_.from ?? options.from;
+
+        // Address normalization/validation lives here (not just in the Resend
+        // transport) so every transport — custom adapters included — and the
+        // queue path get the same length + CR/LF/comma + bracket checks.
+        assertSafeAddresses({
+            bcc: options_.bcc,
+            cc: options_.cc,
+            from,
+            replyTo: options_.replyTo,
+            to: options_.to,
+        });
+
         return {
             bcc: options_.bcc,
             cc: options_.cc,
-            from: options_.from ?? options.from,
+            from,
             headers: options_.headers,
             html,
             replyTo: options_.replyTo,

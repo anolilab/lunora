@@ -13,7 +13,12 @@ export interface QueuedSend {
     to: string | string[];
 }
 
-export const toQueuedPayload = (options: QueuedSend): QueuedSend => {
+/**
+ * Narrow a `SendOptions` to its serializable `QueuedSend` shape by dropping the
+ * non-cloneable `react` field. React elements are not structured-cloneable, so
+ * the queue body must carry only the pre-rendered html/text and scalar fields.
+ */
+export const toQueuedPayload = (options: SendOptions): QueuedSend => {
     return {
         bcc: options.bcc,
         cc: options.cc,
@@ -65,7 +70,68 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
         throw new Error("@cirrus/mail: queue message `to` must be a string or string[]");
     }
 
-    return mailer.send(candidate as unknown as SendOptions);
+    const assertOptionalString = (field: string, value: unknown): string | undefined => {
+        if (value === undefined) {
+            return undefined;
+        }
+
+        if (typeof value !== "string") {
+            throw new TypeError(`@cirrus/mail: queue message \`${field}\` must be a string`);
+        }
+
+        return value;
+    };
+
+    const assertOptionalStringList = (field: string, value: unknown): string | string[] | undefined => {
+        if (value === undefined) {
+            return undefined;
+        }
+
+        if (typeof value === "string") {
+            return value;
+        }
+
+        if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+            return value as string[];
+        }
+
+        throw new TypeError(`@cirrus/mail: queue message \`${field}\` must be a string or string[]`);
+    };
+
+    let headers: Record<string, string> | undefined;
+
+    if (candidate.headers !== undefined) {
+        if (!candidate.headers || typeof candidate.headers !== "object" || Array.isArray(candidate.headers)) {
+            throw new TypeError("@cirrus/mail: queue message `headers` must be an object of string values");
+        }
+
+        const entries = Object.entries(candidate.headers as Record<string, unknown>);
+
+        for (const [key, value] of entries) {
+            if (typeof value !== "string") {
+                throw new TypeError(`@cirrus/mail: queue message header "${key}" must be a string`);
+            }
+        }
+
+        headers = candidate.headers as Record<string, string>;
+    }
+
+    // Build a typed payload from the validated fields rather than blindly
+    // casting the untrusted body — the cast would defeat the type system at
+    // exactly the boundary this function exists to guard.
+    const options: SendOptions = {
+        bcc: assertOptionalStringList("bcc", candidate.bcc) as string[] | undefined,
+        cc: assertOptionalStringList("cc", candidate.cc) as string[] | undefined,
+        from: assertOptionalString("from", candidate.from),
+        headers,
+        html: assertOptionalString("html", candidate.html),
+        replyTo: assertOptionalString("replyTo", candidate.replyTo),
+        subject: candidate.subject,
+        text: assertOptionalString("text", candidate.text),
+        to: candidate.to as string | string[],
+    };
+
+    return mailer.send(options);
 };
 
 export { type QueueLike } from "./types.js";
