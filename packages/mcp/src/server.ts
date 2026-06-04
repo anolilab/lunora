@@ -1,4 +1,8 @@
 /* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases". Ours qualifies: we dispatch tools defined with plain JSON Schema and bridge structured results ourselves, which avoids McpServer's per-tool zod dependency. */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { CirrusClient } from "@cirrus/client";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -7,8 +11,49 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 import { callTool, TOOL_DEFINITIONS } from "./tools.js";
 
+/**
+ * Resolve the package's real version so the MCP `initialize` handshake reports
+ * the build a client is actually talking to. Reading `package.json` at runtime
+ * (rather than hardcoding) keeps the advertised version in lockstep with
+ * semantic-release bumps; if resolution ever fails we fall back to `0.0.0`.
+ */
+const resolveVersion = (): string => {
+    // Walk up from this module's directory to the nearest `package.json`. A
+    // relative `../package.json` is unreliable because the bundler emits this
+    // code into a hashed shared-chunk subdirectory whose depth isn't fixed.
+    try {
+        let directory = dirname(fileURLToPath(import.meta.url));
+
+        for (let depth = 0; depth < 8; depth += 1) {
+            try {
+                const raw = readFileSync(join(directory, "package.json"), "utf8");
+                const pkg = JSON.parse(raw) as { name?: string; version?: string };
+
+                // Skip any nested package.json that isn't ours.
+                if (pkg.name === "@cirrus/mcp" && typeof pkg.version === "string" && pkg.version.length > 0) {
+                    return pkg.version;
+                }
+            } catch {
+                // No package.json at this level (or unreadable); keep climbing.
+            }
+
+            const parent = dirname(directory);
+
+            if (parent === directory) {
+                break;
+            }
+
+            directory = parent;
+        }
+    } catch {
+        // Fall through to the static fallback below.
+    }
+
+    return "0.0.0";
+};
+
 /** Server name/version advertised in the MCP `initialize` handshake. */
-const SERVER_INFO = { name: "cirrus", version: "0.0.0" } as const;
+const SERVER_INFO = { name: "cirrus", version: resolveVersion() } as const;
 
 interface CirrusMcpServerOptions {
     /**
