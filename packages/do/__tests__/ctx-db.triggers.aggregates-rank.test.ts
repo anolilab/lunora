@@ -225,7 +225,7 @@ describe("ctx-db triggers — aggregates and rank", () => {
             // Counter still reflects exactly the one row in p1 (no drift from
             // a -prev/+next applied against a row state that no longer matched
             // disk).
-            expect(await competitor.count("todos", { projectId: "p1" })).toBe(1);
+            await expect(competitor.count("todos", { projectId: "p1" })).resolves.toBe(1);
         });
 
         it("after-delete trigger sees the count without the deleted row", async () => {

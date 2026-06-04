@@ -1213,6 +1213,7 @@ abstract class ShardDO {
             // past the runtime's per-socket limit. Roll back the in-memory
             // mutation so a retry has a chance to land and surface a
             // structured error to the caller.
+            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `subs` is a Record keyed by dynamic subscription id; removal is the intended rollback
             delete attachment.subs[subId];
 
             return "serialize_failed";
@@ -1224,6 +1225,7 @@ abstract class ShardDO {
     protected unsubscribe(ws: WebSocket, subId: string): void {
         const attachment = this.readAttachment(ws);
 
+        // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `subs` is a Record keyed by dynamic subscription id; removal is the intended unsubscribe
         delete attachment.subs[subId];
         (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
         this.subMemos.get(ws)?.delete(subId);
@@ -1495,6 +1497,7 @@ abstract class ShardDO {
         }
 
         ShardDO.rootSizeWarned = true;
+        // eslint-disable-next-line no-console -- intentional one-shot operational warning surfacing the __root__ DO approaching the 10 GiB ceiling
         console.warn(
             `[@cirrus/do] __root__ Durable Object SQLite size is ${String(size)} bytes (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). Plan a \`.shardBy()\` migration before you hit the wall. See https://cirrus.dev/docs/concepts/sharding for guidance.`,
         );

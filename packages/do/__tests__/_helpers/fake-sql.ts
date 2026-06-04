@@ -49,11 +49,11 @@ const SELECT_BY_ID = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id
 // Single UNION-ALL probe `lookupById` issues to locate a row across every
 // non-global table in one round-trip. Each branch tags its source table via
 // `AS __t__` and consumes one (identical) id param.
-const UNION_PROBE_BRANCH = /SELECT '((?:[^']|'')+)' AS __t__, id, _creationTime, __doc__ FROM "([^"]+)" WHERE id = \?/gu;
+const UNION_PROBE_BRANCH = /SELECT '(?:[^']|'')+' AS __t__, id, _creationTime, __doc__ FROM "([^"]+)" WHERE id = \?/gu;
 const UNION_PROBE =
     /^SELECT '(?:[^']|'')+' AS __t__, id, _creationTime, __doc__ FROM "[^"]+" WHERE id = \?(?: UNION ALL SELECT '(?:[^']|'')+' AS __t__, id, _creationTime, __doc__ FROM "[^"]+" WHERE id = \?)* LIMIT 1$/u;
 // Batch hydration `rankPage` uses: `WHERE id IN (?, ?, ...)`.
-const SELECT_BY_IDS = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id IN \((?:\?(?:, \?)*)\)$/u;
+const SELECT_BY_IDS = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id IN \(\?(?:, \?)*\)$/u;
 
 const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
     return {
@@ -294,22 +294,31 @@ const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
         return cursor<Record<string, unknown>>([]);
     };
 
+    // Applies an UPDATE to a single row. `snapshot` (when provided) gates the
+    // write CAS-style: only mutate when the on-disk __doc__ still equals the
+    // read-time snapshot. `nextRow` builds the replacement from the current row.
+    const applyUpdate = (tableName: string, id: string, snapshot: string | undefined, nextRow: (row: FakeRow) => FakeRow): void => {
+        const table = state.tables.get(tableName);
+        const row = table?.get(id);
+        const allowed = snapshot === undefined ? Boolean(row) : row?.__doc__ === snapshot;
+
+        if (table && row && allowed) {
+            table.set(id, nextRow(row));
+            state.lastChanges = 1;
+        } else {
+            state.lastChanges = 0;
+        }
+    };
+
     const handleUpdate: Handler = (sqlString, params) => {
         const updateDocumentCasMatch = UPDATE_SET_DOC_CAS.exec(sqlString);
 
         if (updateDocumentCasMatch) {
-            const tableName = updateDocumentCasMatch[1]!;
             const [document_, id, snapshot] = params as [string, string, string];
-            const table = state.tables.get(tableName);
-            const row = table?.get(id);
 
-            // CAS: only mutate when the on-disk __doc__ still equals the read-time snapshot.
-            if (table && row?.__doc__ === snapshot) {
-                table.set(id, { ...row, __doc__: document_ });
-                state.lastChanges = 1;
-            } else {
-                state.lastChanges = 0;
-            }
+            applyUpdate(updateDocumentCasMatch[1]!, id, snapshot, (row) => {
+                return { ...row, __doc__: document_ };
+            });
 
             return cursor<Record<string, unknown>>([]);
         }
@@ -317,17 +326,11 @@ const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
         const updateDocumentMatch = UPDATE_SET_DOC.exec(sqlString);
 
         if (updateDocumentMatch) {
-            const tableName = updateDocumentMatch[1]!;
             const [document_, id] = params as [string, string];
-            const table = state.tables.get(tableName);
-            const row = table?.get(id);
 
-            if (table && row) {
-                table.set(id, { ...row, __doc__: document_ });
-                state.lastChanges = 1;
-            } else {
-                state.lastChanges = 0;
-            }
+            applyUpdate(updateDocumentMatch[1]!, id, undefined, (row) => {
+                return { ...row, __doc__: document_ };
+            });
 
             return cursor<Record<string, unknown>>([]);
         }
@@ -335,18 +338,11 @@ const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
         const updateBothCasMatch = UPDATE_SET_DOC_AND_TIME_CAS.exec(sqlString);
 
         if (updateBothCasMatch) {
-            const tableName = updateBothCasMatch[1]!;
             const [creationTime, document_, id, snapshot] = params as [number, string, string, string];
-            const table = state.tables.get(tableName);
-            const row = table?.get(id);
 
-            // CAS: only mutate when the on-disk __doc__ still equals the read-time snapshot.
-            if (table && row?.__doc__ === snapshot) {
-                table.set(id, { __doc__: document_, _creationTime: creationTime, id });
-                state.lastChanges = 1;
-            } else {
-                state.lastChanges = 0;
-            }
+            applyUpdate(updateBothCasMatch[1]!, id, snapshot, () => {
+                return { __doc__: document_, _creationTime: creationTime, id };
+            });
 
             return cursor<Record<string, unknown>>([]);
         }
@@ -354,17 +350,11 @@ const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
         const updateBothMatch = UPDATE_SET_DOC_AND_TIME.exec(sqlString);
 
         if (updateBothMatch) {
-            const tableName = updateBothMatch[1]!;
             const [creationTime, document_, id] = params as [number, string, string];
-            const table = state.tables.get(tableName);
-            const row = table?.get(id);
 
-            if (table && row) {
-                table.set(id, { __doc__: document_, _creationTime: creationTime, id });
-                state.lastChanges = 1;
-            } else {
-                state.lastChanges = 0;
-            }
+            applyUpdate(updateBothMatch[1]!, id, undefined, () => {
+                return { __doc__: document_, _creationTime: creationTime, id };
+            });
 
             return cursor<Record<string, unknown>>([]);
         }
@@ -462,7 +452,7 @@ const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
 
             // eslint-disable-next-line no-cond-assign -- iterate every UNION branch
             while ((branch = UNION_PROBE_BRANCH.exec(sqlString)) !== null) {
-                const tableName = branch[2]!;
+                const tableName = branch[1]!;
                 const id = params[branchIndex] as string;
                 const row = state.tables.get(tableName)?.get(id);
 

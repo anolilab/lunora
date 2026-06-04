@@ -69,7 +69,10 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
             // write-sync.
             {
                 pattern: / AS __t__,.* WHERE id = \? LIMIT 1$/u,
-                rows: () => matchRows.map((row) => ({ __t__: "docs", ...(row as unknown as Record<string, unknown>) })) as unknown as Row[],
+                rows: () =>
+                    matchRows.map((row) => {
+                        return { __t__: "docs", ...(row as unknown as Record<string, unknown>) };
+                    }) as unknown as Row[],
             },
             { pattern: /WHERE id = \? LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) as unknown as Row[] },
             { pattern: /^SELECT id, _creationTime, __doc__ FROM .* WHERE id = \?$/u, rows: () => matchRows as unknown as Row[] },
