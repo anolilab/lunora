@@ -253,6 +253,15 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
         return { code: 1, files: [], target: "" };
     }
 
+    // Guard the project name against path traversal: it becomes a directory
+    // under cwd, so a name containing separators or `..` could scaffold outside
+    // the intended parent. Mirrors the `--source` `isSafeSource` gate.
+    if (name.includes("/") || name.includes("\\") || name === ".." || name === ".") {
+        options.logger.error(`init: refusing project name "${name}" — must not contain path separators or be "." / "..".`);
+
+        return { code: 1, files: [], target: "" };
+    }
+
     const target = resolve(cwd, name);
 
     if (existsSync(target)) {
