@@ -72,10 +72,4 @@ export class SubscriptionRegistry {
     public all(): SubscriptionState[] {
         return [...this.byKey.values()];
     }
-
-    public markAllPendingAck(): void {
-        for (const state of this.byKey.values()) {
-            state.acked = false;
-        }
-    }
 }

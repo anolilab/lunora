@@ -1193,7 +1193,9 @@ class CirrusClient {
         try {
             body = await response.json();
         } catch {
-            throw new Error(`CirrusClient: response was not JSON (status ${response.status.toString()})`);
+            const statusText = response.statusText ? ` ${response.statusText}` : "";
+
+            throw new Error(`CirrusClient: response was not JSON (status ${response.status.toString()}${statusText})`);
         }
 
         if ("error" in body) {
@@ -1201,6 +1203,15 @@ class CirrusClient {
 
             (error as Error & { code?: string }).code = body.error.code;
             throw error;
+        }
+
+        // A non-2xx response whose body parsed as JSON but carried no `error`
+        // envelope would otherwise be treated as a successful result. Surface the
+        // HTTP status so callers get an actionable error instead.
+        if (!response.ok) {
+            const statusText = response.statusText ? ` ${response.statusText}` : "";
+
+            throw new Error(`CirrusClient: request failed (status ${response.status.toString()}${statusText})`);
         }
 
         return body.result;
@@ -1238,7 +1249,9 @@ class CirrusClient {
         try {
             body = await response.json();
         } catch {
-            throw new Error(`CirrusClient: response was not JSON (status ${response.status.toString()})`);
+            const statusText = response.statusText ? ` ${response.statusText}` : "";
+
+            throw new Error(`CirrusClient: response was not JSON (status ${response.status.toString()}${statusText})`);
         }
 
         // Untrusted server payload: narrow before inspecting for an error envelope.
@@ -1248,6 +1261,14 @@ class CirrusClient {
 
             (error as Error & { code?: string }).code = envelope.code;
             throw error;
+        }
+
+        // A non-2xx response with a JSON body but no `error` envelope would
+        // otherwise be returned as a successful payload. Surface the HTTP status.
+        if (!response.ok) {
+            const statusText = response.statusText ? ` ${response.statusText}` : "";
+
+            throw new Error(`CirrusClient: admin request failed (status ${response.status.toString()}${statusText})`);
         }
 
         return body;
