@@ -376,7 +376,32 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
             });
         }
 
-        const document = typeof record["doc"] === "object" && record["doc"] !== null ? (record["doc"] as Record<string, unknown>) : undefined;
+        const rawDocument = record["doc"];
+
+        // `typeof [] === "object"`, so an explicit Array.isArray guard is
+        // required to keep arrays out of the writer (which expects a
+        // Record). Failing here surfaces the malformed change at the parse
+        // boundary instead of mid-replay.
+        if (rawDocument !== undefined && (typeof rawDocument !== "object" || rawDocument === null || Array.isArray(rawDocument))) {
+            throw Object.assign(new Error(`applyCdc: changes[${String(index)}].doc must be an object`), {
+                code: "BAD_REQUEST",
+                name: "CirrusError",
+                status: 400,
+            });
+        }
+
+        const document = rawDocument as Record<string, unknown> | undefined;
+
+        // When the post-image carries an id it must agree with the entry id,
+        // otherwise the replay would write a row whose id contradicts the CDC
+        // cursor — reject the inconsistency at the boundary.
+        if (document !== undefined && typeof document["_id"] === "string" && document["_id"] !== id) {
+            throw Object.assign(new Error(`applyCdc: changes[${String(index)}].doc._id must match the entry id`), {
+                code: "BAD_REQUEST",
+                name: "CirrusError",
+                status: 400,
+            });
+        }
 
         return {
             doc: document,
