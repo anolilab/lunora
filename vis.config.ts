@@ -28,6 +28,13 @@ export default defineConfig({
             inputs: ["production", "^production"],
             outputs: ["{projectRoot}/dist"],
         },
+        // App codegen (docs: fumadocs-mdx; playground: cirrus codegen) emits the
+        // generated dirs the apps' source imports. `cirrus codegen` loads
+        // @cirrus/codegen + the @cirrus deps, so build the upstream packages first.
+        "codegen": {
+            cache: true,
+            dependsOn: ["^build"],
+        },
         "lint:eslint": {
             cache: true,
             // Type-aware ESLint rules (no-unsafe-*, no-unnecessary-condition) need the
