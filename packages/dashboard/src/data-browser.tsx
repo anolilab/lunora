@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TableInfo, TablePage, WriteRowResult } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
-import { adminRef, callOptions, fireAndForget } from "./internal.js";
+import { adminRef, callOptions, fireAndForget, formatCell } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
@@ -102,30 +102,6 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
  * hidden behind this helper so it isn't an inline array-index key.
  */
 const rowKey = (row: TableRow, index: number): string => rowId(row) ?? `row-${index.toString()}`;
-
-/** Render a single cell value as text without throwing on objects or null. */
-const formatCell = (value: unknown): string => {
-    if (value === null || value === undefined) {
-        return "";
-    }
-
-    switch (typeof value) {
-        case "bigint":
-        case "boolean":
-        case "number": {
-            return value.toString();
-        }
-        case "string": {
-            return value;
-        }
-        case "symbol": {
-            return value.toString();
-        }
-        default: {
-            return JSON.stringify(value);
-        }
-    }
-};
 
 /**
  * Renders a foreign-key cell as a link to the target table. Extracted to module

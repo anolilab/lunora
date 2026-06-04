@@ -36,11 +36,13 @@ export const aggregateMetrics = (results: ReadonlyArray<ShardMetricsResult>): Ag
     let cacheHits = 0;
     let cacheTotal = 0;
 
-    for (const { error, metrics } of results) {
+    for (const { metrics } of results) {
         if (metrics === null) {
-            if (error !== null) {
-                failed += 1;
-            }
+            // A null snapshot is counted as failed regardless of whether an error
+            // string came with it, so `reachable + failed === results.length`
+            // always holds — a result that is neither reachable nor failed would
+            // otherwise vanish from the totals.
+            failed += 1;
 
             continue;
         }

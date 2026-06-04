@@ -3,7 +3,7 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import { errorMessage, fireAndForget } from "./internal.js";
+import { errorMessage, fireAndForget, formatCell } from "./internal.js";
 
 interface GlobalDataBrowserProps {
     /** Rows requested per page. Clamped server-side to `[1, 500]`. */
@@ -11,30 +11,6 @@ interface GlobalDataBrowserProps {
 }
 
 const DEFAULT_PAGE_SIZE = 50;
-
-/** Render a single cell value as text without throwing on objects or null. */
-const formatCell = (value: unknown): string => {
-    if (value === null || value === undefined) {
-        return "";
-    }
-
-    switch (typeof value) {
-        case "bigint":
-        case "boolean":
-        case "number": {
-            return value.toString();
-        }
-        case "string": {
-            return value;
-        }
-        case "symbol": {
-            return value.toString();
-        }
-        default: {
-            return JSON.stringify(value);
-        }
-    }
-};
 
 /**
  * A stable React key for a global-table row. `.global()` docs carry an `_id`
