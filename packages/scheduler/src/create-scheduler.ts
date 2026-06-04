@@ -82,9 +82,11 @@ const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
     // The DO's `/list` returns `{ records: ScheduleRecord[] }` (the pending
     // `id:` headers). Surface the array directly to callers.
     const list = async (): Promise<ScheduleRecord[]> => {
-        const { records } = await getDO<{ records: ScheduleRecord[] }>(options, "/list");
+        const body = await getDO<{ records?: ScheduleRecord[] }>(options, "/list");
 
-        return records;
+        // Keep the return type honest (never `undefined`) so `get()` can `.find`
+        // without throwing if the DO ever responds 200 without a `records` array.
+        return Array.isArray(body.records) ? body.records : [];
     };
 
     // Derived from `/list` rather than a dedicated endpoint — the DO has no

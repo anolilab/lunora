@@ -140,6 +140,18 @@ describe("createScheduler", () => {
         await expect(scheduler.get("missing")).resolves.toBeNull();
     });
 
+    it("list()/get() stay robust when the DO 200s without a `records` array", async () => {
+        expect.assertions(2);
+
+        // DO drift / unexpected 200 body: `records` absent. list() must return
+        // [] (not undefined) and get() must resolve null rather than throwing.
+        const { namespace } = fakeNamespace({ "/list": { ok: true } });
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        await expect(scheduler.list()).resolves.toEqual([]);
+        await expect(scheduler.get("a")).resolves.toBeNull();
+    });
+
     it("throws when SchedulerDO returns a non-2xx response", async () => {
         expect.assertions(1);
 
