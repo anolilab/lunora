@@ -447,7 +447,12 @@ class SchedulerDO {
 
         await this.state.storage.put(`${HEADER_PREFIX}${id}`, record);
         await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, id), id);
-        await this.rescheduleAlarm();
+        // Fast path: the new job is the only thing that could have moved the
+        // earliest-pending time *earlier*. If a current alarm is already at or
+        // before the new job, no rescan is needed — just keep it. Only when the
+        // new job is sooner (or no alarm is set) do we (re)arm. Avoids a `t:`
+        // list on every schedule of a not-earliest job.
+        await this.armAlarmIfEarlier(record.scheduledFor);
         await this.broadcastChange();
 
         return SchedulerDO.json({ id, scheduledFor: record.scheduledFor });
@@ -478,10 +483,27 @@ class SchedulerDO {
     }
 
     private async removeRecord(record: ScheduleRecord): Promise<void> {
-        await this.state.storage.delete(`${HEADER_PREFIX}${record.id}`);
-        await this.state.storage.delete(SchedulerDO.indexKey(record.scheduledFor, record.id));
-        // Drop any pending retry row so cancelled jobs don't leak storage.
-        await this.state.storage.delete(`${RETRY_PREFIX}${record.id}`);
+        // Single batched delete: the header, time-index entry, and any pending
+        // retry row in one storage round-trip instead of three.
+        await this.state.storage.delete([
+            `${HEADER_PREFIX}${record.id}`,
+            SchedulerDO.indexKey(record.scheduledFor, record.id),
+            `${RETRY_PREFIX}${record.id}`,
+        ]);
+    }
+
+    /**
+     * Arm the alarm for `scheduledFor` only if it is sooner than the currently
+     * set alarm (or none is set). Used on the schedule path: inserting a job
+     * can only ever pull the earliest-pending time *earlier*, never later, so a
+     * full `t:` rescan is unnecessary unless the new job is the new earliest.
+     */
+    private async armAlarmIfEarlier(scheduledFor: number): Promise<void> {
+        const current = await this.state.storage.getAlarm();
+
+        if (current === null || scheduledFor < current) {
+            await this.state.storage.setAlarm(scheduledFor);
+        }
     }
 
     private async rescheduleAlarm(): Promise<void> {
