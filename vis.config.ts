@@ -30,12 +30,15 @@ export default defineConfig({
         },
         "lint:eslint": {
             cache: true,
-            dependsOn: ["default"],
+            // Type-aware ESLint rules (no-unsafe-*, no-unnecessary-condition) need the
+            // upstream packages' declarations built, same as lint:types — without ^build
+            // cross-package @cirrus types resolve to `any` and trigger a no-unsafe cascade.
+            dependsOn: ["^build", "default", "^public"],
             inputs: ["default"],
         },
         "lint:eslint:fix": {
             cache: true,
-            dependsOn: ["default"],
+            dependsOn: ["^build", "default", "^public"],
             inputs: ["default"],
         },
         "lint:package-json": {
