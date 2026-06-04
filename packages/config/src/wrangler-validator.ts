@@ -50,8 +50,10 @@ interface WranglerConfig {
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
-    tail_consumers?: ReadonlyArray<TailConsumer>;
-    vectorize?: ReadonlyArray<{ binding?: string; index_name?: string }>;
+    // Parsed from untrusted JSONC, so individual entries may be `null` or
+    // otherwise malformed; the validators below guard against that at runtime.
+    tail_consumers?: ReadonlyArray<TailConsumer | null | undefined>;
+    vectorize?: ReadonlyArray<{ binding?: string; index_name?: string } | null | undefined>;
 }
 
 interface SchemaInfo {
@@ -78,7 +80,7 @@ const validateVectorizeBindings = (wrangler: WranglerConfig, vectorIndexNames: R
     }
 
     const vectorizeBindings = wrangler.vectorize ?? [];
-    const declaredIndexNames = new Set(vectorizeBindings.filter((binding) => binding != null).map((binding) => binding.index_name));
+    const declaredIndexNames = new Set(vectorizeBindings.filter(Boolean).map((binding) => binding?.index_name));
 
     for (const indexName of vectorIndexNames) {
         if (!declaredIndexNames.has(indexName)) {
@@ -108,10 +110,10 @@ const validateTailConsumers = (wrangler: WranglerConfig, errors: string[]): void
 
     // `Array.isArray` widens the readonly element type to `any`; restore it so
     // member access below stays type-safe.
-    const entries = consumers as ReadonlyArray<TailConsumer>;
+    const entries = consumers as ReadonlyArray<TailConsumer | null | undefined>;
 
     for (const [index, consumer] of entries.entries()) {
-        if (consumer === null || typeof consumer !== "object" || typeof consumer.service !== "string" || consumer.service.length === 0) {
+        if (!consumer || typeof consumer !== "object" || typeof consumer.service !== "string" || consumer.service.length === 0) {
             errors.push(`tail_consumers[${String(index)}] must have a non-empty "service" naming the consumer Worker`);
         }
     }
@@ -126,7 +128,7 @@ const validateTailConsumers = (wrangler: WranglerConfig, errors: string[]): void
  */
 const withTailConsumer = (wrangler: WranglerConfig, consumer: TailConsumer): WranglerConfig => {
     const existing = wrangler.tail_consumers ?? [];
-    const alreadyWired = existing.some((entry) => entry != null && entry.service === consumer.service && entry.environment === consumer.environment);
+    const alreadyWired = existing.some((entry) => Boolean(entry) && entry?.service === consumer.service && entry?.environment === consumer.environment);
 
     if (alreadyWired) {
         return wrangler;
