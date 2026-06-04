@@ -1,3 +1,4 @@
+import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent.js";
 import type { CirrusVectors } from "./types.js";
 
 /**
@@ -220,39 +221,61 @@ export const createVectorSyncHook = (options: { namespace?: string; schema: Sche
         // event.doc on update is the FULL merged row, so an inline (Shape A)
         // index whose source field was just cleared (now nullish) must be
         // PURGED — skipping the upsert would otherwise leave the stale vector
-        // searchable. Split inline indexes into "has a value -> upsert" and
-        // "cleared -> delete". Shape B has no per-field source to clear; its
-        // `select` defines the value, so it always upserts.
-        const inlineToUpsert = inlineIndexes.filter((index) => row[index.field] !== undefined && row[index.field] !== null);
-        const inlineToClear = inlineIndexes.filter((index) => row[index.field] === undefined || row[index.field] === null);
+        // searchable. Read each source field once, then split inline indexes
+        // into "has a value -> upsert" and "cleared -> delete". Shape B has no
+        // per-field source to clear; its `select` defines the value, so it
+        // always upserts.
+        const inlineWithValue = inlineIndexes.map((index) => {
+            return { index, value: row[index.field] };
+        });
+        const inlineToUpsert = inlineWithValue.filter((entry) => entry.value !== undefined && entry.value !== null);
+        const inlineToClear = inlineWithValue.filter((entry) => entry.value === undefined || entry.value === null);
+
+        // The embedder takes text. A non-string source (e.g. a JSON column
+        // holding an object/array) would otherwise be coerced via `String()`
+        // into "[object Object]"/comma-joined garbage, embedding meaningless
+        // text and silently producing an unsearchable vector. Surface it as a
+        // descriptive error instead of the silent footgun.
+        for (const { index, value } of inlineToUpsert) {
+            if (typeof value !== "string") {
+                throw new TypeError(
+                    `@cirrus/vectors: inline index "${index.name}" expects a string source at "${index.field}" on table "${event.table}" (got ${typeof value}); use a standalone defineVectorIndex with a select() to derive text from non-string columns`,
+                );
+            }
+        }
 
         // Same per-index independence on the write path — fan the upserts out
-        // (plus any clears) and await as a group. Embedders may make remote
-        // calls, so the serial loop was a hidden N× latency multiplier.
-        const operations: Promise<void>[] = [
-            ...inlineToClear.map((index) => vectors.deleteByIds(index.name, [event.id])),
-            ...inlineToUpsert.map((index) =>
-                vectors.upsert(index.name, {
-                    embed: index.embed,
+        // (plus any clears) and run as a group. Embedders may make remote
+        // calls, so the serial loop was a hidden N× latency multiplier. Bound
+        // the fan-out with the same cap as `upsertMany`: a table with many
+        // vector indexes (or a bulk apply reusing this hook) must not spawn an
+        // unbounded number of concurrent embedder + Vectorize subrequests.
+        const operations: Array<() => Promise<void>> = [
+            ...inlineToClear.map((entry) => async (): Promise<void> => {
+                await vectors.deleteByIds(entry.index.name, [event.id]);
+            }),
+            ...inlineToUpsert.map((entry) => async (): Promise<void> => {
+                await vectors.upsert(entry.index.name, {
+                    embed: entry.index.embed,
                     id: event.id,
-                    input: String(row[index.field]),
-                    metadata: index.metadata ? pickMetadata(row, index.metadata) : undefined,
+                    input: entry.value as string,
+                    metadata: entry.index.metadata ? pickMetadata(row, entry.index.metadata) : undefined,
                     namespace,
-                }),
-            ),
-            ...standaloneIndexes.map(([name, definition]) =>
-                vectors.upsert(name, {
+                });
+            }),
+            ...standaloneIndexes.map(([name, definition]) => async (): Promise<void> => {
+                await vectors.upsert(name, {
                     embed: definition.embed,
                     id: event.id,
                     input: definition.select(row),
                     metadata: definition.metadata?.(row),
                     namespace,
-                }),
-            ),
+                });
+            }),
         ];
 
         try {
-            await Promise.all(operations);
+            await concurrentMap(operations, UPSERT_EMBED_CONCURRENCY, async (operation) => operation());
         } catch (error) {
             // Best-effort compensation: a partial fan-out leaves some indexes
             // mutated. Purge this row's id from every affected index so the

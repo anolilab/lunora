@@ -11,6 +11,8 @@ import type {
     VectorizeVector,
 } from "./types.js";
 
+import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent.js";
+
 const resolveIndex = (indexes: Record<string, VectorizeIndexLike>, name: string): VectorizeIndexLike => {
     const index = indexes[name];
 
@@ -40,48 +42,6 @@ const MAX_ID_BATCH = 1000;
 
 /** Vectorize hard ceiling on a single `upsertMany` batch. */
 const MAX_UPSERT_BATCH = 1000;
-
-/** Cap on parallel `toVector` (embedder) calls inside a single `upsertMany`. */
-const UPSERT_EMBED_CONCURRENCY = 8;
-
-/**
- * Map `items` through `fn` with bounded parallelism — at most `limit` calls in
- * flight at once. Preserves input order in the output. Written inline to avoid
- * a `p-limit` dependency.
- */
-const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number, function_: (item: T, index: number) => Promise<U>): Promise<U[]> => {
-    if (items.length === 0) {
-        return [];
-    }
-
-    const effectiveLimit = Math.max(1, Math.min(limit, items.length));
-    const results: U[] = Array.from({ length: items.length });
-    let cursor = 0;
-
-    const workers = Array.from({ length: effectiveLimit }, async () => {
-        while (true) {
-            const index = cursor;
-
-            cursor += 1;
-
-            if (index >= items.length) {
-                return;
-            }
-
-            // `index < items.length` is guaranteed above, so the indexed read
-            // yields a real element; `at` keeps the access in-bounds without a
-            // non-null assertion. `T` itself cannot be `undefined` for a
-            // populated array here, so the cast restores the element type.
-            const item = items.at(index) as T;
-
-            results[index] = await function_(item, index);
-        }
-    });
-
-    await Promise.all(workers);
-
-    return results;
-};
 
 export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
     if (!options.indexes || Object.keys(options.indexes).length === 0) {
@@ -119,7 +79,11 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
 
         let values: ReadonlyArray<number>;
 
-        if (input.vector) {
+        // Guard on length, not truthiness: an empty `[]` is truthy but is not a
+        // usable query vector. Falling through to the embed branch yields the
+        // descriptive local error instead of an opaque remote Vectorize reject,
+        // and an accidental empty array no longer silently skips the embedder.
+        if (input.vector && input.vector.length > 0) {
             values = input.vector;
         } else {
             if (!input.embed || input.input === undefined) {

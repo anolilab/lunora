@@ -136,6 +136,52 @@ describe("createVectors", () => {
         await expect(vectors.query("docs", {})).rejects.toThrow(/requires either/i);
     });
 
+    it("treats an empty precomputed vector as absent and falls through to embed", async () => {
+        expect.assertions(3);
+
+        const index = fakeIndex();
+        const vectors = createVectors({ indexes: { docs: index } });
+        const embed = vi.fn<EmbedFunction<string>>(async (text: string) => [text.length]);
+
+        // `[]` is truthy but unusable: it must not be forwarded to index.query.
+        await vectors.query("docs", { embed, input: "hi", vector: [] });
+
+        expect(embed).toHaveBeenCalledWith("hi");
+        expect(index.query).toHaveBeenCalledWith([2], expect.anything());
+        await expect(vectors.query("docs", { vector: [] })).rejects.toThrow(/requires either/i);
+    });
+
+    it("rejects upsertMany batches over the 1000 limit", async () => {
+        expect.assertions(2);
+
+        const vectors = createVectors({ indexes: { docs: fakeIndex() } });
+        const embed = (text: string): ReadonlyArray<number> => [text.length];
+        const inputs = Array.from({ length: 1001 }, (_, index) => {
+            return { embed, id: `id-${String(index)}`, input: "x" };
+        });
+
+        await expect(vectors.upsertMany("docs", inputs)).rejects.toThrow(RangeError);
+        await expect(vectors.upsertMany("docs", inputs)).rejects.toThrow(/exceeds 1000/);
+    });
+
+    it("rejects getByIds / deleteByIds id batches over the 1000 limit", async () => {
+        expect.assertions(2);
+
+        const vectors = createVectors({ indexes: { docs: fakeIndex() } });
+        const ids = Array.from({ length: 1001 }, (_, index) => `id-${String(index)}`);
+
+        await expect(vectors.getByIds("docs", ids)).rejects.toThrow(/at most 1000 ids/);
+        await expect(vectors.deleteByIds("docs", ids)).rejects.toThrow(/at most 1000 ids/);
+    });
+
+    it.each([0, 101, 1.5, -1])("rejects an out-of-range or non-integer topK (%s)", async (topK) => {
+        expect.assertions(1);
+
+        const vectors = createVectors({ indexes: { docs: fakeIndex() } });
+
+        await expect(vectors.query("docs", { topK, vector: [0.1] })).rejects.toThrow(/topK must be an integer in \[1, 100\]/);
+    });
+
     it("passes through getByIds and deleteByIds unchanged", async () => {
         expect.assertions(4);
 
