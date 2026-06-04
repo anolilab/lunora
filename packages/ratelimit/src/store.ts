@@ -169,7 +169,7 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     // insert directly, halving the index lookups per consuming limit() (was
     // find-in-get + find-in-set; now one find total). The cache is invalidated
     // on every write so a subsequent get() re-reads, never serving stale state.
-    const idCache = new Map<string, Id<string> | null>();
+    const idCache = new Map<string, Id<string> | undefined>();
 
     const find = async (storageKey: string): Promise<Record<string, unknown> | null> => {
         const row = await db
@@ -177,32 +177,31 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
             .withIndex(index, (q) => q.eq(keyField, storageKey))
             .first();
 
-        idCache.set(storageKey, row ? (row._id as Id<string>) : null);
+        idCache.set(storageKey, row ? (row._id as Id<string>) : undefined);
 
         return row;
     };
 
     // The row id resolved by the most recent find(): the id when a row matched,
-    // `null` when it didn't, or `undefined` when no lookup is cached (the caller
-    // must find()). Re-running find() only when the cache is cold is what saves
-    // the redundant lookup on the get()→set() hot path.
-    const resolveId = async (storageKey: string): Promise<Id<string> | null> => {
-        const cached = idCache.get(storageKey);
-
+    // or a cached `undefined` (tracked via `idCache.has()`) when it didn't. A
+    // missing cache entry means no lookup is cached (the caller must find()).
+    // Re-running find() only when the cache is cold is what saves the redundant
+    // lookup on the get()→set() hot path.
+    const resolveId = async (storageKey: string): Promise<Id<string> | undefined> => {
         if (idCache.has(storageKey)) {
-            return cached ?? null;
+            return idCache.get(storageKey);
         }
 
         await find(storageKey);
 
-        return idCache.get(storageKey) ?? null;
+        return idCache.get(storageKey);
     };
 
     return {
         delete: async (storageKey) => {
             const id = await resolveId(storageKey);
 
-            if (id !== null) {
+            if (id !== undefined) {
                 await db.delete(id);
             }
 
@@ -231,10 +230,10 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
                 document.prev = value.prev;
             }
 
-            if (id !== null) {
-                await db.patch(id, document);
-            } else {
+            if (id === undefined) {
                 idCache.set(storageKey, await db.insert(table, document));
+            } else {
+                await db.patch(id, document);
             }
         },
     };

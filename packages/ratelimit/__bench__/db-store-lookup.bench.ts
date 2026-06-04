@@ -9,7 +9,7 @@ import { createDbStore } from "../src/index.js";
  * gate: the limiter reads the prior value, runs the algorithm, then writes back.
  *
  * The **legacy** adapter ran an index lookup (`withIndex(...).first()`) inside
- * *both* get() and set() — two scans per consuming call for one read-modify-
+ * both* get() and set() — two scans per consuming call for one read-modify-
  * write. The **current** adapter caches the row id resolved by get()'s lookup so
  * set() patches directly, collapsing it to a single scan.
  *
@@ -28,10 +28,11 @@ const createFakeDatabase = (): RateLimitDb => {
 
     const query = (): RateLimitDbQuery => {
         const constraints: [string, unknown][] = [];
+        const matches = (document: Record<string, unknown>): boolean => constraints.every(([field, value]) => document[field] === value);
         const handle: RateLimitDbQuery = {
             first: async () =>
                 // Linear scan — stands in for the cost of walking the index range.
-                [...rows.values()].find((document) => constraints.every(([field, value]) => document[field] === value)) ?? null,
+                [...rows.values()].find((document) => matches(document)) ?? null,
             withIndex: (_indexName, range) => {
                 const recorder: RateLimitDbIndexRange = {
                     eq: (field, value) => {
