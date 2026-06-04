@@ -92,6 +92,7 @@ interface DatabaseWriterLike {
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
+
     /**
      * Optional table-aware lookup. The underlying writer (e.g. `@cirrus/do`)
      * already knows the owning table of an id internally (`lookupById`), so it
@@ -534,15 +535,15 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
      * it. The single source of truth shared by `get()` and the write gate.
      * Two paths:
      *
-     *   - **Fast path** — when the writer implements the optional `getWithTable`
-     *     seam it already knows the owning table from its internal index, so we
-     *     get `{ row, tableName }` in a single round-trip and only need to check
-     *     whether that table participates in RLS.
-     *   - **Fallback** — older writers expose only `get(id)`, so we fetch the
-     *     row, then probe every policy table with a `findFirst` to discover
-     *     ownership. The probes run concurrently (latency bounded by the slowest
-     *     single probe, not their sum). The unwrapped `base.*` is intentionally
-     *     used so policy enforcement on writes doesn't recurse through itself.
+     * - **Fast path** — when the writer implements the optional `getWithTable`
+     * seam it already knows the owning table from its internal index, so we
+     * get `{ row, tableName }` in a single round-trip and only need to check
+     * whether that table participates in RLS.
+     * - **Fallback** — older writers expose only `get(id)`, so we fetch the
+     * row, then probe every policy table with a `findFirst` to discover
+     * ownership. The probes run concurrently (latency bounded by the slowest
+     * single probe, not their sum). The unwrapped `base.*` is intentionally
+     * used so policy enforcement on writes doesn't recurse through itself.
      *
      * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when
      * the row exists but isn't in any policy-gated table (no policy applies →

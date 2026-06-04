@@ -430,13 +430,20 @@ const buildStreamHandler =
         if (request.signal.aborted) {
             ac.abort();
 
-            return new Response(new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }), {
-                headers: {
-                    "cache-control": "no-cache, no-transform",
-                    "content-type": "text/event-stream; charset=utf-8",
-                    "x-accel-buffering": "no",
+            return new Response(
+                new ReadableStream<Uint8Array>({
+                    start: (controller) => {
+                        controller.close();
+                    },
+                }),
+                {
+                    headers: {
+                        "cache-control": "no-cache, no-transform",
+                        "content-type": "text/event-stream; charset=utf-8",
+                        "x-accel-buffering": "no",
+                    },
                 },
-            });
+            );
         }
 
         const onAbort = (): void => {

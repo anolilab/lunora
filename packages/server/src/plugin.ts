@@ -62,6 +62,7 @@ export interface SchemaExtension<T extends Record<string, TableDefinition> = Rec
     readonly key: string;
     /** Extension tables. Names should be namespaced by `key` (e.g. `ratelimit_buckets`). */
     readonly tables: T;
+
     /**
      * Optional standalone vector indexes the plugin ships, keyed by index
      * name. Merged into the host schema's `vectorIndexes`; a key collision

@@ -129,6 +129,7 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknown> & { _id: string; table: string })[]): void => {
     const byId = new Map(rows.map((row) => [row._id, row] as const));
 
+    // eslint-disable-next-line no-param-reassign -- the helper's purpose is to install the seam on the caller's fake writer
     database.writer.getWithTable = async (id) => {
         database.calls.push({ args: undefined, method: "getWithTable", tableOrId: id });
         const row = byId.get(id);
@@ -351,12 +352,16 @@ describe("rls — read path", () => {
         const docsPolicy = definePolicy<TestContext>({
             on: "read",
             table: "documents",
-            when: ({ auth }) => ({ ownerId: auth.userId }),
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
         });
         const notesPolicy = definePolicy<TestContext>({
             on: "read",
             table: "notes",
-            when: ({ auth }) => ({ ownerId: auth.userId }),
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
         });
 
         const fake = createFakeDatabase([
@@ -395,7 +400,9 @@ describe("rls — read path", () => {
         const policy = definePolicy<TestContext>({
             on: "read",
             table: "documents",
-            when: ({ auth }) => ({ ownerId: auth.userId }),
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
         });
 
         const rows = [
@@ -412,6 +419,7 @@ describe("rls — read path", () => {
 
         expect(result?.["_id"]).toBe("d1");
         expect(fake.calls.some((call) => call.method === "getWithTable")).toBe(true);
+
         // No membership probe fan-out: the only findFirst is the policy check on
         // the owning table (with a baseWhere), never an unscoped probe.
         const unscopedProbes = fake.calls.filter((call) => call.method === "findFirst" && !(call.args as { baseWhere?: unknown } | undefined)?.baseWhere);
@@ -553,7 +561,9 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         const policy = definePolicy<TestContext>({
             on: "insert",
             table: "documents",
-            when: () => ({ _id: { eq: "anything" } }),
+            when: () => {
+                return { _id: { eq: "anything" } };
+            },
         });
         const database = createFakeDatabase([]);
 

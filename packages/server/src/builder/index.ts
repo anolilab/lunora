@@ -111,6 +111,7 @@ const makeStreamHandler =
             const iterator = source[Symbol.asyncIterator]();
 
             try {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- intentional infinite pump loop; exits via the abort/`done` returns below
                 while (true) {
                     if (signal.aborted) {
                         return;
@@ -123,6 +124,7 @@ const makeStreamHandler =
                         return;
                     }
 
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `iterator.next()` above may have flipped `aborted`; TS can't model the side effect so it sees this as always-false
                     if (signal.aborted) {
                         return;
                     }

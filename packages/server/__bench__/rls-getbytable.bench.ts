@@ -19,8 +19,8 @@ import { definePolicy, initCirrus, rls } from "../src/index.js";
  * round-trips*, not just wall-clock — but the bench is still wall-clock so the
  * fast path's flat cost across K is visible against the probe path's growth.
  *
- *   - **probe K=1 / 4 / 16** — no `getWithTable`; 1 get + K findFirst probes.
- *   - **getWithTable K=1 / 4 / 16** — fast path; one lookup regardless of K.
+ * - **probe K=1 / 4 / 16** — no `getWithTable`; 1 get + K findFirst probes.
+ * - **getWithTable K=1 / 4 / 16** — fast path; one lookup regardless of K.
  */
 
 interface CountingWriter {
@@ -45,7 +45,7 @@ const TARGET_ID = "row_1";
  * on the first table. `withTable` toggles whether the fast-path seam exists.
  */
 const makeWriter = (tableCount: number, withTable: boolean): CountingWriter => {
-    const owningTable = `t${tableCount - 1}`;
+    const owningTable = `t${String(tableCount - 1)}`;
     const row = { _creationTime: 0, _id: TARGET_ID, ownerId: "user_42" };
 
     const writer: CountingWriter = {
@@ -107,12 +107,16 @@ const policiesFor = (tableCount: number): Policy<BenchContext>[] =>
     Array.from({ length: tableCount }, (_, index) =>
         definePolicy<BenchContext>({
             on: "read",
-            table: `t${index}`,
-            when: ({ auth }) => ({ ownerId: auth.userId }),
+            table: `t${String(index)}`,
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
         }),
     );
 
-const buildContext = (writer: CountingWriter): BenchContext => ({ auth: { roles: [], userId: "user_42" }, db: writer });
+const buildContext = (writer: CountingWriter): BenchContext => {
+    return { auth: { roles: [], userId: "user_42" }, db: writer };
+};
 
 const makeGetHandler = (tableCount: number) =>
     cirrus.query.use(rlsAsAny<BenchContext>(policiesFor(tableCount))).query(async ({ ctx }) => {
@@ -132,11 +136,11 @@ const fastWriters = { 1: makeWriter(1, true), 4: makeWriter(4, true), 16: makeWr
 
 describe("rls() get() — table discovery cost vs K policy tables", () => {
     for (const k of [1, 4, 16] as const) {
-        bench(`probe path K=${k}: 1 get + ${k} findFirst probes`, async () => {
+        bench(`probe path K=${String(k)}: 1 get + ${String(k)} findFirst probes`, async () => {
             await handlers[k].handler(buildContext(probeWriters[k]), {});
         });
 
-        bench(`getWithTable fast path K=${k}: single lookup`, async () => {
+        bench(`getWithTable fast path K=${String(k)}: single lookup`, async () => {
             await handlers[k].handler(buildContext(fastWriters[k]), {});
         });
     }
