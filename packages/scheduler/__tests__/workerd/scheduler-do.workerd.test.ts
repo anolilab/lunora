@@ -90,7 +90,7 @@ describe("schedulerDO (workerd)", () => {
             originUrl: "https://app.test",
             scheduledFor: sooner,
         });
-        const soonerBody = await soonerResponse.json();
+        const soonerBody = await soonerResponse.json<ScheduleResponseBody>();
 
         await post(stub, "/schedule", { args: {}, functionPath: "a", originUrl: "https://app.test", scheduledFor: later });
 

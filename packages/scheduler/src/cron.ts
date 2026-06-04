@@ -29,11 +29,21 @@ interface CronTriggerSnippet {
 // (we don't enforce minute < 60 etc.) — wrangler/Cloudflare will reject
 // out-of-range values — but strict enough to refuse free-form prose like
 // "every minute" that would otherwise silently no-op.
-const CRON_PIECE = /^(?:\*|\*\/\d+|\d+(?:-\d+)?(?:\/\d+)?|[A-Za-z]{3}(?:-[A-Za-z]{3})?(?:\/\d+)?)$/u;
+// `*` optionally followed by a step (`*/5`).
+const CRON_WILDCARD = /^\*(?:\/\d+)?$/u;
+
+// A numeric value or range, optionally followed by a step (`5`, `1-3`, `1-3/2`).
+const CRON_NUMERIC = /^\d+(?:-\d+)?(?:\/\d+)?$/u;
+
+// A 3-letter named token (month/weekday), optionally as a range, with a step
+// (`MON`, `MON-FRI`, `JAN-MAR/2`).
+const CRON_NAMED = /^[A-Za-z]{3}(?:-[A-Za-z]{3})?(?:\/\d+)?$/u;
 
 const CRON_FIELD_SEPARATOR = /\s+/u;
 
-const isValidCronField = (field: string): boolean => field.split(",").every((piece) => CRON_PIECE.test(piece));
+const isValidCronPiece = (piece: string): boolean => CRON_WILDCARD.test(piece) || CRON_NUMERIC.test(piece) || CRON_NAMED.test(piece);
+
+const isValidCronField = (field: string): boolean => field.split(",").every((piece) => isValidCronPiece(piece));
 
 /** Standard 5-field (minute hour day month dow) or 6-field (with seconds) cron. */
 const isValidCronExpression = (schedule: string): boolean => {

@@ -190,12 +190,9 @@ class SchedulerDO {
 
             const ok = await this.dispatch(record);
 
-            if (ok) {
-                // Single batched delete: one storage round-trip instead of two.
-                await this.state.storage.delete([`${HEADER_PREFIX}${record.id}`, `${RETRY_PREFIX}${record.id}`]);
-            } else {
-                await this.recordRetry(record);
-            }
+            // On success, a single batched delete (one storage round-trip instead
+            // of two) clears the header + retry rows; on failure, re-arm for retry.
+            await (ok ? this.state.storage.delete([`${HEADER_PREFIX}${record.id}`, `${RETRY_PREFIX}${record.id}`]) : this.recordRetry(record));
         }
         /* eslint-enable no-await-in-loop */
 

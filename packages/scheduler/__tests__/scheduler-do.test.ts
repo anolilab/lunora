@@ -13,6 +13,10 @@ interface CancelResponseBody {
     cancelled: boolean;
 }
 
+const readSchedule = async (response: Response): Promise<ScheduleResponseBody> => response.json<ScheduleResponseBody>();
+
+const readCancel = async (response: Response): Promise<CancelResponseBody> => response.json<CancelResponseBody>();
+
 class TestScheduler extends SchedulerDO {
     public dispatched: ScheduleRecord[] = [];
 
@@ -55,7 +59,7 @@ const post = (path: string, body: unknown): Request =>
 
 /** Read a /schedule response and return the typed id. */
 const scheduledId = async (response: Response): Promise<string> => {
-    const body = (await response.json()) as ScheduleResponseBody;
+    const body = await response.json<ScheduleResponseBody>();
 
     return body.id;
 };
@@ -77,7 +81,7 @@ describe("schedulerDO", () => {
             }),
         );
 
-        const body = await response.json();
+        const body = await readSchedule(response);
 
         expect(response.status).toBe(200);
         expect(body.scheduledFor).toBe(scheduledFor);
@@ -110,14 +114,14 @@ describe("schedulerDO", () => {
         const sooner = Date.now() + 1000;
 
         const soonerResponse = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", originUrl: "https://x.test", scheduledFor: sooner }));
-        const soonerBody = await soonerResponse.json();
+        const soonerBody = await readSchedule(soonerResponse);
 
         await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: later }));
 
         expect(state.alarm).toBe(sooner);
 
         const cancelResponse = await scheduler.fetch(post("/cancel", { id: soonerBody.id }));
-        const cancelBody = await cancelResponse.json();
+        const cancelBody = await readCancel(cancelResponse);
 
         expect(cancelBody.cancelled).toBe(true);
         expect(state.alarm).toBe(later);
@@ -129,7 +133,7 @@ describe("schedulerDO", () => {
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(post("/cancel", { id: "missing" }));
-        const body = await response.json();
+        const body = await readCancel(response);
 
         expect(body.cancelled).toBe(false);
     });
@@ -207,7 +211,7 @@ describe("schedulerDO — live subscriptions", () => {
         const scheduled = await scheduler.fetch(
             post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
         );
-        const { id } = await scheduled.json();
+        const { id } = await readSchedule(scheduled);
 
         // Connect after scheduling, then cancel — the cancel should push an empty list.
         state.sockets.length = 0;
@@ -305,7 +309,7 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
 
         // Each backoff is roughly double the previous (30s, 60s, 120s).
         expect(delays).toHaveLength(3);
-        expect((delays[1] ?? 0) > (delays[0] ?? 0)).toBe(true);
+        expect(delays[1] ?? 0).toBeGreaterThan(delays[0] ?? 0);
     });
 
     it("parks a job under dead: after MAX_RETRY_ATTEMPTS and clears id:/retry:", async () => {

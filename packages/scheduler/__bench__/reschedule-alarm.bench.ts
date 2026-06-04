@@ -1,14 +1,14 @@
 import { bench, describe } from "vitest";
 
-/**
+/*
  * SchedulerDO arms its alarm to the earliest pending job on every `/schedule`.
  *
- * - **old** — `rescheduleAlarm()` runs a `storage.list({ prefix: "t:", limit: 1 })`
- *   on every schedule to find the earliest entry, even when the just-inserted
- *   job is not the earliest (the common case for "schedule far in the future").
- * - **new** — `armAlarmIfEarlier()` reads the already-set alarm via
- *   `storage.getAlarm()` and only writes a new alarm when the inserted job is
- *   sooner. No prefix scan when the new job is not the earliest.
+ * old — `rescheduleAlarm()` runs a `storage.list({ prefix: "t:", limit: 1 })`
+ * on every schedule to find the earliest entry, even when the just-inserted
+ * job is not the earliest (the common case for "schedule far in the future").
+ * new — `armAlarmIfEarlier()` reads the already-set alarm via
+ * `storage.getAlarm()` and only writes a new alarm when the inserted job is
+ * sooner. No prefix scan when the new job is not the earliest.
  *
  * We model both against a Map-backed storage with the same byte-ordered `list`
  * the production fake uses (lexical order matches numeric order on the padded
@@ -23,9 +23,9 @@ const indexKey = (scheduledFor: number, id: string): string => `t:${padTime(sche
 
 interface Store {
     alarm: number | null;
-    map: Map<string, unknown>;
     // Mirrors the fake-state byte-ordered prefix list used by rescheduleAlarm.
     listFirst: (prefix: string) => string | undefined;
+    map: Map<string, unknown>;
 }
 
 const byteCompare = (left: string, right: string): number => {
@@ -63,6 +63,7 @@ const rescheduleAlarmOld = (store: Store): void => {
     const first = store.listFirst("t:");
 
     if (first === undefined) {
+        // eslint-disable-next-line no-param-reassign -- store is the mutable system under test; mutating it models setAlarm()
         store.alarm = null;
 
         return;
@@ -71,6 +72,7 @@ const rescheduleAlarmOld = (store: Store): void => {
     const dueAt = Number.parseInt(first.slice(2, first.indexOf(":", 2)), 10);
 
     if (Number.isFinite(dueAt)) {
+        // eslint-disable-next-line no-param-reassign -- store is the mutable system under test; mutating it models setAlarm()
         store.alarm = dueAt;
     }
 };
@@ -78,6 +80,7 @@ const rescheduleAlarmOld = (store: Store): void => {
 // --- new path: getAlarm comparison, no scan unless sooner -----------------
 const armAlarmIfEarlier = (store: Store, scheduledFor: number): void => {
     if (store.alarm === null || scheduledFor < store.alarm) {
+        // eslint-disable-next-line no-param-reassign -- store is the mutable system under test; mutating it models setAlarm()
         store.alarm = scheduledFor;
     }
 };
@@ -94,6 +97,7 @@ const seed = (store: Store): void => {
         store.map.set(indexKey(when, `seed${String(index)}`), `seed${String(index)}`);
     }
 
+    // eslint-disable-next-line no-param-reassign -- store is the mutable system under test; seeding sets the baseline alarm
     store.alarm = base; // earliest seeded job
 };
 

@@ -142,9 +142,9 @@ describe("createScheduler", () => {
     it("createCronTrigger validates inputs", () => {
         expect.assertions(2);
 
-        expect(() => createCronTrigger({ fn: fnRef, schedule: "" })).toThrow();
+        expect(() => createCronTrigger({ fn: fnRef, schedule: "" })).toThrow("requires `schedule` and `fn`");
         // @ts-expect-error - intentional misuse
-        expect(() => createCronTrigger({ schedule: "0 * * * *" })).toThrow();
+        expect(() => createCronTrigger({ schedule: "0 * * * *" })).toThrow("requires `schedule` and `fn`");
     });
 
     it("createCronTrigger accepts named weekday/month tokens", () => {
@@ -160,7 +160,7 @@ describe("createScheduler", () => {
     it("createCronTrigger still rejects free-form prose", () => {
         expect.assertions(2);
 
-        expect(() => createCronTrigger({ fn: fnRef, schedule: "every minute" })).toThrow();
-        expect(() => createCronTrigger({ fn: fnRef, schedule: "0 0 * *" })).toThrow();
+        expect(() => createCronTrigger({ fn: fnRef, schedule: "every minute" })).toThrow("invalid cron expression");
+        expect(() => createCronTrigger({ fn: fnRef, schedule: "0 0 * *" })).toThrow("invalid cron expression");
     });
 });
