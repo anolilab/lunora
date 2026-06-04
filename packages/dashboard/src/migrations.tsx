@@ -34,6 +34,11 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    // The shard a successful one-shot last targeted. The live channel keys on
+    // this committed value (not the live `shardKey` input) so editing the shard
+    // box without refreshing doesn't resubscribe to a half-typed shard on every
+    // keystroke — mirroring DataBrowser's `loaded.shard`.
+    const [committedShard, setCommittedShard] = useState<null | string>(null);
     const [rows, setRows] = useState<MigrationStatusRow[] | null>(null);
     const [statusError, setStatusError] = useState<null | string>(null);
     const { live, liveError, setLiveError, toggle } = useLiveToggle();
@@ -53,6 +58,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
                 const result = (await client.query(MIGRATION_STATUS, {}, callOptions(shard))) as { migrations: MigrationStatusRow[] };
 
                 recordShard(shard);
+                setCommittedShard(shard);
                 setRows(result.migrations);
             } catch (error) {
                 setRows(null);
@@ -71,13 +77,13 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     useLiveAdmin(
         ADMIN_FUNCTIONS.migrationStatus,
         {},
-        shardKey,
+        committedShard ?? "",
         (result) => {
             setStatusError(null);
             setLiveError(undefined);
             setRows((result as { migrations: MigrationStatusRow[] }).migrations);
         },
-        live,
+        live && committedShard !== null,
         setLiveError,
     );
 

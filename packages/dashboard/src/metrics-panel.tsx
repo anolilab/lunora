@@ -96,6 +96,11 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    // The shard a successful one-shot last targeted. The live channel keys on
+    // this committed value (not the live `shardKey` input) so editing the shard
+    // box without refreshing doesn't resubscribe to a half-typed shard on every
+    // keystroke — mirroring DataBrowser's `loaded.shard`.
+    const [committedShard, setCommittedShard] = useState<null | string>(null);
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
     const [error, setError] = useState<null | string>(null);
     const { live, liveError, setLiveError, toggle } = useLiveToggle();
@@ -164,6 +169,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                 recordShard(shard);
 
                 if (mountedRef.current) {
+                    setCommittedShard(shard);
                     applySample(next);
                 }
             } catch (error_) {
@@ -186,13 +192,13 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     useLiveAdmin(
         ADMIN_FUNCTIONS.getMetrics,
         {},
-        shardKey,
+        committedShard ?? "",
         (next) => {
             if (mountedRef.current) {
                 applySample(next as ShardMetrics);
             }
         },
-        live,
+        live && committedShard !== null,
         (message) => {
             if (mountedRef.current) {
                 setLiveError(message);

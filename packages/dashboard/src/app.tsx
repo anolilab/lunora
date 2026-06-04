@@ -10,6 +10,7 @@ import { ErrorBoundary } from "./error-boundary.js";
 import DashboardStyles from "./theme.js";
 import DASHBOARD_ROOT_CLASS from "./theme-constants.js";
 import { loadToken, saveToken } from "./token-storage.js";
+import useDebounced from "./use-debounced.js";
 
 interface DashboardAppProps {
     /**
@@ -69,18 +70,24 @@ export const DashboardApp = ({ adminToken, baseUrl, dashboard }: DashboardAppPro
         saveToken(token);
     }, [token]);
 
+    // Debounce the value that feeds the client so typing/pasting a multi-character
+    // token doesn't rebuild the CirrusClient (and tear down its WebSocket +
+    // reconnect timers) once per keystroke. The raw `token` still drives the
+    // controlled input; the client rebuilds at most once per typing pause.
+    const debouncedToken = useDebounced(token, 300);
+
     const client = useMemo(() => {
         // The token doubles as the WS credential (`wsToken`) so live admin
         // subscriptions clear the upgrade's admin gate, mirroring the bearer the
         // HTTP admin RPCs already send.
-        const created = new CirrusClient({ url: resolveBaseUrl(baseUrl), ...(token === "" ? {} : { wsToken: token }) });
+        const created = new CirrusClient({ url: resolveBaseUrl(baseUrl), ...(debouncedToken === "" ? {} : { wsToken: debouncedToken }) });
 
-        if (token !== "") {
-            created.setAuthToken(token);
+        if (debouncedToken !== "") {
+            created.setAuthToken(debouncedToken);
         }
 
         return created;
-    }, [baseUrl, token]);
+    }, [baseUrl, debouncedToken]);
 
     // Close the previous client when `token`/`baseUrl` changes (and on unmount)
     // so we don't leak sockets, in-flight streams, or reconnect timers each

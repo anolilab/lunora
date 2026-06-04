@@ -96,6 +96,11 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    // The shard a successful one-shot last targeted. The live channel keys on
+    // this committed value (not the live `shardKey` input) so editing the shard
+    // box without refreshing doesn't resubscribe to a half-typed shard on every
+    // keystroke — mirroring DataBrowser's `loaded.shard`.
+    const [committedShard, setCommittedShard] = useState<null | string>(null);
     const [entries, setEntries] = useState<LogEntry[]>([]);
     const [error, setError] = useState<null | string>(null);
     const [search, setSearch] = useState<string>("");
@@ -110,6 +115,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 const result = (await client.query(GET_LOGS, {}, callOptions(shard))) as LogsResult;
 
                 recordShard(shard);
+                setCommittedShard(shard);
                 setEntries(result.entries);
             } catch (error_) {
                 setEntries([]);
@@ -128,13 +134,13 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     useLiveAdmin(
         ADMIN_FUNCTIONS.getLogs,
         {},
-        shardKey,
+        committedShard ?? "",
         (result) => {
             setError(null);
             setLiveError(undefined);
             setEntries((result as LogsResult).entries);
         },
-        live,
+        live && committedShard !== null,
         setLiveError,
     );
 
