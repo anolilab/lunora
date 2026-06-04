@@ -11,7 +11,7 @@
  * against accidentally targeting localhost in production scripts.
  */
 import { createReadStream, createWriteStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { stat, unlink } from "node:fs/promises";
 
 import resolveAdminBaseUrl from "../util/admin-url.js";
 import type { Logger } from "../util/logger.js";
@@ -101,38 +101,62 @@ const streamNdjsonToSink = async (body: ReadableStream<Uint8Array>, sink: NodeJS
     let leftover = "";
     let done = false;
 
-    while (!done) {
-        // eslint-disable-next-line no-await-in-loop -- stream chunks must be read sequentially
-        const read = await reader.read();
+    try {
+        while (!done) {
+            // eslint-disable-next-line no-await-in-loop -- stream chunks must be read sequentially
+            const read = await reader.read();
 
-        done = read.done;
+            done = read.done;
 
-        if (read.value === undefined) {
-            continue;
+            if (read.value === undefined) {
+                continue;
+            }
+
+            bytes += read.value.length;
+            leftover += decoder.decode(read.value, { stream: true });
+
+            let newlineIndex = leftover.indexOf("\n");
+
+            while (newlineIndex !== -1) {
+                rows += 1;
+                const line = `${leftover.slice(0, newlineIndex)}\n`;
+
+                // eslint-disable-next-line no-await-in-loop -- backpressure is intentionally sequential
+                await writeWithBackpressure(sink, line);
+                leftover = leftover.slice(newlineIndex + 1);
+                newlineIndex = leftover.indexOf("\n");
+            }
         }
 
-        bytes += read.value.length;
-        leftover += decoder.decode(read.value, { stream: true });
-
-        let newlineIndex = leftover.indexOf("\n");
-
-        while (newlineIndex !== -1) {
+        if (leftover.length > 0) {
             rows += 1;
-            const line = `${leftover.slice(0, newlineIndex)}\n`;
-
-            // eslint-disable-next-line no-await-in-loop -- backpressure is intentionally sequential
-            await writeWithBackpressure(sink, line);
-            leftover = leftover.slice(newlineIndex + 1);
-            newlineIndex = leftover.indexOf("\n");
+            await writeWithBackpressure(sink, `${leftover}\n`);
         }
+
+        return { bytes, rows };
+    } finally {
+        // Release the body lock even on a thrown write/decode error so the
+        // response stream isn't left locked.
+        reader.releaseLock();
+    }
+};
+
+/**
+ * Close the write stream and remove the partial backup after a mid-stream
+ * export failure. No-op for the stdout sink (`outPath === undefined`).
+ */
+const discardPartialExport = async (sink: NodeJS.WritableStream, outPath: string | undefined): Promise<void> => {
+    if (outPath === undefined) {
+        return;
     }
 
-    if (leftover.length > 0) {
-        rows += 1;
-        await writeWithBackpressure(sink, `${leftover}\n`);
-    }
+    (sink as ReturnType<typeof createWriteStream>).destroy();
 
-    return { bytes, rows };
+    try {
+        await unlink(outPath);
+    } catch {
+        /* ignore — partial file may not exist */
+    }
 };
 
 /**
@@ -197,7 +221,18 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     const outPath = options.out === undefined || options.out === "-" ? undefined : options.out;
     const sink = outPath === undefined ? process.stdout : createWriteStream(outPath, { encoding: "utf8" });
 
-    const { bytes, rows } = await streamNdjsonToSink(response.body, sink);
+    let bytes: number;
+    let rows: number;
+
+    try {
+        ({ bytes, rows } = await streamNdjsonToSink(response.body, sink));
+    } catch (error) {
+        // On a mid-stream failure, close the file descriptor and remove the
+        // partial backup so we don't leak the fd or leave a truncated dump.
+        await discardPartialExport(sink, outPath);
+
+        throw error;
+    }
 
     if (outPath !== undefined) {
         await new Promise<void>((resolve, reject) => {

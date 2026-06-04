@@ -109,6 +109,7 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
 
     let sigintCount = 0;
     let escalationTimer: NodeJS.Timeout | undefined;
+    let tearingDown = false;
 
     const onSigint = () => {
         sigintCount += 1;
@@ -176,12 +177,25 @@ const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?
                     onLine(chunk, "stderr");
                 });
 
+                const onFirstExit = () => {
+                    // The first child to exit tears down its sibling(s) so
+                    // Promise.all can resolve instead of hanging on a child
+                    // that outlives a crashed peer.
+                    if (!tearingDown) {
+                        tearingDown = true;
+                        logger.info(`[${tag}] exited — shutting down remaining dev processes`);
+                        cleanup("SIGTERM");
+                    }
+                };
+
                 child.on("error", (error) => {
                     logger.error(`[${tag}] failed to start: ${error.message}`);
+                    onFirstExit();
                     resolve(1);
                 });
 
                 child.on("exit", (code) => {
+                    onFirstExit();
                     resolve(code ?? 0);
                 });
             }),
@@ -252,4 +266,4 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 };
 
 export type { DevCommandOptions, DevCommandPlan, DevMode };
-export { planDevCommand, runDevCommand };
+export { planDevCommand, runConcurrent, runDevCommand };

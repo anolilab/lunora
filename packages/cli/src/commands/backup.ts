@@ -166,6 +166,10 @@ interface CollectedPage {
     cursors: Record<string, number>;
     globalChanges: ReadonlyArray<WireChange>;
     globalCursor: number;
+    /** True if this page collected at least one in-window (ts at or before `toMs`) change. */
+    inWindow: boolean;
+    /** True if this page dropped at least one change for being past `toMs`. */
+    pastWindow: boolean;
 }
 
 /**
@@ -177,16 +181,33 @@ const collectReplayPage = (data: SyncPage, cursors: Readonly<Record<string, numb
     const batches: ReplayBatch[] = [];
     const nextCursors: Record<string, number> = { ...cursors };
     let advanced = false;
+    let inWindow = false;
+    let pastWindow = false;
+
+    const partitionByWindow = (changes: ReadonlyArray<WireChange>): WireChange[] => {
+        const fresh: WireChange[] = [];
+
+        for (const entry of changes) {
+            if ((entry.ts ?? 0) <= toMs) {
+                fresh.push(entry);
+            } else {
+                pastWindow = true;
+            }
+        }
+
+        return fresh;
+    };
 
     for (const shard of data.shards ?? []) {
         if (shard.shardKey === undefined) {
             continue;
         }
 
-        const fresh = (shard.changes ?? []).filter((entry) => (entry.ts ?? 0) <= toMs);
+        const fresh = partitionByWindow(shard.changes ?? []);
 
         if (fresh.length > 0) {
             batches.push({ changes: fresh, shardKey: shard.shardKey });
+            inWindow = true;
         }
 
         if (typeof shard.cursor === "number" && shard.cursor > (nextCursors[shard.shardKey] ?? 0)) {
@@ -195,7 +216,12 @@ const collectReplayPage = (data: SyncPage, cursors: Readonly<Record<string, numb
         }
     }
 
-    const globalChanges = (data.global?.changes ?? []).filter((entry) => (entry.ts ?? 0) <= toMs);
+    const globalChanges = partitionByWindow(data.global?.changes ?? []);
+
+    if (globalChanges.length > 0) {
+        inWindow = true;
+    }
+
     let nextGlobalCursor = globalCursor;
 
     if (typeof data.global?.cursor === "number" && data.global.cursor > globalCursor) {
@@ -203,7 +229,7 @@ const collectReplayPage = (data: SyncPage, cursors: Readonly<Record<string, numb
         advanced = true;
     }
 
-    return { advanced, batches, cursors: nextCursors, globalChanges, globalCursor: nextGlobalCursor };
+    return { advanced, batches, cursors: nextCursors, globalChanges, globalCursor: nextGlobalCursor, inWindow, pastWindow };
 };
 
 /** POST one replay page to `/apply` and return how many changes it applied. */
@@ -267,6 +293,15 @@ const replayCdcTo = async (options: BackupCommandOptions, baseUrl: string, token
         applied += await postReplayPage(fetchImpl, baseUrl, headers, collected);
 
         if (!collected.advanced) {
+            break;
+        }
+
+        // Once the feed passes `--to`, every later page filters to an empty
+        // in-window batch yet cursors keep advancing — without this guard the
+        // loop would keep doing real /sync round-trips up to MAX_REPLAY_PAGES
+        // for zero applied work. Stop as soon as a page collects nothing in
+        // window but did drop changes for being past the cutoff.
+        if (!collected.inWindow && collected.pastWindow) {
             break;
         }
     }

@@ -240,6 +240,77 @@ describe("cirrus backup restore --to (point-in-time recovery)", () => {
         expect(applyBodies[0]?.batches[0]?.changes).toHaveLength(2);
     });
 
+    it("stops paging once the feed passes --to instead of draining the whole changelog", async () => {
+        expect.assertions(3);
+
+        const { logger } = capturingLogger();
+
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        let syncCalls = 0;
+        let applyCalls = 0;
+
+        // Page 1: in-window changes. Page 2 onward: only changes PAST --to, but
+        // the cursor keeps advancing — the old loop would keep doing /sync
+        // round-trips up to MAX_REPLAY_PAGES for zero applied work. The
+        // early-break must stop after page 2.
+        const okJson = (value: unknown) => {
+            return {
+                body: null,
+                json: async () => value,
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        };
+
+        const fetchImpl: StreamingFetchLike = async (url) => {
+            if (url.endsWith("/_cirrus/admin/import")) {
+                return okJson({ inserted: { users: 1 } });
+            }
+
+            if (url.endsWith("/_cirrus/admin/sync")) {
+                syncCalls += 1;
+                const page =
+                    syncCalls === 1
+                        ? { shards: [{ changes: [{ id: "a", ts: 100 }], cursor: syncCalls, shardKey: "c1" }] }
+                        : // ts far beyond the --to cutoff; cursor still advances.
+                          { shards: [{ changes: [{ id: `f${String(syncCalls)}`, ts: Number.MAX_SAFE_INTEGER }], cursor: syncCalls, shardKey: "c1" }] };
+
+                return okJson(page);
+            }
+
+            applyCalls += 1;
+
+            return okJson({ applied: 1 });
+        };
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl,
+            logger,
+            subcommand: "restore",
+            target: created.entry?.id,
+            to: "2026-06-03T12:00:00.000Z",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(0);
+        // Page 1 applied the in-window change; page 2 collected nothing in
+        // window but saw a past-window change → break. No third /sync.
+        expect(syncCalls).toBe(2);
+        expect(applyCalls).toBe(1);
+    });
+
     it("rejects an invalid --to timestamp", async () => {
         expect.assertions(1);
 
