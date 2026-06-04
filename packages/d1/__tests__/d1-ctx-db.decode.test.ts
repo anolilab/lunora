@@ -23,10 +23,11 @@ const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike 
 // An `v.optional(inner)` column: kind is "optional", the inner validator
 // (carrying the real storage kind) lives on `_meta.inner`, mirroring
 // `@cirrus/values`' `createValidator`. The decode must unwrap to `inner.kind`.
-const optionalCol = (innerKind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({
+const optionalCol = (innerKind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike =>
+    ({
         _meta: { column: { notNull: false, ...column }, inner: { _meta: {}, kind: innerKind } },
         kind: "optional",
-    } as ValidatorLike);
+    }) as ValidatorLike;
 
 // A table whose columns span every non-scalar storage form the serializer
 // encodes: object/array/record → JSON, bigint → decimal string, plus scalar
