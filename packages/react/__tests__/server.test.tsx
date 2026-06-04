@@ -25,6 +25,7 @@ const mockFetch = (result: unknown): ReturnType<typeof vi.fn> =>
                 json: async () => {
                     return { result };
                 },
+                ok: true,
                 status: 200,
             }) as unknown as Response,
     );
