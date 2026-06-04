@@ -1,4 +1,4 @@
-import { CirrusError, toErrorResponse } from "./errors.js";
+import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors.js";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
 import { emitRpcEvent } from "./observability.js";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator.js";
@@ -655,10 +655,12 @@ interface ForwardContext {
 
 /**
  * Build an `ObservabilityEvent` for a failed RPC dispatch. Extracts code /
- * status / message from a {@link CirrusError} when present; otherwise reports
- * `INTERNAL_SERVER_ERROR` / 500 with the thrown value's message. Used by
- * both the single-shard and fan-out error branches so they emit a uniform
- * shape.
+ * status / message from any transport-mappable error (a {@link CirrusError} or
+ * a structural `CirrusError`/`ConflictError` from a downstream package, the
+ * same set `toErrorResponse` maps); otherwise reports `INTERNAL_SERVER_ERROR` /
+ * 500 with the thrown value's message. Used by both the single-shard and
+ * fan-out error branches so they emit a uniform shape — and so a `ConflictError`
+ * is reported with its real code/status instead of a generic 500.
  */
 const buildErrorEvent = (
     functionPath: string,
@@ -666,10 +668,9 @@ const buildErrorEvent = (
     error: unknown,
     extra: { fanOut?: { table: string }; shardKey?: string },
 ): ObservabilityEvent => {
-    const isCirrus = error instanceof Error && error.name === "CirrusError";
-    const errorRecord = error as Record<string, unknown>;
-    const code = isCirrus && typeof errorRecord["code"] === "string" ? errorRecord["code"] : "INTERNAL_SERVER_ERROR";
-    const status = isCirrus && typeof errorRecord["status"] === "number" ? errorRecord["status"] : 500;
+    const mappable = error instanceof CirrusError || isStructuralCirrusError(error) || isStructuralConflictError(error);
+    const code = mappable ? (error as { code: string }).code : "INTERNAL_SERVER_ERROR";
+    const status = mappable ? (error as { status: number }).status : 500;
     const message = error instanceof Error ? error.message : String(error);
 
     return {
@@ -1756,7 +1757,12 @@ const createWorker = (
         return value === null || value === "" ? undefined : value;
     };
 
-    /** Parse the shared `limit` / `offset` paging params off an admin GET request. */
+    /**
+     * Parse the shared `limit` / `offset` paging params off an admin GET request.
+     * Negative values are clamped to `undefined` (limit) / `0` (offset) so a
+     * `?limit=-5` or `?offset=-1` never reaches the introspectors as a malformed
+     * SQL `LIMIT`/`OFFSET`.
+     */
     const parsePaging = (request: Request): { limit?: number; offset?: number } => {
         const url = new URL(request.url);
         const limitParameter = url.searchParams.get("limit");
@@ -1765,8 +1771,8 @@ const createWorker = (
         const offset = offsetParameter === null ? undefined : Number.parseInt(offsetParameter, 10);
 
         return {
-            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
-            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
+            limit: limit !== undefined && Number.isFinite(limit) && limit >= 0 ? limit : undefined,
+            offset: offset !== undefined && Number.isFinite(offset) && offset >= 0 ? offset : undefined,
         };
     };
 

@@ -90,5 +90,5 @@ const toErrorResponse = (error: unknown): Response => {
     });
 };
 
-export { CirrusError, toErrorResponse };
-export type { CirrusErrorBody };
+export { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse };
+export type { CirrusErrorBody, StructuralCirrusErrorLike };
