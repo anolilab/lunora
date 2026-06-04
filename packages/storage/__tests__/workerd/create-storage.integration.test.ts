@@ -37,6 +37,20 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
         await expect(got!.text()).resolves.toBe("hello cirrus");
     });
 
+    it("download with a byte range streams only the requested window", async () => {
+        expect.assertions(2);
+
+        const sut = storage();
+
+        await sut.upload("clip.txt", new TextEncoder().encode("abcdefghij").buffer, { contentType: "text/plain" });
+
+        // R2 resolves the range server-side, so only these bytes come back.
+        const ranged = await sut.download("clip.txt", { range: { length: 4, offset: 2 } });
+
+        expect(ranged).not.toBeNull();
+        await expect(ranged!.text()).resolves.toBe("cdef");
+    });
+
     it("list returns objects matching the given prefix", async () => {
         expect.assertions(1);
 
