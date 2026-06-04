@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import createScheduler from "../src/create-scheduler.js";
 import { createCronTrigger } from "../src/cron.js";
-import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference } from "../src/types.js";
+import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord } from "../src/types.js";
 
 const NAMESPACE_PATTERN = /namespace/;
 const ORIGIN_URL_PATTERN = /originUrl/;
@@ -25,6 +25,17 @@ const fakeNamespace = (responses: Record<string, unknown> = DEFAULT_RESPONSES): 
             const path = new URL(url).pathname;
 
             calls.push({ body, url });
+
+            // The DO's `/get?id=` route is derived from the same `/list` records
+            // the fake is seeded with: look the id up and answer `{ record }` on a
+            // hit, `{}` on a miss (mirroring the real DO's absent-field contract).
+            if (path === "/get") {
+                const id = new URL(url).searchParams.get("id");
+                const seeded = (responses["/list"] as { records?: ScheduleRecord[] } | undefined)?.records ?? [];
+                const record = seeded.find((candidate) => candidate.id === id);
+
+                return Response.json(record ? { record } : {}, { headers: { "content-type": "application/json" }, status: 200 });
+            }
 
             const responseBody = responses[path] ?? { ok: true };
 
@@ -129,15 +140,21 @@ describe("createScheduler", () => {
         expect(calls).toHaveLength(1);
     });
 
-    it("get() resolves a single record by id, or null when absent", async () => {
-        expect.assertions(2);
+    it("get() resolves a single record via the direct GET /get?id= route", async () => {
+        expect.assertions(4);
 
         const records = [{ args: {}, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
-        const { namespace } = fakeNamespace({ "/list": { records } });
+        const { calls, namespace } = fakeNamespace({ "/list": { records } });
         const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
 
         await expect(scheduler.get("a")).resolves.toEqual(records[0]);
         await expect(scheduler.get("missing")).resolves.toBeNull();
+
+        // O(1) lookup: a dedicated `/get` read, not a full `/list` scan.
+        const url = new URL(calls[0]!.url);
+
+        expect(url.pathname).toBe("/get");
+        expect(url.searchParams.get("id")).toBe("a");
     });
 
     it("list()/get() stay robust when the DO 200s without a `records` array", async () => {
