@@ -3,21 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 
 import { compileMigrationsSql, ensureMigrated } from "../src/migrate.js";
 
-vi.mock("better-auth/db/migration", () => {
-    return { getMigrations: vi.fn() };
+vi.mock(import("better-auth/db/migration"), () => {
+    return { getMigrations: vi.fn<typeof getMigrations>() };
 });
 
 const mockGetMigrations = vi.mocked(getMigrations);
 
-const makeMigrations = (runMigrations = vi.fn(async () => {})) => {
-    return { compileMigrations: vi.fn(async () => "SQL"), runMigrations };
+const makeMigrations = (runMigrations = vi.fn<() => Promise<void>>(async () => {})) => {
+    return { compileMigrations: vi.fn<() => Promise<string>>(async () => "SQL"), runMigrations };
 };
 
 describe("ensureMigrated", () => {
     it("single-flights concurrent callers onto one migration run", async () => {
         expect.assertions(2);
 
-        const runMigrations = vi.fn(async () => {});
+        const runMigrations = vi.fn<() => Promise<void>>(async () => {});
 
         mockGetMigrations.mockReset();
         mockGetMigrations.mockResolvedValue(makeMigrations(runMigrations) as never);
@@ -53,7 +53,7 @@ describe("ensureMigrated", () => {
         // builds `createAuth({...})` per request knows the diff re-runs.
         expect.assertions(1);
 
-        const runMigrations = vi.fn(async () => {});
+        const runMigrations = vi.fn<() => Promise<void>>(async () => {});
 
         mockGetMigrations.mockReset();
         mockGetMigrations.mockResolvedValue(makeMigrations(runMigrations) as never);
@@ -71,10 +71,10 @@ describe("compileMigrationsSql", () => {
     it("forwards options to getMigrations and returns compileMigrations()'s result", async () => {
         expect.assertions(3);
 
-        const compileMigrations = vi.fn(async () => "CREATE TABLE user (...)");
+        const compileMigrations = vi.fn<() => Promise<string>>(async () => "CREATE TABLE user (...)");
 
         mockGetMigrations.mockReset();
-        mockGetMigrations.mockResolvedValue({ compileMigrations, runMigrations: vi.fn(async () => {}) } as never);
+        mockGetMigrations.mockResolvedValue({ compileMigrations, runMigrations: vi.fn<() => Promise<void>>(async () => {}) } as never);
 
         const options = { db: {} };
 

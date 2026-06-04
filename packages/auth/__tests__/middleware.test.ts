@@ -102,7 +102,9 @@ describe("withAuthPlugins", () => {
         expect(context.authApi).toBeDefined();
         expect(context.authApi).toBe(auth.api);
 
-        expectTypeOf(context.authApi?.createOrganization).toBeFunction();
+        // Non-null assertions narrow away the `| undefined` from the optional
+        // chain so `toBeFunction` checks the resolved endpoint type, not the union.
+        expectTypeOf(context.authApi!.createOrganization!).toBeFunction();
     });
 
     it("ctx.authApi.createOrganization writes to the underlying store", async () => {
@@ -157,6 +159,6 @@ describe("withAuthPlugins", () => {
         expect(contextOut).toMatchObject({ userId: "u_42" });
         expect(contextOut.authApi).toBeDefined();
 
-        expectTypeOf((contextOut.authApi as { createOrganization?: unknown }).createOrganization).toBeFunction();
+        expectTypeOf((contextOut.authApi as { createOrganization: (...args: unknown[]) => unknown }).createOrganization).toBeFunction();
     });
 });
