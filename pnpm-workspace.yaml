@@ -8,6 +8,13 @@ packages:
 
 autoInstallPeers: true
 
+# Force a single React across the tree. @visulima/tui (a vis dependency) and its
+# react-reconciler pin react@19.2.6 while everything else uses 19.2.7; the two
+# copies crash vis's TUI renderer ("Invalid hook call" / useContext on null).
+overrides:
+  react: 19.2.7
+  react-dom: 19.2.7
+
 catalogs:
   build:
     "@babel/core": ^7.29.7
