@@ -12,15 +12,15 @@ const mockClient = (): {
     mutation: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
 } => {
-    const action = vi.fn(async () => {
+    const action = vi.fn<() => Promise<{ ran: string }>>(async () => {
         return { ran: "action" };
     });
-    const listFunctions = vi.fn(async () => [{ kind: "query", path: "messages:list" }]);
-    const listGlobalTables = vi.fn(async () => [{ columns: ["email"], name: "users" }]);
-    const mutation = vi.fn(async () => {
+    const listFunctions = vi.fn<() => Promise<{ kind: string; path: string }[]>>(async () => [{ kind: "query", path: "messages:list" }]);
+    const listGlobalTables = vi.fn<() => Promise<{ columns: string[]; name: string }[]>>(async () => [{ columns: ["email"], name: "users" }]);
+    const mutation = vi.fn<() => Promise<{ id: string }>>(async () => {
         return { id: "m1" };
     });
-    const query = vi.fn(async () => {
+    const query = vi.fn<() => Promise<{ count: number }>>(async () => {
         return { count: 7 };
     });
 

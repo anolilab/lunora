@@ -11,8 +11,8 @@ const mockClient = (): {
     listFunctions: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
 } => {
-    const listFunctions = vi.fn(async () => [{ kind: "query", path: "messages:list" }]);
-    const query = vi.fn(async () => {
+    const listFunctions = vi.fn<() => Promise<{ kind: string; path: string }[]>>(async () => [{ kind: "query", path: "messages:list" }]);
+    const query = vi.fn<() => Promise<{ count: number }>>(async () => {
         return { count: 7 };
     });
 
@@ -74,7 +74,7 @@ describe("resolveClient", () => {
 });
 
 describe("createCirrusMcpServer request handlers", () => {
-    it("ListTools returns the full tool definition set", async () => {
+    it("listTools returns the full tool definition set", async () => {
         expect.assertions(1);
 
         const server = createCirrusMcpServer({ client: mockClient().asClient });
@@ -89,7 +89,7 @@ describe("createCirrusMcpServer request handlers", () => {
         ]);
     });
 
-    it("CallTool dispatches through callTool against the injected client", async () => {
+    it("callTool dispatches through callTool against the injected client", async () => {
         expect.assertions(2);
 
         const mock = mockClient();
@@ -105,7 +105,7 @@ describe("createCirrusMcpServer request handlers", () => {
         expect(JSON.parse((result.content[0] as { text: string }).text)).toStrictEqual([{ kind: "query", path: "messages:list" }]);
     });
 
-    it("CallTool tolerates a request with no arguments bag (defaults to {})", async () => {
+    it("callTool tolerates a request with no arguments bag (defaults to {})", async () => {
         expect.assertions(1);
 
         const mock = mockClient();
