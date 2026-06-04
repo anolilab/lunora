@@ -8,6 +8,8 @@
         "build": "vite build",
         "deploy": "wrangler deploy",
         "dev": "vite",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
         "lint:types": "tsc --noEmit",
         "test": "vitest run"
     },

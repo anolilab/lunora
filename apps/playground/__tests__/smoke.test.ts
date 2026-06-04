@@ -16,13 +16,13 @@ import { fileURLToPath } from "node:url";
 
 import { runCodegen } from "@cirrus/codegen";
 import { validateWranglerProject } from "@cirrus/config";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
 const testDirectory = fileURLToPath(new URL(".", import.meta.url));
 const projectRoot = join(testDirectory, "..");
 
 describe("playground compose smoke (Phase 7)", () => {
-    test("runCodegen parses schema + functions and emits the _generated triad", () => {
+    it("runCodegen parses schema + functions and emits the _generated triad", () => {
         expect.assertions(7);
 
         const result = runCodegen({ projectRoot });
@@ -37,7 +37,7 @@ describe("playground compose smoke (Phase 7)", () => {
         expect(result.generated.api).toContain("messages");
     });
 
-    test("validateWranglerProject finds no problems for the shipped wrangler.jsonc", () => {
+    it("validateWranglerProject finds no problems for the shipped wrangler.jsonc", () => {
         expect.assertions(3);
 
         const result = validateWranglerProject({ projectRoot });
@@ -47,7 +47,7 @@ describe("playground compose smoke (Phase 7)", () => {
         expect(result.report.valid).toBe(true);
     });
 
-    test("wrangler.jsonc declares the bindings the schema requires", () => {
+    it("wrangler.jsonc declares the bindings the schema requires", () => {
         expect.assertions(7);
 
         const wranglerPath = join(projectRoot, "wrangler.jsonc");

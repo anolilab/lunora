@@ -7,12 +7,12 @@ import type {
     ExecutionContextLike,
     FunctionRegistryLike,
     GlobalIntrospector,
-    Route,
     ScheduledControllerLike,
     ShardNamespaceLike,
 } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
-import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
+import type { DurableObjectNamespaceLike } from "@cirrus/scheduler";
+import { createScheduler } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
 import { buildSignedUrl, createStorage } from "@cirrus/storage";
 
@@ -21,29 +21,31 @@ import { createShardDO } from "../../cirrus/_generated/shard.js";
 import schema from "../../cirrus/schema.js";
 
 /** Adapt the raw D1 binding to `@cirrus/d1`'s `D1Exec`. Reads go through `all`; admin browsing never writes. */
-const buildExec = (db: D1DatabaseLike): D1Exec => ({
-    all: async (sql, parameters) => {
-        const result = await db
-            .prepare(sql)
-            .bind(...parameters)
-            .all<Record<string, unknown>>();
+const buildExec = (database: D1DatabaseLike): D1Exec => {
+    return {
+        all: async (sql, parameters) => {
+            const result = await database
+                .prepare(sql)
+                .bind(...parameters)
+                .all<Record<string, unknown>>();
 
-        return result.results;
-    },
-    run: async (sql, parameters) => {
-        await db
-            .prepare(sql)
-            .bind(...parameters)
-            .run();
-    },
-});
+            return result.results;
+        },
+        run: async (sql, parameters) => {
+            await database
+                .prepare(sql)
+                .bind(...parameters)
+                .run();
+        },
+    };
+};
 
 /**
  * Introspect `.global()` (D1-backed) tables so the dashboard's global data
  * browser can list and page them.
  */
-const d1Introspector = (db: D1DatabaseLike): GlobalIntrospector => {
-    const exec = buildExec(db);
+const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
+    const exec = buildExec(database);
 
     return {
         listTables: () => listGlobalTables(exec, schema as never),
@@ -56,14 +58,14 @@ const d1Introspector = (db: D1DatabaseLike): GlobalIntrospector => {
  * Selects only non-sensitive identity columns (never password hashes or tokens),
  * orders newest-first, and clamps the page size. Admin-gated by the runtime.
  */
-const authIntrospector = (db: D1DatabaseLike): AuthIntrospector => {
-    const exec = buildExec(db);
+const authIntrospector = (database: D1DatabaseLike): AuthIntrospector => {
+    const exec = buildExec(database);
 
     const page = async <T>(
         table: string,
         columns: string,
         where: string,
-        parameters: readonly unknown[],
+        parameters: ReadonlyArray<unknown>,
         limit?: number,
         offset?: number,
     ): Promise<{ rows: T[]; total: number }> => {
@@ -199,7 +201,7 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         },
         // The runtime's route map can stay empty: better-auth routes are
         // dispatched ahead of the worker by the `handleAuthRequest` hook.
-        routes: {} as Record<string, Route>,
+        routes: {},
         // Exposes /_cirrus/admin/scheduled so the dashboard can list/cancel jobs.
         schedulerDO: env.SCHEDULER,
         shardDO: env.SHARD,

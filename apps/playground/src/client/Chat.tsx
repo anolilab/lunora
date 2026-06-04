@@ -3,7 +3,7 @@ import type { CSSProperties, ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../cirrus/_generated/api.js";
-import type { Doc as Document_, Id } from "../../cirrus/_generated/dataModel.js";
+import type { Id } from "../../cirrus/_generated/dataModel.js";
 
 /** Hoisted so the literal isn't reallocated (and re-flagged) per render. */
 const LAYOUT_STYLE: CSSProperties = { display: "grid", gap: 16, gridTemplateColumns: "240px 1fr", padding: 16 };
@@ -19,8 +19,8 @@ export const Chat = (): ReactElement => {
     const [activeChannel, setActiveChannel] = useState<Id<"channels"> | null>(null);
     const [draft, setDraft] = useState("");
 
-    const channels = useQuery(api.channels.list, {}) as Document_<"channels">[] | undefined;
-    const messages = useQuery(api.messages.list, activeChannel ? { channelId: activeChannel } : "skip") as Document_<"messages">[] | undefined;
+    const channels = useQuery(api.channels.list, {});
+    const messages = useQuery(api.messages.list, activeChannel ? { channelId: activeChannel } : "skip");
 
     const { mutate: sendMessage, pending: sendPending } = useMutation(api.messages.send);
     const { mutate: createChannel } = useMutation(api.channels.create);

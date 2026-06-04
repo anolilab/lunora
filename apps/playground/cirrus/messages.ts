@@ -1,7 +1,7 @@
 import type { Id } from "@cirrus/server";
 import { mutation, query, v } from "@cirrus/server";
 
-import type { Doc } from "./_generated/dataModel.js";
+import type { Doc as Document_ } from "./_generated/dataModel.js";
 
 /**
  * List recent messages for a channel. The `shardBy("channelId")` on the
@@ -10,13 +10,13 @@ import type { Doc } from "./_generated/dataModel.js";
  */
 export const list = query({
     args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
-    handler: async (context, { channelId, limit }): Promise<Doc<"messages">[]> => {
+    handler: async (context, { channelId, limit }): Promise<Document_<"messages">[]> => {
         const rows = await context.db
             .query("messages")
             .withIndex("by_channel_created", (q) => q.eq("channelId", channelId))
             .take(limit ?? 50);
 
-        return rows as unknown as Doc<"messages">[];
+        return rows as unknown as Document_<"messages">[];
     },
 });
 
