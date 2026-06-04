@@ -20,11 +20,6 @@
             "import": "./dist/index.mjs",
             "require": "./dist/index.cjs"
         },
-        "./wrangler-validator": {
-            "types": "./dist/wranglerValidator.d.ts",
-            "import": "./dist/wranglerValidator.mjs",
-            "require": "./dist/wranglerValidator.cjs"
-        },
         "./package.json": "./package.json"
     },
     "scripts": {

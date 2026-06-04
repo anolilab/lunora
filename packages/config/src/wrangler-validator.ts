@@ -78,7 +78,7 @@ const validateVectorizeBindings = (wrangler: WranglerConfig, vectorIndexNames: R
     }
 
     const vectorizeBindings = wrangler.vectorize ?? [];
-    const declaredIndexNames = new Set(vectorizeBindings.map((binding) => binding.index_name));
+    const declaredIndexNames = new Set(vectorizeBindings.filter((binding) => binding != null).map((binding) => binding.index_name));
 
     for (const indexName of vectorIndexNames) {
         if (!declaredIndexNames.has(indexName)) {
@@ -111,7 +111,7 @@ const validateTailConsumers = (wrangler: WranglerConfig, errors: string[]): void
     const entries = consumers as ReadonlyArray<TailConsumer>;
 
     for (const [index, consumer] of entries.entries()) {
-        if (typeof consumer.service !== "string" || consumer.service.length === 0) {
+        if (consumer === null || typeof consumer !== "object" || typeof consumer.service !== "string" || consumer.service.length === 0) {
             errors.push(`tail_consumers[${String(index)}] must have a non-empty "service" naming the consumer Worker`);
         }
     }
@@ -126,7 +126,7 @@ const validateTailConsumers = (wrangler: WranglerConfig, errors: string[]): void
  */
 const withTailConsumer = (wrangler: WranglerConfig, consumer: TailConsumer): WranglerConfig => {
     const existing = wrangler.tail_consumers ?? [];
-    const alreadyWired = existing.some((entry) => entry.service === consumer.service && entry.environment === consumer.environment);
+    const alreadyWired = existing.some((entry) => entry != null && entry.service === consumer.service && entry.environment === consumer.environment);
 
     if (alreadyWired) {
         return wrangler;
@@ -168,15 +168,12 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
         errors.push(`compatibility_date must be >= "${REQUIRED_COMPATIBILITY_DATE}" (got "${compatibilityDate || "<missing>"}")`);
     }
 
-    // `web_socket_auto_reply_to_close` became the default on 2026-04-07, which
-    // is the same date REQUIRED_COMPATIBILITY_DATE enforces — so requiring it
-    // explicitly is redundant and workerd now warns when it's set. Listing the
-    // flag is still accepted, so we don't error if it's present.
-    const flags = wrangler.compatibility_flags ?? [];
-
-    if (compatibilityDate && compatibilityDate < REQUIRED_COMPATIBILITY_DATE && !flags.includes(REQUIRED_FLAG)) {
-        errors.push(`compatibility_flags must include "${REQUIRED_FLAG}"`);
-    }
+    // `web_socket_auto_reply_to_close` became the default on 2026-04-07, the
+    // same date REQUIRED_COMPATIBILITY_DATE enforces — so requiring it
+    // explicitly is redundant and workerd now warns when it's set. Any
+    // compatibility_date that would have made the flag mandatory already trips
+    // the `>= REQUIRED_COMPATIBILITY_DATE` error above, so a separate flag error
+    // adds no signal. We therefore neither require nor reject the flag here.
 
     if (schema?.hasGlobalTable) {
         const d1Bindings = wrangler.d1_databases ?? [];

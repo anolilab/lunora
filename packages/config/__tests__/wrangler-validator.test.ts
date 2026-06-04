@@ -126,6 +126,52 @@ describe("wrangler-validator", () => {
             expect(report.errors.some((line) => line.includes(REQUIRED_FLAG))).toBe(false);
         });
 
+        it("reports a malformed compatibility_date that is not YYYY-MM-DD", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig({
+                compatibility_date: "2026-4-7",
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            });
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("YYYY-MM-DD"))).toBe(true);
+        });
+
+        it("does not throw and reports a tail_consumers entry that is null", () => {
+            expect.assertions(2);
+
+            const wrangler = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                tail_consumers: [null],
+            } as unknown as WranglerConfig;
+
+            const report = validateWranglerConfig(wrangler);
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("tail_consumers[0]"))).toBe(true);
+        });
+
+        it("does not throw when a vectorize entry is null", () => {
+            expect.assertions(2);
+
+            const wrangler = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                vectorize: [null],
+            } as unknown as WranglerConfig;
+
+            const report = validateWranglerConfig(wrangler, { hasGlobalTable: false, vectorIndexNames: ["docs-body"] });
+
+            // The null entry is skipped; the declared index is simply unmatched.
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("docs-body"))).toBe(true);
+        });
+
         it("reports an outdated compatibility_date", () => {
             expect.assertions(1);
 
@@ -250,6 +296,15 @@ describe("wrangler-validator", () => {
             const next = withTailConsumer(wrangler, { environment: "production", service: "log-forwarder" });
 
             expect(next).toBe(wrangler);
+        });
+
+        it("does not throw when existing tail_consumers contains a null entry", () => {
+            expect.assertions(1);
+
+            const wrangler = { tail_consumers: [null] } as unknown as WranglerConfig;
+            const next = withTailConsumer(wrangler, { service: "log-forwarder" });
+
+            expect(next.tail_consumers).toHaveLength(2);
         });
 
         it("adds a distinct entry when the environment differs", () => {
@@ -399,6 +454,42 @@ describe("wrangler-validator", () => {
             const result = validateWranglerProject({ projectRoot: workdir });
 
             expect(result.problems).toEqual([]);
+        });
+
+        it("reports a malformed compatibility_date from disk", () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "compatibility_date": "2026-4-7",
+    "compatibility_flags": ["${REQUIRED_FLAG}"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    }
+}
+`,
+                "utf8",
+            );
+
+            const result = validateWranglerProject({ projectRoot: workdir });
+
+            expect(result.report.valid).toBe(false);
+            expect(result.problems.some((line) => line.includes("YYYY-MM-DD"))).toBe(true);
+        });
+
+        it("reports a JSONC syntax error as an unparseable config", () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(join(workdir, "wrangler.jsonc"), `{ "name": "x", `, "utf8");
+
+            const result = validateWranglerProject({ projectRoot: workdir });
+
+            expect(result.report.valid).toBe(false);
+            expect(result.problems.some((line) => /failed to parse .* as JSONC/u.test(line))).toBe(true);
         });
 
         it("returns a problem when schema has .global() tables but D1 binding is missing", () => {

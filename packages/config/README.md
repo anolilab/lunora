@@ -63,8 +63,6 @@ These constants are exported as `REQUIRED_FLAG` and `REQUIRED_COMPATIBILITY_DATE
 
 Types: `WranglerConfig`, `SchemaInfo`, `WranglerValidationReport`, `WranglerProjectValidationOptions`, `WranglerProjectValidationResult`.
 
-The `wrangler-validator` subpath export (`@cirrus/config/wrangler-validator`) re-exports the same module for adapter authors who want to pin the import path.
-
 ## Docs
 
 - Repo root: [README.md](../../README.md)
