@@ -62,6 +62,15 @@ const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: 
         const routes: { pattern: RegExp; rows: () => Row[] }[] = [
             { pattern: /^SELECT changes\(\) AS changed$/u, rows: () => [{ changed: 1 }] as unknown as Row[] },
             { pattern: / MATCH /u, rows: () => matchRows as unknown as Row[] },
+            // `lookupById` folds every table into one UNION-ALL probe tagged
+            // with `AS __t__`; resolve it to the canned rows (more specific
+            // than the generic `LIMIT 1` probe below, so it must come first)
+            // so the patch/delete table-resolution path reaches the FTS
+            // write-sync.
+            {
+                pattern: / AS __t__,.* WHERE id = \? LIMIT 1$/u,
+                rows: () => matchRows.map((row) => ({ __t__: "docs", ...(row as unknown as Record<string, unknown>) })) as unknown as Row[],
+            },
             { pattern: /WHERE id = \? LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) as unknown as Row[] },
             { pattern: /^SELECT id, _creationTime, __doc__ FROM .* WHERE id = \?$/u, rows: () => matchRows as unknown as Row[] },
         ];

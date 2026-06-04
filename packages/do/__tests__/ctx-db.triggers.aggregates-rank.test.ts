@@ -168,6 +168,66 @@ describe("ctx-db triggers — aggregates and rank", () => {
             ]);
         });
 
+        it("replace() conflicts when a concurrent write commits during the before-update trigger, leaving the aggregate consistent", async () => {
+            expect.assertions(3);
+
+            // Two writers over the SAME SQLite db. The before-update trigger
+            // spans an `await`; inside it a SECOND writer commits a competing
+            // patch on the same row — exactly the window the OCC guard must
+            // catch. Without the guard, replace's UPDATE ... WHERE id = ?
+            // would silently clobber that write (lost update) AND apply a
+            // `-prev` aggregate step against a stale `previous`, drifting the
+            // count companion.
+            let fired = false;
+            let competitor: DatabaseWriterLike | undefined;
+
+            const schema: SchemaLike = {
+                tables: {
+                    todos: {
+                        aggregateIndexes: [byProject],
+                        indexes: [],
+                        shape: { projectId: { kind: "string" }, title: { kind: "string" } },
+                        triggerMap: {
+                            raceWrite: {
+                                handler: async () => {
+                                    // Commit a competing write exactly once,
+                                    // during the replace's await window.
+                                    if (!fired) {
+                                        fired = true;
+                                        await competitor?.patch("t1", { title: "concurrent" });
+                                    }
+                                },
+                                op: "update",
+                                timing: "before",
+                            },
+                        },
+                    },
+                },
+            };
+            const writer = makeWriter(schema);
+
+            competitor = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+
+            await writer.insert("todos", { _id: "t1", projectId: "p1", title: "orig" }, { allowExplicitId: true });
+
+            // replace reads its snapshot, fires the before-update trigger
+            // (which commits the competing patch), then its guarded UPDATE
+            // must match zero rows and raise a ConflictError.
+            await expect(writer.replace("t1", { projectId: "p2", title: "replaced" })).rejects.toMatchObject({ name: "ConflictError" });
+
+            // The competing patch survived (not clobbered) and the row stays
+            // in its original partition — proof the aggregate -prev step never
+            // ran against the stale snapshot.
+            const row = await competitor.get("t1");
+
+            expect(row).toMatchObject({ projectId: "p1", title: "concurrent" });
+
+            // Counter still reflects exactly the one row in p1 (no drift from
+            // a -prev/+next applied against a row state that no longer matched
+            // disk).
+            expect(await competitor.count("todos", { projectId: "p1" })).toBe(1);
+        });
+
         it("after-delete trigger sees the count without the deleted row", async () => {
             expect.assertions(1);
 
