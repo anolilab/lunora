@@ -146,4 +146,21 @@ describe("createScheduler", () => {
         // @ts-expect-error - intentional misuse
         expect(() => createCronTrigger({ schedule: "0 * * * *" })).toThrow();
     });
+
+    it("createCronTrigger accepts named weekday/month tokens", () => {
+        expect.assertions(4);
+
+        // Standard + Cloudflare-accepted named day-of-week / month fields.
+        expect(() => createCronTrigger({ fn: fnRef, schedule: "0 0 * * MON" })).not.toThrow();
+        expect(() => createCronTrigger({ fn: fnRef, schedule: "0 0 1 JAN *" })).not.toThrow();
+        expect(() => createCronTrigger({ fn: fnRef, schedule: "0 9 * * MON-FRI" })).not.toThrow();
+        expect(() => createCronTrigger({ fn: fnRef, schedule: "0 0 1 jan-mar *" })).not.toThrow();
+    });
+
+    it("createCronTrigger still rejects free-form prose", () => {
+        expect.assertions(2);
+
+        expect(() => createCronTrigger({ fn: fnRef, schedule: "every minute" })).toThrow();
+        expect(() => createCronTrigger({ fn: fnRef, schedule: "0 0 * *" })).toThrow();
+    });
 });

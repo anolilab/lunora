@@ -22,11 +22,14 @@ interface CronTriggerSnippet {
 }
 
 // Single cron-piece: `*`, `*` followed by a step, a digit, a range, or a
-// range with a step. Intentionally permissive on numeric values (we don't
-// enforce minute < 60 etc.) — wrangler/Cloudflare will reject out-of-range
-// values — but strict enough to refuse free-form prose like "every minute"
-// that would otherwise silently no-op.
-const CRON_PIECE = /^(?:\*|\*\/\d+|\d+(?:-\d+)?(?:\/\d+)?)$/u;
+// range with a step. Also accepts the standard 3-letter named tokens for
+// months (JAN..DEC) and weekdays (SUN..SAT), case-insensitively and in
+// ranges/lists (e.g. `MON`, `MON-FRI`, `JAN-MAR`), which both standard cron
+// and Cloudflare's parser support. Intentionally permissive on numeric values
+// (we don't enforce minute < 60 etc.) — wrangler/Cloudflare will reject
+// out-of-range values — but strict enough to refuse free-form prose like
+// "every minute" that would otherwise silently no-op.
+const CRON_PIECE = /^(?:\*|\*\/\d+|\d+(?:-\d+)?(?:\/\d+)?|[A-Za-z]{3}(?:-[A-Za-z]{3})?(?:\/\d+)?)$/u;
 
 const CRON_FIELD_SEPARATOR = /\s+/u;
 
