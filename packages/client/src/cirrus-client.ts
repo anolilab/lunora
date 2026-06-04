@@ -176,6 +176,14 @@ const applyOptimisticToState = (state: SubscriptionState, optimistic: (current: 
             return;
         }
 
+        // If another optimistic write has since stacked on this same
+        // subscription (so `lastValue` is no longer the value WE set), restoring
+        // our captured `previous` would clobber that newer still-pending value.
+        // Only roll back when our value is still the live one.
+        if (state.lastValue !== next) {
+            return;
+        }
+
         // eslint-disable-next-line no-param-reassign -- rollback restores the shared subscription state
         state.lastValue = previous;
 
@@ -487,8 +495,12 @@ class CirrusClient {
                     args: argsRecord,
                     functionPath: function_.__cirrusRef,
                     reject: (error) => {
-                        for (const rollback of optimisticRollbacks) {
-                            rollback();
+                        // LIFO: roll back most-recent optimistic write first so a
+                        // stacked update on the same subscription restores the
+                        // immediately-prior value rather than clobbering a newer
+                        // still-pending optimistic value with a stale snapshot.
+                        for (let index = optimisticRollbacks.length - 1; index >= 0; index -= 1) {
+                            optimisticRollbacks[index]?.();
                         }
 
                         reject(error instanceof Error ? error : new Error(String(error)));
@@ -510,8 +522,11 @@ class CirrusClient {
         try {
             return (await this.rpc(function_.__cirrusRef, argsRecord, options.shardKey, { captureBookmark: true })) as ReturnOf<F>;
         } catch (error) {
-            for (const rollback of optimisticRollbacks) {
-                rollback();
+            // LIFO: see the offline-queue reject path above. Roll back the
+            // most-recent optimistic write first so stacked updates on the same
+            // subscription don't restore a stale captured snapshot.
+            for (let index = optimisticRollbacks.length - 1; index >= 0; index -= 1) {
+                optimisticRollbacks[index]?.();
             }
 
             throw error;
@@ -574,7 +589,6 @@ class CirrusClient {
         }
 
         const base = joinUrl(deriveWsUrl(this.url), SCHEDULED_WS_PATH);
-        const url = this.wsToken === undefined ? base : `${base}?token=${encodeURIComponent(this.wsToken)}`;
         const reconnect = createReconnect(this.reconnectOptions);
 
         let socket: undefined | WebSocket;
@@ -585,6 +599,12 @@ class CirrusClient {
             if (closed || this.WebSocketImpl === undefined) {
                 return;
             }
+
+            // Read `this.wsToken` at connect time (not once at subscribe time) so a
+            // post-subscribe `setWsToken()` rotation is picked up on the next
+            // reconnect attempt instead of looping forever with a stale token the
+            // admin gate rejects.
+            const url = this.wsToken === undefined ? base : `${base}?token=${encodeURIComponent(this.wsToken)}`;
 
             socket = new this.WebSocketImpl(url);
 
@@ -913,9 +933,14 @@ class CirrusClient {
             type: "stream",
         };
 
-        if (conn?.wsState === "open") {
-            sendOn(conn, message);
-        } else if (conn) {
+        // Fast path: socket is open, try to send immediately. `sendOn` can still
+        // return `false` if the socket closed between the `wsState` check and the
+        // `.send()` call (or `.send()` threw) — in that race the frame was never
+        // delivered, so fall through to the bounded pending-queue path below so it
+        // rides the next reconnect instead of leaking a forever-hanging consumer.
+        const sentImmediately = conn?.wsState === "open" && sendOn(conn, message);
+
+        if (!sentImmediately && conn) {
             // Defer the send to the open handler — the existing pending logic
             // is for unsubscribes, so stash the stream-start frame separately.
             conn.pendingStreams = conn.pendingStreams ?? [];

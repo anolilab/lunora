@@ -639,6 +639,54 @@ describe("cirrusClient", () => {
 
             expect(received).toEqual([0, 9]);
         });
+
+        it("stacked optimistic mutations: older failing first does not clobber newer pending value", async () => {
+            expect.assertions(2);
+
+            // Two outstanding RPCs on the same (fn, args, shard) subscription. The
+            // older one (A) rejects first; its rollback must NOT restore the value
+            // from before B applied, because B's optimistic value is still pending.
+            const deferreds: { reject: (error: unknown) => void; resolve: (value: Response) => void }[] = [];
+            const fetchMock = vi.fn<typeof fetch>(
+                async () =>
+                    new Promise<Response>((resolve, reject) => {
+                        deferreds.push({ reject, resolve });
+                    }),
+            );
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("counter:get"), {}, (d) => received.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+            const subId = JSON.parse(socket.sent[0]!).id as string;
+
+            socket.receive({ delta: 0, id: subId, type: "delta" });
+
+            // A: 0 -> 1, then B: 1 -> 2 (both optimistic, both in-flight).
+            const promiseA = client.mutation(fnRef("counter:get"), {}, { optimistic: (c) => (typeof c === "number" ? c + 1 : 1) });
+            const promiseB = client.mutation(fnRef("counter:get"), {}, { optimistic: (c) => (typeof c === "number" ? c + 1 : 1) });
+
+            expect(received).toEqual([0, 1, 2]);
+
+            // A fails first. Its rollback must leave B's pending value (2) intact.
+            deferreds[0]!.reject(new Error("A failed"));
+            await promiseA.catch(() => undefined);
+
+            // Settle B so the test doesn't leak a pending promise.
+            deferreds[1]!.resolve(jsonResponse({ result: { ok: true } }));
+            await promiseB;
+
+            // The fixed rollback only restores when its own value is still live;
+            // B's value (2) survived A's failure.
+            expect(received).toEqual([0, 1, 2]);
+        });
     });
 
     // --- Scheduler admin --------------------------------------------------------
