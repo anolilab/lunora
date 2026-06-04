@@ -100,7 +100,7 @@ export interface RegisteredCirrusFunction {
      * For `"stream"` the handler returns an `AsyncIterable` synchronously and takes an
      * `AbortSignal` as a third argument — the runtime drives it frame-by-frame.
      */
-    handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>);
+    handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
