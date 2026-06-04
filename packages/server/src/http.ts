@@ -5,6 +5,7 @@ import { Hono } from "hono";
 
 import type { EmptyArgs } from "./builder/index.js";
 import { CirrusError } from "./error.js";
+import { parseValidatorMap } from "./functions.js";
 import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types.js";
 
 /** HTTP verbs the typed {@link httpRoute} builder can bind to. */
@@ -208,7 +209,11 @@ const coerceScalar = (kind: ValidatorKind, raw: string): unknown => {
             return raw;
         }
         case "number": {
-            return Number(raw);
+            // `Number("")` is `0`, so an empty-but-present numeric param
+            // (`?limit=`) would silently satisfy `v.number()` as 0. Map the
+            // empty string to NaN so the validator rejects it like any other
+            // malformed value rather than coercing to a surprising 0.
+            return raw === "" ? Number.NaN : Number(raw);
         }
         default: {
             return raw;
@@ -242,45 +247,6 @@ const coerceSearchParameter = (validator: Validator, c: Context<CirrusHttpEnv>, 
     return raw === undefined ? undefined : coerceScalar(effective.kind, raw);
 };
 
-/**
- * Validate each declared field of `source` through its validator, prefixing any
- * `ValidationError` with `label.&lt;key>` so the 400 response points at the bad
- * field. Optional fields absent from the source are skipped.
- */
-const parseFields = (validators: ArgsValidator, source: Record<string, unknown>, label: string): Record<string, unknown> => {
-    const out: Record<string, unknown> = {};
-
-    for (const key of Object.keys(validators)) {
-        const validator = validators[key];
-
-        if (!validator) {
-            continue;
-        }
-
-        const candidate = source[key];
-
-        if (candidate === undefined && validator.kind === "optional") {
-            continue;
-        }
-
-        try {
-            out[key] = validator.parse(candidate);
-        } catch (error: unknown) {
-            if (error instanceof ValidationError) {
-                throw new ValidationError(`${label}.${key}: ${error.message}`, {
-                    expected: error.expected,
-                    path: [key, ...error.path],
-                    received: error.received,
-                });
-            }
-
-            throw error;
-        }
-    }
-
-    return out;
-};
-
 const parseSearchParams = (validators: ArgsValidator, c: Context<CirrusHttpEnv>): Record<string, unknown> => {
     const raw: Record<string, unknown> = {};
 
@@ -294,7 +260,7 @@ const parseSearchParams = (validators: ArgsValidator, c: Context<CirrusHttpEnv>)
         raw[key] = coerceSearchParameter(validator, c, key);
     }
 
-    return parseFields(validators, raw, "searchParams");
+    return parseValidatorMap(validators, raw, "searchParams");
 };
 
 /** Coerce + validate the declared hono path params (`/users/:id`). Path params arrive as strings. */
@@ -314,7 +280,7 @@ const parseParams = (validators: ArgsValidator, c: Context<CirrusHttpEnv>): Reco
         raw[key] = value === undefined ? undefined : coerceScalar(unwrapOptional(validator).kind, value);
     }
 
-    return parseFields(validators, raw, "params");
+    return parseValidatorMap(validators, raw, "params");
 };
 
 type LooseHandler = (options: {
@@ -338,7 +304,7 @@ const parseBody = async (validators: ArgsValidator, c: Context<CirrusHttpEnv>): 
         throw new CirrusError("BAD_REQUEST", "Expected a JSON object body");
     }
 
-    return parseFields(validators, json as Record<string, unknown>, "body");
+    return parseValidatorMap(validators, json as Record<string, unknown>, "body");
 };
 
 /**
@@ -459,14 +425,31 @@ const buildStreamHandler =
         const encoder = new TextEncoder();
         const ac = new AbortController();
 
-        request.signal.addEventListener("abort", () => {
+        // Already disconnected before we even started — return a closed stream
+        // and never construct the pump or run the user handler.
+        if (request.signal.aborted) {
             ac.abort();
-        });
+
+            return new Response(new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }), {
+                headers: {
+                    "cache-control": "no-cache, no-transform",
+                    "content-type": "text/event-stream; charset=utf-8",
+                    "x-accel-buffering": "no",
+                },
+            });
+        }
+
+        const onAbort = (): void => {
+            ac.abort();
+        };
+
+        request.signal.addEventListener("abort", onAbort, { once: true });
 
         const stream = new ReadableStream<Uint8Array>({
             cancel() {
                 // The downstream consumer dropped the stream — propagate the
                 // cancel to the user iterator so any in-flight work bails out.
+                request.signal.removeEventListener("abort", onAbort);
                 ac.abort();
             },
             async start(controller) {
@@ -500,6 +483,7 @@ const buildStreamHandler =
 
                     controller.enqueue(encoder.encode(sseFrame(payload, "error")));
                 } finally {
+                    request.signal.removeEventListener("abort", onAbort);
                     controller.close();
                 }
             },

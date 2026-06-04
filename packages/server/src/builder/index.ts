@@ -102,14 +102,37 @@ const makeStreamHandler =
         // `next()` pump by wrapping the iterator with an outer async generator.
         return (async function* drive(): AsyncGenerator<R, void, void> {
             const resolvedContext = await runMiddleware(middlewares, context);
-            const iterator = userHandler({ args: parsed, ctx: resolvedContext, signal });
+            const source = userHandler({ args: parsed, ctx: resolvedContext, signal });
+            // Drive the source through an explicit iterator so the abort check
+            // can gate each `.next()` *before* the producer is resumed — a
+            // `for await` would pull (and thus resume the producer for one more
+            // step) before we ever observe the cancel, letting user side effects
+            // run after the client has gone away.
+            const iterator = source[Symbol.asyncIterator]();
 
-            for await (const chunk of iterator) {
-                yield chunk;
+            try {
+                while (true) {
+                    if (signal.aborted) {
+                        return;
+                    }
 
-                if (signal.aborted) {
-                    return;
+                    // eslint-disable-next-line no-await-in-loop -- sequential by nature: each chunk must be produced and forwarded before the next is pulled
+                    const next = await iterator.next();
+
+                    if (next.done) {
+                        return;
+                    }
+
+                    if (signal.aborted) {
+                        return;
+                    }
+
+                    yield next.value;
                 }
+            } finally {
+                // Close the producer so its `finally`/cleanup runs when we bail
+                // early (abort) or the consumer stops iterating.
+                await iterator.return?.();
             }
         })();
     };

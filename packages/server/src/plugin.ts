@@ -49,7 +49,7 @@
  */
 
 import type { Middleware } from "./builder/types.js";
-import type { FunctionKind, RegisteredFunction, Schema, TableDefinition } from "./types.js";
+import type { FunctionKind, RegisteredFunction, Schema, TableDefinition, VectorIndexDefinition } from "./types.js";
 
 /**
  * Schema fragment a plugin contributes. Same shape as the `tables` map
@@ -62,18 +62,31 @@ export interface SchemaExtension<T extends Record<string, TableDefinition> = Rec
     readonly key: string;
     /** Extension tables. Names should be namespaced by `key` (e.g. `ratelimit_buckets`). */
     readonly tables: T;
+    /**
+     * Optional standalone vector indexes the plugin ships, keyed by index
+     * name. Merged into the host schema's `vectorIndexes`; a key collision
+     * with the base schema is a hard error (same policy as tables).
+     */
+    readonly vectorIndexes?: Record<string, VectorIndexDefinition>;
 }
 
 /**
  * Build a {@link SchemaExtension}. The `key` is a runtime tag (used for
  * error messages on collision) and a type-level brand.
  */
-export const defineSchemaExtension = <T extends Record<string, TableDefinition>>(key: string, options: { tables: T }): SchemaExtension<T> => {
+export const defineSchemaExtension = <T extends Record<string, TableDefinition>>(
+    key: string,
+    options: { tables: T; vectorIndexes?: Record<string, VectorIndexDefinition> },
+): SchemaExtension<T> => {
     if (!key) {
         throw new Error("defineSchemaExtension: `key` is required and must be a non-empty string");
     }
 
-    return { key, tables: options.tables };
+    return {
+        key,
+        tables: options.tables,
+        ...(options.vectorIndexes ? { vectorIndexes: options.vectorIndexes } : {}),
+    };
 };
 
 /**
@@ -241,8 +254,22 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
         merged[name] = table;
     }
 
+    const mergedVectorIndexes: Record<string, VectorIndexDefinition> = { ...base.vectorIndexes };
+
+    if (extension.vectorIndexes) {
+        for (const [name, index] of Object.entries(extension.vectorIndexes)) {
+            if (Object.hasOwn(mergedVectorIndexes, name)) {
+                throw new Error(
+                    `defineSchema(...).extend("${extension.key}"): vector index "${name}" already exists in the base schema — extension vector indexes must be namespaced (e.g. "${extension.key}_${name}")`,
+                );
+            }
+
+            mergedVectorIndexes[name] = index;
+        }
+    }
+
     return {
         tables: merged as T & X,
-        vectorIndexes: base.vectorIndexes,
+        vectorIndexes: mergedVectorIndexes,
     };
 };

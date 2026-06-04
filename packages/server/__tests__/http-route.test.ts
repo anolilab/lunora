@@ -95,6 +95,22 @@ describe("httpRoute searchParams", () => {
         await expect(response.json()).resolves.toMatchObject({ code: "BAD_REQUEST", error: expect.stringContaining("searchParams.limit") });
     });
 
+    it("an empty-but-present numeric param fails with a 400 (not coerced to 0)", async () => {
+        expect.assertions(2);
+
+        const route = httpRoute
+            .get("/api/items")
+            .searchParams({ limit: v.number() })
+            .handler(({ searchParams }) => searchParams);
+
+        // `Number("")` is `0`; without the empty-string guard `?limit=` would
+        // silently satisfy `v.number()` as 0 instead of being rejected.
+        const response = await dispatch(route, "GET", "/api/items", new Request("https://x/api/items?limit="));
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ code: "BAD_REQUEST", error: expect.stringContaining("searchParams.limit") });
+    });
+
     it("a missing required param fails with a 400", async () => {
         expect.assertions(1);
 

@@ -42,6 +42,7 @@ interface FakeDatabase {
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         get: (id: string) => Promise<Record<string, unknown> | null>;
+        getWithTable?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
         insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
         query: (tableName: string) => never;
@@ -116,6 +117,23 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
                 calls.push({ args: document, method: "replace", tableOrId: id });
             },
         },
+    };
+};
+
+/**
+ * Enable the optional `getWithTable` fast-path seam on a fake writer, answering
+ * `{ row, tableName }` from the seeded rows in one shot — mirroring what
+ * `@cirrus/do`'s `lookupById` returns. Records a `getWithTable` call so a test
+ * can assert the probe fan-out (`findFirst` per policy table) was skipped.
+ */
+const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknown> & { _id: string; table: string })[]): void => {
+    const byId = new Map(rows.map((row) => [row._id, row] as const));
+
+    database.writer.getWithTable = async (id) => {
+        database.calls.push({ args: undefined, method: "getWithTable", tableOrId: id });
+        const row = byId.get(id);
+
+        return row ? { row, tableName: row.table } : null;
     };
 };
 
@@ -323,6 +341,86 @@ describe("rls — read path", () => {
         expect(result?.["event"]).toBe("login");
     });
 
+    it("get() distinguishes deny from absent across 2+ policy-gated tables", async () => {
+        expect.assertions(3);
+
+        // Two policy-gated tables. The requested id lives in "documents" but
+        // its ownerId fails the predicate, so the policy DENIES it. A wrong
+        // fall-through (treating the failed baseWhere fetch as "not in this
+        // table" and returning the unguarded row) would leak the hidden row.
+        const docsPolicy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => ({ ownerId: auth.userId }),
+        });
+        const notesPolicy = definePolicy<TestContext>({
+            on: "read",
+            table: "notes",
+            when: ({ auth }) => ({ ownerId: auth.userId }),
+        });
+
+        const fake = createFakeDatabase([
+            { _id: "d1", ownerId: "u2", table: "documents" },
+            { _id: "n1", ownerId: "u1", table: "notes" },
+        ]);
+        const wrappedFindFirst = fake.writer.findFirst;
+
+        // Honest fake: a baseWhere-scoped findFirst filters by the predicate.
+        fake.writer.findFirst = async (tableName, args) => {
+            const candidate = await wrappedFindFirst(tableName, args);
+            const baseWhere = (args as { baseWhere?: { ownerId?: unknown } } | undefined)?.baseWhere;
+
+            if (!candidate || !baseWhere || !("ownerId" in baseWhere)) {
+                return candidate;
+            }
+
+            return candidate["ownerId"] === baseWhere.ownerId ? candidate : null;
+        };
+
+        const denied = cirrus.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("d1"));
+        const allowed = cirrus.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("n1"));
+        const absent = cirrus.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("missing"));
+
+        // d1 exists in "documents" but is denied → null (NOT the leaked row).
+        await expect(denied.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
+        // n1 exists in "notes" and is owned by u1 → returned.
+        await expect(allowed.handler(makeContext(fake, "u1"), {})).resolves.toMatchObject({ _id: "n1" });
+        // missing id → null.
+        await expect(absent.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
+    });
+
+    it("get() uses the getWithTable fast path and skips the probe fan-out when present", async () => {
+        expect.assertions(3);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => ({ ownerId: auth.userId }),
+        });
+
+        const rows = [
+            { _id: "d1", ownerId: "u1", table: "documents" },
+            { _id: "x1", ownerId: "u1", table: "other" },
+        ];
+        const fake = createFakeDatabase(rows);
+
+        enableGetWithTable(fake, rows);
+
+        // Owned + allowed: single getWithTable lookup + one policy-check findFirst.
+        const handler = cirrus.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("d1"));
+        const result = await handler.handler(makeContext(fake, "u1"), {});
+
+        expect(result?.["_id"]).toBe("d1");
+        expect(fake.calls.some((call) => call.method === "getWithTable")).toBe(true);
+        // No membership probe fan-out: the only findFirst is the policy check on
+        // the owning table (with a baseWhere), never an unscoped probe.
+        const unscopedProbes = fake.calls.filter(
+            (call) => call.method === "findFirst" && !(call.args as { baseWhere?: unknown } | undefined)?.baseWhere,
+        );
+
+        expect(unscopedProbes).toHaveLength(0);
+    });
+
     it("count() on a non-policy table does NOT mark restrictsCounts", async () => {
         expect.assertions(1);
 
@@ -444,6 +542,32 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         await handler.handler(makeContext(database, "u1"), {});
 
         expect(database.calls.some((call) => call.method === "insert")).toBe(true);
+    });
+
+    it("insert: a predicate referencing a writer-assigned system field denies (documented limitation)", async () => {
+        expect.assertions(2);
+
+        // The insert policy is evaluated against the caller's candidate document
+        // BEFORE the writer stamps `_id`/`_creationTime`, so a predicate keyed
+        // on `_id` can never match the candidate → the insert is denied. This
+        // locks in the documented behavior (author insert policies against
+        // user-supplied fields, not system fields).
+        const policy = definePolicy<TestContext>({
+            on: "insert",
+            table: "documents",
+            when: () => ({ _id: { eq: "anything" } }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = cirrus.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.insert("documents", { ownerId: "u1", title: "x" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            name: "CirrusError",
+        });
+        expect(database.calls.some((call) => call.method === "insert")).toBe(false);
     });
 
     it("insert: predicate mismatch denies with FORBIDDEN", async () => {

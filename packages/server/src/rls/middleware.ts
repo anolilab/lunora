@@ -92,6 +92,15 @@ interface DatabaseWriterLike {
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
+    /**
+     * Optional table-aware lookup. The underlying writer (e.g. `@cirrus/do`)
+     * already knows the owning table of an id internally (`lookupById`), so it
+     * can return `{ row, tableName }` in a single round-trip. When present, the
+     * RLS wrapper uses it to collapse the per-call membership-probe fan-out
+     * (1 `get` + N `findFirst` across every policy table) down to one lookup.
+     * Writers that don't implement it fall back to the probe path.
+     */
+    getWithTable?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
@@ -392,6 +401,15 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
  * pre-write row (USING) and, when supplied, the post-image `nextRow` (WITH
  * CHECK) so a policy cannot be satisfied by the old row while the patch
  * reassigns the row to another tenant.
+ *
+ * SYSTEM-FIELD LIMITATION (insert): on `insert` the candidate `context.row`
+ * is the caller's document BEFORE the writer stamps `_id` / `_creationTime`
+ * downstream (those are assigned by `@cirrus/do`/`@cirrus/d1` after the policy
+ * runs). So an insert policy whose `when` returns a `WhereInput` referencing
+ * `_id` or `_creationTime` cannot match — the field is absent on the candidate
+ * — and the insert is DENIED. Author insert policies against user-supplied
+ * fields (`ownerId`, `tenantId`, …), not writer-assigned system fields. Update
+ * / delete policies do see system fields (the pre-write row is fully stamped).
  */
 const evaluateWrite = <Context>(
     policies: ReadonlyArray<Policy<Context>>,
@@ -512,18 +530,42 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
     };
 
     /**
-     * Resolve the writer's id-to-table lookup by probing each policy table
-     * with a direct `get` against the underlying writer. The unwrapped
-     * `base.get` is intentionally used so policy enforcement on writes
-     * doesn't recurse through itself when we go fetch the pre-write row.
-     * Probes run concurrently: id-to-table latency is bounded by the
-     * slowest single probe rather than the sum of all probes.
+     * Resolve the raw row for `id` and which policy-gated table (if any) owns
+     * it. The single source of truth shared by `get()` and the write gate.
+     * Two paths:
+     *
+     *   - **Fast path** — when the writer implements the optional `getWithTable`
+     *     seam it already knows the owning table from its internal index, so we
+     *     get `{ row, tableName }` in a single round-trip and only need to check
+     *     whether that table participates in RLS.
+     *   - **Fallback** — older writers expose only `get(id)`, so we fetch the
+     *     row, then probe every policy table with a `findFirst` to discover
+     *     ownership. The probes run concurrently (latency bounded by the slowest
+     *     single probe, not their sum). The unwrapped `base.*` is intentionally
+     *     used so policy enforcement on writes doesn't recurse through itself.
+     *
+     * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when
+     * the row exists but isn't in any policy-gated table (no policy applies →
+     * callers fall through unrestricted).
      */
-    const findRowTable = async (id: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
+    const locateRow = async (id: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+        if (base.getWithTable) {
+            const located = await base.getWithTable(id);
+
+            if (!located) {
+                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @cirrus/do's writer null sentinel
+                return { row: null, tableName: undefined };
+            }
+
+            // Owned by a table that isn't policy-gated → tableName undefined.
+            return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
+        }
+
         const row = await base.get(id);
 
         if (!row) {
-            return undefined;
+            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @cirrus/do's writer null sentinel
+            return { row: null, tableName: undefined };
         }
 
         // Ids are globally unique, so at most one probe hits; settle all of
@@ -537,11 +579,18 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             }),
         );
 
-        const tableName = probes.find((entry): entry is string => entry !== undefined);
+        return { row, tableName: probes.find((entry): entry is string => entry !== undefined) };
+    };
 
-        // The row exists but isn't in any policy-gated table — fall through
-        // unrestricted by returning `undefined` (no policy applies).
-        return tableName === undefined ? undefined : { row, tableName };
+    /**
+     * Locate the policy-gated table that owns `id` (for the write gate). Thin
+     * wrapper over {@link locateRow} that drops the unguarded-row case — a write
+     * to a row in no policy-gated table needs no policy check.
+     */
+    const findRowTable = async (id: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
+        const located = await locateRow(id);
+
+        return located.row && located.tableName !== undefined ? { row: located.row, tableName: located.tableName } : undefined;
     };
 
     /**
@@ -622,55 +671,38 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         },
 
         async get(id) {
-            const row = await base.get(id);
+            // Step 1 — **membership + raw fetch in one pass**. `locateRow`
+            // returns the raw row (so an absent row is `null` and a row in no
+            // policy-gated table falls through unrestricted) plus the owning
+            // policy-gated `tableName` when one exists.
+            const located = await locateRow(id);
 
-            if (!row) {
+            if (!located.row) {
                 // eslint-disable-next-line unicorn/no-null -- RlsDatabase.get structurally mirrors @cirrus/do's writer, which returns `null` for an absent row
                 return null;
             }
 
-            // Two-step lookup, in parallel across the policy-gated tables:
-            //   1. **Membership** — does this row belong to this table?
-            //      A `findFirst` WITHOUT `baseWhere` so it can't be confused
-            //      with a policy denial.
-            //   2. **Policy check** — re-fetch WITH `baseWhere` only on the
-            //      table that owns the row; null here means deny, not absent.
-            // Without step 1 a denied row would silently fall through to the
-            // unguarded `row` below, leaking what the policy is meant to hide.
-            const probes = await Promise.all(
-                [...perTable.keys()].map(async (tableName) => {
-                    const membership = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
-
-                    if (membership?.["_id"] !== id) {
-                        return undefined;
-                    }
-
-                    const { baseWhere, restricts } = readBase(tableName);
-
-                    if (!restricts || !baseWhere) {
-                        return { allowed: membership };
-                    }
-
-                    const allowed = await base.findFirst(tableName, { baseWhere, limit: 1, where: { _id: id } });
-
-                    // `allowed: null` is the policy verdict ("denied"), distinct from
-                    // the `undefined` "this row isn't in this table" probe sentinel.
-                    // eslint-disable-next-line unicorn/no-null -- null is the deliberate "denied" verdict surfaced by get(), mirroring @cirrus/do
-                    return { allowed: allowed?.["_id"] === id ? allowed : null };
-                }),
-            );
-
-            // Ids are globally unique, so at most one probe matches.
-            const hit = probes.find((entry): entry is { allowed: null | Record<string, unknown> } => entry !== undefined);
-
             // Row exists but isn't in any policy-gated table → unrestricted.
-            if (!hit) {
-                return row;
+            if (located.tableName === undefined) {
+                return located.row;
             }
 
-            // Row owned by a policy-gated table; surface the policy verdict
-            // (a deliberate null means "denied", NOT "fall back to row").
-            return hit.allowed;
+            const { baseWhere, restricts } = readBase(located.tableName);
+
+            // The owning table participates in RLS but the read policy doesn't
+            // restrict (e.g. policy returned `true`) → return the row as-is.
+            if (!restricts || !baseWhere) {
+                return located.row;
+            }
+
+            // Step 2 — **policy check**: re-fetch WITH `baseWhere` only on the
+            // owning table. `null` here is the policy verdict ("denied"), NOT a
+            // fall-through to the unguarded row — that distinction is what stops
+            // a hidden row from leaking.
+            const allowed = await base.findFirst(located.tableName, { baseWhere, limit: 1, where: { _id: id } });
+
+            // eslint-disable-next-line unicorn/no-null -- null is the deliberate "denied" verdict surfaced by get(), mirroring @cirrus/do
+            return allowed?.["_id"] === id ? allowed : null;
         },
 
         async insert(tableName, document) {
