@@ -8,6 +8,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache.js";
 import { useCirrus } from "./cirrus-provider.js";
 import type { PaginationResult, PaginationStatus, UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./types.js";
+import useLazyRef from "./use-lazy-ref.js";
 import type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
 
 interface PageRequest {
@@ -71,7 +72,7 @@ const useInfiniteQuery = <F extends FunctionReference>(
         desiredRef.current = { entries: pageEntries, fn: function_, shardKey };
     });
 
-    const detachesRef = useRef(new Map<string, () => void>());
+    const detachesRef = useLazyRef((): Map<string, () => void> => new Map());
 
     // The CirrusClient the current detach handles are bound to. Page-key hashes
     // don't encode client identity, so a client swap (same page keys) would

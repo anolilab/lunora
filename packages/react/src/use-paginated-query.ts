@@ -8,6 +8,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache.js";
 import { useCirrus } from "./cirrus-provider.js";
 import type { PaginationResult, PaginationStatus, UsePaginatedQueryOptions, UsePaginatedQueryResult } from "./types.js";
+import useLazyRef from "./use-lazy-ref.js";
 
 /** The args a paginated query exposes minus the framework-supplied page cursor. */
 type PaginatedArgs<F> = Omit<ArgsOf<F>, "paginationOpts">;
@@ -90,7 +91,7 @@ const usePaginatedQuery = <F extends FunctionReference>(
 
     // Track per-page detach handles so a page falling out of the request set
     // releases its subscription without disturbing the others.
-    const detachesRef = useRef(new Map<string, () => void>());
+    const detachesRef = useLazyRef((): Map<string, () => void> => new Map());
 
     // The CirrusClient the current detach handles are bound to. Page-key hashes
     // don't encode client identity, so a client swap (same page keys) would
