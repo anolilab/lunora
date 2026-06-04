@@ -14,6 +14,12 @@ export interface SubscriptionState {
     /** True once the server has acked the subscription on the current socket. */
     acked: boolean;
     readonly args: Record<string, unknown>;
+    /**
+     * Stable-stringified `args`, computed once at subscribe time. Cached so the
+     * optimistic-update fan-out can compare against a mutation's args key without
+     * re-serializing every subscription's args on every mutation.
+     */
+    readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
     /** Notified when the server rejects this subscription (e.g. admin auth). */
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;

@@ -211,6 +211,13 @@ const buildStreamError = (message: ServerErrorMessage): Error => {
     return Object.assign(new Error(messageText), code === undefined ? undefined : { code });
 };
 
+/**
+ * Shared one-shot decoder for binary WS frames. `TextDecoder` is stateless for a
+ * single `decode()` call, so a module-level singleton avoids allocating a fresh
+ * decoder per inbound binary frame.
+ */
+const sharedDecoder = new TextDecoder();
+
 /** Decode a raw WS frame (string or binary) into text, or `undefined` if unsupported. */
 const decodeServerFrame = (raw: unknown): string | undefined => {
     if (typeof raw === "string") {
@@ -218,7 +225,7 @@ const decodeServerFrame = (raw: unknown): string | undefined => {
     }
 
     if (raw instanceof ArrayBuffer) {
-        return new TextDecoder().decode(raw);
+        return sharedDecoder.decode(raw);
     }
 
     return undefined;
@@ -817,6 +824,7 @@ class CirrusClient {
             state = {
                 acked: false,
                 args: argsRecord,
+                argsKey: stableStringify(argsRecord),
                 callbacks: new Set<SubscriptionCallback>(),
                 errorCallbacks: new Set<SubscriptionErrorCallback>(),
                 fn: function_,
@@ -1084,7 +1092,7 @@ class CirrusClient {
         const mutationArgsKey = stableStringify(argsRecord);
 
         for (const state of this.subscriptions.all()) {
-            if (state.fn.__cirrusRef !== functionRef || state.shardKey !== mutationShardKey || stableStringify(state.args) !== mutationArgsKey) {
+            if (state.fn.__cirrusRef !== functionRef || state.shardKey !== mutationShardKey || state.argsKey !== mutationArgsKey) {
                 continue;
             }
 
