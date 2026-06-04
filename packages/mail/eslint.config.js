@@ -118,6 +118,15 @@ export default createConfig(
             "vitest/prefer-strict-equal": "off",
         },
     },
+    // Benchmark files declare local React components purely as render fixtures;
+    // they're never an HMR boundary, so react-refresh's "only export components"
+    // guard does not apply.
+    {
+        files: ["**/__bench__/**/*.{ts,tsx}", "**/*.bench.{ts,tsx}"],
+        rules: {
+            "react-refresh/only-export-components": "off",
+        },
+    },
     // Markdown code blocks: don't enforce language tags.
     {
         files: ["**/*.md", "**/*.md/**"],

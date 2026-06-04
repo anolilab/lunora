@@ -4,15 +4,17 @@ import createMailer from "../src/create-mailer.js";
 
 // Drive the private Resend transport's error-mapping branches by faking the
 // underlying @visulima/email provider. Each test swaps `sendEmail`'s result.
-const sendEmail = vi.fn();
-const initialize = vi.fn(async () => undefined);
+const sendEmail = vi.fn<(...args: unknown[]) => unknown>();
+const initialize = vi.fn<() => Promise<undefined>>(async () => undefined);
 
-vi.mock("@visulima/email/providers/resend", () => ({
-    resendProvider: () => ({
-        initialize,
-        sendEmail,
-    }),
-}));
+vi.mock(import("@visulima/email/providers/resend"), () => {
+    // The transport only ever calls `initialize()` + `sendEmail()`, so the fake
+    // provider implements just those two; cast through `unknown` because the real
+    // `Provider` interface declares more members we don't exercise here.
+    return {
+        resendProvider: () => ({ initialize, sendEmail }) as unknown as ReturnType<typeof import("@visulima/email/providers/resend").resendProvider>,
+    };
+});
 
 describe("resend transport error mapping", () => {
     let consoleError: ReturnType<typeof vi.spyOn>;

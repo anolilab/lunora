@@ -82,17 +82,21 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
         return value;
     };
 
-    const assertOptionalStringList = (field: string, value: unknown): string | string[] | undefined => {
+    const assertOptionalStringList = (field: string, value: unknown): string[] | undefined => {
         if (value === undefined) {
             return undefined;
         }
 
+        // A lone string is accepted for convenience and normalized to a
+        // single-element list — `bcc`/`cc` are `string[]` downstream and the
+        // address parser treats `"a"` and `["a"]` identically, so wrapping is
+        // behavior-preserving while keeping the return type uniform.
         if (typeof value === "string") {
-            return value;
+            return [value];
         }
 
         if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
-            return value as string[];
+            return value;
         }
 
         throw new TypeError(`@cirrus/mail: queue message \`${field}\` must be a string or string[]`);
@@ -120,8 +124,8 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
     // casting the untrusted body — the cast would defeat the type system at
     // exactly the boundary this function exists to guard.
     const options: SendOptions = {
-        bcc: assertOptionalStringList("bcc", candidate.bcc) as string[] | undefined,
-        cc: assertOptionalStringList("cc", candidate.cc) as string[] | undefined,
+        bcc: assertOptionalStringList("bcc", candidate.bcc),
+        cc: assertOptionalStringList("cc", candidate.cc),
         from: assertOptionalString("from", candidate.from),
         headers,
         html: assertOptionalString("html", candidate.html),

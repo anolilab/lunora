@@ -37,37 +37,27 @@ const assertSafeHeaderValue = (label: string, value: string): void => {
     }
 };
 
-/** `@visulima/email` models addresses as `{ email, name? }`. Accept either shape. */
-const toAddress = (input: string): { email: string; name?: string } => {
-    const match = ADDRESS_PATTERN.exec(input);
-
-    if (match) {
-        const name = (match[1] ?? "").trim();
-        const email = (match[2] ?? "").trim();
-
-        // An angle-bracket form was supplied. Trust the captured address even
-        // when the display name is empty (`<a@b.c>`) — otherwise the bare-email
-        // fallback below would treat the whole `<a@b.c>` literal as the address
-        // and forward an invalid bracketed mailbox to the provider.
-        if (email) {
-            if (name.length > MAX_NAME_LENGTH) {
-                throw new Error(`@cirrus/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
-            }
-
-            if (email.length > MAX_EMAIL_LENGTH) {
-                throw new Error(`@cirrus/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
-            }
-
-            if (name) {
-                assertSafeAddressField("name", name);
-            }
-
-            assertSafeAddressField("email", email);
-
-            return name ? { email, name } : { email };
-        }
+/** Validate the bracketed `name &lt;email>` form captured by `ADDRESS_PATTERN`. */
+const toBracketedAddress = (name: string, email: string): { email: string; name?: string } => {
+    if (name.length > MAX_NAME_LENGTH) {
+        throw new Error(`@cirrus/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
     }
 
+    if (email.length > MAX_EMAIL_LENGTH) {
+        throw new Error(`@cirrus/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
+    }
+
+    if (name) {
+        assertSafeAddressField("name", name);
+    }
+
+    assertSafeAddressField("email", email);
+
+    return name ? { email, name } : { email };
+};
+
+/** Validate a bare `addr@host` address (no display name). */
+const toBareAddress = (input: string): { email: string } => {
     const email = input.trim();
 
     if (email.length > MAX_EMAIL_LENGTH) {
@@ -77,6 +67,22 @@ const toAddress = (input: string): { email: string; name?: string } => {
     assertSafeAddressField("email", email);
 
     return { email };
+};
+
+/** `@visulima/email` models addresses as `{ email, name? }`. Accept either shape. */
+const toAddress = (input: string): { email: string; name?: string } => {
+    const match = ADDRESS_PATTERN.exec(input);
+    const email = (match?.[2] ?? "").trim();
+
+    // An angle-bracket form was supplied. Trust the captured address even
+    // when the display name is empty (`<a@b.c>`) — otherwise the bare-email
+    // fallback below would treat the whole `<a@b.c>` literal as the address
+    // and forward an invalid bracketed mailbox to the provider.
+    if (match && email) {
+        return toBracketedAddress((match[1] ?? "").trim(), email);
+    }
+
+    return toBareAddress(input);
 };
 
 const toAddressList = (input: string | string[] | undefined): { email: string; name?: string }[] | undefined => {
@@ -164,6 +170,7 @@ const createResendTransport = (apiKey: string, defaultFrom: string): MailTranspo
                 // Keep the raw provider detail in server logs only — surfacing
                 // it to callers can disclose provider internals. Throw a stable,
                 // generic message.
+                // eslint-disable-next-line no-console -- intentional server-side log of the redacted provider error before throwing a generic message
                 console.error(`@cirrus/mail: send failed: ${reason}`);
 
                 throw new Error("@cirrus/mail: send failed");

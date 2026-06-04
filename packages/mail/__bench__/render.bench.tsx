@@ -9,7 +9,7 @@ import { bench, describe } from "vitest";
  *
  * React rendering is primarily synchronous CPU work on a single thread, so the
  * concurrent variant does NOT halve wall-clock time; the win is bounded by the
- * async/IO portion of @react-email/render. This bench contrasts the old
+ * async/IO portion of `@react-email/render`. This bench contrasts the old
  * sequential `await`s against the new `Promise.all` so the (modest) delta is
  * observable rather than asserted.
  */

@@ -99,7 +99,11 @@ describe("address validation (applies to every transport + the queue path)", () 
 
         const { transport } = captureTransport();
         const messages: unknown[] = [];
-        const queue = { send: async (payload: unknown) => void messages.push(payload) };
+        const queue = {
+            send: async (payload: unknown): Promise<void> => {
+                messages.push(payload);
+            },
+        };
         const mailer = createMailer({ from: "noreply@x.test", queue, transport });
 
         await expect(mailer.queue({ subject: "Hi", to: "a@x.test,evil@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
@@ -140,10 +144,16 @@ describe("header / subject validation", () => {
     });
 });
 
-const noopMailer = (): Mailer => ({
-    queue: async () => ({ queued: true }),
-    send: vi.fn(async () => ({ id: "queued-send" })),
-});
+const noopMailer = (): Mailer => {
+    return {
+        queue: async () => {
+            return { queued: true };
+        },
+        send: vi.fn<Mailer["send"]>(async () => {
+            return { id: "queued-send" };
+        }),
+    };
+};
 
 describe("consumeQueuedSend rejects malformed queue bodies", () => {
     it("rejects a non-object body", async () => {
