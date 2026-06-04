@@ -401,6 +401,15 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
  * pre-write row (USING) and, when supplied, the post-image `nextRow` (WITH
  * CHECK) so a policy cannot be satisfied by the old row while the patch
  * reassigns the row to another tenant.
+ *
+ * SYSTEM-FIELD LIMITATION (insert): on `insert` the candidate `context.row`
+ * is the caller's document BEFORE the writer stamps `_id` / `_creationTime`
+ * downstream (those are assigned by `@cirrus/do`/`@cirrus/d1` after the policy
+ * runs). So an insert policy whose `when` returns a `WhereInput` referencing
+ * `_id` or `_creationTime` cannot match — the field is absent on the candidate
+ * — and the insert is DENIED. Author insert policies against user-supplied
+ * fields (`ownerId`, `tenantId`, …), not writer-assigned system fields. Update
+ * / delete policies do see system fields (the pre-write row is fully stamped).
  */
 const evaluateWrite = <Context>(
     policies: ReadonlyArray<Policy<Context>>,

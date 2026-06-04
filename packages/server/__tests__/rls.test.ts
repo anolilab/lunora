@@ -544,6 +544,32 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         expect(database.calls.some((call) => call.method === "insert")).toBe(true);
     });
 
+    it("insert: a predicate referencing a writer-assigned system field denies (documented limitation)", async () => {
+        expect.assertions(2);
+
+        // The insert policy is evaluated against the caller's candidate document
+        // BEFORE the writer stamps `_id`/`_creationTime`, so a predicate keyed
+        // on `_id` can never match the candidate → the insert is denied. This
+        // locks in the documented behavior (author insert policies against
+        // user-supplied fields, not system fields).
+        const policy = definePolicy<TestContext>({
+            on: "insert",
+            table: "documents",
+            when: () => ({ _id: { eq: "anything" } }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = cirrus.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.insert("documents", { ownerId: "u1", title: "x" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+            name: "CirrusError",
+        });
+        expect(database.calls.some((call) => call.method === "insert")).toBe(false);
+    });
+
     it("insert: predicate mismatch denies with FORBIDDEN", async () => {
         expect.assertions(2);
 
