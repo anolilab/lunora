@@ -32,6 +32,7 @@ import type {
     TriggerEventLike,
     TriggerOpLike,
     TriggerTimingLike,
+    ValidatorLike,
     WhereCompilerStrategy,
     WhereInput,
 } from "@cirrus/do";
@@ -316,6 +317,10 @@ const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike]
  * round-trips through SQLite's native column type, never as JSON).
  * - everything else (string/number/date/timestamp/id/literal): stored natively,
  * returned verbatim.
+ *
+ * `v.optional(inner)` columns are decoded by their inner kind (see
+ * {@link effectiveColumnKind}) — the optional wrapper only affects insert-time
+ * presence, never the storage form of a present value.
  */
 /** Parse `raw` as JSON, returning `raw` unchanged when it is not valid JSON. */
 const tryJsonParse = (raw: string): unknown => {
@@ -337,6 +342,24 @@ const decodeBigint = (raw: unknown): unknown => {
     } catch {
         return raw;
     }
+};
+
+/**
+ * Resolve the *effective* storage kind of a column validator. `serializeColumnValue`
+ * encodes by the runtime value's JS type, so an `v.optional(inner)` column stores
+ * its present value exactly as `inner` would (boolean → 1/0, object → JSON, …).
+ * The validator's own `kind` is `"optional"`, which hides that — unwrap to the
+ * inner validator's kind so the decode reverses the real storage form. The inner
+ * validator is stashed on `_meta.inner` by `@cirrus/values`' `createValidator`.
+ */
+const effectiveColumnKind = (validator: ValidatorLike): string | undefined => {
+    if (validator.kind !== "optional") {
+        return validator.kind;
+    }
+
+    const inner = (validator._meta as { inner?: ValidatorLike } | undefined)?.inner;
+
+    return inner ? effectiveColumnKind(inner) : validator.kind;
 };
 
 const decodeColumnValue = (kind: string | undefined, raw: unknown): unknown => {
@@ -385,7 +408,7 @@ const decodeGlobalRow = (definition: TableDefinitionLike, row: Record<string, un
             continue;
         }
 
-        decoded[field] = decodeColumnValue(validator.kind, raw);
+        decoded[field] = decodeColumnValue(effectiveColumnKind(validator), raw);
     }
 
     decoded["_id"] = row["id"];

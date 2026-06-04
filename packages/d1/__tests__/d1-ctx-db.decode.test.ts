@@ -20,6 +20,16 @@ const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike 
     };
 };
 
+// An `v.optional(inner)` column: kind is "optional", the inner validator
+// (carrying the real storage kind) lives on `_meta.inner`, mirroring
+// `@cirrus/values`' `createValidator`. The decode must unwrap to `inner.kind`.
+const optionalCol = (innerKind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+    return {
+        _meta: { column: { notNull: false, ...column }, inner: { _meta: {}, kind: innerKind } },
+        kind: "optional",
+    } as ValidatorLike;
+};
+
 // A table whose columns span every non-scalar storage form the serializer
 // encodes: object/array/record → JSON, bigint → decimal string, plus scalar
 // boolean/number/string controls that must pass through untouched.
@@ -153,6 +163,66 @@ describe("d1 ctx-db — non-scalar column round-trip", () => {
         expect(reloaded?.["meta"]).toEqual({});
         expect(reloaded?.["tags"]).toEqual([]);
         expect(reloaded?.["big"]).toBe(0n);
+    });
+});
+
+// A table whose non-scalar columns are wrapped in `v.optional(...)`. The stored
+// form is identical to the unwrapped column (object → JSON, bigint → decimal
+// string, boolean → 1/0), so the decode must unwrap `optional` to the inner kind
+// or every optional non-scalar read returns the raw storage string/number.
+const optionalSchema: SchemaLike = {
+    tables: {
+        opt: {
+            indexes: [],
+            shape: {
+                active: optionalCol("boolean"),
+                big: optionalCol("bigint"),
+                meta: optionalCol("object"),
+                tags: optionalCol("array"),
+            },
+        },
+    },
+};
+
+const setupOptional = (): DatabaseWriterLike => {
+    harness.ddl(
+        `CREATE TABLE "opt" (
+            "id" TEXT PRIMARY KEY,
+            "_creationTime" INTEGER NOT NULL,
+            "active" INTEGER,
+            "big" TEXT,
+            "meta" TEXT,
+            "tags" TEXT
+        )`,
+    );
+
+    return createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema: optionalSchema });
+};
+
+describe("d1 ctx-db — optional non-scalar column round-trip", () => {
+    beforeEach(() => {
+        harness = createD1Exec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("decodes v.optional(object|array|bigint|boolean) by the inner kind", async () => {
+        expect.assertions(4);
+
+        const writer = setupOptional();
+
+        await writer.insert("opt", { _id: "o1", active: true, big: 9_007_199_254_740_993n, meta: { x: 1 }, tags: ["a", "b"] }, { allowExplicitId: true });
+
+        const reloaded = await writer.get("o1");
+
+        // Without unwrapping `optional`, these would come back as the raw JSON
+        // string / decimal string / 1 respectively.
+        expect(reloaded?.["meta"]).toEqual({ x: 1 });
+        expect(reloaded?.["tags"]).toEqual(["a", "b"]);
+        expect(reloaded?.["big"]).toBe(9_007_199_254_740_993n);
+        expect(reloaded?.["active"]).toBe(true);
     });
 });
 
