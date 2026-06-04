@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { emitApi } from "../src/emit.js";
+import { emitApi, emitServer } from "../src/emit.js";
 import type { FunctionIR } from "../src/ir.js";
 
 describe("emitApi", () => {
@@ -68,5 +68,90 @@ describe("emitApi", () => {
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('import("_generated/dataModel.js")');
+    });
+
+    it("rewrites `../_generated/X` qualifiers from nested function files", () => {
+        expect.assertions(2);
+
+        // Regression: a handler nested in `cirrus/sub/foo.ts` imports dataModel
+        // via `../_generated/dataModel.js`; ts-morph prints that relative path
+        // verbatim. Inlined into `_generated/api.ts` it must collapse to
+        // `./dataModel.js`, not stay `../_generated/...` (which resolves one
+        // directory too high → tsc TS2307).
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "list",
+                filePath: "sub/foo",
+                kind: "query",
+                returnType: 'import("../_generated/dataModel.js").Doc_messages[]',
+            },
+        ];
+
+        const rendered = emitApi(functions);
+
+        expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
+        expect(rendered).not.toContain('import("../_generated/dataModel.js")');
+    });
+
+    it("rewrites deeply nested `../../_generated/X` qualifiers", () => {
+        expect.assertions(2);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "list",
+                filePath: "a/b/foo",
+                kind: "query",
+                returnType: 'import("../../_generated/dataModel.js").Doc_messages[]',
+            },
+        ];
+
+        const rendered = emitApi(functions);
+
+        expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
+        expect(rendered).not.toContain('_generated/dataModel.js");');
+    });
+});
+
+describe("emitServer Caller types", () => {
+    it("types a `stream` leaf as resolving to `AsyncIterable<T>`, not a single element", () => {
+        expect.assertions(2);
+
+        // A stream handler returns an `AsyncIterable<T>` synchronously; the
+        // Caller awaits it through `callRegistered`, so the leaf resolves to
+        // `Promise<AsyncIterable<T>>`, not `Promise<T>`.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "watch",
+                filePath: "messages",
+                kind: "stream",
+                returnType: "string",
+            },
+        ];
+
+        const rendered = emitServer(functions);
+
+        expect(rendered).toContain("watch: (args?: {}) => Promise<AsyncIterable<string>>;");
+        expect(rendered).not.toContain("watch: (args?: {}) => Promise<string>;");
+    });
+
+    it("keeps non-stream leaves typed as `Promise<T>`", () => {
+        expect.assertions(1);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "list",
+                filePath: "messages",
+                kind: "query",
+                returnType: "string",
+            },
+        ];
+
+        const rendered = emitServer(functions);
+
+        expect(rendered).toContain("list: (args?: {}) => Promise<string>;");
     });
 });

@@ -548,18 +548,21 @@ export interface OrmWriter extends OrmReader {
  * in the rendered text. Inlined verbatim into `cirrus/_generated/api.ts`,
  * that path is one level too deep — tsc raises TS2307.
  *
- * Fix: strip the leading `./_generated/` segment so types resolve from inside
- * `_generated/`. Cirrus's only relative `import("…")` qualifier comes from
- * `_generated/dataModel.ts`, so this targeted rewrite is enough; absolute
- * imports (e.g. `import("@cirrus/server")`) are left untouched.
+ * Fix: strip everything up to and including the final `_generated/` segment so
+ * types resolve from inside `_generated/`. A handler nested in `cirrus/sub/foo.ts`
+ * imports dataModel via `../_generated/dataModel.js`, which ts-morph prints as
+ * `import("../_generated/dataModel.js")` — so we must accept any number of
+ * leading `./`/`../` segments, not just a single optional `./`. Cirrus's only
+ * relative `import("…")` qualifier comes from `_generated/dataModel.ts`, so this
+ * targeted rewrite is enough; absolute imports (e.g. `import("@cirrus/server")`)
+ * are left untouched.
  */
-const GENERATED_IMPORT_RE = /import\("(?<spec>(?:\.\/)?_generated\/[^"]+)"\)/gu;
-const DOT_GENERATED_PREFIX_RE = /^\.\/_generated\//u;
-const GENERATED_PREFIX_RE = /^_generated\//u;
+const GENERATED_IMPORT_RE = /import\("(?<spec>(?:\.\.?\/)*_generated\/[^"]+)"\)/gu;
+const GENERATED_PREFIX_RE = /^(?:\.\.?\/)*_generated\//u;
 
 const relocateGeneratedImports = (returnType: string): string =>
     returnType.replaceAll(GENERATED_IMPORT_RE, (_match, spec: string) => {
-        const stripped = spec.replace(DOT_GENERATED_PREFIX_RE, "./").replace(GENERATED_PREFIX_RE, "./");
+        const stripped = spec.replace(GENERATED_PREFIX_RE, "./");
 
         return `import("${stripped}")`;
     });
@@ -677,6 +680,15 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
                     const argsType = renderArgsType(definition.args);
                     const optional = argsType === "{}" ? "?" : "";
                     const returnType = relocateGeneratedImports(definition.returnType);
+
+                    // A `stream` handler returns an `AsyncIterable<T>` *synchronously*;
+                    // `callRegistered` awaits the handler, and awaiting a non-thenable
+                    // async-iterable yields the iterable itself. So the leaf resolves to
+                    // `AsyncIterable<T>`, not a single element `T`. (Note `unwrapHandlerReturn`
+                    // already unwrapped the iterable to its element type in `returnType`.)
+                    if (definition.kind === "stream") {
+                        return `        ${definition.exportName}: (args${optional}: ${argsType}) => Promise<AsyncIterable<${returnType}>>;`;
+                    }
 
                     return `        ${definition.exportName}: (args${optional}: ${argsType}) => Promise<${returnType}>;`;
                 })
