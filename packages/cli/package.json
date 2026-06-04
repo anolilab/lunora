@@ -33,6 +33,7 @@
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
+        "bench": "vitest bench --run",
         "test": "vitest run"
     },
     "dependencies": {

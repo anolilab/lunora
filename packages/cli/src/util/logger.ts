@@ -62,35 +62,59 @@ const buildReporter = (): PailReporter => {
     return new Reporter();
 };
 
-const sharedPail: PailLogger = createPail({
-    reporters: [buildReporter()],
-    scope: ["cirrus"],
-    stderr: process.stderr,
-    stdout: process.stdout,
-}) as PailLogger;
+/**
+ * Lazily-constructed pail instance. Building it (plus its Pretty/Json reporter)
+ * is deferred until the first `createLogger()` / `getPail()` call so that merely
+ * importing this module stays side-effect-free (`package.json` declares
+ * `sideEffects:false`) — `cirrus --help` / `-v` never pay the construction cost.
+ */
+let sharedPail: PailLogger | undefined;
+
+const getPail = (): PailLogger => {
+    sharedPail ??= createPail({
+        reporters: [buildReporter()],
+        scope: ["cirrus"],
+        stderr: process.stderr,
+        stdout: process.stdout,
+    }) as PailLogger;
+
+    return sharedPail;
+};
 
 const createLogger = (): Logger => {
     return {
         debug: (message) => {
-            sharedPail.debug(message);
+            getPail().debug(message);
         },
         error: (message) => {
-            sharedPail.error(message);
+            getPail().error(message);
         },
         info: (message) => {
-            sharedPail.info(message);
+            getPail().info(message);
         },
         success: (message) => {
-            sharedPail.success(message);
+            getPail().success(message);
         },
         warn: (message) => {
-            sharedPail.warn(message);
+            getPail().warn(message);
         },
     };
 };
 
-/** Direct access to the underlying pail instance for advanced use-cases. */
-const pail: PailLogger = sharedPail;
+/**
+ * Direct access to the underlying pail instance for advanced use-cases.
+ * A Proxy keeps the public `pail` binding lazy: the real pail is only
+ * constructed on first property access, so importing this module (and thus
+ * the package barrel) stays side-effect-free.
+ */
+const pail: PailLogger = new Proxy({} as PailLogger, {
+    get(_target, property: keyof PailLogger) {
+        const instance = getPail();
+        const value = instance[property];
+
+        return typeof value === "function" ? value.bind(instance) : value;
+    },
+});
 
 export type { Logger };
-export { createLogger, pail };
+export { createLogger, getPail, pail };
