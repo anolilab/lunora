@@ -134,7 +134,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         await options.bucket.delete(key);
     };
 
-    const list = async (prefix?: string, listOptions: ListOptions = {}): Promise<{ cursor?: string; objects: R2ObjectLike[] }> => {
+    const list = async (prefix?: string, listOptions: ListOptions = {}): Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }> => {
         // `prefix` is intentionally permissive: it's read-only and a malformed
         // value just produces an empty result. We still reject NUL bytes since
         // the R2 binding silently truncates at the NUL on some runtimes.
@@ -146,7 +146,9 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         const limit = Math.min(Math.max(1, Math.floor(requested)), MAX_LIST_LIMIT);
         const result = await options.bucket.list({ cursor: listOptions.cursor, delimiter: listOptions.delimiter, limit, prefix });
 
-        return { cursor: result.cursor, objects: result.objects };
+        // Forward R2's `truncated` flag so callers can paginate with a clean
+        // `while (truncated)` loop instead of inferring "more" from `cursor`.
+        return { cursor: result.cursor, objects: result.objects, truncated: result.truncated };
     };
 
     const getUrl = (key: string): string => {

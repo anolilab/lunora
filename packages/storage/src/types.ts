@@ -70,6 +70,6 @@ export interface Storage {
     download: (key: string) => Promise<R2ObjectBodyLike | null>;
     getSignedUrl: (key: string, options?: SignedUrlOptions) => Promise<string>;
     getUrl: (key: string) => string;
-    list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[] }>;
+    list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }>;
     upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; key: string }>;
 }

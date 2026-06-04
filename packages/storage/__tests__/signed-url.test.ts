@@ -140,4 +140,88 @@ describe("signedUrl", () => {
         expect(result.valid).toBe(true);
         expect(result.key).toBe("a/b/c.txt");
     });
+
+    it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a non-positive/non-finite expiresInSeconds (%s)", async (expiresInSeconds) => {
+        expect.assertions(1);
+
+        await expect(
+            buildSignedUrl({
+                baseUrl: "https://cdn.test",
+                expiresInSeconds,
+                key: "x",
+                secret: "shh",
+            }),
+        ).rejects.toThrow(/positive finite number/);
+    });
+
+    it("rejects an expiresInSeconds beyond the 7-day ceiling", async () => {
+        expect.assertions(1);
+
+        await expect(
+            buildSignedUrl({
+                baseUrl: "https://cdn.test",
+                expiresInSeconds: 8 * 24 * 60 * 60,
+                key: "x",
+                secret: "shh",
+            }),
+        ).rejects.toThrow(/must not exceed/);
+    });
+
+    it("returns malformed for an exp with trailing garbage", async () => {
+        expect.assertions(2);
+
+        const url = await buildSignedUrl({
+            baseUrl: "https://cdn.test",
+            expiresInSeconds: 60,
+            key: "x",
+            secret: "shh",
+        });
+        const tampered = new URL(url);
+
+        tampered.searchParams.set("exp", `${tampered.searchParams.get("exp") ?? ""}abc`);
+
+        const result = await verifySignedUrl(tampered.toString(), "shh");
+
+        expect(result.valid).toBe(false);
+        expect(result.reason).toBe("malformed");
+    });
+
+    it("binds the signature to a bare-host baseUrl (no scheme)", async () => {
+        expect.assertions(2);
+
+        // extractHost falls back to scheme-stripping + path-splitting for a
+        // bare host. The minted URL has no scheme, so verify must be handed an
+        // explicit expectedHost to canonicalize against the same host.
+        const url = await buildSignedUrl({
+            baseUrl: "cdn.test/uploads",
+            expiresInSeconds: 60,
+            key: "x.png",
+            secret: "shh",
+        });
+
+        const result = await verifySignedUrl(`https://cdn.test/x.png?${url.split("?")[1] ?? ""}`, "shh", { expectedHost: "cdn.test" });
+
+        expect(result.valid).toBe(true);
+        expect(result.key).toBe("x.png");
+    });
+
+    it("verifies against an explicit expectedHost differing from the inbound host", async () => {
+        expect.assertions(2);
+
+        // Minted for the CDN host, verified against a Worker route host: without
+        // expectedHost this would fail as bad_signature.
+        const url = await buildSignedUrl({
+            baseUrl: "https://cdn.example.com",
+            expiresInSeconds: 60,
+            key: "uploads/x.png",
+            secret: "shh",
+        });
+
+        const rewritten = new URL(url);
+
+        rewritten.host = "api.example.com";
+
+        await expect(verifySignedUrl(rewritten.toString(), "shh")).resolves.toMatchObject({ reason: "bad_signature", valid: false });
+        await expect(verifySignedUrl(rewritten.toString(), "shh", { expectedHost: "https://cdn.example.com" })).resolves.toMatchObject({ valid: true });
+    });
 });

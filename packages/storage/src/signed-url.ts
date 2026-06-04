@@ -2,16 +2,18 @@ import type { SignedUrlOptions } from "./types.js";
 
 const textEncoder = new TextEncoder();
 
+/** Upper bound on a signed-URL TTL — 7 days, matching common CDN/object-store ceilings. */
+const MAX_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
+
 // Hoisted to module scope so the literals aren't recompiled on every call.
 const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;
 const LEADING_SLASH_RE = /^\//;
 
 const toBase64Url = (bytes: Uint8Array): string => {
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
+    // A SHA-256 HMAC is a fixed 32 bytes, well under the argument-spread limit,
+    // so building the binary string in one `fromCharCode` call is safe and
+    // cheaper than a per-byte loop.
+    const binary = String.fromCharCode(...bytes);
 
     return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 };
@@ -28,8 +30,25 @@ const fromBase64Url = (input: string): Uint8Array => {
     return bytes;
 };
 
-const importHmacKey = async (secret: string): Promise<CryptoKey> =>
-    crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
+// The signing secret is effectively constant per process, so the imported
+// (non-extractable) CryptoKey is memoized by secret value: this removes one
+// `crypto.subtle.importKey` from the verify hot path on every request. Caching
+// the Promise (not the resolved key) also coalesces concurrent imports.
+const keyCache = new Map<string, Promise<CryptoKey>>();
+
+const importHmacKey = async (secret: string): Promise<CryptoKey> => {
+    const cached = keyCache.get(secret);
+
+    if (cached) {
+        return cached;
+    }
+
+    const keyPromise = crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
+
+    keyCache.set(secret, keyPromise);
+
+    return keyPromise;
+};
 
 // Host is lowercased so a signature minted for `Example.com` verifies against
 // `example.com` — DNS is case-insensitive, but the URL parser preserves case.
@@ -69,6 +88,18 @@ export const buildSignedUrl = async (
 ): Promise<string> => {
     const method = args.method ?? "GET";
     const expiresInSeconds = args.expiresInSeconds ?? 60 * 60;
+
+    // Fail fast on a non-positive/non-finite TTL (which would mint an
+    // already-expired URL that verify silently rejects) and enforce a ceiling
+    // so a bogus value can't mint an effectively non-expiring URL.
+    if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
+        throw new Error("@cirrus/storage: expiresInSeconds must be a positive finite number");
+    }
+
+    if (expiresInSeconds > MAX_EXPIRES_IN_SECONDS) {
+        throw new Error(`@cirrus/storage: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
+    }
+
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const host = extractHost(args.baseUrl);
     const cryptoKey = await importHmacKey(args.secret);
@@ -97,7 +128,17 @@ export interface VerifyResult {
     valid: boolean;
 }
 
-export const verifySignedUrl = async (input: string | URL, secret: string): Promise<VerifyResult> => {
+/**
+ * Verify a {@link buildSignedUrl} output. By default the signature is
+ * canonicalized against the inbound `url.host`, which matches the build-side
+ * host whenever the URL being verified is the URL that was minted. In a
+ * topology where the host the Worker sees differs from the configured
+ * `publicBaseUrl` host (e.g. a CDN host vs a Worker route that rewrites
+ * `Host`), pass `expectedHost` (the `publicBaseUrl` host) so verification
+ * canonicalizes against the same host the signature was minted for instead of
+ * failing every request as `bad_signature`.
+ */
+export const verifySignedUrl = async (input: string | URL, secret: string, options?: { expectedHost?: string }): Promise<VerifyResult> => {
     let url: URL;
 
     try {
@@ -106,14 +147,18 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
         return { reason: "malformed", valid: false };
     }
 
-    const exp = Number.parseInt(url.searchParams.get("exp") ?? "", 10);
+    // Strict integer parse: `Number.parseInt` would accept trailing garbage
+    // ("123abc" -> 123). buildSignedUrl only ever emits a clean integer, so a
+    // non-integer `exp` is tampered/malformed.
+    const expRaw = url.searchParams.get("exp");
+    const exp = expRaw === null ? Number.NaN : Number(expRaw);
     const sig = url.searchParams.get("sig");
     // Keep `method` as a plain string so the GET/PUT guard below stays a real
     // runtime check (a `as "GET" | "PUT"` cast would make the linter — and the
     // type system — treat the guard as dead code).
     const method = url.searchParams.get("method") ?? "GET";
 
-    if (!sig || !Number.isFinite(exp)) {
+    if (!sig || !Number.isInteger(exp)) {
         return { reason: "malformed", valid: false };
     }
 
@@ -143,12 +188,16 @@ export const verifySignedUrl = async (input: string | URL, secret: string): Prom
         return { reason: "malformed", valid: false };
     }
 
+    // Canonicalize against an explicit expected host when supplied (CDN/host-
+    // rewrite topologies); otherwise bind to the inbound host, which equals the
+    // build-side host whenever the verified URL is the minted URL.
+    const host = options?.expectedHost === undefined ? url.host : extractHost(options.expectedHost);
     const cryptoKey = await importHmacKey(secret);
     const valid = await crypto.subtle.verify(
         "HMAC",
         cryptoKey,
         sigBytes as unknown as BufferSource,
-        textEncoder.encode(canonicalize(method, url.host, key, exp)),
+        textEncoder.encode(canonicalize(method, host, key, exp)),
     );
 
     if (!valid) {
