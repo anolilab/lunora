@@ -6,9 +6,10 @@
     "sideEffects": false,
     "scripts": {
         "build": "next build",
+        "codegen": "fumadocs-mdx",
         "dev": "next dev",
-        "lint:eslint": "fumadocs-mdx && eslint .",
-        "lint:eslint:fix": "fumadocs-mdx && eslint . --fix",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
         "lint:types": "fumadocs-mdx && tsc --noEmit",
         "start": "next start"
     },

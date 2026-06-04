@@ -6,10 +6,11 @@
     "sideEffects": false,
     "scripts": {
         "build": "vite build",
+        "codegen": "cirrus codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
-        "lint:eslint": "cirrus codegen && eslint .",
-        "lint:eslint:fix": "cirrus codegen && eslint . --fix",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
         "lint:types": "cirrus codegen && tsc --noEmit",
         "test": "vitest run"
     },

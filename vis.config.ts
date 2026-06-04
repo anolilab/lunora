@@ -33,12 +33,15 @@ export default defineConfig({
             // Type-aware ESLint rules (no-unsafe-*, no-unnecessary-condition) need the
             // upstream packages' declarations built, same as lint:types — without ^build
             // cross-package @cirrus types resolve to `any` and trigger a no-unsafe cascade.
-            dependsOn: ["^build", "default", "^public"],
+            // `codegen` (self) emits each app's generated dir (.source / cirrus/_generated)
+            // that its source imports — vis runs eslint via its own integration (not the
+            // package's lint:eslint script), so the codegen must come through dependsOn.
+            dependsOn: ["codegen", "^build", "default", "^public"],
             inputs: ["default"],
         },
         "lint:eslint:fix": {
             cache: true,
-            dependsOn: ["^build", "default", "^public"],
+            dependsOn: ["codegen", "^build", "default", "^public"],
             inputs: ["default"],
         },
         "lint:package-json": {
