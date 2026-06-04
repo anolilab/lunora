@@ -32,11 +32,13 @@ describe("cirrusProvider", () => {
         // Suppress React's error logging for this test.
         const { error } = console;
 
+        // eslint-disable-next-line no-console -- intentionally muting React's noisy error logging while asserting the provider-missing throw.
         console.error = (): void => undefined;
 
         try {
             expect(() => render(<Probe />)).toThrow(/CirrusProvider/);
         } finally {
+            // eslint-disable-next-line no-console -- restoring the original console.error captured above.
             console.error = error;
         }
     });

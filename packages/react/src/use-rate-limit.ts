@@ -49,7 +49,7 @@ export const useRateLimit = (config: RateLimitConfig, options: UseRateLimitOptio
         (count = 1): RateLimitStatus => {
             const { status, value } = evaluate(config, valueRef.current, { consume: true, count, now: now(), reserve: false });
 
-            if (value !== null) {
+            if (value !== undefined) {
                 valueRef.current = value;
             }
 

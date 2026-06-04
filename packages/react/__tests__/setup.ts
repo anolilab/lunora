@@ -8,6 +8,7 @@
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
 
+// eslint-disable-next-line vitest/require-top-level-describe -- this is a global vitest setup file; the cleanup hook is intentionally top-level (no describe block) so it runs for every test suite.
 afterEach(() => {
     cleanup();
 });
