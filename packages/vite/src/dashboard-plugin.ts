@@ -88,7 +88,18 @@ const dashboardPlugin = (): Plugin => {
             server.middlewares.use((request, response, next) => {
                 const url = request.url ?? "";
 
-                if (url !== DASHBOARD_PATH && !url.startsWith(`${DASHBOARD_PATH}?`) && url !== `${DASHBOARD_PATH}/`) {
+                // Parse the pathname so query strings and an optional trailing
+                // slash don't change the match (`/__cirrus`, `/__cirrus?x`,
+                // `/__cirrus/`, and `/__cirrus/?x` all serve the dashboard).
+                let pathname: string;
+
+                try {
+                    pathname = new URL(url, "http://localhost").pathname.replace(TRAILING_SLASH, "");
+                } catch {
+                    pathname = url;
+                }
+
+                if (pathname !== DASHBOARD_PATH) {
                     next();
 
                     return;
