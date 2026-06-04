@@ -30,6 +30,47 @@ interface OnlyErrorsOption {
 const shouldSkip = (event: ObservabilityEvent, onlyErrors: boolean | undefined): boolean => onlyErrors === true && event.ok;
 
 /**
+ * Case-insensitively merge `overrides` onto `defaults`, with `overrides`
+ * winning. HTTP header names are case-insensitive, so a naive object spread of
+ * `{ "content-type": ..., ...overrides }` would keep BOTH `content-type` and a
+ * user-supplied `Content-Type` as distinct object keys; the `fetch`/`Headers`
+ * constructor then *combines* them ("application/json, text/plain") instead of
+ * letting the caller override. Normalising the key first guarantees a single,
+ * caller-controlled value per header.
+ */
+const mergeHeaders = (defaults: Record<string, string>, overrides: Record<string, string> | undefined): Record<string, string> => {
+    if (!overrides) {
+        return { ...defaults };
+    }
+
+    const merged: Record<string, string> = {};
+    const seen = new Map<string, string>();
+
+    for (const [name, value] of Object.entries(defaults)) {
+        const lower = name.toLowerCase();
+
+        seen.set(lower, name);
+        merged[name] = value;
+    }
+
+    for (const [name, value] of Object.entries(overrides)) {
+        const lower = name.toLowerCase();
+        const existing = seen.get(lower);
+
+        if (existing === undefined) {
+            seen.set(lower, name);
+            merged[name] = value;
+        } else {
+            // Replace the existing key's value in place so the override wins
+            // without introducing a second, differently-cased duplicate.
+            merged[existing] = value;
+        }
+    }
+
+    return merged;
+};
+
+/**
  * A sink that logs each event via `console`.
  *
  * Useful as a zero-config default during development, or wired behind
@@ -65,6 +106,16 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
      * `Authorization` / API-key header for Axiom, Datadog, etc.).
      */
     headers?: Record<string, string>;
+
+    /**
+     * Optional redaction hook applied to each event immediately before it is
+     * serialized and shipped. Use it to scrub or drop PII (e.g. strip
+     * `error.message`) before it leaves the worker. Return the (possibly
+     * modified) event to send, or `null`/`undefined` to drop the event
+     * entirely. A throwing `transform` drops the event (fail-closed) so a buggy
+     * redactor can never leak the un-scrubbed payload.
+     */
+    transform?: (event: ObservabilityEvent) => null | ObservabilityEvent | undefined;
     /** The ingestion endpoint to POST each event to. */
     url: string;
 }
@@ -79,12 +130,15 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
  * swallowed so a flaky endpoint never surfaces to the caller.
  *
  * Privacy: the full event is serialized, including `error.message`, which may
- * contain user input. See the module-level note.
+ * contain user input. See the module-level note. Pass a `transform` callback to
+ * scrub or drop fields before they leave the worker.
  * @param options Sink options: `url` is the POST target, `headers` are merged
- * request headers (e.g. an API key), and `onlyErrors` ships error events only.
+ * request headers (e.g. an API key), `onlyErrors` ships error events only, and
+ * `transform` redacts/drops each event before send.
  */
 export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
-    const { headers, onlyErrors, url } = options;
+    const { headers, onlyErrors, transform, url } = options;
+    const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers);
 
     return {
         onRpc: (event) => {
@@ -93,12 +147,28 @@ export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
             }
 
             try {
+                let payload: null | ObservabilityEvent | undefined = event;
+
+                if (transform) {
+                    // Fail-closed: if the redactor throws we drop the event
+                    // rather than ship the un-scrubbed original.
+                    try {
+                        payload = transform(event);
+                    } catch {
+                        return;
+                    }
+                }
+
+                if (payload === null || payload === undefined) {
+                    return;
+                }
+
                 // Fire-and-forget: no await. The `.catch` swallows any
                 // rejection so a failed POST can never reject into the dispatch
                 // path. The settled promise is intentionally not retained.
                 const sent = fetch(url, {
-                    body: JSON.stringify(event),
-                    headers: { "content-type": "application/json", ...headers },
+                    body: JSON.stringify(payload),
+                    headers: mergedHeaders,
                     method: "POST",
                 });
 

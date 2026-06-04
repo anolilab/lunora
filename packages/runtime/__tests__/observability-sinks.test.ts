@@ -135,6 +135,89 @@ describe("observability-sinks", () => {
 
             vi.unstubAllGlobals();
         });
+
+        it("lets a differently-cased Content-Type header override the default without duplicating it", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = webhookSink({
+                headers: { "Content-Type": "application/x-ndjson" },
+                url: "https://ingest.example/events",
+            });
+
+            sink.onRpc!(okEvent);
+
+            const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+            const sentHeaders = init.headers as Record<string, string>;
+
+            // The override wins and there is exactly one content-type key — no
+            // combined "application/json, application/x-ndjson".
+            expect(sentHeaders["content-type"]).toBe("application/x-ndjson");
+            expect(Object.keys(sentHeaders).filter((key) => key.toLowerCase() === "content-type")).toHaveLength(1);
+
+            vi.unstubAllGlobals();
+        });
+
+        it("applies a transform to scrub the event before sending", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = webhookSink({
+                transform: (event) => {
+                    return { ...event, error: event.error ? { ...event.error, message: "[redacted]" } : undefined };
+                },
+                url: "https://ingest.example/events",
+            });
+
+            sink.onRpc!(errorEvent);
+
+            const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(init.body).toContain("[redacted]");
+            expect(init.body).not.toContain("user@example.com");
+
+            vi.unstubAllGlobals();
+        });
+
+        it("drops the event when transform returns null", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = webhookSink({ transform: () => null, url: "https://ingest.example/events" });
+
+            sink.onRpc!(errorEvent);
+
+            expect(fetchMock).not.toHaveBeenCalled();
+
+            vi.unstubAllGlobals();
+        });
+
+        it("fails closed by dropping the event when transform throws", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = webhookSink({
+                transform: () => {
+                    throw new Error("scrub failed");
+                },
+                url: "https://ingest.example/events",
+            });
+
+            expect(() => {
+                sink.onRpc!(errorEvent);
+            }).not.toThrow();
+            expect(fetchMock).not.toHaveBeenCalled();
+
+            vi.unstubAllGlobals();
+        });
     });
 
     describe("sentrySink", () => {
