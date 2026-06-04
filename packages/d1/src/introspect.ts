@@ -15,6 +15,7 @@
 import type { SchemaLike } from "@cirrus/do";
 
 import type { D1Exec } from "./d1-ctx-db.js";
+import { decodeGlobalRow } from "./d1-ctx-db.js";
 
 /** A global table plus its current row count. */
 interface GlobalTableInfo {
@@ -46,31 +47,20 @@ const clamp = (value: number, min: number, max: number): number => Math.min(Math
 const isGlobalTable = (schema: SchemaLike, table: string): boolean => schema.tables[table]?.shardMode?.kind === "global";
 
 /**
- * Decode a SELECTed D1 row into a doc: re-expose `_id` from the `id` column,
- * preserve `_creationTime`, and fold 1/0 back into booleans for boolean fields.
- * Mirrors `admin-export-import.ts`'s `decodeRow` so the browser sees the same
- * doc shape the client would.
+ * Decode a SELECTed D1 row into a doc via the shared {@link decodeGlobalRow}
+ * helper, so the browser sees the same doc shape `d1-ctx-db.ts` (the writer) and
+ * `admin-export-import.ts` produce — including non-scalar (object/array/record/
+ * bigint) columns that are JSON/string-encoded on write. Returns `_id`/
+ * `_creationTime` passthrough when the table isn't in the schema.
  */
 const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknown>): Record<string, unknown> => {
     const definition = schema.tables[table];
-    const decoded: Record<string, unknown> = {};
 
-    if (definition) {
-        for (const [field, validator] of Object.entries(definition.shape)) {
-            const raw = row[field];
-
-            if (raw === undefined) {
-                continue;
-            }
-
-            decoded[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
-        }
+    if (!definition) {
+        return { _creationTime: row["_creationTime"], _id: row["id"] };
     }
 
-    decoded["_id"] = row["id"];
-    decoded["_creationTime"] = row["_creationTime"];
-
-    return decoded;
+    return decodeGlobalRow(definition, row);
 };
 
 const countRows = async (exec: D1Exec, quotedTable: string): Promise<number> => {

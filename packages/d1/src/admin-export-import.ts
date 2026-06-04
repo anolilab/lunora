@@ -8,6 +8,7 @@
 import type { DatabaseWriterLike, SchemaLike } from "@cirrus/do";
 
 import type { D1Exec } from "./d1-ctx-db.js";
+import { decodeGlobalRow } from "./d1-ctx-db.js";
 
 /** One exported row: `doc` is reconstructed from the column tuple. */
 interface ExportRow {
@@ -49,30 +50,20 @@ const selectGlobalTables = (schema: SchemaLike, requested?: ReadonlyArray<string
 };
 
 /**
- * Decode a SELECTed D1 row back into a doc the same way `d1-ctx-db.ts`'s
- * `decodeRow` does — re-exposing `_id` (from the `id` column), preserving
- * `_creationTime`, and folding 1/0 back into booleans for boolean fields.
+ * Decode a SELECTed D1 row back into a doc via the shared {@link decodeGlobalRow}
+ * helper — re-exposing `_id` (from the `id` column), preserving `_creationTime`,
+ * and reversing every column's storage form (1/0 → boolean, JSON → object/array/
+ * record, decimal string → bigint). Falls back to `_id`/`_creationTime`-only
+ * when the table isn't declared in the schema.
  */
 const decodeRow = (schema: SchemaLike, table: string, row: Record<string, unknown>): Record<string, unknown> => {
     const definition = schema.tables[table];
-    const decoded: Record<string, unknown> = {};
 
-    if (definition) {
-        for (const [field, validator] of Object.entries(definition.shape)) {
-            const raw = row[field];
-
-            if (raw === undefined) {
-                continue;
-            }
-
-            decoded[field] = validator.kind === "boolean" && (raw === 0 || raw === 1) ? raw === 1 : raw;
-        }
+    if (!definition) {
+        return { _creationTime: row["_creationTime"], _id: row["id"] };
     }
 
-    decoded["_id"] = row["id"];
-    decoded["_creationTime"] = row["_creationTime"];
-
-    return decoded;
+    return decodeGlobalRow(definition, row);
 };
 
 interface ExportGlobalArgs {
