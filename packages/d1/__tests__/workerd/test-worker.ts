@@ -21,7 +21,7 @@ export default {
         const url = new URL(request.url);
 
         if (url.pathname === "/migrate" && request.method === "POST") {
-            const body = await request.json();
+            const body = await request.json<{ migrations: { name: string; sql: string; version: number }[] }>();
             const runner = new MigrationRunner(env.DB as unknown as D1DatabaseLike, body.migrations);
             const result = await runner.run();
 
@@ -29,7 +29,7 @@ export default {
         }
 
         if (url.pathname === "/insert" && request.method === "POST") {
-            const body = await request.json();
+            const body = await request.json<{ bookmark?: string; id: string; name: string }>();
             const client = new D1Client(env.DB as unknown as D1DatabaseLike);
             const session = client.withSession(body.bookmark);
 

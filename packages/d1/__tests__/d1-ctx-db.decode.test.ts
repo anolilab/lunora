@@ -13,10 +13,12 @@ import createD1Exec from "./_helpers/node-sqlite-d1.js";
  */
 const FIXED_CLOCK = 1_700_000_000_000;
 
-const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({
-    _meta: { column: { notNull: true, ...column } },
-    kind,
-});
+const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+    return {
+        _meta: { column: { notNull: true, ...column } },
+        kind,
+    };
+};
 
 // A table whose columns span every non-scalar storage form the serializer
 // encodes: object/array/record → JSON, bigint → decimal string, plus scalar
@@ -81,6 +83,8 @@ describe("d1 ctx-db — non-scalar column round-trip", () => {
     });
 
     it("decodes object/array/record/bigint back to their JS shape via get()", async () => {
+        expect.assertions(8);
+
         const writer = setupDocs();
 
         await writer.insert(
@@ -114,6 +118,8 @@ describe("d1 ctx-db — non-scalar column round-trip", () => {
     });
 
     it("decodes non-scalar columns through findMany() and findFirst()", async () => {
+        expect.assertions(6);
+
         const writer = setupDocs();
 
         await writer.insert(
@@ -136,6 +142,8 @@ describe("d1 ctx-db — non-scalar column round-trip", () => {
     });
 
     it("round-trips empty arrays/objects without corruption", async () => {
+        expect.assertions(3);
+
         const writer = setupDocs();
 
         await writer.insert("docs", { _id: "d3", active: true, big: 0n, count: 0, meta: {}, name: "", settings: {}, tags: [] }, { allowExplicitId: true });
@@ -158,6 +166,8 @@ describe("d1 ctx-db — explicit-id tableName cache", () => {
     });
 
     it("re-points the id→table cache after delete + re-insert into a different table", async () => {
+        expect.assertions(4);
+
         const writer = setupDocs();
 
         // Insert under `docs`, then delete — the delete must drop the stale

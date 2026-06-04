@@ -1,5 +1,6 @@
-import type { AggregateIndexDefinitionLike, DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { DatabaseSync } from "node:sqlite";
+
+import type { AggregateIndexDefinitionLike, DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { bench, describe } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db.js";
@@ -21,7 +22,9 @@ import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations, run
  */
 const CLOCK = 1_700_000_000_000;
 
-const col = (kind: string): ValidatorLike => ({ _meta: { column: { notNull: true } }, kind });
+const col = (kind: string): ValidatorLike => {
+    return { _meta: { column: { notNull: true } }, kind };
+};
 
 const byProject: AggregateIndexDefinitionLike = { by: ["projectId"], name: "byProject", on: "todos", op: "count" };
 const total: AggregateIndexDefinitionLike = { by: [], name: "total", on: "todos", op: "count" };

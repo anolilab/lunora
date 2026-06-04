@@ -20,6 +20,26 @@ import { beforeEach, describe, expect, it } from "vitest";
 /** Lowercase hex SHA-256 shape guard. Hoisted to avoid per-call recompilation. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
 
+interface MigrationEntry {
+    name: string;
+    version: number;
+}
+
+interface MigrateResult {
+    applied: MigrationEntry[];
+    skipped: MigrationEntry[];
+}
+
+interface InsertResult {
+    bookmark: string | null;
+    ok: boolean;
+}
+
+interface ListResult {
+    bookmark: string | null;
+    rows: { id: string; name: string }[];
+}
+
 const dropUsers = async (): Promise<void> => {
     try {
         await env.DB.prepare("DROP TABLE IF EXISTS users").run();
@@ -50,7 +70,7 @@ describe("d1 (workerd)", () => {
         const first = await SELF.fetch("https://test/migrate", {
             body: JSON.stringify({ migrations }),
             method: "POST",
-        }).then((r) => r.json());
+        }).then((r) => r.json<MigrateResult>());
 
         expect(first.applied.map((m) => m.version)).toEqual([1, 2]);
         expect(first.skipped).toEqual([]);
@@ -59,7 +79,7 @@ describe("d1 (workerd)", () => {
         const second = await SELF.fetch("https://test/migrate", {
             body: JSON.stringify({ migrations }),
             method: "POST",
-        }).then((r) => r.json());
+        }).then((r) => r.json<MigrateResult>());
 
         expect(second.applied).toEqual([]);
         expect(second.skipped.map((m) => m.version)).toEqual([1, 2]);
@@ -88,7 +108,7 @@ describe("d1 (workerd)", () => {
         const result = await SELF.fetch("https://test/migrate", {
             body: JSON.stringify({ migrations }),
             method: "POST",
-        }).then((r) => r.json());
+        }).then((r) => r.json<MigrateResult>());
 
         expect(result.applied.map((m) => m.version)).toEqual([1, 2]);
 
@@ -111,7 +131,7 @@ describe("d1 (workerd)", () => {
         const insert = await SELF.fetch("https://test/insert", {
             body: JSON.stringify({ id: "u1", name: "Ada" }),
             method: "POST",
-        }).then((r) => r.json());
+        }).then((r) => r.json<InsertResult>());
 
         expect(insert.ok).toBe(true);
 
@@ -120,7 +140,7 @@ describe("d1 (workerd)", () => {
         // when supplied, round-trips back through the next read without error.
         const list = await SELF.fetch("https://test/list", {
             headers: insert.bookmark ? { "x-d1-bookmark": insert.bookmark } : {},
-        }).then((r) => r.json());
+        }).then((r) => r.json<ListResult>());
 
         expect(list.rows).toEqual([{ id: "u1", name: "Ada" }]);
     });

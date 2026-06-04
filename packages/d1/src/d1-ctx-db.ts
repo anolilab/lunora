@@ -311,12 +311,34 @@ const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike]
  * - `bigint`: decimal string → `BigInt`.
  * - `object`/`array`/`record`: JSON string → parsed value.
  * - `union`/`any`: these only get JSON-encoded when the runtime value was
- *   non-scalar, so a stored *string* is parsed back when it is valid JSON for a
- *   non-scalar shape, and otherwise returned as-is (a scalar union member round-
- *   trips through SQLite's native column type, never as JSON).
+ * non-scalar, so a stored *string* is parsed back when it is valid JSON for a
+ * non-scalar shape, and otherwise returned as-is (a scalar union member
+ * round-trips through SQLite's native column type, never as JSON).
  * - everything else (string/number/date/timestamp/id/literal): stored natively,
- *   returned verbatim.
+ * returned verbatim.
  */
+/** Parse `raw` as JSON, returning `raw` unchanged when it is not valid JSON. */
+const tryJsonParse = (raw: string): unknown => {
+    try {
+        return JSON.parse(raw) as unknown;
+    } catch {
+        return raw;
+    }
+};
+
+/** Decode a `bigint` column: a decimal string back into a `BigInt`, else verbatim. */
+const decodeBigint = (raw: unknown): unknown => {
+    if (typeof raw !== "string") {
+        return raw;
+    }
+
+    try {
+        return BigInt(raw);
+    } catch {
+        return raw;
+    }
+};
+
 const decodeColumnValue = (kind: string | undefined, raw: unknown): unknown => {
     if (raw === null) {
         return raw;
@@ -328,39 +350,15 @@ const decodeColumnValue = (kind: string | undefined, raw: unknown): unknown => {
             // Scalars round-trip natively; only a JSON-encoded non-scalar was
             // ever stored as a string. Parse those, but leave plain strings
             // (the value really was a string) untouched.
-            if (typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("["))) {
-                try {
-                    return JSON.parse(raw) as unknown;
-                } catch {
-                    return raw;
-                }
-            }
-
-            return raw;
+            return typeof raw === "string" && (raw.startsWith("{") || raw.startsWith("[")) ? tryJsonParse(raw) : raw;
         }
         case "array":
         case "object":
         case "record": {
-            if (typeof raw === "string") {
-                try {
-                    return JSON.parse(raw) as unknown;
-                } catch {
-                    return raw;
-                }
-            }
-
-            return raw;
+            return typeof raw === "string" ? tryJsonParse(raw) : raw;
         }
         case "bigint": {
-            if (typeof raw === "string") {
-                try {
-                    return BigInt(raw);
-                } catch {
-                    return raw;
-                }
-            }
-
-            return raw;
+            return decodeBigint(raw);
         }
         case "boolean": {
             return raw === 0 || raw === 1 ? raw === 1 : raw;
@@ -1652,6 +1650,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         }
 
         for (const index of indexes) {
+            // eslint-disable-next-line no-secrets/no-secrets -- false positive: this is a function name referenced in a comment, not a secret.
             // The pre-write `ensureRankBackfilledForTable` hook always runs
             // immediately before this sync, populating `rankBackfilled` with
             // the authoritative existence answer under the same cache key.
