@@ -726,6 +726,55 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     return { claims, headers, identity, userId };
 };
 
+/** Merge `kind`s the coordinator understands; anything else is rejected at the edge. */
+const KNOWN_MERGE_KINDS = new Set(["concat", "topK", "first", "max", "min", "rank", "sum", "groupBy"]);
+
+/**
+ * Validate the client-supplied fan-out spec on the public RPC path. `fanOut`
+ * arrives fully untrusted and flows to `coordinator.fanOut`; `authorizeFanOut`
+ * only gates `table` + `functionPath`, not the merge shape. Unvalidated, a
+ * missing/negative `topK.k` reaches `collected.slice(0, k)` (returning every
+ * row across all shards, or dropping the tail) and an unknown `kind` falls
+ * through to the raw per-shard values — both untrusted-input footguns.
+ */
+const validateFanOut = (fanOut: unknown): FanOutSpec | undefined => {
+    if (fanOut === undefined) {
+        return undefined;
+    }
+
+    if (!fanOut || typeof fanOut !== "object") {
+        throw new CirrusError("RPC `fanOut` must be an object", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const spec = fanOut as { merge?: unknown; table?: unknown };
+
+    if (typeof spec.table !== "string" || spec.table.length === 0) {
+        throw new CirrusError("RPC `fanOut.table` must be a non-empty string", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (!spec.merge || typeof spec.merge !== "object") {
+        throw new CirrusError("RPC `fanOut.merge` must be an object", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const merge = spec.merge as { by?: unknown; k?: unknown; kind?: unknown };
+
+    if (typeof merge.kind !== "string" || !KNOWN_MERGE_KINDS.has(merge.kind)) {
+        throw new CirrusError("RPC `fanOut.merge.kind` is not a recognized merge strategy", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (merge.kind === "topK") {
+        if (typeof merge.k !== "number" || !Number.isInteger(merge.k) || merge.k < 0) {
+            throw new CirrusError("RPC `fanOut.merge.k` must be a non-negative integer", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (typeof merge.by !== "string" || merge.by.length === 0) {
+            throw new CirrusError("RPC `fanOut.merge.by` must be a non-empty string", { code: "BAD_REQUEST", status: 400 });
+        }
+    }
+
+    return spec as FanOutSpec;
+};
+
 const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     // Read with a byte budget so a chunked / Content-Length-stripped body can't
     // bypass the size cap the header fast-path only loosely enforces.
@@ -747,7 +796,7 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
 
     return {
         args: envelope.args ?? {},
-        fanOut: envelope.fanOut,
+        fanOut: validateFanOut(envelope.fanOut),
         functionPath: envelope.functionPath,
         shardKey: envelope.shardKey,
     };
@@ -842,6 +891,28 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
     }
 
     return { tables };
+};
+
+/**
+ * Read a JSON request body under the authoritative `MAX_BODY_BYTES` cap.
+ *
+ * Mirrors `parseExportBody`/`parseMigrateRequest`: drains the body through the
+ * byte-budgeted reader (so a chunked / Content-Length-stripped payload can't
+ * slip past the cap) and maps a 413 through unchanged while turning any other
+ * parse failure into a 400. Returns `{}` for an empty body.
+ */
+const readJsonBodyWithLimit = async (request: Request): Promise<Record<string, unknown>> => {
+    try {
+        const text = await readBodyTextWithLimit(request);
+
+        return text === "" ? {} : (JSON.parse(text) as Record<string, unknown>);
+    } catch (error) {
+        if (error instanceof CirrusError) {
+            throw error;
+        }
+
+        throw new CirrusError("Request body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+    }
 };
 
 /**
@@ -946,7 +1017,11 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     const globalRows: { doc: Record<string, unknown>; table: string }[] = [];
     const globalLineMap: number[] = [];
     const perShard = new Map<string, AdminBatch>();
-    let lineNumber = 0;
+    // Physical 1-based source line index. Incremented for EVERY line handled,
+    // including blank ones, so `error.line` / `startLine` always point at the
+    // user's actual source line. Counting only non-blank lines (the old bug)
+    // mis-attributed errors whenever the NDJSON had a leading/interior blank line.
+    let physicalLine = 0;
 
     const reader = request.body.getReader();
     const decoder = new TextDecoder();
@@ -957,15 +1032,17 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     let totalBytes = 0;
 
     const handleLine = (line: string): void => {
+        // Advance the physical line counter first so blank lines still consume a
+        // line number — keeps `error.line` aligned with the source file.
+        physicalLine += 1;
+
         const trimmed = line.trim();
 
         if (trimmed.length === 0) {
             return;
         }
 
-        lineNumber += 1;
-
-        const row = parseImportRow(trimmed, lineNumber);
+        const row = parseImportRow(trimmed, physicalLine);
 
         if (!row.ok) {
             errors.push(row.error);
@@ -978,14 +1055,14 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
 
         if (info?.mode.kind === "global") {
             globalRows.push({ doc: documentRow, table });
-            globalLineMap.push(lineNumber);
+            globalLineMap.push(physicalLine);
 
             return;
         }
 
         // Shard-local routing: shardBy(field) picks the value of `doc[field]`;
         // root/undefined modes route to the default shard.
-        const resolved = resolveImportShardKey(documentRow, table, info, defaultShard, lineNumber);
+        const resolved = resolveImportShardKey(documentRow, table, info, defaultShard, physicalLine);
 
         if (!resolved.ok) {
             errors.push(resolved.error);
@@ -998,7 +1075,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         if (existing) {
             existing.rows.push({ doc: documentRow, table });
         } else {
-            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, table }], shardKey: resolved.shardKey, startLine: lineNumber });
+            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, table }], shardKey: resolved.shardKey, startLine: physicalLine });
         }
     };
 
@@ -1543,9 +1620,7 @@ const createWorker = (
             throw new CirrusError("Sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const raw = (await request.json().catch(() => {
-            return {};
-        })) as Record<string, unknown>;
+        const raw = await readJsonBodyWithLimit(request);
         const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
         const limit = typeof raw["limit"] === "number" ? raw["limit"] : undefined;
         const globalCursor = typeof raw["globalCursor"] === "number" ? raw["globalCursor"] : 0;
@@ -1591,9 +1666,7 @@ const createWorker = (
             throw new CirrusError("Apply endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const raw = (await request.json().catch(() => {
-            return {};
-        })) as Record<string, unknown>;
+        const raw = await readJsonBodyWithLimit(request);
         const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
         const batches = rawBatches
             .map((batch) => batch as { changes?: unknown; shardKey?: unknown })

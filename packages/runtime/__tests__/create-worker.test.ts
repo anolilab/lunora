@@ -338,7 +338,7 @@ describe("createWorker", () => {
 
         await worker.fetch(
             new Request("https://app.example/_cirrus/rpc", {
-                body: JSON.stringify({ args: {}, fanOut: { kind: "all" }, functionPath: "messages:list" }),
+                body: JSON.stringify({ args: {}, fanOut: { merge: { kind: "concat" }, table: "messages" }, functionPath: "messages:list" }),
                 method: "POST",
             }),
             {},
@@ -455,6 +455,46 @@ describe("createWorker", () => {
 
         expect(res.status).toBe(403);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_FANOUT" } });
+        expect(fanOut).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["unknown merge kind", { merge: { kind: "bogus" }, table: "messages" }],
+        ["negative topK.k", { merge: { by: "score", k: -1, kind: "topK" }, table: "messages" }],
+        ["missing topK.k", { merge: { by: "score", kind: "topK" }, table: "messages" }],
+        ["non-integer topK.k", { merge: { by: "score", k: 1.5, kind: "topK" }, table: "messages" }],
+        ["missing topK.by", { merge: { k: 5, kind: "topK" }, table: "messages" }],
+        ["missing table", { merge: { kind: "concat" } }],
+        ["missing merge", { table: "messages" }],
+    ])("rejects malformed fan-out merge shape (%s) with 400 before the coordinator", async (_label, fanOutSpec) => {
+        expect.assertions(2);
+
+        const fanOut = vi.fn<() => never>();
+        const worker = createWorker({
+            authorizeFanOut: () => true,
+            queryCoordinator: {
+                fanOut,
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, fanOut: fanOutSpec, functionPath: "messages:list" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(400);
         expect(fanOut).not.toHaveBeenCalled();
     });
 });

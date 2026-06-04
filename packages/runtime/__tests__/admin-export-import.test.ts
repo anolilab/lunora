@@ -20,6 +20,28 @@ const noopNamespace: ShardNamespaceLike = {
 
 const ADMIN_TOKEN = "admin-bear";
 
+/**
+ * A chunked request body that streams just over the 1 MiB `MAX_BODY_BYTES`
+ * cap with no `Content-Length`, so only the byte-budgeted reader can reject it.
+ */
+const oversizedStream = (): ReadableStream<Uint8Array> => {
+    const chunk = new Uint8Array(256 * 1024).fill(120); // 'x'
+    let sent = 0;
+
+    return new ReadableStream<Uint8Array>({
+        pull(controller) {
+            if (sent >= 5) {
+                controller.close();
+
+                return;
+            }
+
+            sent += 1;
+            controller.enqueue(chunk); // 5 × 256 KiB = 1.25 MiB > 1 MiB cap
+        },
+    });
+};
+
 describe("createWorker — admin export endpoint", () => {
     it("rejects without a configured admin token (403)", async () => {
         expect.assertions(1);
@@ -351,6 +373,52 @@ describe("createWorker — admin import endpoint", () => {
         expect(body.errors[0]).toMatchObject({ code: "BAD_ROW", line: 2 });
     });
 
+    it("attributes row errors to the physical source line across blank lines", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        // Leading blank line (line 1) + interior blank line (line 4). The bad
+        // row sits on physical line 5; counting only non-blank lines would
+        // mis-report it as line 3.
+        const ndjson = [
+            "",
+            JSON.stringify({ doc: { _id: "u1", email: "a@b.com" }, table: "users" }),
+            JSON.stringify({ doc: { _id: "u2", email: "c@d.com" }, table: "users" }),
+            "",
+            "not-json",
+        ].join("\n");
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/import", {
+                body: ndjson,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const body: { errors: { code: string; line: number }[]; inserted: Record<string, number> } = await response.json();
+
+        expect(body.inserted).toEqual({ users: 2 });
+        expect(body.errors).toHaveLength(1);
+        expect(body.errors[0]).toMatchObject({ code: "BAD_ROW", line: 5 });
+    });
+
     it("routes global-table rows through importGlobals", async () => {
         expect.assertions(3);
 
@@ -664,6 +732,43 @@ describe("admin sync (CDC streaming export)", () => {
         expect(response.status).toBe(200);
         expect(body.global).toBeUndefined();
     });
+
+    it("rejects an over-cap chunked body with 413", async () => {
+        expect.assertions(1);
+
+        const orchestrateCdcSync = vi.fn<() => never>();
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync,
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/sync", {
+                // Streamed body has no Content-Length, so the header fast-path
+                // can't see the size — the byte-budgeted reader must catch it.
+                body: oversizedStream(),
+                // @ts-expect-error -- duplex is required by the fetch spec for a streaming body but missing from the lib types here
+                duplex: "half",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(413);
+    });
 });
 
 describe("admin apply (CDC replay)", () => {
@@ -714,5 +819,40 @@ describe("admin apply (CDC replay)", () => {
         // 2 shard batches (mock returns batches.length) + 2 globals.
         expect(body.applied).toBe(4);
         expect(applyGlobals).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects an over-cap chunked body with 413", async () => {
+        expect.assertions(1);
+
+        const orchestrateApplyCdc = vi.fn<() => never>();
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc,
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/apply", {
+                body: oversizedStream(),
+                // @ts-expect-error -- duplex is required by the fetch spec for a streaming body but missing from the lib types here
+                duplex: "half",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(413);
     });
 });
