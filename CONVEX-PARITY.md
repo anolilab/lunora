@@ -8,6 +8,17 @@ Legend: **full** = equivalent capability · **partial** = present but shallower 
 
 ---
 
+## ✅ Shipped since this analysis (Phase A — 2026-06)
+
+The following gaps are now closed (see the tiered tables below for the original descriptions):
+
+- **#21 Scheduler introspection** — `ctx.scheduler.cancel/list/get` + `list/get` on the `@cirrus/scheduler` client.
+- **#10 In-handler storage upload** — `ctx.storage.generateUploadUrl()` + `store()`; `contentType` now supported in signed PUT URLs.
+- **#11 / #12 / #13 File serving** — `serveStorageObject(ctx, key, request)` httpAction helper with HTTP **Range/206** + `Content-Range`/416, `ETag`, and `sha256` surfaced in object metadata.
+- **#7 / #8 Observability adapters** — built-in `consoleSink` / `webhookSink` (Axiom/Datadog) / `sentrySink` / `combineSinks`, exported from `@cirrus/runtime`.
+
+---
+
 ## Where Cirrus already leads Convex
 
 These are differentiators — do not regress them.
