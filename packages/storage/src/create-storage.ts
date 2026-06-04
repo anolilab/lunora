@@ -24,20 +24,50 @@ const toHex = (buffer: ArrayBuffer): string => {
 
 /**
  * Surface R2's SHA-256 checksum as a hex `sha256` field on the object metadata.
- * Mutates the object in place (rather than spreading) because a real
- * `R2Object`/`R2ObjectBody` carries methods like `arrayBuffer()`/`body` on its
- * prototype — a shallow `{ ...object }` copy would drop them. A no-op when R2
- * carries no checksum, so the field stays absent rather than `undefined`-valued.
+ *
+ * A real `R2Object`/`R2ObjectBody` is a workerd host object: its properties are
+ * `readonly`, it is **non-extensible**, and accessors like `body` plus methods
+ * like `arrayBuffer()`/`text()` are native — they throw "Illegal invocation"
+ * unless invoked with the original host object as `this`. That rules out three
+ * naive approaches: a `{ ...object }` spread drops the prototype methods; an
+ * in-place `object.sha256 = …` throws `TypeError: object is not extensible` in
+ * strict mode (ESM is always strict); and an `Object.create(object)` wrapper
+ * rebinds `this` for the native accessors and breaks them.
+ *
+ * So we wrap the object in a `Proxy` that answers `sha256` itself and forwards
+ * every other access to the underlying host object with the host object as the
+ * receiver (so native getters keep their `this`), binding function-valued
+ * properties to the target (so native methods keep their `this`). A no-op
+ * pass-through when R2 carries no checksum, so the field stays absent rather
+ * than `undefined`-valued and we avoid an allocation on the common path.
  */
 const withSha256 = <T extends R2ObjectLike>(object: T): T => {
     const raw = object.checksums?.sha256;
 
-    if (raw !== undefined) {
-        // eslint-disable-next-line no-param-reassign -- intentional in-place set: a real R2Object/R2ObjectBody carries methods on its prototype that a `{ ...object }` copy would drop
-        object.sha256 = toHex(raw);
+    if (raw === undefined) {
+        return object;
     }
 
-    return object;
+    const sha256 = toHex(raw);
+
+    return new Proxy(object, {
+        get(target, property) {
+            if (property === "sha256") {
+                return sha256;
+            }
+
+            // Forward with `target` as the receiver so native accessors (e.g.
+            // R2ObjectBody's `body` getter) run against the real host object.
+            const value = Reflect.get(target, property, target) as unknown;
+
+            // Bind function-valued properties (arrayBuffer/text/bytes/…) to the
+            // target so native methods aren't invoked with the Proxy as `this`.
+            return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+        },
+        has(target, property) {
+            return property === "sha256" || Reflect.has(target, property);
+        },
+    });
 };
 
 /** Trailing-slash trimmer for `publicBaseUrl` — a linear scan (no regex backtracking). */

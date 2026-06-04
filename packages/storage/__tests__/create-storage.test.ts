@@ -278,4 +278,78 @@ describe("createStorage", () => {
 
         expect(listed.objects[0]?.sha256).toBe("010203ff");
     });
+
+    it("download() preserves native methods/getters of a frozen (non-extensible) R2 object", async () => {
+        // Regression: a real R2Object is a non-extensible workerd host object whose
+        // `body`/`arrayBuffer()`/`text()` are native and require the original object
+        // as `this`. A plain `object.sha256 = …` would throw "not extensible"; an
+        // `{ ...object }`/`Object.create` wrapper would break the native bindings.
+        // The Proxy must add `sha256` without mutating or breaking the host object.
+        expect.assertions(6);
+
+        const checksum = new Uint8Array([0, 171, 255]).buffer; // -> "00abff"
+        const bodyStream = new ReadableStream();
+
+        // Emulate a host object: native accessors/methods that throw "Illegal
+        // invocation" unless `this` is the original instance, and a frozen shell.
+        const host = Object.freeze(
+            Object.create(
+                Object.defineProperties(
+                    {},
+                    {
+                        arrayBuffer: {
+                            value(this: unknown) {
+                                if (this !== host) {
+                                    throw new TypeError("Illegal invocation");
+                                }
+
+                                return Promise.resolve(new ArrayBuffer(3));
+                            },
+                        },
+                        body: {
+                            get(this: unknown) {
+                                if (this !== host) {
+                                    throw new TypeError("Illegal invocation");
+                                }
+
+                                return bodyStream;
+                            },
+                        },
+                        text: {
+                            value(this: unknown) {
+                                if (this !== host) {
+                                    throw new TypeError("Illegal invocation");
+                                }
+
+                                return Promise.resolve("ok");
+                            },
+                        },
+                    },
+                ),
+                {
+                    checksums: { value: { sha256: checksum } },
+                    etag: { enumerable: true, value: "etag-host" },
+                    httpMetadata: { enumerable: true, value: { contentType: "text/plain" } },
+                    key: { enumerable: true, value: "uploads/frozen.bin" },
+                    size: { enumerable: true, value: 3 },
+                },
+            ) as unknown as R2ObjectBodyLike,
+        ) as R2ObjectBodyLike;
+
+        const bucket = fakeBucket();
+
+        vi.spyOn(bucket, "get").mockImplementation(async () => host);
+
+        const storage = createStorage({ bucket });
+        const object = await storage.download("uploads/frozen.bin");
+
+        expect(object?.sha256).toBe("00abff");
+        expect(object?.etag).toBe("etag-host");
+        // Native getter + methods still resolve against the original host object.
+        expect(object?.body).toBe(bodyStream);
+        await expect(object?.text()).resolves.toBe("ok");
+        await expect(object?.arrayBuffer()).resolves.toBeInstanceOf(ArrayBuffer);
+        // The original host object was never mutated (no `sha256` own property).
+        expect(Object.hasOwn(host, "sha256")).toBe(false);
+    });
 });
