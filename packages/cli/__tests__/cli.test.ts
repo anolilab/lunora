@@ -1,11 +1,11 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { COMMANDS, runCli } from "../src/cli.js";
+import { BOOLEAN_OPTIONS, COMMANDS, runCli } from "../src/cli.js";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const templatesRoot = resolve(testDirectory, "..", "..", "..", "templates");
@@ -154,5 +154,36 @@ describe("cirrus CLI entry", () => {
 
             expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
         });
+    });
+});
+
+describe("bOOLEAN_OPTIONS stays in sync with command definitions", () => {
+    it("includes every `type: Boolean` option declared across all commands", () => {
+        expect.assertions(2);
+
+        // reorderArgvOptionsFirst relies on this hand-maintained set to know
+        // which flags do NOT consume the next token. If a future command adds
+        // a Boolean flag but forgets to register it here, that flag would
+        // greedily swallow the following positional with no error. This scans
+        // the source for every `{ ..., name: "x", ..., type: Boolean }` option
+        // and asserts membership, so the set can't silently desync.
+        const source = readFileSync(resolve(testDirectory, "..", "src", "cli.ts"), "utf8");
+        // Match option objects whose `type` is Boolean, capturing the `name`.
+        const optionPattern = /\{[^{}]*name:\s*"([a-z][\w-]*)"[^{}]*type:\s*Boolean[^{}]*\}/gu;
+        const booleanNames = new Set<string>();
+
+        for (const match of source.matchAll(optionPattern)) {
+            if (match[1] !== undefined) {
+                booleanNames.add(match[1]);
+            }
+        }
+
+        // Sanity: the scan must find the known Boolean flags, otherwise the
+        // regex broke and the assertion below would pass vacuously.
+        expect(booleanNames.size).toBeGreaterThan(0);
+
+        const missing = [...booleanNames].filter((name) => !BOOLEAN_OPTIONS.has(name));
+
+        expect(missing).toStrictEqual([]);
     });
 });

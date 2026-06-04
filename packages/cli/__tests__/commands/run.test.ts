@@ -100,6 +100,48 @@ describe("cirrus run", () => {
         expect(result.code).toBe(1);
     });
 
+    it("surfaces a non-JSON error body without throwing on a consumed stream", async () => {
+        expect.assertions(3);
+
+        // Mirror undici/Node fetch: reading the body twice throws. The old
+        // code did `json()` (which disturbs the stream on non-JSON input) then
+        // fell back to `text()` on the consumed body — throwing "Body is
+        // unusable" and masking the real server message. The fix reads the
+        // body exactly once via text(), so this must surface the plain text.
+        let bodyRead = false;
+
+        const fetchImpl: FetchLike = async () => {
+            return {
+                json: async () => {
+                    bodyRead = true;
+
+                    throw new SyntaxError("Unexpected token '<', \"<html>...\" is not valid JSON");
+                },
+                ok: false,
+                status: 502,
+                text: async () => {
+                    if (bodyRead) {
+                        throw new TypeError("Body is unusable");
+                    }
+
+                    bodyRead = true;
+
+                    return "<html><body>502 Bad Gateway</body></html>";
+                },
+            };
+        };
+
+        const result = await runRpcCommand({
+            fetchImpl,
+            functionPath: "x:y",
+            logger: silentLogger(),
+        });
+
+        expect(result.code).toBe(1);
+        expect(bodyRead).toBe(true);
+        expect(result.body).toBe("<html><body>502 Bad Gateway</body></html>");
+    });
+
     it("returns non-zero when --args is invalid JSON", async () => {
         expect.assertions(2);
 
