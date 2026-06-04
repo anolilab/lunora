@@ -132,12 +132,29 @@ const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string
     return toBase64(JSON.stringify(values));
 };
 
+/**
+ * The cursor is client-supplied, so any decode failure is a bad request, not
+ * a server fault. Returns a `CirrusError`-shaped error the runtime's error
+ * mapper renders as a 400 (a raw `TypeError`/`SyntaxError` would fall through
+ * to a generic 500).
+ */
+const invalidCursor = (): Error => Object.assign(new TypeError("invalid cursor"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+
 /** Decode a cursor back into its ordered sort-key values (orderBy fields, then id). */
 const decodeCursor = (cursor: string): unknown[] => {
-    const decoded = JSON.parse(fromBase64(cursor)) as unknown;
+    let decoded: unknown;
+
+    try {
+        decoded = JSON.parse(fromBase64(cursor)) as unknown;
+    } catch {
+        // atob() throws InvalidCharacterError on non-base64 input and
+        // JSON.parse throws SyntaxError on malformed JSON. Normalize both
+        // client-supplied failures to the same typed 400 error.
+        throw invalidCursor();
+    }
 
     if (!Array.isArray(decoded)) {
-        throw new TypeError("invalid cursor");
+        throw invalidCursor();
     }
 
     return decoded;
