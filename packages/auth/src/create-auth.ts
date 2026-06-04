@@ -27,7 +27,11 @@ export type CirrusAuth = ReturnType<typeof betterAuth>;
  * fail loudly at the first fetch rather than the first sign-in attempt.
  */
 export const createAuth = (options: CirrusAuthOptions): CirrusAuth => {
-    if (!options.secret) {
+    // Reject missing *and* whitespace-only secrets — a value like `" "` is
+    // falsy-adjacent (it slips past `!options.secret`) but is just as
+    // misconfigured, so fail loudly at construction time rather than at the
+    // first sign-in attempt.
+    if (!options.secret || options.secret.trim() === "") {
         throw new Error("@cirrus/auth: `secret` is required");
     }
 
