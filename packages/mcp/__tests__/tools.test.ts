@@ -105,6 +105,23 @@ describe("callTool", () => {
         expect(result.isError).toBe(true);
     });
 
+    it('serializes a void (undefined) result to the string "null" rather than dropping it', async () => {
+        expect.assertions(3);
+
+        const mock = mockClient();
+
+        // A mutation/action that returns nothing resolves to `undefined`.
+        mock.mutation.mockResolvedValueOnce(undefined);
+
+        const result = await callTool(mock.asClient, "cirrus_run_mutation", { functionPath: "messages:send" });
+
+        expect(result.isError).toBeUndefined();
+        // `text` must always be a string per the MCP TextContent contract;
+        // `JSON.stringify(undefined)` would otherwise yield the JS value undefined.
+        expect(typeof result.content[0]!.text).toBe("string");
+        expect(result.content[0]!.text).toBe("null");
+    });
+
     it("surfaces a thrown client error as an error result rather than rejecting", async () => {
         expect.assertions(2);
 
