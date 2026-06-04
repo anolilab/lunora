@@ -32,6 +32,9 @@ const Page = async ({ params }: PageProps): Promise<ReactElement> => {
 
 export default Page;
 
+// Next.js expects `generateStaticParams` to be async (it may be awaited by the
+// build pipeline); the sync body here has nothing to await.
+// eslint-disable-next-line @typescript-eslint/require-await -- Next.js generateStaticParams contract
 export const generateStaticParams = async (): Promise<ReadonlyArray<{ slug: string[] }>> => source.generateParams();
 
 export const generateMetadata = async ({ params }: PageProps): Promise<Metadata> => {

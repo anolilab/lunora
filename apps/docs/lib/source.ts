@@ -9,6 +9,7 @@ import { docs } from "@/.source/server";
  * `.source/server.ts` file emitted by `fumadocs-mdx` (the `.d.ts` stub
  * checked into the repo only ever advertises the same `docs` symbol).
  */
+// eslint-disable-next-line import/prefer-default-export -- shared named binding imported by multiple route/layout modules
 export const source = loader({
     baseUrl: "/docs",
     source: docs.toFumadocsSource(),
