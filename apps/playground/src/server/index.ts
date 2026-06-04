@@ -2,7 +2,15 @@ import type { CirrusAuth } from "@cirrus/auth";
 import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
-import type { AuthIntrospector, ExecutionContextLike, GlobalIntrospector, Route, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
+import type {
+    AuthIntrospector,
+    ExecutionContextLike,
+    FunctionRegistryLike,
+    GlobalIntrospector,
+    Route,
+    ScheduledControllerLike,
+    ShardNamespaceLike,
+} from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
@@ -172,8 +180,11 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         authIntrospector: env.DB ? authIntrospector(env.DB as D1DatabaseLike) : undefined,
         d1: env.DB,
         // Exposes /_cirrus/admin/functions so the dashboard's runner can
-        // auto-discover queries/mutations/actions.
-        functions: CIRRUS_FUNCTIONS,
+        // auto-discover queries/mutations/actions. The generated registry's
+        // `kind` union also carries `"stream"`, which the discovery endpoint
+        // (queries/mutations/actions only) structurally ignores — narrow to the
+        // registry view the runtime reads.
+        functions: CIRRUS_FUNCTIONS as unknown as FunctionRegistryLike,
         // Exposes /_cirrus/admin/global/* so the dashboard can browse `.global()`
         // (D1-backed) tables.
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
