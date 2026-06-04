@@ -1,5 +1,5 @@
 import { useCirrus } from "@cirrus/react";
-import type { ColumnDef, Row, SortingState } from "@tanstack/react-table";
+import type { ColumnDef, OnChangeFn, Row, SortingState, Table } from "@tanstack/react-table";
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement } from "react";
@@ -144,22 +144,430 @@ const sortIndicator = (sorted: "asc" | "desc" | false): string => {
 };
 
 /**
- * Read-only data browser for a single shard's SQLite database. Lists the user
- * tables (via the `__cirrus_admin__:listTables` RPC), then pages through the
- * rows of whichever table is selected (`__cirrus_admin__:readTablePage`).
- *
- * Both calls travel over the ordinary {@link useCirrus} client transport; the
- * admin RPCs are intercepted inside the Durable Object and are gated by the
- * server's `CIRRUS_ADMIN_TOKEN`. The host is responsible for configuring the
- * client's auth token — this component issues no credentials of its own.
- *
- * The table view is built on a headless `@tanstack/react-table` model: column
- * defs derive from `page.columns`, sorting and (global) filtering run
- * page-locally over the loaded rows, and the rendered rows are virtualized with
- * `@tanstack/react-virtual` so a large page never inflates the DOM. None of this
- * touches the server — pagination still flows through `readTablePage`.
+ * Shard-key input + "Load tables" trigger. Presentational: the parent owns the
+ * shard-key state and the load handler.
  */
-export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement => {
+const DataBrowserToolbar = ({
+    onLoadTables,
+    onShardChange,
+    shardKey,
+}: {
+    onLoadTables: () => void;
+    onShardChange: (value: string) => void;
+    shardKey: string;
+}): ReactElement => (
+    <div>
+        <ShardInput onChange={onShardChange} testId="db-shard-input" value={shardKey} />
+        <button data-testid="db-load-tables" onClick={onLoadTables} type="button">
+            Load tables
+        </button>
+    </div>
+);
+
+/**
+ * The list of user tables for the loaded shard. Each entry selects its table on
+ * click; `selectedTable` drives the `aria-pressed` state.
+ */
+const DataBrowserTableList = ({
+    onSelect,
+    selectedTable,
+    tables,
+}: {
+    onSelect: (table: string) => void;
+    selectedTable: null | string;
+    tables: TableInfo[];
+}): ReactElement => (
+    <ul data-testid="db-table-list">
+        {tables.map((tableInfo) => (
+            <li key={tableInfo.name}>
+                <button
+                    aria-pressed={selectedTable === tableInfo.name}
+                    data-testid={`db-table-${tableInfo.name}`}
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over tableInfo.name; admin dev-tool render path
+                    onClick={() => {
+                        onSelect(tableInfo.name);
+                    }}
+                    type="button"
+                >
+                    {tableInfo.name} ({tableInfo.rowCount})
+                </button>
+            </li>
+        ))}
+    </ul>
+);
+
+/**
+ * The page's view toggle / refresh / live / search / add-row controls. All state
+ * lives in the parent; this component is purely the control bar markup.
+ */
+const DataBrowserViewControls = ({
+    editable,
+    filter,
+    live,
+    liveError,
+    onAddRow,
+    onFilterChange,
+    onRefresh,
+    onShowJson,
+    onShowTable,
+    onToggleLive,
+    viewMode,
+}: {
+    editable: boolean;
+    filter: string;
+    live: boolean;
+    liveError: string | undefined;
+    onAddRow: () => void;
+    onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    onRefresh: () => void;
+    onShowJson: () => void;
+    onShowTable: () => void;
+    onToggleLive: () => void;
+    viewMode: "json" | "table";
+}): ReactElement => (
+    <div data-testid="db-view-toggle">
+        <button aria-pressed={viewMode === "table"} data-testid="db-view-table" onClick={onShowTable} type="button">
+            Table
+        </button>
+        <button aria-pressed={viewMode === "json"} data-testid="db-view-json" onClick={onShowJson} type="button">
+            JSON
+        </button>
+        <button data-testid="db-refresh" onClick={onRefresh} type="button">
+            Refresh
+        </button>
+        <LiveToggle live={live} liveError={liveError} onToggle={onToggleLive} prefix="db" />
+        <input aria-label="Search rows" data-testid="db-filter" onChange={onFilterChange} placeholder="search table…" value={filter} />
+        {editable && (
+            <button data-testid="db-add-row" onClick={onAddRow} type="button">
+                Add row
+            </button>
+        )}
+    </div>
+);
+
+/**
+ * The JSON-doc row editor (textarea + Save/Cancel). The parent owns the draft
+ * text and the save/cancel handlers.
+ */
+const DataBrowserRowEditor = ({
+    docText,
+    onCancel,
+    onDocumentChange,
+    onSave,
+}: {
+    docText: string;
+    onCancel: () => void;
+    onDocumentChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
+    onSave: () => void;
+}): ReactElement => (
+    <div data-testid="db-editor">
+        <textarea aria-label="Row document JSON" data-testid="db-editor-doc" onChange={onDocumentChange} value={docText} />
+        <button data-testid="db-editor-save" onClick={onSave} type="button">
+            Save
+        </button>
+        <button data-testid="db-editor-cancel" onClick={onCancel} type="button">
+            Cancel
+        </button>
+    </div>
+);
+
+/** Previous / range / Next pagination footer. */
+const DataBrowserPagination = ({
+    hasNext,
+    hasPrevious,
+    onNext,
+    onPrevious,
+    rangeEnd,
+    rangeStart,
+    total,
+}: {
+    hasNext: boolean;
+    hasPrevious: boolean;
+    onNext: () => void;
+    onPrevious: () => void;
+    rangeEnd: number;
+    rangeStart: number;
+    total: number;
+}): ReactElement => (
+    <div>
+        <button data-testid="db-prev" disabled={!hasPrevious} onClick={onPrevious} type="button">
+            Previous
+        </button>
+        <span data-testid="db-page-info">{`${rangeStart.toString()}-${rangeEnd.toString()} of ${total.toString()}`}</span>
+        <button data-testid="db-next" disabled={!hasNext} onClick={onNext} type="button">
+            Next
+        </button>
+    </div>
+);
+
+/**
+ * The virtualized table: sortable header derived from react-table's flat
+ * headers, plus the windowed rows positioned absolutely inside a full-height
+ * tbody. All model state (`table`, `tableRows`, `virtualRows`, `tbodyStyle`,
+ * `scrollRef`) is owned by the parent; edit/delete are surfaced as callbacks so
+ * this stays a pure render of the page's rows.
+ */
+const DataBrowserTableView = ({
+    editable,
+    onDelete,
+    onEdit,
+    scrollRef,
+    table,
+    tableRows,
+    tbodyStyle,
+    virtualRows,
+}: {
+    editable: boolean;
+    onDelete: (id: null | string) => void;
+    onEdit: (id: null | string, original: TableRow) => void;
+    scrollRef: React.RefObject<HTMLDivElement | null>;
+    table: Table<TableRow>;
+    tableRows: Row<TableRow>[];
+    tbodyStyle: CSSProperties;
+    virtualRows: { index: number; size: number; start: number }[];
+}): ReactElement => {
+    const renderRow = (virtualRow: { index: number; size: number; start: number }): ReactElement => {
+        const tableRow = tableRows[virtualRow.index] as Row<TableRow>;
+        const { original } = tableRow;
+        const id = rowId(original);
+        const key = rowKey(original, virtualRow.index);
+        // Per-row absolute offset from the virtualizer; necessarily a fresh object
+        // each render since `start`/`size` change as the window scrolls.
+        // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- dynamic virtualizer offset
+        const rowStyle: CSSProperties = {
+            ...ROW_BASE_STYLE,
+            height: `${virtualRow.size.toString()}px`,
+            transform: `translateY(${virtualRow.start.toString()}px)`,
+        };
+
+        return (
+            <tr data-testid="db-row" key={tableRow.id} style={rowStyle}>
+                {tableRow.getVisibleCells().map((cell) => (
+                    <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                ))}
+                {editable && (
+                    <td>
+                        <button
+                            data-testid={`db-edit-${key}`}
+                            disabled={id === null}
+                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the original row; admin dev-tool render path
+                            onClick={() => {
+                                onEdit(id, original);
+                            }}
+                            type="button"
+                        >
+                            Edit
+                        </button>
+                        <ConfirmButton
+                            confirmLabel="Delete?"
+                            disabled={id === null}
+                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the row id; admin dev-tool render path
+                            onConfirm={() => {
+                                onDelete(id);
+                            }}
+                            testId={`db-delete-${key}`}
+                        >
+                            Delete
+                        </ConfirmButton>
+                    </td>
+                )}
+            </tr>
+        );
+    };
+
+    return (
+        <div data-testid="db-scroll" ref={scrollRef} style={SCROLL_STYLE}>
+            <table data-testid="db-rows" style={ROWS_STYLE}>
+                <thead>
+                    <tr>
+                        {table.getFlatHeaders().map((header) => (
+                            <th key={header.id}>
+                                <button data-testid={`db-sort-${header.column.id}`} onClick={header.column.getToggleSortingHandler()} type="button">
+                                    {flexRender(header.column.columnDef.header, header.getContext())}
+                                    {sortIndicator(header.column.getIsSorted())}
+                                </button>
+                            </th>
+                        ))}
+                        {editable && <th aria-label="Row actions" />}
+                    </tr>
+                </thead>
+                <tbody style={tbodyStyle}>{virtualRows.map((virtualRow) => renderRow(virtualRow))}</tbody>
+            </table>
+        </div>
+    );
+};
+
+/** What {@link useDataBrowserTable} hands back to the component. */
+interface DataBrowserTableModel {
+    scrollRef: React.RefObject<HTMLDivElement | null>;
+    table: Table<TableRow>;
+    tableRows: Row<TableRow>[];
+    tbodyStyle: CSSProperties;
+    virtualRows: { index: number; size: number; start: number }[];
+}
+
+/**
+ * The headless table model + virtualizer for the loaded page. Column defs derive
+ * from `page.columns` (foreign-key columns in `page.refs` render as links via
+ * `onNavigateToRef`), the supplied page-local `sorting` runs over the loaded
+ * rows, and the rendered rows are virtualized so a large page never inflates the
+ * DOM. Pure wiring — extracted verbatim from the component so its behavior is
+ * unchanged; the `sorting` state stays owned by the caller.
+ */
+const useDataBrowserTable = (
+    page: TablePage | null,
+    onNavigateToRef: (target: string, id: string) => void,
+    sorting: SortingState,
+    onSortingChange: OnChangeFn<SortingState>,
+): DataBrowserTableModel => {
+    const columns = page?.columns;
+    const rows = page?.rows;
+    const references = page?.refs;
+
+    // Column defs are derived from the loaded page. Each accessor reads the
+    // column by name off the ORIGINAL row object; the cell renderer reuses
+    // `formatCell` so the markup matches the JSON view's text. Foreign-key
+    // columns (in `refs`) render their value as a link to the target table.
+    const columnDefs = useMemo<ColumnDef<TableRow>[]>(() => {
+        if (columns === undefined) {
+            return [];
+        }
+
+        return columns.map((column) => {
+            const target = references?.[column];
+
+            return {
+                accessorFn: (row: TableRow) => row[column],
+                cell: (info): ReactElement => {
+                    const value = info.getValue();
+
+                    if (target !== undefined && (typeof value === "string" || typeof value === "number") && String(value) !== "") {
+                        return <RefCell column={column} id={String(value)} onNavigate={onNavigateToRef} target={target} />;
+                    }
+
+                    return <>{formatCell(value)}</>;
+                },
+                header: references?.[column] === undefined ? column : `${column} →`,
+                id: column,
+            };
+        });
+    }, [columns, references, onNavigateToRef]);
+
+    const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
+
+    // Search is server-side now (see the debounced `search` effect); the table
+    // model only owns page-local sorting over the already-filtered page.
+    const table = useReactTable<TableRow>({
+        columns: columnDefs,
+        data,
+        getCoreRowModel: getCoreRowModel(),
+        getSortedRowModel: getSortedRowModel(),
+        onSortingChange,
+        state: { sorting },
+    });
+
+    // The post-sort/filter rows for this page. We keep react-table's `Row`
+    // wrappers so edit/delete can resolve the ORIGINAL row via `row.original`,
+    // never a sorted/filtered copy.
+    const tableRows = table.getRowModel().rows;
+
+    const scrollRef = useRef<HTMLDivElement | null>(null);
+
+    // Virtualize the rendered rows. The viewport is a fixed `SCROLL_HEIGHT` tall,
+    // so we report that height to the virtualizer directly instead of measuring
+    // the DOM. This keeps the window deterministic and, crucially, works under
+    // jsdom — which reports every `getBoundingClientRect` as 0×0, so the default
+    // `observeElementRect` would size the viewport to 0 and render no rows.
+    // We still observe width changes (height is pinned) and seed the same rect
+    // on first paint via `initialRect`. overscan keeps a few off-screen rows.
+    const virtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>({
+        count: tableRows.length,
+        estimateSize: () => ROW_HEIGHT,
+        getScrollElement: () => scrollRef.current,
+        initialRect: { height: SCROLL_HEIGHT, width: 0 },
+        observeElementRect: (instance, callback) => {
+            const element = instance.scrollElement;
+
+            const report = (): void => {
+                callback({ height: SCROLL_HEIGHT, width: element?.clientWidth ?? 0 });
+            };
+
+            report();
+
+            if (element === null || typeof ResizeObserver === "undefined") {
+                return undefined;
+            }
+
+            const observer = new ResizeObserver(report);
+
+            observer.observe(element);
+
+            return () => {
+                observer.disconnect();
+            };
+        },
+        overscan: 8,
+    });
+
+    const virtualRows = virtualizer.getVirtualItems();
+    const totalSize = virtualizer.getTotalSize();
+    // The tbody spans the full virtual height so the scrollbar reflects all rows
+    // while only the windowed rows are absolutely positioned inside it. The
+    // height is intrinsically dynamic (it tracks the virtualizer), so the style
+    // object is rebuilt each render — react-virtual's canonical pattern.
+
+    const tbodyStyle: CSSProperties = { display: "block", height: `${totalSize.toString()}px`, position: "relative" };
+
+    return { scrollRef, table, tableRows, tbodyStyle, virtualRows };
+};
+
+/** Everything {@link useDataBrowser} exposes to the {@link DataBrowser} render. */
+interface DataBrowserModel {
+    addRow: () => void;
+    cancelEdit: () => void;
+    editing: null | { docText: string; id: null | string };
+    filter: string;
+    goNext: () => void;
+    goPrevious: () => void;
+    hasNext: boolean;
+    hasPrevious: boolean;
+    live: boolean;
+    liveError: string | undefined;
+    loadTables: () => void;
+    onEditorDocumentChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
+    onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    onRowDelete: (id: null | string) => void;
+    onRowEdit: (id: null | string, original: TableRow) => void;
+    page: TablePage | null;
+    pageError: null | string;
+    rangeEnd: number;
+    rangeStart: number;
+    refreshPage: () => void;
+    saveEdit: () => void;
+    selectedTable: null | string;
+    selectTable: (table: string) => void;
+    setShardKey: (value: string) => void;
+    shardKey: string;
+    showJson: () => void;
+    showTable: () => void;
+    table: DataBrowserTableModel;
+    tables: TableInfo[] | null;
+    tablesError: null | string;
+    toggleLive: () => void;
+    total: number;
+    viewMode: "json" | "table";
+    writeError: null | string;
+}
+
+/**
+ * All non-render state and handlers for the data browser: the admin RPC reads
+ * (`listTables` / `readTablePage`), the live subscriptions, the schema-aware
+ * writes, page-local sorting/search, and the derived pagination range. Composes
+ * {@link useDataBrowserTable} for the headless table model. Extracted verbatim
+ * from the component so behavior, fetch sequencing, and effect dependencies are
+ * unchanged — the component below is now just markup wiring.
+ */
+const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string | undefined; pageSize: number }): DataBrowserModel => {
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -363,103 +771,10 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         [client, fetchPage, offset, search, selectedTable, shardKey],
     );
 
-    const columns = page?.columns;
-    const rows = page?.rows;
-    const references = page?.refs;
-
-    // Column defs are derived from the loaded page. Each accessor reads the
-    // column by name off the ORIGINAL row object; the cell renderer reuses
-    // `formatCell` so the markup matches the JSON view's text. Foreign-key
-    // columns (in `refs`) render their value as a link to the target table.
-    const columnDefs = useMemo<ColumnDef<TableRow>[]>(() => {
-        if (columns === undefined) {
-            return [];
-        }
-
-        return columns.map((column) => {
-            const target = references?.[column];
-
-            return {
-                accessorFn: (row: TableRow) => row[column],
-                cell: (info): ReactElement => {
-                    const value = info.getValue();
-
-                    if (target !== undefined && (typeof value === "string" || typeof value === "number") && String(value) !== "") {
-                        return <RefCell column={column} id={String(value)} onNavigate={navigateToRef} target={target} />;
-                    }
-
-                    return <>{formatCell(value)}</>;
-                },
-                header: references?.[column] === undefined ? column : `${column} →`,
-                id: column,
-            };
-        });
-    }, [columns, references, navigateToRef]);
-
-    const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
-
-    // Search is server-side now (see the debounced `search` effect); the table
-    // model only owns page-local sorting over the already-filtered page.
-    const table = useReactTable<TableRow>({
-        columns: columnDefs,
-        data,
-        getCoreRowModel: getCoreRowModel(),
-        getSortedRowModel: getSortedRowModel(),
-        onSortingChange: setSorting,
-        state: { sorting },
-    });
-
-    // The post-sort/filter rows for this page. We keep react-table's `Row`
-    // wrappers so edit/delete can resolve the ORIGINAL row via `row.original`,
-    // never a sorted/filtered copy.
-    const tableRows = table.getRowModel().rows;
-
-    const scrollRef = useRef<HTMLDivElement | null>(null);
-
-    // Virtualize the rendered rows. The viewport is a fixed `SCROLL_HEIGHT` tall,
-    // so we report that height to the virtualizer directly instead of measuring
-    // the DOM. This keeps the window deterministic and, crucially, works under
-    // jsdom — which reports every `getBoundingClientRect` as 0×0, so the default
-    // `observeElementRect` would size the viewport to 0 and render no rows.
-    // We still observe width changes (height is pinned) and seed the same rect
-    // on first paint via `initialRect`. overscan keeps a few off-screen rows.
-    const virtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>({
-        count: tableRows.length,
-        estimateSize: () => ROW_HEIGHT,
-        getScrollElement: () => scrollRef.current,
-        initialRect: { height: SCROLL_HEIGHT, width: 0 },
-        observeElementRect: (instance, callback) => {
-            const element = instance.scrollElement;
-
-            const report = (): void => {
-                callback({ height: SCROLL_HEIGHT, width: element?.clientWidth ?? 0 });
-            };
-
-            report();
-
-            if (element === null || typeof ResizeObserver === "undefined") {
-                return undefined;
-            }
-
-            const observer = new ResizeObserver(report);
-
-            observer.observe(element);
-
-            return () => {
-                observer.disconnect();
-            };
-        },
-        overscan: 8,
-    });
-
-    const virtualRows = virtualizer.getVirtualItems();
-    const totalSize = virtualizer.getTotalSize();
-    // The tbody spans the full virtual height so the scrollbar reflects all rows
-    // while only the windowed rows are absolutely positioned inside it. The
-    // height is intrinsically dynamic (it tracks the virtualizer), so the style
-    // object is rebuilt each render — react-virtual's canonical pattern.
-    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- dynamic virtualizer height
-    const tbodyStyle: CSSProperties = { display: "block", height: `${totalSize.toString()}px`, position: "relative" };
+    // Headless table model + virtualizer for the loaded page. The page-local
+    // `sorting` state stays here (table switches reset it via `setSorting`); the
+    // hook owns only the derived react-table/virtualizer wiring.
+    const table = useDataBrowserTable(page, navigateToRef, sorting, setSorting);
 
     const total = page?.total ?? 0;
     const hasPrevious = offset > 0;
@@ -517,64 +832,114 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         goToPage(offset + pageSize);
     }, [goToPage, offset, pageSize]);
 
-    const renderRow = (virtualRow: { index: number; size: number; start: number }): ReactElement => {
-        const tableRow = tableRows[virtualRow.index] as Row<TableRow>;
-        const { original } = tableRow;
-        const id = rowId(original);
-        const key = rowKey(original, virtualRow.index);
-        // Per-row absolute offset from the virtualizer; necessarily a fresh object
-        // each render since `start`/`size` change as the window scrolls.
-        // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- dynamic virtualizer offset
-        const rowStyle: CSSProperties = {
-            ...ROW_BASE_STYLE,
-            height: `${virtualRow.size.toString()}px`,
-            transform: `translateY(${virtualRow.start.toString()}px)`,
-        };
+    const onRowEdit = useCallback((id: null | string, original: TableRow): void => {
+        setWriteError(null);
+        setEditing({ docText: JSON.stringify(rowDocument(original), null, 2), id });
+    }, []);
 
-        return (
-            <tr data-testid="db-row" key={tableRow.id} style={rowStyle}>
-                {tableRow.getVisibleCells().map((cell) => (
-                    <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-                ))}
-                {editable && (
-                    <td>
-                        <button
-                            data-testid={`db-edit-${key}`}
-                            disabled={id === null}
-                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the original row; admin dev-tool render path
-                            onClick={() => {
-                                setWriteError(null);
-                                setEditing({ docText: JSON.stringify(rowDocument(original), null, 2), id });
-                            }}
-                            type="button"
-                        >
-                            Edit
-                        </button>
-                        <ConfirmButton
-                            confirmLabel="Delete?"
-                            disabled={id === null}
-                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the row id; admin dev-tool render path
-                            onConfirm={() => {
-                                fireAndForget(writeRow("delete", id));
-                            }}
-                            testId={`db-delete-${key}`}
-                        >
-                            Delete
-                        </ConfirmButton>
-                    </td>
-                )}
-            </tr>
-        );
+    const onRowDelete = useCallback(
+        (id: null | string): void => {
+            fireAndForget(writeRow("delete", id));
+        },
+        [writeRow],
+    );
+
+    return {
+        addRow,
+        cancelEdit,
+        editing,
+        filter,
+        goNext,
+        goPrevious,
+        hasNext,
+        hasPrevious,
+        live,
+        liveError,
+        loadTables,
+        onEditorDocumentChange,
+        onFilterChange,
+        onRowDelete,
+        onRowEdit,
+        page,
+        pageError,
+        rangeEnd,
+        rangeStart,
+        refreshPage,
+        saveEdit,
+        selectedTable,
+        selectTable,
+        setShardKey,
+        shardKey,
+        showJson,
+        showTable,
+        table,
+        tables,
+        tablesError,
+        toggleLive: toggle,
+        total,
+        viewMode,
+        writeError,
     };
+};
+
+/**
+ * Read-only data browser for a single shard's SQLite database. Lists the user
+ * tables (via the `__cirrus_admin__:listTables` RPC), then pages through the
+ * rows of whichever table is selected (`__cirrus_admin__:readTablePage`).
+ *
+ * Both calls travel over the ordinary {@link useCirrus} client transport; the
+ * admin RPCs are intercepted inside the Durable Object and are gated by the
+ * server's `CIRRUS_ADMIN_TOKEN`. The host is responsible for configuring the
+ * client's auth token — this component issues no credentials of its own.
+ *
+ * The table view is built on a headless `@tanstack/react-table` model: column
+ * defs derive from `page.columns`, sorting and (global) filtering run
+ * page-locally over the loaded rows, and the rendered rows are virtualized with
+ * `@tanstack/react-virtual` so a large page never inflates the DOM. None of this
+ * touches the server — pagination still flows through `readTablePage`. All of
+ * that state lives in {@link useDataBrowser}; this component is just the markup.
+ */
+export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement => {
+    const {
+        addRow,
+        cancelEdit,
+        editing,
+        filter,
+        goNext,
+        goPrevious,
+        hasNext,
+        hasPrevious,
+        live,
+        liveError,
+        loadTables,
+        onEditorDocumentChange,
+        onFilterChange,
+        onRowDelete,
+        onRowEdit,
+        page,
+        pageError,
+        rangeEnd,
+        rangeStart,
+        refreshPage,
+        saveEdit,
+        selectedTable,
+        selectTable,
+        setShardKey,
+        shardKey,
+        showJson,
+        showTable,
+        table,
+        tables,
+        tablesError,
+        toggleLive,
+        total,
+        viewMode,
+        writeError,
+    } = useDataBrowser({ initialShardKey, pageSize });
 
     return (
         <div data-testid="cirrus-data-browser">
-            <div>
-                <ShardInput onChange={setShardKey} testId="db-shard-input" value={shardKey} />
-                <button data-testid="db-load-tables" onClick={loadTables} type="button">
-                    Load tables
-                </button>
-            </div>
+            <DataBrowserToolbar onLoadTables={loadTables} onShardChange={setShardKey} shardKey={shardKey} />
 
             {tablesError !== null && (
                 <p data-testid="db-tables-error" role="alert">
@@ -582,25 +947,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                 </p>
             )}
 
-            {tables !== null && (
-                <ul data-testid="db-table-list">
-                    {tables.map((tableInfo) => (
-                        <li key={tableInfo.name}>
-                            <button
-                                aria-pressed={selectedTable === tableInfo.name}
-                                data-testid={`db-table-${tableInfo.name}`}
-                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over tableInfo.name; admin dev-tool render path
-                                onClick={() => {
-                                    selectTable(tableInfo.name);
-                                }}
-                                type="button"
-                            >
-                                {tableInfo.name} ({tableInfo.rowCount})
-                            </button>
-                        </li>
-                    ))}
-                </ul>
-            )}
+            {tables !== null && <DataBrowserTableList onSelect={selectTable} selectedTable={selectedTable} tables={tables} />}
 
             {pageError !== null && (
                 <p data-testid="db-page-error" role="alert">
@@ -610,35 +957,22 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
 
             {page !== null && (
                 <div data-testid="db-page">
-                    <div data-testid="db-view-toggle">
-                        <button aria-pressed={viewMode === "table"} data-testid="db-view-table" onClick={showTable} type="button">
-                            Table
-                        </button>
-                        <button aria-pressed={viewMode === "json"} data-testid="db-view-json" onClick={showJson} type="button">
-                            JSON
-                        </button>
-                        <button data-testid="db-refresh" onClick={refreshPage} type="button">
-                            Refresh
-                        </button>
-                        <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="db" />
-                        <input aria-label="Search rows" data-testid="db-filter" onChange={onFilterChange} placeholder="search table…" value={filter} />
-                        {editable && (
-                            <button data-testid="db-add-row" onClick={addRow} type="button">
-                                Add row
-                            </button>
-                        )}
-                    </div>
+                    <DataBrowserViewControls
+                        editable={editable}
+                        filter={filter}
+                        live={live}
+                        liveError={liveError}
+                        onAddRow={addRow}
+                        onFilterChange={onFilterChange}
+                        onRefresh={refreshPage}
+                        onShowJson={showJson}
+                        onShowTable={showTable}
+                        onToggleLive={toggleLive}
+                        viewMode={viewMode}
+                    />
 
                     {editable && editing !== null && (
-                        <div data-testid="db-editor">
-                            <textarea aria-label="Row document JSON" data-testid="db-editor-doc" onChange={onEditorDocumentChange} value={editing.docText} />
-                            <button data-testid="db-editor-save" onClick={saveEdit} type="button">
-                                Save
-                            </button>
-                            <button data-testid="db-editor-cancel" onClick={cancelEdit} type="button">
-                                Cancel
-                            </button>
-                        </div>
+                        <DataBrowserRowEditor docText={editing.docText} onCancel={cancelEdit} onDocumentChange={onEditorDocumentChange} onSave={saveEdit} />
                     )}
 
                     {writeError !== null && (
@@ -648,41 +982,29 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                     )}
 
                     {viewMode === "table" && (
-                        <div data-testid="db-scroll" ref={scrollRef} style={SCROLL_STYLE}>
-                            <table data-testid="db-rows" style={ROWS_STYLE}>
-                                <thead>
-                                    <tr>
-                                        {table.getFlatHeaders().map((header) => (
-                                            <th key={header.id}>
-                                                <button
-                                                    data-testid={`db-sort-${header.column.id}`}
-                                                    onClick={header.column.getToggleSortingHandler()}
-                                                    type="button"
-                                                >
-                                                    {flexRender(header.column.columnDef.header, header.getContext())}
-                                                    {sortIndicator(header.column.getIsSorted())}
-                                                </button>
-                                            </th>
-                                        ))}
-                                        {editable && <th aria-label="Row actions" />}
-                                    </tr>
-                                </thead>
-                                <tbody style={tbodyStyle}>{virtualRows.map((virtualRow) => renderRow(virtualRow))}</tbody>
-                            </table>
-                        </div>
+                        <DataBrowserTableView
+                            editable={editable}
+                            onDelete={onRowDelete}
+                            onEdit={onRowEdit}
+                            scrollRef={table.scrollRef}
+                            table={table.table}
+                            tableRows={table.tableRows}
+                            tbodyStyle={table.tbodyStyle}
+                            virtualRows={table.virtualRows}
+                        />
                     )}
 
                     {viewMode === "json" && <pre data-testid="db-json">{JSON.stringify(page.rows, null, 2)}</pre>}
 
-                    <div>
-                        <button data-testid="db-prev" disabled={!hasPrevious} onClick={goPrevious} type="button">
-                            Previous
-                        </button>
-                        <span data-testid="db-page-info">{`${rangeStart.toString()}-${rangeEnd.toString()} of ${total.toString()}`}</span>
-                        <button data-testid="db-next" disabled={!hasNext} onClick={goNext} type="button">
-                            Next
-                        </button>
-                    </div>
+                    <DataBrowserPagination
+                        hasNext={hasNext}
+                        hasPrevious={hasPrevious}
+                        onNext={goNext}
+                        onPrevious={goPrevious}
+                        rangeEnd={rangeEnd}
+                        rangeStart={rangeStart}
+                        total={total}
+                    />
                 </div>
             )}
         </div>
