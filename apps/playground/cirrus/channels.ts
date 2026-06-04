@@ -1,7 +1,8 @@
 import type { Id } from "@cirrus/server";
 import { mutation, query, v } from "@cirrus/server";
 
-import type { Doc as Document_ } from "./_generated/dataModel.js";
+// eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
+import type { Doc } from "./_generated/dataModel.js";
 
 /**
  * List every channel — `.global()` so the read happens against D1, with
@@ -9,10 +10,10 @@ import type { Doc as Document_ } from "./_generated/dataModel.js";
  */
 export const list = query({
     args: {},
-    handler: async (context): Promise<Document_<"channels">[]> => {
+    handler: async (context): Promise<Doc<"channels">[]> => {
         const rows = await context.db.query("channels").collect();
 
-        return rows as unknown as Document_<"channels">[];
+        return rows as unknown as Doc<"channels">[];
     },
 });
 

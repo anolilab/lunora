@@ -1,7 +1,8 @@
 import type { Id } from "@cirrus/server";
 import { mutation, query, v } from "@cirrus/server";
 
-import type { Doc as Document_ } from "./_generated/dataModel.js";
+// eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
+import type { Doc } from "./_generated/dataModel.js";
 
 /**
  * List recent messages for a channel. The `shardBy("channelId")` on the
@@ -10,13 +11,13 @@ import type { Doc as Document_ } from "./_generated/dataModel.js";
  */
 export const list = query({
     args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
-    handler: async (context, { channelId, limit }): Promise<Document_<"messages">[]> => {
+    handler: async (context, { channelId, limit }): Promise<Doc<"messages">[]> => {
         const rows = await context.db
             .query("messages")
             .withIndex("by_channel_created", (q) => q.eq("channelId", channelId))
             .take(limit ?? 50);
 
-        return rows as unknown as Document_<"messages">[];
+        return rows as unknown as Doc<"messages">[];
     },
 });
 
