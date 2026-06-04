@@ -1,4 +1,3 @@
-import type { ValidationPath } from "./errors.js";
 import { describeValue, formatPath, ValidationError } from "./errors.js";
 
 /** Branded id type, e.g. `Id&lt;"users">`. */
@@ -136,7 +135,14 @@ type InsertShape<S extends Record<string, Validator>> = {
 };
 
 interface ParseContext {
-    path: ValidationPath;
+    /**
+     * Mutable path stack walked from the root to the value currently being
+     * parsed. Composite parsers `push` a segment before descending into a child
+     * and `pop` it on return, so on the success path no per-child array is
+     * allocated. `fail()` snapshots it (the live array is reused), so the
+     * {@link ValidationError} retains a stable copy.
+     */
+    path: (number | string)[];
 }
 
 interface InternalValidator<T> extends Validator<T> {
@@ -169,7 +175,9 @@ interface InternalColumnValidator<T> extends InternalValidator<T> {
 // an arrow const loses that narrowing and surfaces no-unsafe-call downstream.
 // eslint-disable-next-line func-style
 function fail(context: ParseContext, expected: string, received: unknown): never {
-    const { path } = context;
+    // Snapshot the live mutable path stack — composite parsers push/pop into it,
+    // so the ValidationError must own its own copy.
+    const path = [...context.path];
     const receivedDescription = describeValue(received);
 
     throw new ValidationError(`Expected ${expected} at ${formatPath(path)}, received ${receivedDescription}`, {
@@ -375,10 +383,14 @@ const array = <V extends Validator>(inner: V): ColumnValidator<Infer<V>[], Infer
                     fail(context, "array", value);
                 }
 
-                const out: Infer<V>[] = [];
+                const { length } = value;
+                const out: Infer<V>[] = Array.from({ length });
+                const { path } = context;
 
-                for (const [index, element] of value.entries()) {
-                    out.push(innerInternal._parse(element, { path: [...context.path, index] }));
+                for (let index = 0; index < length; index += 1) {
+                    path.push(index);
+                    out[index] = innerInternal._parse(value[index], context);
+                    path.pop();
                 }
 
                 return out;
@@ -393,8 +405,17 @@ type ObjectShapeType<S extends ObjectShape> = {
     [K in keyof S as undefined extends Infer<S[K]> ? K : never]?: Infer<S[K]>;
 } & { [K in keyof S as undefined extends Infer<S[K]> ? never : K]: Infer<S[K]> };
 
-const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<ObjectShapeType<S>, ObjectShapeType<S>> =>
-    asColumn(
+const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<ObjectShapeType<S>, ObjectShapeType<S>> => {
+    // Precompute the key list, per-key internal validator, and the optional flag
+    // once at construction time — the shape is fixed, so the per-parse hot path
+    // never re-runs Object.keys (one array alloc) or re-casts each child.
+    const entries = Object.keys(shape).map((key) => {
+        const child = toInternal(shape[key] as Validator);
+
+        return { child, isOptional: child.kind === "optional", key } as const;
+    });
+
+    return asColumn(
         createValidator<ObjectShapeType<S>>(
             "object",
             (value, context) => {
@@ -404,16 +425,18 @@ const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<Objec
 
                 const input = value as Record<string, unknown>;
                 const out: Record<string, unknown> = {};
+                const { path } = context;
 
-                for (const key of Object.keys(shape)) {
-                    const child = toInternal(shape[key] as Validator);
+                for (const { child, isOptional, key } of entries) {
                     const fieldValue = input[key];
 
-                    if (fieldValue === undefined && child.kind === "optional") {
+                    if (fieldValue === undefined && isOptional) {
                         continue;
                     }
 
-                    out[key] = child._parse(fieldValue, { path: [...context.path, key] });
+                    path.push(key);
+                    out[key] = child._parse(fieldValue, context);
+                    path.pop();
                 }
 
                 return out as ObjectShapeType<S>;
@@ -421,6 +444,7 @@ const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<Objec
             { shape },
         ),
     );
+};
 
 const record = <K extends Validator<string>, V extends Validator>(
     keyValidator: K,
@@ -438,21 +462,21 @@ const record = <K extends Validator<string>, V extends Validator>(
                 }
 
                 const input = value as Record<string, unknown>;
-                // `Object.create(null)` so the result has no prototype chain —
-                // belt-and-braces against a `__proto__` key sneaking through.
+                // `Object.create(null)` so the result has no prototype chain.
+                // Because the target has a null prototype, assigning any key —
+                // including `__proto__`/`constructor`/`prototype` — creates a
+                // plain own property and cannot pollute Object.prototype, so we
+                // round-trip every own enumerable key instead of silently
+                // dropping legitimate data under those names.
                 const out = Object.create(null) as Record<string, unknown>;
+                const { path } = context;
 
                 for (const key of Object.keys(input)) {
-                    // Skip dangerous keys outright — these mutate the object
-                    // prototype if assigned via `out[key] = ...` on a normal
-                    // object literal, which is a JSON-level injection risk.
-                    if (key === "__proto__" || key === "constructor" || key === "prototype") {
-                        continue;
-                    }
+                    path.push(key);
+                    const parsedKey = keyInternal._parse(key, context);
+                    const parsedValue = valueInternal._parse(input[key], context);
 
-                    const parsedKey = keyInternal._parse(key, { path: [...context.path, key] });
-                    const parsedValue = valueInternal._parse(input[key], { path: [...context.path, key] });
-
+                    path.pop();
                     out[parsedKey as string] = parsedValue;
                 }
 
@@ -468,21 +492,54 @@ const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValid
         throw new Error("v.union requires at least one member");
     }
 
+    const memberInternals = members.map((member) => toInternal(member));
+
     return asColumn(
         createValidator<Infer<Vs[number]>>(
             "union",
             (value, context): Infer<Vs[number]> => {
-                for (const member of members) {
-                    const result = member.safeParse(value);
+                // Parse each member against the live context so the real path is
+                // threaded into any per-branch ValidationError. We keep the
+                // deepest (longest-path) branch failure to surface the most
+                // specific diagnostic. A non-ValidationError from a member's
+                // refinement is a programmer error, not a branch miss, so it
+                // propagates instead of being swallowed.
+                let deepestError: ValidationError | undefined;
+                const { path } = context;
+                const baseDepth = path.length;
 
-                    if (result.ok) {
-                        return result.value as Infer<Vs[number]>;
+                for (const member of memberInternals) {
+                    try {
+                        return member._parse(value, context) as Infer<Vs[number]>;
+                    } catch (error: unknown) {
+                        if (!(error instanceof ValidationError)) {
+                            throw error;
+                        }
+
+                        // A composite member that threw mid-descent left its own
+                        // segments on the shared path stack (the pop after the
+                        // throwing child never ran); unwind to our entry depth
+                        // before trying the next branch.
+                        path.length = baseDepth;
+
+                        if (deepestError === undefined || error.path.length > deepestError.path.length) {
+                            deepestError = error;
+                        }
                     }
                 }
 
+                // All branches failed. If exactly one member exists, surface its
+                // own (more specific) error; otherwise report the union miss at
+                // the union's own path while citing the closest branch detail.
+                if (memberInternals.length === 1 && deepestError !== undefined) {
+                    throw deepestError;
+                }
+
+                const detail = deepestError === undefined ? "" : ` (closest: expected ${deepestError.expected} at ${formatPath(deepestError.path)})`;
+
                 // `fail` is `: never`; returning it makes every path of this arrow
                 // explicitly terminal (consistent-return doesn't track never-returns).
-                return fail(context, `union of ${String(members.length)} member(s)`, value);
+                return fail(context, `union of ${String(members.length)} member(s)${detail}`, value);
             },
             { members },
         ),
