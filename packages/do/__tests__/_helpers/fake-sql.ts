@@ -46,6 +46,13 @@ const SELECT_CHANGES = /^SELECT changes\(\) AS changed$/u;
 const PROBE_ID = /^SELECT 1 FROM "([^"]+)" WHERE id = \? LIMIT 1$/u;
 const SELECT_ALL = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)"(?: WHERE (.+?))?(?: ORDER BY (.+?))?(?: LIMIT (\d+))?$/u;
 const SELECT_BY_ID = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id = \?$/u;
+// Single UNION-ALL probe `lookupById` issues to locate a row across every
+// non-global table in one round-trip. Each branch tags its source table via
+// `AS __t__` and consumes one (identical) id param.
+const UNION_PROBE_BRANCH = /SELECT '((?:[^']|'')+)' AS __t__, id, _creationTime, __doc__ FROM "([^"]+)" WHERE id = \?/gu;
+const UNION_PROBE = /^SELECT '(?:[^']|'')+' AS __t__, id, _creationTime, __doc__ FROM "[^"]+" WHERE id = \?(?: UNION ALL SELECT '(?:[^']|'')+' AS __t__, id, _creationTime, __doc__ FROM "[^"]+" WHERE id = \?)* LIMIT 1$/u;
+// Batch hydration `rankPage` uses: `WHERE id IN (?, ?, ...)`.
+const SELECT_BY_IDS = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id IN \((?:\?(?:, \?)*)\)$/u;
 
 const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
     return {
@@ -441,6 +448,41 @@ const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
             const row = state.tables.get(tableName)?.get(id);
 
             return cursor<Record<string, unknown>>(row ? [{ 1: 1 }] : []);
+        }
+
+        if (UNION_PROBE.test(sqlString)) {
+            // Each branch carries its source table (the `AS __t__` literal)
+            // and a positional id param. Walk them in order and return the
+            // first hit, tagged with `__t__` so `lookupById` recovers the
+            // owning table.
+            UNION_PROBE_BRANCH.lastIndex = 0;
+            let branchIndex = 0;
+            let branch: null | RegExpExecArray;
+
+            // eslint-disable-next-line no-cond-assign -- iterate every UNION branch
+            while ((branch = UNION_PROBE_BRANCH.exec(sqlString)) !== null) {
+                const tableName = branch[2]!;
+                const id = params[branchIndex] as string;
+                const row = state.tables.get(tableName)?.get(id);
+
+                if (row) {
+                    return cursor<Record<string, unknown>>([{ __t__: tableName, ...(row as unknown as Record<string, unknown>) }]);
+                }
+
+                branchIndex += 1;
+            }
+
+            return cursor<Record<string, unknown>>([]);
+        }
+
+        const selectByIdsMatch = SELECT_BY_IDS.exec(sqlString);
+
+        if (selectByIdsMatch) {
+            const tableName = selectByIdsMatch[1]!;
+            const table = state.tables.get(tableName);
+            const rows = (params as string[]).map((id) => table?.get(id)).filter((row): row is NonNullable<typeof row> => row !== undefined);
+
+            return cursor<Record<string, unknown>>(rows as unknown as Record<string, unknown>[]);
         }
 
         const selectByIdMatch = SELECT_BY_ID.exec(sqlString);

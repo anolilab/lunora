@@ -1880,33 +1880,48 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * single probe loop that returns the row when it hits.
      */
     const lookupById = (id: string): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
-        for (const [tableName, definition] of Object.entries(schema.tables)) {
-            if (definition.shardMode?.kind === "global") {
-                continue;
-            }
+        // Row ids are random UUIDs, so the owning table can't be derived from
+        // the id. Rather than probing each table with its own SELECT (T
+        // statements worst-case on a T-table schema, on the per-mutation hot
+        // path), fold every non-global table into one UNION-ALL probe that
+        // tags each branch with its source table — a single round-trip
+        // regardless of table count. `LIMIT 1` short-circuits once a branch
+        // hits; ids are unique across tables so at most one branch matches.
+        const nonGlobalTables = Object.entries(schema.tables)
+            .filter(([, definition]) => definition.shardMode?.kind !== "global")
+            .map(([tableName]) => tableName);
 
-            const rows = runSql(sql, `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`, id).toArray();
-
-            const [firstRow] = rows;
-
-            if (firstRow) {
-                const row = rowToDocument(firstRow);
-
-                if (row) {
-                    // Capture the exact stored blob at read time so a
-                    // read-modify-write that spans an `await` (before-update
-                    // trigger / onDelete cascade) can compare-and-swap on it —
-                    // a concurrent write that changed the row flips the blob
-                    // and the guarded UPDATE/DELETE matches zero rows.
-                    const rawDocument = firstRow[DOC_COLUMN];
-                    const documentJson = typeof rawDocument === "string" ? rawDocument : JSON.stringify(rawDocument ?? {});
-
-                    return { docJson: documentJson, row, tableName };
-                }
-            }
+        if (nonGlobalTables.length === 0) {
+            return undefined;
         }
 
-        return undefined;
+        const branches = nonGlobalTables.map(
+            (tableName) => `SELECT '${tableName.replaceAll("'", "''")}' AS __t__, id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`,
+        );
+        const probeSql = `${branches.join(" UNION ALL ")} LIMIT 1`;
+        const parameters = nonGlobalTables.map(() => id);
+
+        const [firstRow] = runSql(sql, probeSql, ...parameters).toArray();
+
+        if (!firstRow) {
+            return undefined;
+        }
+
+        const tableName = firstRow["__t__"];
+        const row = rowToDocument(firstRow);
+
+        if (typeof tableName !== "string" || !row) {
+            return undefined;
+        }
+
+        // Capture the exact stored blob at read time so a read-modify-write
+        // that spans an `await` (before-update trigger / onDelete cascade)
+        // can compare-and-swap on it — a concurrent write that changed the
+        // row flips the blob and the guarded UPDATE/DELETE matches zero rows.
+        const rawDocument = firstRow[DOC_COLUMN];
+        const documentJson = typeof rawDocument === "string" ? rawDocument : JSON.stringify(rawDocument ?? {});
+
+        return { docJson: documentJson, row, tableName };
     };
 
     const writer: DatabaseWriterLike = {
@@ -2721,18 +2736,38 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const hasMore = rankRows.length > take;
             const usable = hasMore ? rankRows.slice(0, take) : rankRows;
 
+            // Hydrate the whole page in one `IN (...)` query instead of one
+            // SELECT per rank row (an N+1 on the read path). Build an
+            // id->doc map, then re-project in rank-companion order so the
+            // keyset page order is preserved.
+            const pageIds = usable.map((rankRow) => rankRow[RANK_TIEBREAK] as string);
             const docs: Record<string, unknown>[] = [];
 
-            for (const rankRow of usable) {
+            if (pageIds.length > 0) {
+                const placeholders = pageIds.map(() => "?").join(", ");
                 const documentRows = runSql(
                     sql,
-                    `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`,
-                    rankRow[RANK_TIEBREAK] as string,
+                    `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id IN (${placeholders})`,
+                    ...pageIds,
                 ).toArray();
-                const record = rowToDocument(documentRows[0]);
 
-                if (record) {
-                    docs.push(record);
+                const byId = new Map<string, Record<string, unknown>>();
+
+                for (const documentRow of documentRows) {
+                    const record = rowToDocument(documentRow);
+                    const recordId = documentRow["id"];
+
+                    if (record && typeof recordId === "string") {
+                        byId.set(recordId, record);
+                    }
+                }
+
+                for (const pageId of pageIds) {
+                    const record = byId.get(pageId);
+
+                    if (record) {
+                        docs.push(record);
+                    }
                 }
             }
 
