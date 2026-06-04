@@ -112,6 +112,34 @@ describe("createScheduler", () => {
         expect(new URL(calls[0]!.url).pathname).toBe("/cancel");
     });
 
+    it("list() parses the DO's record array (GET /list)", async () => {
+        expect.assertions(3);
+
+        const records = [
+            { args: { x: 1 }, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 },
+            { args: {}, enqueuedAt: 2, functionPath: "messages.purge", id: "b", scheduledFor: 20 },
+        ];
+        const { calls, namespace } = fakeNamespace({ "/list": { records } });
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        const result = await scheduler.list();
+
+        expect(result).toEqual(records);
+        expect(new URL(calls[0]!.url).pathname).toBe("/list");
+        expect(calls).toHaveLength(1);
+    });
+
+    it("get() resolves a single record by id, or null when absent", async () => {
+        expect.assertions(2);
+
+        const records = [{ args: {}, enqueuedAt: 1, functionPath: "messages.send", id: "a", scheduledFor: 10 }];
+        const { namespace } = fakeNamespace({ "/list": { records } });
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        await expect(scheduler.get("a")).resolves.toEqual(records[0]);
+        await expect(scheduler.get("missing")).resolves.toBeNull();
+    });
+
     it("throws when SchedulerDO returns a non-2xx response", async () => {
         expect.assertions(1);
 

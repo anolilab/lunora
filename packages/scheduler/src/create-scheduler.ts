@@ -1,4 +1,4 @@
-import type { ArgsOf, CirrusSchedulerOptions, FunctionReference, RunOptions, Scheduler } from "./types.js";
+import type { ArgsOf, CirrusSchedulerOptions, FunctionReference, RunOptions, Scheduler, ScheduleRecord } from "./types.js";
 
 const callDO = async <T>(options: CirrusSchedulerOptions, path: string, body: unknown): Promise<T> => {
     const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
@@ -7,6 +7,19 @@ const callDO = async <T>(options: CirrusSchedulerOptions, path: string, body: un
         headers: { "content-type": "application/json" },
         method: "POST",
     });
+
+    if (!response.ok) {
+        const text = await response.text();
+
+        throw new Error(`@cirrus/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
+    }
+
+    return await response.json();
+};
+
+const getDO = async <T>(options: CirrusSchedulerOptions, path: string): Promise<T> => {
+    const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
+    const response = await stub.fetch(`https://scheduler.internal${path}`, { method: "GET" });
 
     if (!response.ok) {
         const text = await response.text();
@@ -66,7 +79,24 @@ const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
 
     const cancel = async (id: string): Promise<{ cancelled: boolean }> => callDO<{ cancelled: boolean }>(options, "/cancel", { id });
 
-    return { cancel, runAfter, runAt };
+    // The DO's `/list` returns `{ records: ScheduleRecord[] }` (the pending
+    // `id:` headers). Surface the array directly to callers.
+    const list = async (): Promise<ScheduleRecord[]> => {
+        const { records } = await getDO<{ records: ScheduleRecord[] }>(options, "/list");
+
+        return records;
+    };
+
+    // Derived from `/list` rather than a dedicated endpoint — the DO has no
+    // single-record GET, and the pending set is small enough to scan.
+    const get = async (id: string): Promise<ScheduleRecord | null> => {
+        const records = await list();
+
+        // eslint-disable-next-line unicorn/no-null -- public contract returns `ScheduleRecord | null` (Convex `get` convention), not undefined
+        return records.find((record) => record.id === id) ?? null;
+    };
+
+    return { cancel, get, list, runAfter, runAt };
 };
 
 export default createScheduler;

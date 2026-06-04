@@ -39,6 +39,10 @@ export interface ScheduleRecord {
 
 export interface Scheduler {
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
+    /** Resolve a single pending job by id, or `null` when absent (derived from {@link Scheduler.list}). */
+    get: (id: string) => Promise<ScheduleRecord | null>;
+    /** All pending scheduled jobs (the DO's `/list` view). */
+    list: () => Promise<ScheduleRecord[]>;
     runAfter: <F extends FunctionReference>(
         delayMs: number,
         function_: F,
