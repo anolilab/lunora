@@ -198,6 +198,31 @@ describe("observabilitySink", () => {
             expect(events[0]!.shardKey).toBe("__root__");
         });
 
+        it("reports a structural ConflictError with its real code and status", async () => {
+            expect.assertions(2);
+
+            const { events, sink } = collectEvents();
+
+            // Structural ConflictError shape (name/code/status) — mirrors what
+            // `@cirrus/do` throws without taking a runtime dependency on it.
+            const conflict = Object.assign(new Error("write conflict"), { code: "CONFLICT", name: "ConflictError", status: 409 });
+
+            shard.throwOnFetch = conflict;
+            const worker = createWorker({ observability: sink, shardDO: shard.namespace });
+
+            await worker.fetch(
+                new Request("https://app.example/_cirrus/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:send" }),
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            expect(events[0]!.error?.code).toBe("CONFLICT");
+            expect(events[0]!.error?.status).toBe(409);
+        });
+
         it("emits a fanOut event for cross-shard dispatch", async () => {
             expect.assertions(5);
 

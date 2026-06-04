@@ -1,4 +1,4 @@
-import { CirrusError, toErrorResponse } from "./errors.js";
+import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors.js";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
 import { emitRpcEvent } from "./observability.js";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator.js";
@@ -561,6 +561,13 @@ interface RpcContext {
 const MAX_BODY_BYTES = 1_048_576;
 
 /**
+ * Shared, stateless `TextEncoder` for NDJSON export/backup streaming. `encode()`
+ * is reusable across calls, so a single module-scope instance avoids allocating
+ * a fresh encoder per export/backup stream.
+ */
+const NDJSON_ENCODER = new TextEncoder();
+
+/**
  * Read a request body fully into text while enforcing a hard byte budget as the
  * bytes arrive. `Content-Length` is forgeable — a chunked request omits it
  * (so the header guard sees `0`) and a non-numeric value makes the header guard
@@ -648,10 +655,12 @@ interface ForwardContext {
 
 /**
  * Build an `ObservabilityEvent` for a failed RPC dispatch. Extracts code /
- * status / message from a {@link CirrusError} when present; otherwise reports
- * `INTERNAL_SERVER_ERROR` / 500 with the thrown value's message. Used by
- * both the single-shard and fan-out error branches so they emit a uniform
- * shape.
+ * status / message from any transport-mappable error (a {@link CirrusError} or
+ * a structural `CirrusError`/`ConflictError` from a downstream package, the
+ * same set `toErrorResponse` maps); otherwise reports `INTERNAL_SERVER_ERROR` /
+ * 500 with the thrown value's message. Used by both the single-shard and
+ * fan-out error branches so they emit a uniform shape — and so a `ConflictError`
+ * is reported with its real code/status instead of a generic 500.
  */
 const buildErrorEvent = (
     functionPath: string,
@@ -659,10 +668,9 @@ const buildErrorEvent = (
     error: unknown,
     extra: { fanOut?: { table: string }; shardKey?: string },
 ): ObservabilityEvent => {
-    const isCirrus = error instanceof Error && error.name === "CirrusError";
-    const errorRecord = error as Record<string, unknown>;
-    const code = isCirrus && typeof errorRecord["code"] === "string" ? errorRecord["code"] : "INTERNAL_SERVER_ERROR";
-    const status = isCirrus && typeof errorRecord["status"] === "number" ? errorRecord["status"] : 500;
+    const mappable = error instanceof CirrusError || isStructuralCirrusError(error) || isStructuralConflictError(error);
+    const code = mappable ? (error as { code: string }).code : "INTERNAL_SERVER_ERROR";
+    const status = mappable ? (error as { status: number }).status : 500;
     const message = error instanceof Error ? error.message : String(error);
 
     return {
@@ -726,6 +734,55 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     return { claims, headers, identity, userId };
 };
 
+/** Merge `kind`s the coordinator understands; anything else is rejected at the edge. */
+const KNOWN_MERGE_KINDS = new Set(["concat", "topK", "first", "max", "min", "rank", "sum", "groupBy"]);
+
+/**
+ * Validate the client-supplied fan-out spec on the public RPC path. `fanOut`
+ * arrives fully untrusted and flows to `coordinator.fanOut`; `authorizeFanOut`
+ * only gates `table` + `functionPath`, not the merge shape. Unvalidated, a
+ * missing/negative `topK.k` reaches `collected.slice(0, k)` (returning every
+ * row across all shards, or dropping the tail) and an unknown `kind` falls
+ * through to the raw per-shard values — both untrusted-input footguns.
+ */
+const validateFanOut = (fanOut: unknown): FanOutSpec | undefined => {
+    if (fanOut === undefined) {
+        return undefined;
+    }
+
+    if (!fanOut || typeof fanOut !== "object") {
+        throw new CirrusError("RPC `fanOut` must be an object", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const spec = fanOut as { merge?: unknown; table?: unknown };
+
+    if (typeof spec.table !== "string" || spec.table.length === 0) {
+        throw new CirrusError("RPC `fanOut.table` must be a non-empty string", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (!spec.merge || typeof spec.merge !== "object") {
+        throw new CirrusError("RPC `fanOut.merge` must be an object", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const merge = spec.merge as { by?: unknown; k?: unknown; kind?: unknown };
+
+    if (typeof merge.kind !== "string" || !KNOWN_MERGE_KINDS.has(merge.kind)) {
+        throw new CirrusError("RPC `fanOut.merge.kind` is not a recognized merge strategy", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (merge.kind === "topK") {
+        if (typeof merge.k !== "number" || !Number.isInteger(merge.k) || merge.k < 0) {
+            throw new CirrusError("RPC `fanOut.merge.k` must be a non-negative integer", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (typeof merge.by !== "string" || merge.by.length === 0) {
+            throw new CirrusError("RPC `fanOut.merge.by` must be a non-empty string", { code: "BAD_REQUEST", status: 400 });
+        }
+    }
+
+    return spec as FanOutSpec;
+};
+
 const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     // Read with a byte budget so a chunked / Content-Length-stripped body can't
     // bypass the size cap the header fast-path only loosely enforces.
@@ -747,7 +804,7 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
 
     return {
         args: envelope.args ?? {},
-        fanOut: envelope.fanOut,
+        fanOut: validateFanOut(envelope.fanOut),
         functionPath: envelope.functionPath,
         shardKey: envelope.shardKey,
     };
@@ -842,6 +899,28 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
     }
 
     return { tables };
+};
+
+/**
+ * Read a JSON request body under the authoritative `MAX_BODY_BYTES` cap.
+ *
+ * Mirrors `parseExportBody`/`parseMigrateRequest`: drains the body through the
+ * byte-budgeted reader (so a chunked / Content-Length-stripped payload can't
+ * slip past the cap) and maps a 413 through unchanged while turning any other
+ * parse failure into a 400. Returns `{}` for an empty body.
+ */
+const readJsonBodyWithLimit = async (request: Request): Promise<Record<string, unknown>> => {
+    try {
+        const text = await readBodyTextWithLimit(request);
+
+        return text === "" ? {} : (JSON.parse(text) as Record<string, unknown>);
+    } catch (error) {
+        if (error instanceof CirrusError) {
+            throw error;
+        }
+
+        throw new CirrusError("Request body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+    }
 };
 
 /**
@@ -946,7 +1025,11 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     const globalRows: { doc: Record<string, unknown>; table: string }[] = [];
     const globalLineMap: number[] = [];
     const perShard = new Map<string, AdminBatch>();
-    let lineNumber = 0;
+    // Physical 1-based source line index. Incremented for EVERY line handled,
+    // including blank ones, so `error.line` / `startLine` always point at the
+    // user's actual source line. Counting only non-blank lines (the old bug)
+    // mis-attributed errors whenever the NDJSON had a leading/interior blank line.
+    let physicalLine = 0;
 
     const reader = request.body.getReader();
     const decoder = new TextDecoder();
@@ -957,15 +1040,17 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     let totalBytes = 0;
 
     const handleLine = (line: string): void => {
+        // Advance the physical line counter first so blank lines still consume a
+        // line number — keeps `error.line` aligned with the source file.
+        physicalLine += 1;
+
         const trimmed = line.trim();
 
         if (trimmed.length === 0) {
             return;
         }
 
-        lineNumber += 1;
-
-        const row = parseImportRow(trimmed, lineNumber);
+        const row = parseImportRow(trimmed, physicalLine);
 
         if (!row.ok) {
             errors.push(row.error);
@@ -978,14 +1063,14 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
 
         if (info?.mode.kind === "global") {
             globalRows.push({ doc: documentRow, table });
-            globalLineMap.push(lineNumber);
+            globalLineMap.push(physicalLine);
 
             return;
         }
 
         // Shard-local routing: shardBy(field) picks the value of `doc[field]`;
         // root/undefined modes route to the default shard.
-        const resolved = resolveImportShardKey(documentRow, table, info, defaultShard, lineNumber);
+        const resolved = resolveImportShardKey(documentRow, table, info, defaultShard, physicalLine);
 
         if (!resolved.ok) {
             errors.push(resolved.error);
@@ -998,7 +1083,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         if (existing) {
             existing.rows.push({ doc: documentRow, table });
         } else {
-            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, table }], shardKey: resolved.shardKey, startLine: lineNumber });
+            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, table }], shardKey: resolved.shardKey, startLine: physicalLine });
         }
     };
 
@@ -1498,15 +1583,15 @@ const createWorker = (
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
 
-        // Stream NDJSON: shard-local rows first, then global rows. The shard
-        // fan-out is materialised because each shard returns a single envelope;
-        // we still write the response incrementally so a slow consumer never
-        // inflates worker memory.
+        // Stream NDJSON: shard-local rows first, then global rows. Caveat: each
+        // shard returns a single materialised envelope, and the whole fan-out is
+        // collected before the stream drains, so peak worker memory still scales
+        // with the total shard-local row count — the streaming only keeps the
+        // *response* from being buffered, it does not bound the source data.
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
-                const encoder = new TextEncoder();
                 const writeRow = (row: ExportRow): void => {
-                    controller.enqueue(encoder.encode(`${JSON.stringify(row)}\n`));
+                    controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
                 };
 
                 try {
@@ -1543,9 +1628,7 @@ const createWorker = (
             throw new CirrusError("Sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const raw = (await request.json().catch(() => {
-            return {};
-        })) as Record<string, unknown>;
+        const raw = await readJsonBodyWithLimit(request);
         const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
         const limit = typeof raw["limit"] === "number" ? raw["limit"] : undefined;
         const globalCursor = typeof raw["globalCursor"] === "number" ? raw["globalCursor"] : 0;
@@ -1591,9 +1674,7 @@ const createWorker = (
             throw new CirrusError("Apply endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const raw = (await request.json().catch(() => {
-            return {};
-        })) as Record<string, unknown>;
+        const raw = await readJsonBodyWithLimit(request);
         const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
         const batches = rawBatches
             .map((batch) => batch as { changes?: unknown; shardKey?: unknown })
@@ -1676,7 +1757,12 @@ const createWorker = (
         return value === null || value === "" ? undefined : value;
     };
 
-    /** Parse the shared `limit` / `offset` paging params off an admin GET request. */
+    /**
+     * Parse the shared `limit` / `offset` paging params off an admin GET request.
+     * Negative values are clamped to `undefined` (limit) / `0` (offset) so a
+     * `?limit=-5` or `?offset=-1` never reaches the introspectors as a malformed
+     * SQL `LIMIT`/`OFFSET`.
+     */
     const parsePaging = (request: Request): { limit?: number; offset?: number } => {
         const url = new URL(request.url);
         const limitParameter = url.searchParams.get("limit");
@@ -1685,8 +1771,8 @@ const createWorker = (
         const offset = offsetParameter === null ? undefined : Number.parseInt(offsetParameter, 10);
 
         return {
-            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
-            offset: offset !== undefined && Number.isFinite(offset) ? offset : undefined,
+            limit: limit !== undefined && Number.isFinite(limit) && limit >= 0 ? limit : undefined,
+            offset: offset !== undefined && Number.isFinite(offset) && offset >= 0 ? offset : undefined,
         };
     };
 
@@ -2195,20 +2281,21 @@ const createWorker = (
         const forwardedHeaders: Record<string, string> = { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" };
         const tables = options.backupTables;
 
-        // Stream the NDJSON straight into R2 so the whole snapshot is never held
-        // in worker memory at once. `put` resolves after the stream is fully
-        // consumed, so the row/byte counters are final by the time we write the
-        // manifest. Shard fan-out is materialised per shard (one envelope each),
-        // but the concatenated body still flows through the stream incrementally.
+        // Stream the NDJSON straight into R2 so the concatenated body is never
+        // held in worker memory at once. `put` resolves after the stream is
+        // fully consumed, so the row/byte counters are final by the time we
+        // write the manifest. Caveat: the shard fan-out is materialised per
+        // shard (one envelope each) and collected before the stream drains, so
+        // peak memory still scales with the total shard-local row count — the
+        // streaming bounds the response bytes, not the source data.
         let rows = 0;
         let bytes = 0;
         let streamError: Error | undefined;
 
         const stream = new ReadableStream<Uint8Array>({
             async pull(streamController) {
-                const encoder = new TextEncoder();
                 const writeRow = (row: ExportRow): void => {
-                    const encoded = encoder.encode(`${JSON.stringify(row)}\n`);
+                    const encoded = NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`);
 
                     rows += 1;
                     bytes += encoded.byteLength;
