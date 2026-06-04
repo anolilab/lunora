@@ -120,7 +120,7 @@ describe("emitServer Caller types", () => {
 
         // A stream handler returns an `AsyncIterable<T>` synchronously; the
         // Caller awaits it through `callRegistered`, so the leaf resolves to
-        // `Promise<AsyncIterable<T>>`, not `Promise<T>`.
+        // a wrapped async iterable, not a single element.
         const functions: ReadonlyArray<FunctionIR> = [
             {
                 args: {},
@@ -133,6 +133,7 @@ describe("emitServer Caller types", () => {
 
         const rendered = emitServer(functions);
 
+        // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated TS type string, not a secret
         expect(rendered).toContain("watch: (args?: {}) => Promise<AsyncIterable<string>>;");
         expect(rendered).not.toContain("watch: (args?: {}) => Promise<string>;");
     });

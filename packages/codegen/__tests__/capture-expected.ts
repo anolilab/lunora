@@ -1,3 +1,4 @@
+/* eslint-disable vitest/require-hook -- this is a one-off fixture-capture script run via tsx, not a Vitest test file */
 import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
