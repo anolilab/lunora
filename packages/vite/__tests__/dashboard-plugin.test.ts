@@ -120,4 +120,79 @@ describe("dashboardPlugin", () => {
         // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's logger; no `this` binding to lose
         expect(server.config.logger.info).toHaveBeenCalledWith(expect.stringContaining("/__cirrus"));
     });
+
+    const installMiddleware = (configuredHost: unknown): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
+        const plugin = dashboardPlugin();
+        let middleware: ((request: { url?: string }, response: ServerResponse, next: () => void) => void) | undefined;
+
+        const server = {
+            config: { base: "/", logger: { info: vi.fn<(message: string) => void>() }, server: { host: configuredHost } },
+            httpServer: { listening: false, once: vi.fn<() => void>() },
+            middlewares: {
+                use: (function_: typeof middleware) => {
+                    middleware = function_;
+                },
+            },
+            transformIndexHtml: vi.fn<(url: string, html: string) => Promise<string>>(async (_url: string, html: string) => html),
+        } as unknown as ViteDevServer;
+
+        (plugin.configureServer as (s: ViteDevServer) => unknown)(server);
+
+        if (middleware === undefined) {
+            throw new Error("middleware was not installed");
+        }
+
+        return middleware;
+    };
+
+    const makeResponse = (): { end: ReturnType<typeof vi.fn>; response: ServerResponse } => {
+        const end = vi.fn<(chunk?: string) => void>();
+        const response = { end, setHeader: vi.fn<(name: string, value: string) => void>(), statusCode: 0 } as unknown as ServerResponse;
+
+        return { end, response };
+    };
+
+    it("returns 403 on a non-loopback bind", () => {
+        expect.assertions(3);
+
+        const middleware = installMiddleware("0.0.0.0");
+        const { end, response } = makeResponse();
+        const next = vi.fn<() => void>();
+
+        middleware({ url: DASHBOARD_PATH }, response, next);
+
+        expect(response.statusCode).toBe(403);
+        expect(next).not.toHaveBeenCalled();
+        expect((end.mock.calls[0] as [string])[0]).toContain("loopback");
+    });
+
+    it.each(["localhost", "127.0.0.1", "::1", undefined, false])("serves the dashboard when host is %s", async (host) => {
+        expect.assertions(2);
+
+        const middleware = installMiddleware(host);
+        const { response } = makeResponse();
+        const next = vi.fn<() => void>();
+
+        middleware({ url: DASHBOARD_PATH }, response, next);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(response.statusCode).toBe(200);
+        expect(next).not.toHaveBeenCalled();
+    });
+
+    it.each([`${DASHBOARD_PATH}?foo=1`, `${DASHBOARD_PATH}/`, `${DASHBOARD_PATH}/?foo=1`])("matches the dashboard route variant %s", async (url) => {
+        expect.assertions(2);
+
+        const middleware = installMiddleware("localhost");
+        const { response } = makeResponse();
+        const next = vi.fn<() => void>();
+
+        middleware({ url }, response, next);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(next).not.toHaveBeenCalled();
+        expect(response.statusCode).toBe(200);
+    });
 });

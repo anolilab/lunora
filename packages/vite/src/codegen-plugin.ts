@@ -8,28 +8,33 @@ import type { ResolvedCirrusPluginOptions } from "./types.js";
 
 const DEBOUNCE_MS = 100;
 
+/**
+ * Run codegen, returning the absolute directory codegen actually wrote to
+ * (so callers can invalidate the *real* output, not an independently-guessed
+ * path), or `undefined` when codegen was skipped or failed.
+ */
 const runCodegenSafely = (
     options: Pick<ResolvedCirrusPluginOptions, "projectRoot" | "schemaDir">,
     logger: { error: (message: string) => void; warn: (message: string) => void },
-): boolean => {
+): string | undefined => {
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
     if (!existsSync(schemaPath)) {
         logger.warn(`[cirrus] schema.ts not found at ${schemaPath} — codegen skipped`);
 
-        return false;
+        return undefined;
     }
 
     try {
-        runCodegen({ cirrusDirectory: options.schemaDir, projectRoot: options.projectRoot });
+        const result = runCodegen({ cirrusDirectory: options.schemaDir, projectRoot: options.projectRoot });
 
-        return true;
+        return resolve(result.outputDirectory);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
         logger.error(`[cirrus] codegen failed: ${message}`);
 
-        return false;
+        return undefined;
     }
 };
 
@@ -39,7 +44,13 @@ const runCodegenSafely = (
  */
 const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
     const absoluteSchemaDirectory = resolve(options.projectRoot, options.schemaDir);
-    const absoluteGeneratedDirectory = resolve(options.projectRoot, options.generatedDir);
+
+    // Seed from the resolved option, but treat codegen's returned output dir as
+    // authoritative once it has run — codegen always writes to
+    // `<schemaDir>/_generated` and ignores any custom `generatedDir`, so a
+    // mismatching option would otherwise make the change-guard and the
+    // invalidation loop below target the wrong (empty) directory.
+    let absoluteGeneratedDirectory = resolve(options.projectRoot, options.generatedDir);
 
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -56,7 +67,11 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                 },
             };
 
-            runCodegenSafely(options, logger);
+            const outputDirectory = runCodegenSafely(options, logger);
+
+            if (outputDirectory !== undefined) {
+                absoluteGeneratedDirectory = outputDirectory;
+            }
         },
         configureServer(server: ViteDevServer) {
             server.watcher.add(absoluteSchemaDirectory);
@@ -77,6 +92,49 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
             // `startsWith` would also match a sibling whose name shares the
             // prefix (e.g. `cirrus-foo/` for schemaDir `cirrus`).
             const isInside = (path: string, directory: string): boolean => path === directory || path.startsWith(directory + sep);
+
+            // Set once the server is torn down so a debounced callback that fires
+            // after `close` no-ops instead of writing to a dead ws/module graph.
+            let closed = false;
+
+            // Invalidate generated modules across every module graph so the dev
+            // server picks up new types/values. Vite 6's environment API (used by
+            // `@cloudflare/vite-plugin` for the worker/SSR environment) keeps
+            // per-environment graphs that the legacy `server.moduleGraph` doesn't
+            // cover, so walk those too when present.
+            type ModuleGraphLike = {
+                idToModuleMap: Map<string, { id: string | null }>;
+                invalidateModule: (module: { id: string | null }) => void;
+            };
+
+            const invalidateGenerated = (): void => {
+                // `environments` is absent on Vite < 6 / partial mocks; the cast
+                // through `unknown` keeps the runtime guard meaningful.
+                const environments = server.environments as unknown as Record<string, { moduleGraph?: ModuleGraphLike }> | undefined;
+                const graphs: ModuleGraphLike[] = [];
+
+                if (environments !== undefined) {
+                    for (const environment of Object.values(environments)) {
+                        if (environment.moduleGraph !== undefined) {
+                            graphs.push(environment.moduleGraph);
+                        }
+                    }
+                }
+
+                if (graphs.length === 0) {
+                    graphs.push(server.moduleGraph as unknown as ModuleGraphLike);
+                }
+
+                for (const graph of graphs) {
+                    for (const moduleEntry of graph.idToModuleMap.values()) {
+                        if (moduleEntry.id && isInside(moduleEntry.id, absoluteGeneratedDirectory)) {
+                            // Invalidate via the owning graph so per-environment
+                            // graphs are handled correctly.
+                            graph.invalidateModule(moduleEntry);
+                        }
+                    }
+                }
+            };
 
             const onChange = (file: string): void => {
                 // Only react to changes inside the schema dir, and ignore generated output.
@@ -105,15 +163,19 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                 }
 
                 debounceTimer = setTimeout(() => {
-                    const ok = runCodegenSafely(options, serverLogger);
+                    debounceTimer = undefined;
 
-                    if (ok) {
-                        // Invalidate generated modules so the dev server picks up new types/values.
-                        for (const moduleEntry of server.moduleGraph.idToModuleMap.values()) {
-                            if (moduleEntry.id && isInside(moduleEntry.id, absoluteGeneratedDirectory)) {
-                                server.moduleGraph.invalidateModule(moduleEntry);
-                            }
-                        }
+                    // The server may have closed during the debounce window.
+                    if (closed) {
+                        return;
+                    }
+
+                    const outputDirectory = runCodegenSafely(options, serverLogger);
+
+                    if (outputDirectory !== undefined) {
+                        absoluteGeneratedDirectory = outputDirectory;
+
+                        invalidateGenerated();
 
                         server.ws.send({ type: "full-reload" });
                     }
@@ -123,6 +185,24 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
             server.watcher.on("add", onChange);
             server.watcher.on("change", onChange);
             server.watcher.on("unlink", onChange);
+
+            // Tear down on server close: stop a pending debounce from firing on a
+            // dead ws/module graph and drop the watcher listeners so repeated
+            // `configureServer` invocations (restarts) don't leak handlers.
+            return () => {
+                server.httpServer?.once("close", () => {
+                    closed = true;
+
+                    if (debounceTimer) {
+                        clearTimeout(debounceTimer);
+                        debounceTimer = undefined;
+                    }
+
+                    server.watcher.off("add", onChange);
+                    server.watcher.off("change", onChange);
+                    server.watcher.off("unlink", onChange);
+                });
+            };
         },
         name: "cirrus:codegen",
     };
