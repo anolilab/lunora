@@ -84,6 +84,7 @@ export default createConfig(
     {
         rules: {
             "antfu/consistent-chaining": "off",
+            "antfu/consistent-list-newline": "off",
             "no-confusing-arrow": "off",
             "unicorn/number-literal-case": "off",
         },
