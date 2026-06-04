@@ -81,12 +81,14 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
         method: "POST",
     });
 
+    const text = await response.text();
+
     let body: unknown;
 
     try {
-        body = await response.json();
+        body = JSON.parse(text);
     } catch {
-        body = await response.text();
+        body = text;
     }
 
     options.logger.info(JSON.stringify(body, undefined, 2));
