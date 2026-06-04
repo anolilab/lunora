@@ -13,13 +13,18 @@ import type {
 } from "./types.js";
 
 /**
- * Validate an args record against the validator map. Throws a
- * {@link ValidationError} with the offending field's path on mismatch.
+ * Validate each declared field of `source` through its validator, re-wrapping
+ * any {@link ValidationError} with a `label.<key>:` prefix and the rebuilt path
+ * `[key, ...error.path]` so the failure points at the offending field. Optional
+ * fields absent from the source are skipped (so `v.optional` passes and a
+ * required validator fails on `undefined`).
  *
- * Exported so the procedure builder (`./builder`) reuses one validator
- * implementation rather than forking the arg-parsing logic.
+ * The single arg-/field-parsing implementation shared by the procedure builder
+ * ({@link validateArgs}, label `args`) and the HTTP route builder (search
+ * params / body / path params, each with its own label) so the error-prefixing
+ * and optional-skip semantics can't drift apart.
  */
-const validateArgs = <A extends ArgsValidator>(validators: A, args: Record<string, unknown>): InferArgs<A> => {
+const parseValidatorMap = (validators: ArgsValidator, source: Record<string, unknown>, label: string): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
 
     for (const key of Object.keys(validators)) {
@@ -29,7 +34,7 @@ const validateArgs = <A extends ArgsValidator>(validators: A, args: Record<strin
             continue;
         }
 
-        const candidate = args[key];
+        const candidate = source[key];
 
         if (candidate === undefined && validator.kind === "optional") {
             continue;
@@ -39,7 +44,7 @@ const validateArgs = <A extends ArgsValidator>(validators: A, args: Record<strin
             out[key] = validator.parse(candidate);
         } catch (error: unknown) {
             if (error instanceof ValidationError) {
-                throw new ValidationError(`args.${key}: ${error.message}`, {
+                throw new ValidationError(`${label}.${key}: ${error.message}`, {
                     expected: error.expected,
                     path: [key, ...error.path],
                     received: error.received,
@@ -50,8 +55,18 @@ const validateArgs = <A extends ArgsValidator>(validators: A, args: Record<strin
         }
     }
 
-    return out as InferArgs<A>;
+    return out;
 };
+
+/**
+ * Validate an args record against the validator map. Throws a
+ * {@link ValidationError} with the offending field's path on mismatch.
+ *
+ * Exported so the procedure builder (`./builder`) reuses one validator
+ * implementation rather than forking the arg-parsing logic.
+ */
+const validateArgs = <A extends ArgsValidator>(validators: A, args: Record<string, unknown>): InferArgs<A> =>
+    parseValidatorMap(validators, args, "args") as InferArgs<A>;
 
 interface QueryDefinition<A extends ArgsValidator, R> {
     args: A;
@@ -106,6 +121,6 @@ const internalMutation = <A extends ArgsValidator, R>(definition: MutationDefini
 /** Register an internal action — callable only server-side via `ctx.runAction`, never from a client. */
 const internalAction = <A extends ArgsValidator, R>(definition: ActionDefinition<A, R>): RegisteredAction<A, R> => wrap("action", definition, "internal");
 
-export { action, internalAction, internalMutation, internalQuery, mutation, query, validateArgs };
+export { action, internalAction, internalMutation, internalQuery, mutation, parseValidatorMap, query, validateArgs };
 
 export type { ActionDefinition, MutationDefinition, QueryDefinition };
