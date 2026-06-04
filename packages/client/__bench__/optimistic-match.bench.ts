@@ -42,12 +42,14 @@ interface SubState {
 
 const SUBSCRIPTION_COUNT = 200;
 
-const makeArgs = (index: number): Record<string, unknown> => ({
-    channel: { id: `channel_${index.toString()}`, kind: "room" },
-    cursor: index * 25,
-    filters: { archived: false, limit: 50, tags: ["a", "b", "c"] },
-    userId: `user_${index.toString()}`,
-});
+const makeArgs = (index: number): Record<string, unknown> => {
+    return {
+        channel: { id: `channel_${index.toString()}`, kind: "room" },
+        cursor: index * 25,
+        filters: { archived: false, limit: 50, tags: ["a", "b", "c"] },
+        userId: `user_${index.toString()}`,
+    };
+};
 
 const subscriptions: SubState[] = Array.from({ length: SUBSCRIPTION_COUNT }, (_v, index) => {
     const args = makeArgs(index);
