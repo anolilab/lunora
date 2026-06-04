@@ -6,6 +6,9 @@ import type { RateLimitConfigMap } from "../src/types.js";
 
 const NOT_CONFIGURED_RE = /not configured/;
 const POSITIVE_INTEGER_RE = /positive integer/;
+const POSITIVE_PERIOD_RE = /period must be a positive number/;
+const POSITIVE_RATE_RE = /rate must be a positive number/;
+const NON_NEGATIVE_CAPACITY_RE = /capacity must be a non-negative number/;
 
 const config = {
     login: { kind: "fixed window", period: 1000, rate: 3 },
@@ -304,6 +307,26 @@ describe("sharding", () => {
 
         expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", period: 1000, rate: 4, shards: 1.5 } }, now: () => 0 })).toThrow(
             POSITIVE_INTEGER_RE,
+        );
+    });
+
+    it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a non-positive/non-finite period (%p) at construction", (period) => {
+        expect.assertions(1);
+
+        expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", period, rate: 4 } }, now: () => 0 })).toThrow(POSITIVE_PERIOD_RE);
+    });
+
+    it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a non-positive/non-finite rate (%p) at construction", (rate) => {
+        expect.assertions(1);
+
+        expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", period: 1000, rate } }, now: () => 0 })).toThrow(POSITIVE_RATE_RE);
+    });
+
+    it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("rejects a negative/non-finite capacity (%p) at construction", (capacity) => {
+        expect.assertions(1);
+
+        expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", capacity, period: 1000, rate: 4 } }, now: () => 0 })).toThrow(
+            NON_NEGATIVE_CAPACITY_RE,
         );
     });
 });

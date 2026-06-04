@@ -94,6 +94,22 @@ class RateLimiter<Names extends string = string> {
             if (config.shards !== undefined && (!Number.isInteger(config.shards) || config.shards < 1)) {
                 throw new Error(`rate limit "${name}": shards must be a positive integer`);
             }
+
+            // A zero/negative/non-finite period divides by zero in the token
+            // bucket (ratePerMs = rate / period → Infinity) and produces NaN
+            // window starts in the windowed algorithms — silently corrupting
+            // every subsequent admit/reject decision. Fail fast at construction.
+            if (!Number.isFinite(config.period) || config.period <= 0) {
+                throw new Error(`rate limit "${name}": period must be a positive number`);
+            }
+
+            if (!Number.isFinite(config.rate) || config.rate <= 0) {
+                throw new Error(`rate limit "${name}": rate must be a positive number`);
+            }
+
+            if (config.capacity !== undefined && (!Number.isFinite(config.capacity) || config.capacity < 0)) {
+                throw new Error(`rate limit "${name}": capacity must be a non-negative number`);
+            }
         }
     }
 
@@ -121,7 +137,7 @@ class RateLimiter<Names extends string = string> {
             // bucket this key actually consumes from.
             const base = storageKeyFor(name, normalizedKey);
             const storageKey = `${base}#${String(hashToShard(base, shards))}`;
-            const current = availableAt(perShardConfig(config, shards), (await this.store.get(storageKey)) ?? undefined, now);
+            const current = availableAt(perShardConfig(config, shards), await this.store.get(storageKey), now);
 
             return { config, ts: current.ts, value: current.value };
         }
