@@ -318,6 +318,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
     // the debounced value already matches what's loaded (e.g. right after a
     // table switch cleared it) so it doesn't double-fetch.
     useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- `search` is a debounced value that updates asynchronously (not on a discrete event), so reacting to its change in an effect is the correct pattern.
         if (selectedTable === null || loaded === null || loaded.search === search) {
             return;
         }
