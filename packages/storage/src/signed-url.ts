@@ -193,12 +193,7 @@ export const verifySignedUrl = async (input: string | URL, secret: string, optio
     // build-side host whenever the verified URL is the minted URL.
     const host = options?.expectedHost === undefined ? url.host : extractHost(options.expectedHost);
     const cryptoKey = await importHmacKey(secret);
-    const valid = await crypto.subtle.verify(
-        "HMAC",
-        cryptoKey,
-        sigBytes as unknown as BufferSource,
-        textEncoder.encode(canonicalize(method, host, key, exp)),
-    );
+    const valid = await crypto.subtle.verify("HMAC", cryptoKey, sigBytes as unknown as BufferSource, textEncoder.encode(canonicalize(method, host, key, exp)));
 
     if (!valid) {
         return { reason: "bad_signature", valid: false };

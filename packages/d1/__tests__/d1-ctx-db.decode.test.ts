@@ -138,11 +138,7 @@ describe("d1 ctx-db — non-scalar column round-trip", () => {
     it("round-trips empty arrays/objects without corruption", async () => {
         const writer = setupDocs();
 
-        await writer.insert(
-            "docs",
-            { _id: "d3", active: true, big: 0n, count: 0, meta: {}, name: "", settings: {}, tags: [] },
-            { allowExplicitId: true },
-        );
+        await writer.insert("docs", { _id: "d3", active: true, big: 0n, count: 0, meta: {}, name: "", settings: {}, tags: [] }, { allowExplicitId: true });
 
         const reloaded = await writer.get("d3");
 

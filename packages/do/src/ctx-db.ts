@@ -1896,7 +1896,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         const branches = nonGlobalTables.map(
-            (tableName) => `SELECT '${tableName.replaceAll("'", "''")}' AS __t__, id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`,
+            (tableName) =>
+                `SELECT '${tableName.replaceAll("'", "''")}' AS __t__, id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)} WHERE id = ?`,
         );
         const probeSql = `${branches.join(" UNION ALL ")} LIMIT 1`;
         const parameters = nonGlobalTables.map(() => id);

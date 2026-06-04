@@ -90,9 +90,7 @@ describe("address validation (applies to every transport + the queue path)", () 
         const { transport } = captureTransport();
         const mailer = createMailer({ from: "noreply@x.test", transport });
 
-        await expect(mailer.send({ cc: ["a@x.test", "b@x.test,evil@x.test"], subject: "Hi", to: "x@x.test" })).rejects.toThrow(
-            CR_LF_COMMA_PATTERN,
-        );
+        await expect(mailer.send({ cc: ["a@x.test", "b@x.test,evil@x.test"], subject: "Hi", to: "x@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
         await expect(mailer.send({ replyTo: "reply@x.test\r\nx: y", subject: "Hi", to: "x@x.test" })).rejects.toThrow(CR_LF_COMMA_PATTERN);
     });
 
@@ -181,9 +179,7 @@ describe("consumeQueuedSend rejects malformed queue bodies", () => {
     it("rejects a non-object `headers`", async () => {
         expect.assertions(1);
 
-        await expect(consumeQueuedSend(noopMailer(), { headers: 5, subject: "Hi", to: "a@x.test" })).rejects.toThrow(
-            /`headers` must be an object/,
-        );
+        await expect(consumeQueuedSend(noopMailer(), { headers: 5, subject: "Hi", to: "a@x.test" })).rejects.toThrow(/`headers` must be an object/);
     });
 
     it("rejects a `headers` map with a non-string value", async () => {

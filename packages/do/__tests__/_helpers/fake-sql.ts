@@ -50,7 +50,8 @@ const SELECT_BY_ID = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id
 // non-global table in one round-trip. Each branch tags its source table via
 // `AS __t__` and consumes one (identical) id param.
 const UNION_PROBE_BRANCH = /SELECT '((?:[^']|'')+)' AS __t__, id, _creationTime, __doc__ FROM "([^"]+)" WHERE id = \?/gu;
-const UNION_PROBE = /^SELECT '(?:[^']|'')+' AS __t__, id, _creationTime, __doc__ FROM "[^"]+" WHERE id = \?(?: UNION ALL SELECT '(?:[^']|'')+' AS __t__, id, _creationTime, __doc__ FROM "[^"]+" WHERE id = \?)* LIMIT 1$/u;
+const UNION_PROBE =
+    /^SELECT '(?:[^']|'')+' AS __t__, id, _creationTime, __doc__ FROM "[^"]+" WHERE id = \?(?: UNION ALL SELECT '(?:[^']|'')+' AS __t__, id, _creationTime, __doc__ FROM "[^"]+" WHERE id = \?)* LIMIT 1$/u;
 // Batch hydration `rankPage` uses: `WHERE id IN (?, ?, ...)`.
 const SELECT_BY_IDS = /^SELECT id, _creationTime, __doc__ FROM "([^"]+)" WHERE id IN \((?:\?(?:, \?)*)\)$/u;
 

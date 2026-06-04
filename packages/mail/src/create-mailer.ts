@@ -96,13 +96,7 @@ const toAddressList = (input: string | string[] | undefined): { email: string; n
  * exact same validation the default transport does — without changing the
  * string wire shape the payload carries.
  */
-const assertSafeAddresses = (payload: {
-    bcc?: string | string[];
-    cc?: string | string[];
-    from?: string;
-    replyTo?: string;
-    to?: string | string[];
-}): void => {
+const assertSafeAddresses = (payload: { bcc?: string | string[]; cc?: string | string[]; from?: string; replyTo?: string; to?: string | string[] }): void => {
     toAddressList(payload.to);
     toAddressList(payload.cc);
     toAddressList(payload.bcc);

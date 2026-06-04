@@ -414,9 +414,7 @@ describe("rls — read path", () => {
         expect(fake.calls.some((call) => call.method === "getWithTable")).toBe(true);
         // No membership probe fan-out: the only findFirst is the policy check on
         // the owning table (with a baseWhere), never an unscoped probe.
-        const unscopedProbes = fake.calls.filter(
-            (call) => call.method === "findFirst" && !(call.args as { baseWhere?: unknown } | undefined)?.baseWhere,
-        );
+        const unscopedProbes = fake.calls.filter((call) => call.method === "findFirst" && !(call.args as { baseWhere?: unknown } | undefined)?.baseWhere);
 
         expect(unscopedProbes).toHaveLength(0);
     });

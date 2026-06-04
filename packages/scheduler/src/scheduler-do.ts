@@ -485,11 +485,7 @@ class SchedulerDO {
     private async removeRecord(record: ScheduleRecord): Promise<void> {
         // Single batched delete: the header, time-index entry, and any pending
         // retry row in one storage round-trip instead of three.
-        await this.state.storage.delete([
-            `${HEADER_PREFIX}${record.id}`,
-            SchedulerDO.indexKey(record.scheduledFor, record.id),
-            `${RETRY_PREFIX}${record.id}`,
-        ]);
+        await this.state.storage.delete([`${HEADER_PREFIX}${record.id}`, SchedulerDO.indexKey(record.scheduledFor, record.id), `${RETRY_PREFIX}${record.id}`]);
     }
 
     /**
