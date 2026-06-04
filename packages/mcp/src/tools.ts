@@ -92,7 +92,13 @@ const reference = (functionPath: string): FunctionReference => {
 };
 
 const ok = (value: unknown): ToolResult => {
-    return { content: [{ text: JSON.stringify(value, undefined, 2), type: "text" }] };
+    // A void-returning mutation/action resolves to `undefined`, and
+    // `JSON.stringify(undefined)` yields the JS value `undefined` (not a
+    // string), which violates both `ToolResult.content[].text: string` and the
+    // MCP `TextContent` contract. Emit the JSON `null` literal in that case.
+    const text = value === undefined ? "null" : JSON.stringify(value, undefined, 2);
+
+    return { content: [{ text, type: "text" }] };
 };
 
 /**
