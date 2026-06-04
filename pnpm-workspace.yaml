@@ -19,7 +19,7 @@ catalogs:
   build:
     "@babel/core": ^7.29.7
     "@babel/preset-react": ^7.29.7
-    "@visulima/packem": 2.0.0-alpha.78
+    "@visulima/packem": 2.0.0-alpha.87
     "babel-plugin-react-compiler": ^19.1.0-rc.2
     esbuild: ^0.28.0
   dev:
@@ -32,7 +32,7 @@ catalogs:
   lint:
     "@anolilab/eslint-config": 27.0.2
     "@anolilab/prettier-config": 10.0.1
-    "@eslint-react/eslint-plugin": 5.8.10
+    "@eslint-react/eslint-plugin": 5.8.11
     "@ospm/eslint-plugin-react-unhookify": ^1.0.2
     eslint: 10.4.1
     eslint-plugin-jsx-a11y: ^6.10.2
@@ -57,8 +57,8 @@ catalogs:
     "@commitlint/cli": ^21.0.2
     "@commitlint/config-conventional": ^21.0.2
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 1.0.0-alpha.25
-    "@visulima/tabular": 4.0.0-alpha.11
+    "@visulima/vis": 1.0.0-alpha.30
+    "@visulima/tabular": 4.0.0-alpha.13
   test:
     "@vitest/coverage-v8": 4.1.8
     "@vitest/ui": 4.1.8
@@ -70,7 +70,7 @@ catalogs:
     "@types/node": 25.9.1
   cloudflare:
     "@cloudflare/vitest-pool-workers": ^0.16.12
-    "@cloudflare/workers-types": ^4.20260602.1
+    "@cloudflare/workers-types": ^4.20260604.1
     miniflare: ^4.20260601.0
     wrangler: ^4.97.0
   e2e:
@@ -95,7 +95,7 @@ catalogs:
     react: ^19.2.7
     react-dom: ^19.2.7
   mail:
-    "@visulima/email": 1.0.0-alpha.32
+    "@visulima/email": 1.0.0-alpha.35
     "@react-email/render": 2.0.8
   mcp:
     "@modelcontextprotocol/sdk": ^1.29.0
@@ -152,14 +152,6 @@ minimumReleaseAgeExclude:
   - '@better-auth/telemetry@1.6.14'
   - '@cloudflare/vite-plugin@1.39.2'
   - '@cloudflare/vitest-pool-workers@0.16.12'
-  - '@cloudflare/workers-types@4.20260602.1'
-  - '@eslint-react/ast@5.8.10'
-  - '@eslint-react/core@5.8.10'
-  - '@eslint-react/eslint@5.8.10'
-  - '@eslint-react/eslint-plugin@5.8.10'
-  - '@eslint-react/jsx@5.8.10'
-  - '@eslint-react/shared@5.8.10'
-  - '@eslint-react/var@5.8.10'
   - '@next/env@16.2.7'
   - '@next/swc-darwin-arm64@16.2.7'
   - '@next/swc-darwin-x64@16.2.7'
@@ -176,12 +168,6 @@ minimumReleaseAgeExclude:
   - '@tanstack/virtual-core@3.17.0'
   - '@types/react@19.2.16'
   - better-auth@1.6.14
-  - eslint-plugin-react-dom@5.8.10
-  - eslint-plugin-react-jsx@5.8.10
-  - eslint-plugin-react-naming-convention@5.8.10
-  - eslint-plugin-react-rsc@5.8.10
-  - eslint-plugin-react-web-api@5.8.10
-  - eslint-plugin-react-x@5.8.10
   - eslint-plugin-react-you-might-not-need-an-effect@1.0.0
   - miniflare@4.20260601.0
   - next@16.2.7
@@ -190,3 +176,71 @@ minimumReleaseAgeExclude:
   - tsx@4.22.4
   - vite@8.0.16
   - wrangler@4.97.0
+  - '@cloudflare/workers-types@4.20260604.1'
+  - '@eslint-react/ast@5.8.11'
+  - '@eslint-react/core@5.8.11'
+  - '@eslint-react/eslint-plugin@5.8.11'
+  - '@eslint-react/eslint@5.8.11'
+  - '@eslint-react/jsx@5.8.11'
+  - '@eslint-react/shared@5.8.11'
+  - '@eslint-react/var@5.8.11'
+  - eslint-plugin-react-dom@5.8.11
+  - eslint-plugin-react-jsx@5.8.11
+  - eslint-plugin-react-naming-convention@5.8.11
+  - eslint-plugin-react-rsc@5.8.11
+  - eslint-plugin-react-web-api@5.8.11
+  - eslint-plugin-react-x@5.8.11
+  - '@visulima/packem@2.0.0-alpha.87'
+  - '@visulima/tabular@4.0.0-alpha.13'
+  - '@visulima/email@1.0.0-alpha.35'
+  - '@visulima/ansi@4.0.0-alpha.16'
+  - '@visulima/colorize@2.0.0-alpha.13'
+  - '@visulima/css-style-inject@1.0.0-alpha.17'
+  - '@visulima/disposable-email-domains@1.0.0-alpha.16'
+  - '@visulima/error@6.0.0-alpha.32'
+  - '@visulima/humanizer@3.0.0-alpha.13'
+  - '@visulima/interactive-manager@1.0.0-alpha.4'
+  - '@visulima/is-ansi-color-supported@3.0.0-alpha.12'
+  - '@visulima/packem-rollup@1.0.0-alpha.72'
+  - '@visulima/packem-share@1.0.0-alpha.49'
+  - '@visulima/path@3.0.0-alpha.12'
+  - '@visulima/rollup-plugin-css@1.0.0-alpha.52'
+  - '@visulima/rollup-plugin-dts@1.0.0-alpha.33'
+  - '@visulima/secret-scanner-binding-darwin-arm64@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-darwin-x64@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-linux-arm64-gnu@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-linux-arm64-musl@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-linux-x64-gnu@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-linux-x64-musl@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-win32-arm64-msvc@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-win32-x64-msvc@1.0.0-alpha.5'
+  - '@visulima/secret-scanner@1.0.0-alpha.5'
+  - '@visulima/spinner@1.0.0-alpha.3'
+  - '@visulima/string@3.0.0-alpha.16'
+  - '@visulima/task-runner-binding-darwin-arm64@1.0.0-alpha.19'
+  - '@visulima/task-runner-binding-darwin-x64@1.0.0-alpha.19'
+  - '@visulima/task-runner-binding-linux-arm64-gnu@1.0.0-alpha.19'
+  - '@visulima/task-runner-binding-linux-arm64-musl@1.0.0-alpha.19'
+  - '@visulima/task-runner-binding-linux-x64-gnu@1.0.0-alpha.19'
+  - '@visulima/task-runner-binding-linux-x64-musl@1.0.0-alpha.19'
+  - '@visulima/task-runner-binding-win32-arm64-msvc@1.0.0-alpha.19'
+  - '@visulima/task-runner-binding-win32-x64-msvc@1.0.0-alpha.19'
+  - '@visulima/task-runner@1.0.0-alpha.19'
+  - '@visulima/tui-binding-darwin-arm64@1.0.0-alpha.23'
+  - '@visulima/tui-binding-darwin-x64@1.0.0-alpha.23'
+  - '@visulima/tui-binding-linux-arm64-gnu@1.0.0-alpha.23'
+  - '@visulima/tui-binding-linux-arm64-musl@1.0.0-alpha.23'
+  - '@visulima/tui-binding-linux-x64-gnu@1.0.0-alpha.23'
+  - '@visulima/tui-binding-linux-x64-musl@1.0.0-alpha.23'
+  - '@visulima/tui-binding-win32-arm64-msvc@1.0.0-alpha.23'
+  - '@visulima/tui-binding-win32-x64-msvc@1.0.0-alpha.23'
+  - '@visulima/tui@1.0.0-alpha.23'
+  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.30'
+  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.30'
+  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.30'
+  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.30'
+  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.30'
+  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.30'
+  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.30'
+  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.30'
+  - '@visulima/vis@1.0.0-alpha.30'
