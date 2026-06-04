@@ -90,7 +90,7 @@ interface BuildCliResult {
  * options to the front of argv. We need to know which options take a value
  * so we can keep "option value" pairs together during the reorder.)
  */
-const BOOLEAN_OPTIONS = new Set<string>(["all", "allow-unsafe-source", "dry-run", "json", "no-vite", "prod", "remote", "yes"]);
+const BOOLEAN_OPTIONS: Set<string> = new Set<string>(["all", "allow-unsafe-source", "dry-run", "json", "no-vite", "prod", "remote", "yes"]);
 
 const LEADING_DASHES = /^-+/u;
 
