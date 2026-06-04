@@ -259,7 +259,7 @@ describe("error paths", () => {
         expect(result.ok).toBe(false);
         expect(result.error.path).toEqual(["users", 1, "email"]);
         expect(result.error.expected).toBe("string");
-        expect(result.error.received).toBe("number");
+        expect(result.error.received).toBe("number 42");
     });
 
     it("union nested under an object reports the union's path", () => {
@@ -287,6 +287,22 @@ describe("error paths", () => {
 
         // A programmer error inside a branch is not a branch miss — it surfaces.
         expect(() => schema.parse(1)).toThrow(TypeError);
+    });
+
+    it("received carries the concrete primitive and constructor name", () => {
+        expect.hasAssertions();
+
+        const stringResult = v.number().safeParse("hi");
+        const boolResult = v.string().safeParse(true);
+        const dateResult = v.string().safeParse(new Date(0));
+
+        assertOk(!stringResult.ok && !boolResult.ok && !dateResult.ok, "expected parse failures");
+
+        // String literal is quoted so a stringy "7" is distinguishable from 7.
+        expect(stringResult.error.received).toBe('string "hi"');
+        expect(boolResult.error.received).toBe("boolean true");
+        // A named instance surfaces its constructor instead of a bare "object".
+        expect(dateResult.error.received).toBe("object Date");
     });
 
     it("safeParse returns ok on success", () => {
@@ -351,8 +367,8 @@ describe(".check() refinement", () => {
 
         expect(caught).toBeInstanceOf(ValidationError);
         expect(caught.expected).toBe("must be non-negative");
-        // describeValue stringifies primitives by their typeof.
-        expect(caught.received).toBe("number");
+        // describeValue now carries the concrete primitive literal.
+        expect(caught.received).toBe("number -1");
         expect(caught.message).toContain("non-negative");
     });
 
