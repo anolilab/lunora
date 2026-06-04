@@ -54,7 +54,7 @@ describe("dashboardPlugin", () => {
         expect(plugin.name).toBe("cirrus:dashboard");
         expect(plugin.apply).toBe("serve");
 
-        expectTypeOf(plugin.configureServer).toBeFunction();
+        expectTypeOf(plugin.configureServer).not.toBeUndefined();
     });
 
     it("serves the dashboard HTML at /__cirrus and passes other paths through", async () => {

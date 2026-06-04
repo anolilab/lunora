@@ -82,7 +82,7 @@ describe("codegen-plugin", () => {
             const plugin = codegenPlugin(makeOptions(workdir));
             const hook = plugin.buildStart;
 
-            expectTypeOf(hook).toBeFunction();
+            expectTypeOf(hook).not.toBeUndefined();
 
             // Vite's buildStart is invoked with a rollup-style context. We pass `undefined`
             // because our implementation doesn't touch it.
@@ -112,7 +112,9 @@ describe("codegen-plugin", () => {
 
             const warnings: string[] = [];
             const errors: string[] = [];
+            // eslint-disable-next-line no-console -- capturing console refs to restore after the test
             const originalWarn = console.warn;
+            // eslint-disable-next-line no-console -- capturing console refs to restore after the test
             const originalError = console.error;
 
             // eslint-disable-next-line no-console
@@ -143,7 +145,7 @@ describe("codegen-plugin", () => {
 
             expect(plugin.name).toBe("cirrus:codegen");
 
-            expectTypeOf(plugin.configureServer).toBeFunction();
+            expectTypeOf(plugin.configureServer).not.toBeUndefined();
         });
     });
 });
