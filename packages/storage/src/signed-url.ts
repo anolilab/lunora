@@ -11,9 +11,10 @@ const LEADING_SLASH_RE = /^\//;
 
 const toBase64Url = (bytes: Uint8Array): string => {
     // A SHA-256 HMAC is a fixed 32 bytes, well under the argument-spread limit,
-    // so building the binary string in one `fromCharCode` call is safe and
-    // cheaper than a per-byte loop.
-    const binary = String.fromCharCode(...bytes);
+    // so building the binary string in one `fromCodePoint` call is safe and
+    // cheaper than a per-byte loop. Each byte is < 256, so code point and char
+    // code are identical here.
+    const binary = String.fromCodePoint(...bytes);
 
     return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 };

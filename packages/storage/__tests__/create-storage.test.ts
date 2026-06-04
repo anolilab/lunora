@@ -158,7 +158,9 @@ describe("createStorage", () => {
 
         const bucket = fakeBucket();
 
-        bucket.list = vi.fn<R2BucketLike["list"]>(async () => ({ cursor: "c", objects: [], truncated: true }));
+        vi.spyOn(bucket, "list").mockImplementation(async () => {
+            return { cursor: "c", objects: [], truncated: true };
+        });
 
         const storage = createStorage({ bucket });
         const result = await storage.list();
