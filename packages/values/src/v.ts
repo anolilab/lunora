@@ -438,18 +438,15 @@ const record = <K extends Validator<string>, V extends Validator>(
                 }
 
                 const input = value as Record<string, unknown>;
-                // `Object.create(null)` so the result has no prototype chain —
-                // belt-and-braces against a `__proto__` key sneaking through.
+                // `Object.create(null)` so the result has no prototype chain.
+                // Because the target has a null prototype, assigning any key —
+                // including `__proto__`/`constructor`/`prototype` — creates a
+                // plain own property and cannot pollute Object.prototype, so we
+                // round-trip every own enumerable key instead of silently
+                // dropping legitimate data under those names.
                 const out = Object.create(null) as Record<string, unknown>;
 
                 for (const key of Object.keys(input)) {
-                    // Skip dangerous keys outright — these mutate the object
-                    // prototype if assigned via `out[key] = ...` on a normal
-                    // object literal, which is a JSON-level injection risk.
-                    if (key === "__proto__" || key === "constructor" || key === "prototype") {
-                        continue;
-                    }
-
                     const parsedKey = keyInternal._parse(key, { path: [...context.path, key] });
                     const parsedValue = valueInternal._parse(input[key], { path: [...context.path, key] });
 
@@ -468,21 +465,46 @@ const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValid
         throw new Error("v.union requires at least one member");
     }
 
+    const memberInternals = members.map((member) => toInternal(member));
+
     return asColumn(
         createValidator<Infer<Vs[number]>>(
             "union",
             (value, context): Infer<Vs[number]> => {
-                for (const member of members) {
-                    const result = member.safeParse(value);
+                // Parse each member against the real context so any per-branch
+                // ValidationError keeps the correct path. We keep the deepest
+                // (longest-path) branch failure to surface the most specific
+                // diagnostic. A non-ValidationError from a member's refinement is
+                // a programmer error, not a branch miss, so it propagates instead
+                // of being swallowed (the old safeParse loop re-threw it too, but
+                // only after discarding every per-member path).
+                let deepestError: ValidationError | undefined;
 
-                    if (result.ok) {
-                        return result.value as Infer<Vs[number]>;
+                for (const member of memberInternals) {
+                    try {
+                        return member._parse(value, context) as Infer<Vs[number]>;
+                    } catch (error: unknown) {
+                        if (!(error instanceof ValidationError)) {
+                            throw error;
+                        }
+
+                        if (deepestError === undefined || error.path.length > deepestError.path.length) {
+                            deepestError = error;
+                        }
                     }
                 }
 
+                // A single-member union has nothing to disambiguate, so surface
+                // the member's own (more specific) error directly.
+                if (memberInternals.length === 1 && deepestError !== undefined) {
+                    throw deepestError;
+                }
+
+                const detail = deepestError === undefined ? "" : ` (closest: expected ${deepestError.expected} at ${formatPath(deepestError.path)})`;
+
                 // `fail` is `: never`; returning it makes every path of this arrow
                 // explicitly terminal (consistent-return doesn't track never-returns).
-                return fail(context, `union of ${String(members.length)} member(s)`, value);
+                return fail(context, `union of ${String(members.length)} member(s)${detail}`, value);
             },
             { members },
         ),
