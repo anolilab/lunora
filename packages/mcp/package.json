@@ -2,17 +2,19 @@
     "name": "@cirrus/mcp",
     "version": "0.0.0",
     "description": "Model Context Protocol server exposing a Cirrus deployment to AI agents",
-    "type": "module",
-    "engines": {
-        "node": "^22.15.0 || >=24.10.0"
+    "bin": {
+        "cirrus-mcp": "./dist/bin.mjs"
     },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "type": "module",
     "sideEffects": false,
     "main": "./dist/index.cjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
-    "bin": {
-        "cirrus-mcp": "./dist/bin.mjs"
-    },
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
@@ -21,11 +23,6 @@
         },
         "./package.json": "./package.json"
     },
-    "files": [
-        "dist",
-        "README.md",
-        "LICENSE.md"
-    ],
     "scripts": {
         "build": "packem build",
         "build:prod": "packem build",
@@ -46,5 +43,8 @@
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.10.0"
     }
 }

@@ -7,9 +7,6 @@
         "LICENSE.md"
     ],
     "type": "module",
-    "engines": {
-        "node": "^22.15.0 || >=24.10.0"
-    },
     "sideEffects": false,
     "main": "./dist/index.cjs",
     "module": "./dist/index.mjs",
@@ -42,5 +39,8 @@
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.10.0"
     }
 }

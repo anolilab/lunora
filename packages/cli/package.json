@@ -12,9 +12,6 @@
         "LICENSE.md"
     ],
     "type": "module",
-    "engines": {
-        "node": "^22.15.0 || >=24.10.0"
-    },
     "sideEffects": false,
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
@@ -57,5 +54,8 @@
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.10.0"
     }
 }
