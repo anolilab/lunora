@@ -37,6 +37,9 @@ const UPDATE_SET_DOC_AND_TIME = /^UPDATE "([^"]+)" SET _creationTime = \?, __doc
 // OCC-guarded write forms (finding 40): the CAS appends `AND __doc__ = ?`,
 // matching the read-time snapshot so a concurrent write touches zero rows.
 const UPDATE_SET_DOC_CAS = /^UPDATE "([^"]+)" SET __doc__ = \? WHERE id = \? AND __doc__ = \?$/u;
+// `replace` now CAS-guards its doc+time write too (it spans the before-update
+// trigger `await`), so the snapshot is appended as `AND __doc__ = ?`.
+const UPDATE_SET_DOC_AND_TIME_CAS = /^UPDATE "([^"]+)" SET _creationTime = \?, __doc__ = \? WHERE id = \? AND __doc__ = \?$/u;
 const DELETE_BY_ID = /^DELETE FROM "([^"]+)" WHERE id = \?$/u;
 const DELETE_BY_ID_CAS = /^DELETE FROM "([^"]+)" WHERE id = \? AND __doc__ = \?$/u;
 const SELECT_CHANGES = /^SELECT changes\(\) AS changed$/u;
@@ -313,6 +316,25 @@ const createFakeSql = (): { sql: SqlExec; state: FakeSqlState } => {
 
             if (table && row) {
                 table.set(id, { ...row, __doc__: document_ });
+                state.lastChanges = 1;
+            } else {
+                state.lastChanges = 0;
+            }
+
+            return cursor<Record<string, unknown>>([]);
+        }
+
+        const updateBothCasMatch = UPDATE_SET_DOC_AND_TIME_CAS.exec(sqlString);
+
+        if (updateBothCasMatch) {
+            const tableName = updateBothCasMatch[1]!;
+            const [creationTime, document_, id, snapshot] = params as [number, string, string, string];
+            const table = state.tables.get(tableName);
+            const row = table?.get(id);
+
+            // CAS: only mutate when the on-disk __doc__ still equals the read-time snapshot.
+            if (table && row?.__doc__ === snapshot) {
+                table.set(id, { __doc__: document_, _creationTime: creationTime, id });
                 state.lastChanges = 1;
             } else {
                 state.lastChanges = 0;

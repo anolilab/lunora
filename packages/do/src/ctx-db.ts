@@ -46,7 +46,7 @@ import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokeni
 import serializeSqlValue from "./serialize-sql.js";
 import { ConflictError } from "./transaction.js";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
-import { hasTrigger, runTriggers } from "./triggers.js";
+import { runTriggers } from "./triggers.js";
 import type { MutationDelta } from "./types.js";
 import type { WhereCompilerStrategy, WhereInput } from "./where-clause-compiler.js";
 import { compileWhere } from "./where-clause-compiler.js";
@@ -1909,28 +1909,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         return undefined;
     };
 
-    /**
-     * Lighter variant: returns just the owning table without decoding the
-     * row's JSON blob. Used by `replace` when no trigger or aggregate/rank
-     * index needs the previous row — skipping the JSON parse there saves
-     * the ~30% per-op cost the full-row fetch would otherwise add.
-     */
-    const lookupTableForId = (id: string): string | undefined => {
-        for (const [tableName, definition] of Object.entries(schema.tables)) {
-            if (definition.shardMode?.kind === "global") {
-                continue;
-            }
-
-            const rows = runSql(sql, `SELECT 1 FROM ${quoteIdentifier(tableName)} WHERE id = ? LIMIT 1`, id).toArray();
-
-            if (rows.length > 0) {
-                return tableName;
-            }
-        }
-
-        return undefined;
-    };
-
     const writer: DatabaseWriterLike = {
         async aggregate(tableName, aggOptions) {
             const definition = schema.tables[tableName];
@@ -2780,32 +2758,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async replace(id, document) {
-            // Read the previous row only when an update trigger needs it OR
-            // the table declares aggregate / rank indexes that need a -1/+1
-            // step on the prior `by`-tuple. When neither applies — the
-            // common bare-table case — skip the JSON-decode and just probe
-            // for the owning table (cheaper than `lookupById`'s full fetch).
-            //
-            // To pick the right probe we need the table name first, but
-            // `needsPrevious` is keyed by table — so probe-cheap-then-fetch
-            // ordered so we never pay the full fetch when it wasn't needed.
-            const tableName = lookupTableForId(id);
+            // Single probe that also captures the read-time `__doc__` blob.
+            // The before-update trigger below spans an `await`, so the write
+            // must compare-and-swap on this snapshot (see `runGuardedWrite`)
+            // — the same OCC contract `patch`/`delete` honor. Reusing the
+            // decoded row as `previous` also keeps the aggregate/rank -prev
+            // steps consistent with what was actually on disk at read time.
+            const located = lookupById(id);
 
-            if (!tableName) {
+            if (!located) {
                 throw new Error(`document not found: ${id}`);
             }
 
+            const { docJson: existingJson, row: previous, tableName } = located;
             const tableDefinition = schema.tables[tableName];
 
             if (!tableDefinition) {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const needsPrevious =
-                hasTrigger(schema, tableName, "update") ||
-                (tableDefinition.aggregateIndexes ?? []).length > 0 ||
-                (tableDefinition.rankIndexes ?? []).length > 0;
-            const previous = needsPrevious ? lookupById(id)?.row : undefined;
             const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
@@ -2822,13 +2793,19 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             ensureBackfilledForTable(tableName);
             ensureRankBackfilledForTable(tableName);
 
-            runWrite(
+            // Optimistic-concurrency guard: CAS on the read-time `__doc__`
+            // snapshot so a write that committed during the before-update
+            // trigger `await` raises ConflictError instead of being silently
+            // clobbered (and keeps `previous` — used for the aggregate/rank
+            // -prev steps — in sync with disk).
+            runGuardedWrite(
                 sql,
                 tableName,
-                `UPDATE ${quoteIdentifier(tableName)} SET _creationTime = ?, ${DOC_COLUMN} = ? WHERE id = ?`,
+                `UPDATE ${quoteIdentifier(tableName)} SET _creationTime = ?, ${DOC_COLUMN} = ? WHERE id = ? AND ${DOC_COLUMN} = ?`,
                 creationTime,
                 JSON.stringify(replaced),
                 id,
+                existingJson,
             );
 
             syncSearch(tableName, id, replaced);
