@@ -175,6 +175,15 @@ const usePaginatedQuery = <F extends FunctionReference>(
     useEffect(() => {
         const cache = queryClient.getQueryCache();
         const unsubscribe = cache.subscribe((event) => {
+            // The registry pushes page data via `setQueryData`, which emits an
+            // `"updated"` event. Every other event type (observer lifecycle,
+            // add/remove, etc.) fires on unrelated sibling churn and would only
+            // drive a redundant re-render — skip it before any serialization so
+            // the per-event JSON.stringify + page scan never runs on them.
+            if (event.type !== "updated") {
+                return;
+            }
+
             const hash = serializeQueryKey(event.query.queryKey as QueryKey);
 
             if (pageEntries.some(({ key }) => serializeQueryKey(key) === hash)) {
