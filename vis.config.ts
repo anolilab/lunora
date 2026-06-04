@@ -31,7 +31,7 @@ export default defineConfig({
         // App codegen (docs: fumadocs-mdx; playground: cirrus codegen) emits the
         // generated dirs the apps' source imports. `cirrus codegen` loads
         // @cirrus/codegen + the @cirrus deps, so build the upstream packages first.
-        "codegen": {
+        codegen: {
             cache: true,
             dependsOn: ["^build"],
         },
