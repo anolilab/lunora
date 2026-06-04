@@ -12,6 +12,28 @@ import type { QueryKey } from "@tanstack/react-query";
 const keyHash = (queryKey: QueryKey): string => JSON.stringify(queryKey);
 
 /**
+ * `JSON.stringify` with deterministic key ordering for plain objects. Keeps a
+ * subscription/stream cache key stable across rerenders where the consumer
+ * happens to construct `args` with a different key order (`{a,b}` vs `{b,a}`).
+ *
+ * Shared by `useSubscription` and `useStream` so a key-order edge case fixed in
+ * one never silently drifts from the other.
+ */
+const stableStringify = (value: unknown): string => {
+    if (value === null || typeof value !== "object") {
+        return JSON.stringify(value);
+    }
+
+    if (Array.isArray(value)) {
+        return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+    }
+
+    const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => a.localeCompare(b));
+
+    return `{${entries.map(([key, value_]) => `${JSON.stringify(key)}:${stableStringify(value_)}`).join(",")}}`;
+};
+
+/**
  * Project a Cirrus `(fn, args, shardKey)` triple into the structural query key
  * TanStack hashes for dedup. The `"cirrus"` literal namespaces our entries so
  * an app's own queries can't collide with ours.
@@ -37,4 +59,4 @@ const cirrusQueryKey = (function_: FunctionReference, args: Record<string, unkno
  */
 const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
 
-export { cirrusQueryKey, keyHash, serializeQueryKey };
+export { cirrusQueryKey, keyHash, serializeQueryKey, stableStringify };
