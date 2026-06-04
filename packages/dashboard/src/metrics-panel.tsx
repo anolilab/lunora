@@ -1,6 +1,6 @@
 import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ShardMetrics } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
@@ -96,6 +96,11 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     const client = useCirrus();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    // The shard a successful one-shot last targeted. The live channel keys on
+    // this committed value (not the live `shardKey` input) so editing the shard
+    // box without refreshing doesn't resubscribe to a half-typed shard on every
+    // keystroke — mirroring DataBrowser's `loaded.shard`.
+    const [committedShard, setCommittedShard] = useState<null | string>(null);
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
     const [error, setError] = useState<null | string>(null);
     const { live, liveError, setLiveError, toggle } = useLiveToggle();
@@ -164,6 +169,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                 recordShard(shard);
 
                 if (mountedRef.current) {
+                    setCommittedShard(shard);
                     applySample(next);
                 }
             } catch (error_) {
@@ -186,13 +192,13 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     useLiveAdmin(
         ADMIN_FUNCTIONS.getMetrics,
         {},
-        shardKey,
+        committedShard ?? "",
         (next) => {
             if (mountedRef.current) {
                 applySample(next as ShardMetrics);
             }
         },
-        live,
+        live && committedShard !== null,
         (message) => {
             if (mountedRef.current) {
                 setLiveError(message);
@@ -237,6 +243,9 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
 
     const errorRate = metrics === null || metrics.requests === 0 ? "—" : `${((metrics.errors / metrics.requests) * 100).toFixed(1)}%`;
     const currentDelta = history.length > 0 ? (history.at(-1) as number) : 0;
+    // Memoize the polyline so unrelated re-renders (e.g. shard-input typing)
+    // don't recompute Math.max/min over the history on every render.
+    const sparkline = useMemo(() => sparklinePoints(history), [history]);
 
     const refreshCurrent = useCallback((): void => {
         fireAndForget(refresh(shardKey));
@@ -282,7 +291,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                             viewBox={`0 0 ${SPARK_WIDTH.toString()} ${SPARK_HEIGHT.toString()}`}
                             width={SPARK_WIDTH}
                         >
-                            <polyline fill="none" points={sparklinePoints(history)} stroke="currentColor" strokeWidth={1} />
+                            <polyline fill="none" points={sparkline} stroke="currentColor" strokeWidth={1} />
                         </svg>
                         <span data-testid="mt-sparkline-value">{currentDelta}</span>
                     </>

@@ -67,7 +67,12 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
 
             setExpanded(table);
 
-            if (columns[table] !== undefined) {
+            // Key the column cache by shard + table so editing the shard input
+            // without clicking Refresh and then expanding a table can't return a
+            // previous shard's columns; the probe below uses the same shardKey.
+            const cacheKey = `${shardKey}:${table}`;
+
+            if (columns[cacheKey] !== undefined) {
                 return;
             }
 
@@ -75,7 +80,7 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
                 const page = (await client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey))) as TablePage;
 
                 setColumns((previous) => {
-                    return { ...previous, [table]: page.columns };
+                    return { ...previous, [cacheKey]: page.columns };
                 });
             } catch (error_) {
                 setError(errorMessage(error_));
@@ -120,7 +125,7 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
                             </button>
                             {expanded === table.name && (
                                 <ul data-testid={`sc-columns-${table.name}`}>
-                                    {(columns[table.name] ?? []).map((column) => (
+                                    {(columns[`${shardKey}:${table.name}`] ?? []).map((column) => (
                                         <li key={column}>{column}</li>
                                     ))}
                                 </ul>

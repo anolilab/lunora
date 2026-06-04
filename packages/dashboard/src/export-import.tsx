@@ -38,12 +38,20 @@ const parseNdjson = (text: string): ExportRow[] => {
         }
 
         const parsed = JSON.parse(line) as unknown;
+        const row = parsed as Partial<ExportRow>;
 
-        if (typeof parsed !== "object" || parsed === null || typeof (parsed as ExportRow).table !== "string" || typeof (parsed as ExportRow).doc !== "object") {
+        if (
+            typeof parsed !== "object"
+            || parsed === null
+            || typeof row.table !== "string"
+            || typeof row.doc !== "object"
+            || row.doc === null
+            || Array.isArray(row.doc)
+        ) {
             throw new Error(`line ${(index + 1).toString()}: expected a { table, doc } object`);
         }
 
-        rows.push(parsed as ExportRow);
+        rows.push(row as ExportRow);
     }
 
     return rows;

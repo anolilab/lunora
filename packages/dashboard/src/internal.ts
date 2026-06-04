@@ -21,6 +21,34 @@ export const callOptions = (shardKey: string): { shardKey?: string } => {
 export const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
+ * Render a single table-cell value as text without throwing on objects or null.
+ * Shared by the shard and global data browsers so cell rendering can't drift
+ * between them.
+ */
+export const formatCell = (value: unknown): string => {
+    if (value === null || value === undefined) {
+        return "";
+    }
+
+    switch (typeof value) {
+        case "bigint":
+        case "boolean":
+        case "number": {
+            return value.toString();
+        }
+        case "string": {
+            return value;
+        }
+        case "symbol": {
+            return value.toString();
+        }
+        default: {
+            return JSON.stringify(value);
+        }
+    }
+};
+
+/**
  * Fire a promise without awaiting it, swallowing rejection. The dashboard's
  * async loaders already surface their own errors into panel state via internal
  * try/catch, so an event handler or effect can kick one off and return `void`
