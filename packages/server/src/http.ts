@@ -587,6 +587,40 @@ interface ContextWithStorage {
 const SINGLE_BYTE_RANGE_RE = /^bytes=(\d*)-(\d*)$/;
 
 /**
+ * RFC 7232 requires an `ETag` field-value to be a quoted-string (or `W/`-prefixed
+ * weak validator). R2's `object.etag` is the *unquoted* MD5 hex, so emitting it
+ * verbatim produces a malformed header that conditional-request clients and CDNs
+ * will never match against `If-None-Match: "…"`. Wrap it in quotes unless the
+ * source already carries them (or a weak prefix).
+ */
+const toHttpEtag = (etag: string): string => {
+    if (etag.startsWith('"') || etag.startsWith('W/"')) {
+        return etag;
+    }
+
+    return `"${etag}"`;
+};
+
+/**
+ * True when `value` is safe to use as an HTTP header field-value: no CR, LF, or
+ * NUL. Guards against response-header injection / `Headers`-construction throws
+ * when reflecting attacker-influenced object metadata (e.g. a stored
+ * `Content-Type`).
+ */
+const isSafeHeaderValue = (value: string): boolean => {
+    for (let index = 0; index < value.length; index += 1) {
+        const code = value.codePointAt(index);
+
+        // CR (13), LF (10), NUL (0).
+        if (code === 13 || code === 10 || code === 0) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
+/**
  * Outcome of parsing a `Range` header. `kind: "full"` → no/ignorable range
  * (serve the whole object as 200); `kind: "partial"` → a resolved inclusive
  * `[start, end]` (serve 206); `kind: "unsatisfiable"` → syntactically valid but
@@ -668,11 +702,17 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
         return new Response("Not Found", { status: 404 });
     }
 
-    const contentType = object.httpMetadata?.contentType ?? "application/octet-stream";
+    // `contentType` originates from object metadata set at upload time, so it is
+    // attacker-influenced. A value carrying CR/LF (or other control chars) would
+    // either throw inside `Response`/`Headers` construction (→ unhandled 500) or,
+    // on a permissive runtime, smuggle an injected response header. Reject any
+    // unsafe value and fall back to the safe default rather than reflecting it.
+    const rawContentType = object.httpMetadata?.contentType;
+    const contentType = rawContentType !== undefined && isSafeHeaderValue(rawContentType) ? rawContentType : "application/octet-stream";
     const baseHeaders: Record<string, string> = {
         "accept-ranges": "bytes",
         "content-type": contentType,
-        etag: object.etag,
+        etag: toHttpEtag(object.etag),
     };
 
     if (object.sha256 !== undefined) {

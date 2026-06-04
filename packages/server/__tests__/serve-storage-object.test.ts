@@ -39,9 +39,31 @@ describe("serveStorageObject", () => {
 
         expect(response.status).toBe(200);
         expect(response.headers.get("content-type")).toBe("text/plain");
-        expect(response.headers.get("etag")).toBe("abc");
+        // RFC 7232: ETag must be a quoted-string. R2's `etag` is unquoted hex, so
+        // `serveStorageObject` wraps it.
+        expect(response.headers.get("etag")).toBe('"abc"');
         expect(response.headers.get("accept-ranges")).toBe("bytes");
         expect(response.headers.get("digest")).toBe("sha-256=deadbeef");
+    });
+
+    it("does not double-quote an already-quoted (weak) ETag", async () => {
+        expect.assertions(1);
+
+        const ctx = ctxWith(fakeObject(BODY, { etag: 'W/"weak"' }));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"));
+
+        expect(response.headers.get("etag")).toBe('W/"weak"');
+    });
+
+    it("rejects a CRLF-bearing Content-Type to prevent header injection", async () => {
+        expect.assertions(2);
+
+        const ctx = ctxWith(fakeObject(BODY, { contentType: "text/html\r\nset-cookie: pwned=1" }));
+        const response = await serveStorageObject(ctx, "k", new Request("https://x/k"));
+
+        // Falls back to the safe default rather than reflecting the injected value.
+        expect(response.headers.get("content-type")).toBe("application/octet-stream");
+        expect(response.headers.get("set-cookie")).toBeNull();
     });
 
     it("returns 404 when the object is absent", async () => {
