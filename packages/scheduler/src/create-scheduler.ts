@@ -84,18 +84,19 @@ const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
     const list = async (): Promise<ScheduleRecord[]> => {
         const body = await getDO<{ records?: ScheduleRecord[] }>(options, "/list");
 
-        // Keep the return type honest (never `undefined`) so `get()` can `.find`
-        // without throwing if the DO ever responds 200 without a `records` array.
+        // Keep the return type honest (never `undefined`) if the DO ever responds
+        // 200 without a `records` array.
         return Array.isArray(body.records) ? body.records : [];
     };
 
-    // Derived from `/list` rather than a dedicated endpoint — the DO has no
-    // single-record GET, and the pending set is small enough to scan.
+    // Direct single-record lookup against the DO's `GET /get?id=` route, which
+    // reads the `id:<id>` storage key in O(1) — instead of scanning the whole
+    // `/list` view. The DO omits `record` on a miss, which becomes `null` here.
     const get = async (id: string): Promise<ScheduleRecord | null> => {
-        const records = await list();
+        const body = await getDO<{ record?: ScheduleRecord }>(options, `/get?id=${encodeURIComponent(id)}`);
 
         // eslint-disable-next-line unicorn/no-null -- public contract returns `ScheduleRecord | null` (Convex `get` convention), not undefined
-        return records.find((record) => record.id === id) ?? null;
+        return body.record ?? null;
     };
 
     return { cancel, get, list, runAfter, runAt };

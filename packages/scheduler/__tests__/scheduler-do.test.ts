@@ -57,6 +57,8 @@ const post = (path: string, body: unknown): Request =>
         method: "POST",
     });
 
+const get = (path: string): Request => new Request(`https://scheduler.internal${path}`, { method: "GET" });
+
 /** Read a /schedule response and return the typed id. */
 const scheduledId = async (response: Response): Promise<string> => {
     const body = await response.json<ScheduleResponseBody>();
@@ -154,6 +156,38 @@ describe("schedulerDO", () => {
         expect(scheduler.dispatched[0]?.args).toEqual({ x: 1 });
         // The "later" record stays pending and the alarm is rescheduled to its time.
         expect(state.alarm).toBe(now + 60_000);
+    });
+
+    it("/get returns a single record by id (direct O(1) read), or {} when absent", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduledFor = Date.now() + 60_000;
+
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: { text: "hi" }, functionPath: "messages.send", scheduledFor })));
+
+        const hit = await scheduler.fetch(get(`/get?id=${id}`));
+        const hitBody = await hit.json<{ record?: ScheduleRecord }>();
+
+        expect(hit.status).toBe(200);
+        expect(hitBody.record?.functionPath).toBe("messages.send");
+
+        const miss = await scheduler.fetch(get("/get?id=nope"));
+        const missBody = await miss.json<{ record?: ScheduleRecord }>();
+
+        expect(miss.status).toBe(200);
+        expect(missBody.record).toBeUndefined();
+    });
+
+    it("/get requires an id", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const response = await scheduler.fetch(get("/get"));
+
+        expect(response.status).toBe(400);
     });
 
     it("returns 404 for unknown routes", async () => {

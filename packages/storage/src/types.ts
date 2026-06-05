@@ -1,10 +1,18 @@
 /**
+ * A single-range read against R2: an `{ offset, length }` window (at least one
+ * bound required, mirroring R2's own `R2Range`) or a `{ suffix }` tail. The
+ * subset of `R2Range` that {@link Storage.download} forwards so a caller can
+ * stream just the bytes it needs instead of the whole object.
+ */
+export type R2RangeLike = { length: number; offset?: number } | { length?: number; offset: number } | { suffix: number };
+
+/**
  * Minimal projection of `R2Bucket`. Declared structurally so unit tests can
  * pass a plain object double; the real binding satisfies the same shape.
  */
 export interface R2BucketLike {
     delete: (key: string) => Promise<void>;
-    get: (key: string) => Promise<R2ObjectBodyLike | null>;
+    get: (key: string, options?: { range?: R2RangeLike }) => Promise<R2ObjectBodyLike | null>;
     list: (options?: { cursor?: string; delimiter?: string; limit?: number; prefix?: string }) => Promise<{
         cursor?: string;
         objects: R2ObjectLike[];
@@ -34,6 +42,14 @@ export interface R2ObjectLike {
      * when R2 carries a checksum (derived from {@link R2ObjectLike.checksums}).
      */
     sha256?: string;
+
+    /**
+     * Base64-encoded SHA-256 of the object body, surfaced alongside
+     * {@link R2ObjectLike.sha256} from the same checksum. Base64 is the encoding
+     * RFC 9530 digest headers (`Repr-Digest`/`Content-Digest`) require, so HTTP
+     * layers can emit a spec-compliant digest without re-deriving it.
+     */
+    sha256Base64?: string;
     size: number;
 }
 
@@ -86,7 +102,13 @@ export interface SignedUrlOptions {
 
 export interface Storage {
     delete: (key: string) => Promise<void>;
-    download: (key: string) => Promise<R2ObjectBodyLike | null>;
+
+    /**
+     * Fetch a stored object's metadata + body. Pass `options.range` to stream
+     * only a byte window (R2 resolves the range server-side, so the unwanted
+     * bytes never reach the Worker) — `download(key)` reads the whole object.
+     */
+    download: (key: string, options?: { range?: R2RangeLike }) => Promise<R2ObjectBodyLike | null>;
 
     /**
      * Mint a short-lived signed `PUT` URL a client can upload directly to,
@@ -100,8 +122,9 @@ export interface Storage {
 
     /**
      * Upload `body` to `key`, returning the stored key + etag. Convex-compatible
-     * alias for {@link Storage.upload}.
+     * alias for {@link Storage.upload} — it accepts the same {@link UploadOptions}
+     * so the `maxSize` / `allowedContentTypes` guards aren't lost behind the alias.
      */
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: { contentType?: string }) => Promise<{ etag: string; key: string }>;
+    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; key: string }>;
     upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; key: string }>;
 }

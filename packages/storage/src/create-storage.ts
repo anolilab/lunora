@@ -1,5 +1,5 @@
 import { buildSignedUrl } from "./signed-url.js";
-import type { CirrusStorageOptions, ListOptions, R2ObjectBodyLike, R2ObjectLike, SignedUrlOptions, Storage, UploadOptions } from "./types.js";
+import type { CirrusStorageOptions, ListOptions, R2ObjectBodyLike, R2ObjectLike, R2RangeLike, SignedUrlOptions, Storage, UploadOptions } from "./types.js";
 
 /** R2's documented key-length ceiling. */
 const MAX_KEY_LENGTH = 1024;
@@ -22,8 +22,21 @@ const toHex = (buffer: ArrayBuffer): string => {
     return out;
 };
 
+/** Base64-encode an `ArrayBuffer` (RFC 9530 digest headers want base64, not hex). */
+const toBase64 = (buffer: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+
+    for (const byte of bytes) {
+        binary += String.fromCodePoint(byte);
+    }
+
+    return btoa(binary);
+};
+
 /**
- * Surface R2's SHA-256 checksum as a hex `sha256` field on the object metadata.
+ * Surface R2's SHA-256 checksum as `sha256` (hex) and `sha256Base64` (base64)
+ * fields on the object metadata.
  *
  * A real `R2Object`/`R2ObjectBody` is a workerd host object: its properties are
  * `readonly`, it is **non-extensible**, and accessors like `body` plus methods
@@ -34,12 +47,13 @@ const toHex = (buffer: ArrayBuffer): string => {
  * strict mode (ESM is always strict); and an `Object.create(object)` wrapper
  * rebinds `this` for the native accessors and breaks them.
  *
- * So we wrap the object in a `Proxy` that answers `sha256` itself and forwards
- * every other access to the underlying host object with the host object as the
- * receiver (so native getters keep their `this`), binding function-valued
- * properties to the target (so native methods keep their `this`). A no-op
- * pass-through when R2 carries no checksum, so the field stays absent rather
- * than `undefined`-valued and we avoid an allocation on the common path.
+ * So we wrap the object in a `Proxy` that answers `sha256`/`sha256Base64` itself
+ * and forwards every other access to the underlying host object with the host
+ * object as the receiver (so native getters keep their `this`), binding
+ * function-valued properties to the target (so native methods keep their
+ * `this`). A no-op pass-through when R2 carries no checksum, so the fields stay
+ * absent rather than `undefined`-valued and we avoid an allocation on the common
+ * path.
  */
 const withSha256 = <T extends R2ObjectLike>(object: T): T => {
     const raw = object.checksums?.sha256;
@@ -49,11 +63,16 @@ const withSha256 = <T extends R2ObjectLike>(object: T): T => {
     }
 
     const sha256 = toHex(raw);
+    const sha256Base64 = toBase64(raw);
 
     return new Proxy(object, {
         get(target, property) {
             if (property === "sha256") {
                 return sha256;
+            }
+
+            if (property === "sha256Base64") {
+                return sha256Base64;
             }
 
             // Forward with `target` as the receiver so native accessors (e.g.
@@ -65,7 +84,7 @@ const withSha256 = <T extends R2ObjectLike>(object: T): T => {
             return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
         },
         has(target, property) {
-            return property === "sha256" || Reflect.has(target, property);
+            return property === "sha256" || property === "sha256Base64" || Reflect.has(target, property);
         },
     });
 };
@@ -183,10 +202,15 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         return { etag: object.etag, key: object.key };
     };
 
-    const download = async (key: string): Promise<R2ObjectBodyLike | null> => {
+    const download = async (key: string, downloadOptions: { range?: R2RangeLike } = {}): Promise<R2ObjectBodyLike | null> => {
         validateKey(key);
 
-        const object = await options.bucket.get(key);
+        // Forward `range` so R2 resolves the byte window server-side and streams
+        // only those bytes back — the unwanted bytes never reach the Worker, so
+        // a partial read of a large object doesn't buffer the whole thing. The
+        // two-arg and one-arg calls are split so neither hits R2's `get` overload
+        // that pairs `options` with a mandatory `onlyIf`.
+        const object = await (downloadOptions.range ? options.bucket.get(key, { range: downloadOptions.range }) : options.bucket.get(key));
 
         // `withSha256` is a no-op (and a pass-through) for a null result, so a
         // single call covers both the hit and miss cases without a `null` literal.
@@ -256,16 +280,15 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
     };
 
     // Convex-compatible aliases over the primitives above. `generateUploadUrl`
-    // mints a signed PUT (optionally pinning the content-type into the
-    // signature); `store` is `upload` under Convex's name.
+    // mints a signed PUT (optionally pinning the content-type into the signature).
     const generateUploadUrl = async (key: string, uploadUrlOptions: { contentType?: string; expiresInSeconds?: number } = {}): Promise<string> =>
         getSignedUrl(key, { contentType: uploadUrlOptions.contentType, expiresInSeconds: uploadUrlOptions.expiresInSeconds, method: "PUT" });
 
-    const store = async (
-        key: string,
-        body: ReadableStream | ArrayBuffer | Blob,
-        storeOptions: { contentType?: string } = {},
-    ): Promise<{ etag: string; key: string }> => upload(key, body, { contentType: storeOptions.contentType });
+    // `store` is `upload` under Convex's name; it forwards the full
+    // `UploadOptions` so the `maxSize` / `allowedContentTypes` guards are
+    // available through the alias too, not just `contentType`.
+    const store = async (key: string, body: ReadableStream | ArrayBuffer | Blob, storeOptions: UploadOptions = {}): Promise<{ etag: string; key: string }> =>
+        upload(key, body, storeOptions);
 
     return { delete: deleteObject, download, generateUploadUrl, getSignedUrl, getUrl, list, store, upload };
 };

@@ -140,6 +140,10 @@ class SchedulerDO {
             return this.handleCancel(request);
         }
 
+        if (url.pathname === "/get" && request.method === "GET") {
+            return this.handleGet(url);
+        }
+
         if (url.pathname === "/list" && request.method === "GET") {
             return this.handleList();
         }
@@ -477,6 +481,24 @@ class SchedulerDO {
 
     private async handleList(): Promise<Response> {
         return SchedulerDO.json({ records: await this.listRecords() });
+    }
+
+    /**
+     * Resolve a single pending job by id via a direct `id:&lt;id>` storage read —
+     * O(1), versus scanning the whole `/list` view. Responds `{ record }` on a
+     * hit and `{}` on a miss (an absent `record` field — JSON has no `undefined`
+     * — which the client reads back as `null`).
+     */
+    private async handleGet(url: URL): Promise<Response> {
+        const id = url.searchParams.get("id");
+
+        if (id === null || id.length === 0) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "id is required");
+        }
+
+        const record = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${id}`);
+
+        return SchedulerDO.json(record === undefined ? {} : { record });
     }
 
     private async removeRecord(record: ScheduleRecord): Promise<void> {

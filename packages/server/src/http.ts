@@ -561,8 +561,6 @@ const httpRoute: HttpRoute = {
  * runtime dependency on `@cirrus/storage`; the real binding satisfies the shape.
  */
 interface StorageObjectBody {
-    /** Read the whole body into memory — the fallback when range slicing isn't supported. */
-    arrayBuffer: () => Promise<ArrayBuffer>;
     /** The object body stream (`null` for a zero-byte object). */
     body: ReadableStream | null;
     etag: string;
@@ -570,12 +568,20 @@ interface StorageObjectBody {
     key: string;
     /** Hex SHA-256, when R2 carries a checksum (surfaced by `@cirrus/storage`). */
     sha256?: string;
+    /** Base64 SHA-256 (RFC 9530 digest encoding), when R2 carries a checksum. */
+    sha256Base64?: string;
     size: number;
+}
+
+/** Byte window forwarded to `download()` so R2 streams just the requested slice. */
+interface StorageRange {
+    length: number;
+    offset: number;
 }
 
 /** The minimal storage surface {@link serveStorageObject} needs: a metadata-rich `download`. */
 interface StorageDownloader {
-    download: (key: string) => Promise<StorageObjectBody | null>;
+    download: (key: string, options?: { range?: StorageRange }) => Promise<StorageObjectBody | null>;
 }
 
 /** Any ctx that carries a {@link StorageDownloader} on `.storage` (Query/Mutation/Action ctx all do). */
@@ -687,13 +693,12 @@ const parseRange = (header: null | string, size: number): RangeResult => {
  * **404**; an out-of-bounds range is a **416** with a `Content-Range` of
  * `bytes` star-slash-size.
  *
- * Range slicing is done by buffering the body (`arrayBuffer()`) and slicing the
- * requested window. The `@cirrus/storage` `download()` returns the whole object
- * body (R2's binding does not expose a partial-read API through that helper), so
- * a range request still fetches the full object server-side — the saving is on
- * the wire to the client, not on the R2 read. For very large objects prefer a
- * signed URL (`ctx.storage.getSignedUrl`) so the client ranges against R2/CDN
- * directly.
+ * A range request re-issues the `download()` with the resolved `{ offset, length }`
+ * window so R2 streams only those bytes back to the Worker — the slice is never
+ * buffered in the isolate. The first `download()` is used only for the object's
+ * size + metadata (its body is left unread and cancelled). For very large
+ * objects a signed URL (`ctx.storage.getSignedUrl`) is still cheaper since the
+ * client then ranges against R2/CDN directly with no Worker hop.
  */
 const serveStorageObject = async (context: ContextWithStorage, key: string, request: Request): Promise<Response> => {
     const object = await context.storage.download(key);
@@ -715,16 +720,29 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
         etag: toHttpEtag(object.etag),
     };
 
-    if (object.sha256 !== undefined) {
-        // RFC 3230 / Cloudflare-style digest hint so clients can verify integrity.
-        baseHeaders.digest = `sha-256=${object.sha256}`;
+    if (object.sha256Base64 !== undefined) {
+        // RFC 9530 representation digest so clients can verify integrity. The
+        // value is a structured-field byte-sequence (base64 wrapped in colons),
+        // and it covers the full representation, so it's correct on a 206 too.
+        baseHeaders["repr-digest"] = `sha-256=:${object.sha256Base64}:`;
     }
 
     const range = parseRange(request.headers.get("range"), object.size);
 
     if (range.kind === "unsatisfiable") {
+        // The body here is a plain-text error, not the object — so it carries
+        // neither the object's `Content-Type` nor its digest. Only the
+        // range-relevant headers (and the resource ETag) ride along. The unread
+        // object body is cancelled so the stream isn't left dangling.
+        object.body?.cancel().catch(() => {});
+
         return new Response("Range Not Satisfiable", {
-            headers: { ...baseHeaders, "content-range": `bytes */${String(object.size)}` },
+            headers: {
+                "accept-ranges": "bytes",
+                "content-range": `bytes */${String(object.size)}`,
+                "content-type": "text/plain; charset=utf-8",
+                etag: toHttpEtag(object.etag),
+            },
             status: 416,
         });
     }
@@ -736,15 +754,22 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
         });
     }
 
-    // Single range: buffer + slice. See the doc comment for why this fetches the
-    // whole object server-side.
-    const buffer = await object.arrayBuffer();
-    const slice = buffer.slice(range.start, range.end + 1);
+    // Single range: re-fetch just the window so R2 streams only those bytes (the
+    // first download's body is unused — cancel it rather than leak the stream).
+    object.body?.cancel().catch(() => {});
 
-    return new Response(slice, {
+    const length = range.end - range.start + 1;
+    const slice = await context.storage.download(key, { range: { length, offset: range.start } });
+
+    if (!slice) {
+        // Raced with a delete between the metadata read and the ranged read.
+        return new Response("Not Found", { status: 404 });
+    }
+
+    return new Response(slice.body, {
         headers: {
             ...baseHeaders,
-            "content-length": String(slice.byteLength),
+            "content-length": String(length),
             "content-range": `bytes ${String(range.start)}-${String(range.end)}/${String(object.size)}`,
         },
         status: 206,

@@ -243,10 +243,41 @@ describe("createStorage", () => {
         expect(bucket.puts[0]?.options).toMatchObject({ httpMetadata: { contentType: "text/plain" } });
     });
 
-    it("download()/list() surface a hex sha256 from R2 checksums", async () => {
+    it("store() honors the full UploadOptions guards (maxSize/allowedContentTypes)", async () => {
         expect.assertions(3);
 
-        // 0x01,0x02,0x03,0xff -> "010203ff"
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // The Convex-style `store` alias must not silently drop upload()'s guards.
+        await expect(storage.store("big.bin", new ArrayBuffer(16), { maxSize: 8 })).rejects.toThrow(/exceeds maxSize/);
+        await expect(storage.store("note.txt", new ArrayBuffer(4), { allowedContentTypes: ["image/png"], contentType: "text/plain" })).rejects.toThrow(
+            /not in allowedContentTypes/,
+        );
+        expect(bucket.puts).toHaveLength(0);
+    });
+
+    it("download() forwards a byte range to the bucket (ranged read)", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        await storage.download("clip.mp4", { range: { length: 4, offset: 2 } });
+
+        expect(bucket.get).toHaveBeenCalledWith("clip.mp4", { range: { length: 4, offset: 2 } });
+
+        // A plain download forwards no range (single-arg `get`) so R2 streams the
+        // whole object — and the call avoids R2's `onlyIf` overload.
+        await storage.download("clip.mp4");
+
+        expect(bucket.get).toHaveBeenLastCalledWith("clip.mp4");
+    });
+
+    it("download()/list() surface a hex + base64 sha256 from R2 checksums", async () => {
+        expect.assertions(5);
+
+        // 0x01,0x02,0x03,0xff -> hex "010203ff", base64 "AQID/w=="
         const checksum = new Uint8Array([1, 2, 3, 255]).buffer;
         const bucket = fakeBucket();
 
@@ -272,11 +303,13 @@ describe("createStorage", () => {
         const object = await storage.download("uploads/x.png");
 
         expect(object?.sha256).toBe("010203ff");
+        expect(object?.sha256Base64).toBe("AQID/w==");
         expect(object?.etag).toBe("etag-1");
 
         const listed = await storage.list();
 
         expect(listed.objects[0]?.sha256).toBe("010203ff");
+        expect(listed.objects[0]?.sha256Base64).toBe("AQID/w==");
     });
 
     it("download() preserves native methods/getters of a frozen (non-extensible) R2 object", async () => {
