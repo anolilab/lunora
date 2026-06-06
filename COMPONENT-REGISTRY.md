@@ -1,16 +1,16 @@
-# Cirrus Component Registry — `cirrus add` (spec)
+# Cirrus Component Registry — `cirrus registry` (spec + status)
 
 > Written 2026-06-06. The concrete plan for Cirrus's "component" story, resolving
 > [`CONVEX-PARITY.md`](./CONVEX-PARITY.md) gap **#5**. Expands [`PLAN2.md`](./PLAN2.md) §3.6.
 >
 > **Decision:** Cirrus does **not** build Convex-style sandboxed runtime components. It
-> builds the **kitcn/shadcn registry model** — `cirrus add <name>` scaffolds *user-owned*
+> builds the **kitcn/shadcn registry model** — `cirrus add <name>` scaffolds _user-owned_
 > code into the project. See "Why not Convex components" below.
 
 ## Why not Convex components (the rejected model)
 
 Convex `@convex-dev/*` components are **black-box, runtime-sandboxed npm packages**: each
-gets its own tables / file storage / scheduled functions that the host app *cannot read*,
+gets its own tables / file storage / scheduled functions that the host app _cannot read_,
 accessed only through an exported API, with the component's writes joining the caller's
 transaction. That model is built for a **managed, multi-tenant backend running untrusted
 third-party code**. Replicating it on Cirrus is the wrong trade:
@@ -19,7 +19,7 @@ third-party code**. Replicating it on Cirrus is the wrong trade:
   substrate that gives Cirrus its scaling lead. We'd be building Cirrus's hardest unsolved
   problem just to host components.
 - **Needs per-component storage isolation** — separate DO/D1 namespaces, a sandbox boundary.
-- **Clashes with positioning** — Cirrus is *user-owned Cloudflare infra*; a black-box
+- **Clashes with positioning** — Cirrus is _user-owned Cloudflare infra_; a black-box
   dependency you can't see or edit contradicts "you own your backend."
 - **License** — Convex is FSL: ideas-only, can't vendor the implementation.
 
@@ -29,9 +29,9 @@ user owns and controls the whole deployment. **Won't-do.**
 ## The model we build (white-box, user-owned)
 
 Like `shadcn/ui` and `kitcn`: `cirrus add <name>` **copies code into the user's project**.
-It becomes *their* code — visible, editable, no version lock, no runtime isolation. Tables
+It becomes _their_ code — visible, editable, no version lock, no runtime isolation. Tables
 merge into the app schema (auto-namespaced for collision safety); functions are discovered
-by codegen. Upgrades re-run `add` and *reconcile* without clobbering the user's edits.
+by codegen. Upgrades re-run `add` and _reconcile_ without clobbering the user's edits.
 
 ### Already shipped (the foundation — Phase B)
 
@@ -40,21 +40,27 @@ by codegen. Upgrades re-run `add` and *reconcile* without clobbering the user's 
 - **Codegen `.extend()` discovery** — `discoverSchema` walks `.extend(...)` chains and emits the namespaced extension tables into `api.ts`/`dataModel.ts` (inline + same-project; cross-package deferred).
 - **Middleware composition** — `c.query.use(plugin.middleware)` injects `ctx.api.<key>`.
 
-### Remaining work
+### Shipped
 
-1. **Auto function-namespacing (codegen)** — a plugin/registry item ships queries/mutations;
-   codegen should surface them under `api.<key>.*` and a typed `ctx.api.<key>` automatically,
-   instead of the current manual re-export (`plugin.ts:214`). No runtime sandbox — just
-   discovery + naming. This is the type-half of "components feel first-class."
-2. **The `cirrus add <name>` registry** — the new CLI surface (below).
+1. **Auto function-namespacing (codegen)** — a registry item's queries/mutations surface under
+   `api.<key>.*` with a typed `ctx.api.<key>` automatically (a `cirrus/<key>/index.ts` collapses
+   to `api.<key>.*`). No manual re-export.
+2. **The `cirrus registry` command** — the full CLI surface (below), with a lock-aware upgrade
+   path, a generated catalog, and CI type-checking of every shipped item.
 
-## `cirrus add` — CLI design
+The repo ships nine items: `ratelimit`, `presence`, `mail`, `storage`, `crons`, `auth`
+(+ `auth-clerk` / `auth-auth0`), and `backup`.
+
+## `cirrus registry` — CLI design
 
 ```bash
-cirrus add ratelimit          # scaffold a registry item into cirrus/
-cirrus add ratelimit --dry-run
-cirrus add auth resend        # multiple; dependency-resolved
-cirrus list                   # show available registry items
+cirrus registry add ratelimit            # scaffold a registry item into cirrus/
+cirrus registry add ratelimit --dry-run  # plan only; --diff previews the file changes
+cirrus registry add ratelimit --overwrite  # force-take the incoming copy over local edits
+cirrus registry add auth auth-clerk      # multiple; dependency-resolved (requires:[…])
+cirrus registry list                     # show available registry items (remote catalog)
+cirrus registry view ratelimit           # inspect an item (plan + file contents) without installing
+cirrus registry build [--check]          # regenerate index.json from the item dirs (--check = CI guard)
 ```
 
 Pipeline (mirrors kitcn / shadcn registry + the existing `giget` init templates):
@@ -65,12 +71,12 @@ Pipeline (mirrors kitcn / shadcn registry + the existing `giget` init templates)
    peer deps, `wrangler.jsonc` bindings/triggers, and other registry items it depends on
    (transitively resolved). Print the plan; `--dry-run` stops here.
 3. **Reconcile** — for each file:
-   - new file → write under `cirrus/<name>/` (or the manifest's target).
-   - existing file → **AST/section merge**, not overwrite. Schema goes through
-     `vis generate`-style AST merge into `cirrus/schema.ts` (the cron/table generators
-     already do this via `.vis/templates/_helpers/insert-*.ts`). Track ownership so a
-     re-run updates only the generated regions and preserves user edits (a managed-block
-     marker or a per-item lockfile recording the last-applied hash).
+    - new file → write under `cirrus/<name>/` (or the manifest's target).
+    - existing file → **AST/section merge**, not overwrite. Schema goes through
+      `vis generate`-style AST merge into `cirrus/schema.ts` (the cron/table generators
+      already do this via `.vis/templates/_helpers/insert-*.ts`). Track ownership so a
+      re-run updates only the generated regions and preserves user edits (a managed-block
+      marker or a per-item lockfile recording the last-applied hash).
 4. **Apply deps** — add npm/peer deps to `package.json`; `wrangler.jsonc` bindings/triggers
    reconciled by the existing `@cirrus/vite` cron-sync–style writer. Prompt before install.
 5. **Codegen** — run codegen so the new tables/functions appear in `_generated/`.
@@ -80,39 +86,45 @@ Pipeline (mirrors kitcn / shadcn registry + the existing `giget` init templates)
 
 ```
 registry/ratelimit/
-  registry.json        # manifest: name, description, files[], deps[], bindings[], requires[]
+  registry.json        # manifest (schema: registry/schema/registry-item.schema.json)
   schema.ts            # defineSchemaExtension("ratelimit", { tables: { buckets: ... } })
   ratelimit.ts         # query/mutation/action + middleware (definePlugin)
   README.md
 ```
 
-`registry.json` (sketch):
+`registry.json` — the shipped manifest shape (validated by `registry/schema/registry-item.schema.json`):
 
 ```jsonc
 {
-  "name": "ratelimit",
-  "description": "Token-bucket / fixed-window rate limiting",
-  "requires": [],                       // other registry items
-  "deps": {},                           // npm deps to add
-  "bindings": [],                       // wrangler.jsonc additions
-  "files": [
-    { "from": "schema.ts",    "to": "cirrus/ratelimit/schema.ts",  "merge": "schema-extension" },
-    { "from": "ratelimit.ts", "to": "cirrus/ratelimit/index.ts",   "merge": "create-or-skip" }
-  ]
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "ratelimit",
+    "title": "Rate limit", // short label (shown in plan/list)
+    "description": "Token-bucket / fixed-window rate limiting",
+    "docs": "Attach .use(ratelimit.middleware) …", // post-install guidance
+    "requires": [], // other registry items (resolved deps-first)
+    "deps": {}, // npm deps → package.json dependencies
+    "devDependencies": {}, // npm deps → package.json devDependencies
+    "bindings": [], // wrangler.jsonc additions (array bindings merge)
+    "envVars": [], // scaffolded into .dev.vars; { name, description?, value?, secret? }
+    "files": [
+        { "from": "schema.ts", "to": "cirrus/ratelimit/schema.ts", "merge": "schema-extension" },
+        { "from": "ratelimit.ts", "to": "cirrus/ratelimit/index.ts", "merge": "create-or-skip" },
+    ],
 }
 ```
 
-### Ownership tracking
+The catalog (`registry/index.json`) is generated from the item dirs by `cirrus registry build`
+and CI-verified with `--check`.
 
-Re-running `cirrus add <name>` must not clobber user edits. Options (pick one):
-- **Managed-block markers** in shared files (`// cirrus:ratelimit:start … :end`) — only the
-  marked region is regenerated. Simple; visible.
-- **Per-item lock** (`cirrus/.cirrus-registry.json`) recording each item's version + the hash
-  of each generated file; on re-run, 3-way reconcile (base = last-applied, theirs = new,
-  yours = current) and only touch unchanged regions; report conflicts.
+### Ownership tracking (shipped: per-item lock)
 
-Prefer markers for schema/section merges (matches the AST-merge generators) and the lock for
-whole-file items.
+Re-running `cirrus registry add <name>` does not clobber user edits:
+
+- **Schema/section merges** carry `// cirrus:add:<key>` managed-block markers and are idempotent.
+- **Whole files** use a per-item lock (`cirrus/.cirrus-registry.json`) recording the last-written
+  content hash; on re-run a 3-way reconcile (base = lock hash, yours = on-disk, theirs = incoming)
+  cleanly upgrades an unedited file, drops a `.new` sidecar on a real conflict, and refuses to
+  touch a file cirrus never wrote. `--overwrite` forces theirs; `--diff` previews.
 
 ## Non-goals (explicit)
 
@@ -120,12 +132,14 @@ whole-file items.
 - No cross-DO/component transactions (gap #2 stays a documented trade-off).
 - No black-box versioned npm components — items are copied code the user owns.
 
-## Sequencing
+## Sequencing — all shipped
 
-1. **Function-namespacing codegen** (unblocks "first-class component functions"; bounded, codegen-only).
-2. **`cirrus add` MVP** — one registry item end-to-end (e.g. `ratelimit`, which already exists as `@cirrus/ratelimit`), `giget` fetch + AST schema-merge (reuse `.vis/templates/_helpers`) + dry-run.
-3. **Manifest deps/bindings + ownership tracking + `cirrus list`.**
-4. **Seed the registry** — auth, resend/mail, ratelimit, storage helpers (ride on §3.7 auth expansion).
+1. ✅ **Function-namespacing codegen** — items' functions surface under `api.<key>.*` + typed `ctx.api.<key>`.
+2. ✅ **`cirrus registry add`** — giget fetch + AST schema-merge + `--dry-run`/`--diff`/`--overwrite`.
+3. ✅ **Manifest deps/devDeps/bindings/envVars + lock-based ownership tracking + `list`/`view`/`build`.**
+4. ✅ **Seeded the registry** — ratelimit, presence, mail, storage, crons, auth (+clerk/auth0), backup.
+
+Growth from here is authoring more items + the deployable connector wrappers (#9).
 
 ## License note
 
