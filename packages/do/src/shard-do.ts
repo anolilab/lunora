@@ -10,7 +10,7 @@ import type { MigrationDirection, MigrationRunResult } from "./data-migration.js
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
 import { createDependencyTracker } from "./dependency-tracker.js";
-import type { FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
+import type { FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 import { LogBuffer } from "./log-buffer.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
@@ -296,6 +296,40 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
     }
 
     return { doc: record, id, op, table };
+};
+
+/** The structured-filter operators accepted over the wire (mirrors `FilterOperator`). */
+const FILTER_OPERATORS: ReadonlySet<string> = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
+
+/**
+ * Parse the loosely-typed `filters` admin arg into validated {@link FilterClause}s,
+ * dropping any malformed entry (non-object, missing/blank column, unknown
+ * operator). Returns `undefined` when nothing valid remains so `readTablePage`
+ * takes its no-predicate fast path.
+ */
+const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
+    if (!Array.isArray(raw)) {
+        return undefined;
+    }
+
+    const clauses: FilterClause[] = [];
+
+    for (const item of raw) {
+        if (typeof item !== "object" || item === null) {
+            continue;
+        }
+
+        const record = item as Record<string, unknown>;
+        const { column, operator } = record;
+
+        if (typeof column !== "string" || column === "" || typeof operator !== "string" || !FILTER_OPERATORS.has(operator)) {
+            continue;
+        }
+
+        clauses.push({ column, operator: operator as FilterOperator, value: record["value"] });
+    }
+
+    return clauses.length > 0 ? clauses : undefined;
 };
 
 /**
@@ -1818,6 +1852,7 @@ abstract class ShardDO {
     private readAdminTablePage(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
         const table = typeof args["table"] === "string" ? args["table"] : "";
         const page = readTablePage(sql, {
+            filters: parseTablePageFilters(args["filters"]),
             limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
             offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
             refs: this.tableRefs(table),

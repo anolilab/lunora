@@ -204,4 +204,88 @@ describe("introspect", () => {
             expect(page.columns).toEqual(["__id__", "text", "votes"]);
         });
     });
+
+    describe("readTablePage — structured filters", () => {
+        beforeEach(() => {
+            // A doc-stored table so the json_extract path can be exercised.
+            database.raw(`CREATE TABLE "posts" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(`INSERT INTO "posts" VALUES ('p1', 1, '{"title":"Hi","authorId":"u1"}'), ('p2', 2, '{"title":"Yo","authorId":"u2"}')`);
+        });
+
+        it("filters a physical column by equality", () => {
+            expect.assertions(2);
+
+            const page = readTablePage(database.sql, { filters: [{ column: "votes", operator: "eq", value: 3 }], table: "messages" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows).toEqual([{ __id__: "m1", text: "hello", votes: 3 }]);
+        });
+
+        it("supports numeric comparison operators", () => {
+            expect.assertions(2);
+
+            // votes: m1=3, m2=1, m3=0 → `> 1` keeps only m1; `>= 1` keeps m1, m2.
+            expect(readTablePage(database.sql, { filters: [{ column: "votes", operator: "gt", value: 1 }], table: "messages" }).total).toBe(1);
+            expect(readTablePage(database.sql, { filters: [{ column: "votes", operator: "gte", value: 1 }], table: "messages" }).total).toBe(2);
+        });
+
+        it("supports `contains` (substring) on a physical column", () => {
+            expect.assertions(1);
+
+            const page = readTablePage(database.sql, { filters: [{ column: "text", operator: "contains", value: "ell" }], table: "messages" });
+
+            expect(page.rows).toEqual([{ __id__: "m1", text: "hello", votes: 3 }]);
+        });
+
+        it("filters a doc (`__doc__`) field via json_extract with the path bound", () => {
+            expect.assertions(2);
+
+            const page = readTablePage(database.sql, { filters: [{ column: "title", operator: "eq", value: "Hi" }], table: "posts" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows).toEqual([{ _creationTime: 1, authorId: "u1", id: "p1", title: "Hi" }]);
+        });
+
+        it("aND-combines structured filters with the substring search", () => {
+            expect.assertions(1);
+
+            // search "o" → hello, world; votes >= 1 → hello (3), world (1) — both;
+            // tighten to votes > 1 so only hello survives the AND.
+            const page = readTablePage(database.sql, { filters: [{ column: "votes", operator: "gt", value: 1 }], search: "o", table: "messages" });
+
+            expect(page.rows).toEqual([{ __id__: "m1", text: "hello", votes: 3 }]);
+        });
+
+        it("paginates over the filtered set with an honest total", () => {
+            expect.assertions(3);
+
+            const filters = [{ column: "votes", operator: "gte" as const, value: 0 }];
+            const first = readTablePage(database.sql, { filters, limit: 1, offset: 0, table: "messages" });
+            const second = readTablePage(database.sql, { filters, limit: 1, offset: 1, table: "messages" });
+
+            expect(first.total).toBe(3);
+            expect(second.total).toBe(3);
+            expect(first.rows[0]).not.toEqual(second.rows[0]);
+        });
+
+        it("drops a clause naming a column the table doesn't have", () => {
+            expect.assertions(1);
+
+            // `messages` has no __doc__, so an unknown column can't resolve → the
+            // clause is skipped and every row comes back.
+            const page = readTablePage(database.sql, { filters: [{ column: "nope", operator: "eq", value: "x" }], table: "messages" });
+
+            expect(page.total).toBe(3);
+        });
+
+        it("matches a LIKE wildcard in a `contains` value literally", () => {
+            expect.assertions(1);
+
+            database.raw(`INSERT INTO "messages" VALUES ('m9', '50%off', 0)`);
+
+            const page = readTablePage(database.sql, { filters: [{ column: "text", operator: "contains", value: "50%" }], table: "messages" });
+
+            expect(page.rows).toEqual([{ __id__: "m9", text: "50%off", votes: 0 }]);
+        });
+    });
 });

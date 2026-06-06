@@ -107,7 +107,30 @@ interface TablePage {
     total: number;
 }
 
+/** Comparison a {@link FilterClause} applies. `contains` is a case-sensitive substring (LIKE); the rest are direct SQL comparisons. */
+type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+
+/**
+ * One structured column filter — `column`, `operator`, `value` — AND-combined
+ * with the substring `search` and every other clause. `column` is a displayed
+ * column: a physical/meta column (compared directly) or a `__doc__` JSON field
+ * (compared via `json_extract`, with the path bound as a parameter). The `value`
+ * is always a bound parameter, so no clause can inject SQL.
+ */
+interface FilterClause {
+    column: string;
+    operator: FilterOperator;
+    value?: unknown;
+}
+
 interface ReadTablePageOptions {
+    /**
+     * Structured column filters, AND-combined with each other and with `search`.
+     * Each clause's value (and any `__doc__` path) is a bound parameter; the
+     * column is matched against the table's displayed columns. `total` reflects
+     * the filtered count so pagination stays honest.
+     */
+    filters?: FilterClause[];
     limit?: number;
     offset?: number;
 
@@ -240,6 +263,45 @@ const listTables = (sql: SqlExec): TableInfo[] => {
 const tableExists = (sql: SqlExec, table: string): boolean =>
     sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1", table).toArray().length > 0;
 
+/** SQL operator per direct {@link FilterOperator} (everything but `contains`, which uses LIKE). */
+const FILTER_SQL_OPERATOR: Record<Exclude<FilterOperator, "contains">, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
+
+/** Coerce a filter value to its LIKE-pattern text, treating non-primitives as empty (they can't meaningfully substring-match). */
+const filterValueText = (value: unknown): string => {
+    if (typeof value === "string") {
+        return value;
+    }
+
+    return typeof value === "number" || typeof value === "boolean" ? String(value) : "";
+};
+
+/**
+ * Compile one {@link FilterClause} into a parameterised SQL conjunct, or
+ * `undefined` to skip it (an unknown column on a non-doc table). The compared
+ * expression is the physical column when `column` is one of the table's physical
+ * columns, otherwise a `json_extract` of the `__doc__` blob with the JSON path
+ * bound as a parameter. The value is always bound, so a clause can never inject SQL.
+ */
+const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { params: unknown[]; sql: string } | undefined => {
+    const isPhysical = physicalColumns.includes(clause.column);
+    const isDocumentStored = physicalColumns.includes(DOC_COLUMN);
+
+    if (!isPhysical && !isDocumentStored) {
+        return undefined;
+    }
+
+    // Physical/meta column → quoted identifier; doc field → json_extract with the
+    // path bound (`$."field"`), never interpolated.
+    const columnExpression = isPhysical ? quoteIdentifier(clause.column) : `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`;
+    const pathParameters: unknown[] = isPhysical ? [] : [`$."${clause.column.replaceAll('"', '""')}"`];
+
+    if (clause.operator === "contains") {
+        return { params: [...pathParameters, `%${escapeLike(filterValueText(clause.value))}%`], sql: String.raw`CAST(${columnExpression} AS TEXT) LIKE ? ESCAPE '\'` };
+    }
+
+    return { params: [...pathParameters, clause.value], sql: `${columnExpression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
+};
+
 /**
  * Read a page of rows from one user table. The table name is validated against
  * the live `sqlite_master` allowlist (and rejected if it is internal or
@@ -284,32 +346,44 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
         return Object.keys(references).length > 0 ? { ...page, refs: references } : page;
     };
 
-    // No filter: a plain windowed read against the full row count. Rows are
-    // expanded from `__doc__` so the user fields show as columns (no-op for the
-    // synthetic column-per-field tables used in tests).
-    if (needle === "" || columns.length === 0) {
-        const total = countRows(sql, quoted);
-        const rawRows = sql.exec(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`, limit, offset).toArray();
-        const expanded = expandDocumentRows(columns, rawRows);
+    // Assemble the WHERE as AND-combined conjuncts: an optional substring search
+    // (OR a case-insensitive LIKE across every PHYSICAL column — for doc-stored
+    // tables `__doc__` holds every field value, so this covers all user fields)
+    // plus each structured filter. Column names come from PRAGMA (validated) and
+    // every value/path is a bound parameter, so nothing here injects SQL.
+    const conjuncts: string[] = [];
+    const parameters: unknown[] = [];
 
-        return withReferences({ ...expanded, total });
+    if (needle !== "" && columns.length > 0) {
+        const pattern = `%${escapeLike(needle)}%`;
+
+        conjuncts.push(`(${columns.map((name) => String.raw`CAST(${quoteIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\'`).join(" OR ")})`);
+        parameters.push(...columns.map(() => pattern));
     }
 
-    // Server-side search: OR a case-insensitive LIKE across every PHYSICAL column.
-    // For doc-stored tables the `__doc__` JSON text contains every field value,
-    // so a substring match over it covers all user fields. Column names come from
-    // PRAGMA (validated) and the pattern is a bound parameter, so neither injects
-    // SQL. `total` is the filtered count, keeping the client's pager honest.
-    const pattern = `%${escapeLike(needle)}%`;
-    const where = columns.map((name) => String.raw`CAST(${quoteIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\'`).join(" OR ");
-    const matchParams = columns.map(() => pattern);
+    for (const clause of options.filters ?? []) {
+        const built = buildFilterClause(clause, columns);
 
-    const total = Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted} WHERE ${where}`, ...matchParams).one().c);
-    const rawRows = sql.exec(`SELECT * FROM ${quoted} WHERE ${where} LIMIT ? OFFSET ?`, ...matchParams, limit, offset).toArray();
-    const expanded = expandDocumentRows(columns, rawRows);
+        if (built !== undefined) {
+            conjuncts.push(`(${built.sql})`);
+            parameters.push(...built.params);
+        }
+    }
 
-    return withReferences({ ...expanded, total });
+    // No predicates: a plain windowed read against the full row count.
+    if (conjuncts.length === 0) {
+        const total = countRows(sql, quoted);
+        const rawRows = sql.exec(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`, limit, offset).toArray();
+
+        return withReferences({ ...expandDocumentRows(columns, rawRows), total });
+    }
+
+    const where = conjuncts.join(" AND ");
+    const total = Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted} WHERE ${where}`, ...parameters).one().c);
+    const rawRows = sql.exec(`SELECT * FROM ${quoted} WHERE ${where} LIMIT ? OFFSET ?`, ...parameters, limit, offset).toArray();
+
+    return withReferences({ ...expandDocumentRows(columns, rawRows), total });
 };
 
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage };
-export type { FunctionCallStat, FunctionStatsResult, ReadTablePageOptions, TableIndexesResult, TableIndexInfo, TableInfo, TablePage };
+export type { FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, ReadTablePageOptions, TableIndexesResult, TableIndexInfo, TableInfo, TablePage };
