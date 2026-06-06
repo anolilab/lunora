@@ -8,9 +8,10 @@
 // Run after `packem build`. packem's extension depends on its `runtime` setting
 // (`browser` → `.js`, `node` → `.mjs`), so detect whichever it produced rather
 // than hard-coding one.
-import { build } from "esbuild";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+
+import { build } from "esbuild";
 
 const mountEntry = ["dist/mount.js", "dist/mount.mjs"].find((candidate) => existsSync(join(process.cwd(), candidate)));
 
