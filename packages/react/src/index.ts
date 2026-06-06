@@ -41,6 +41,8 @@ export { useMutation } from "./use-mutation.js";
 export type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
 export { usePaginatedQuery } from "./use-paginated-query.js";
 export { default as usePreloadedQuery } from "./use-preloaded-query.js";
+export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence.js";
+export { usePresence } from "./use-presence.js";
 export { default as useQuery } from "./use-query.js";
 export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit.js";
 export { useRateLimit } from "./use-rate-limit.js";
