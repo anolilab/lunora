@@ -7,7 +7,7 @@ Supports token-bucket, fixed-window, and sliding-window algorithms (see `@cirrus
 ## Install
 
 ```bash
-cirrus add ratelimit
+cirrus registry add ratelimit
 ```
 
 This:

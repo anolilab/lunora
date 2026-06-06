@@ -83,8 +83,16 @@
                 "required": ["from", "to", "merge"],
                 "additionalProperties": false,
                 "properties": {
-                    "from": { "type": "string", "description": "Source path inside the item directory." },
-                    "to": { "type": "string", "description": "Destination relative to the project root (no `..`)." },
+                    "from": {
+                        "type": "string",
+                        "pattern": "^(?!/)(?!.*\\.\\.).+$",
+                        "description": "Source path inside the item directory (relative, no `..`)."
+                    },
+                    "to": {
+                        "type": "string",
+                        "pattern": "^(?!/)(?!.*\\.\\.).+$",
+                        "description": "Destination relative to the project root (relative, no `..`)."
+                    },
                     "merge": {
                         "type": "string",
                         "enum": ["create-or-skip", "schema-extension"],

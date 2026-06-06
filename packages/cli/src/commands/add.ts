@@ -126,6 +126,9 @@ const DEFAULT_SOURCE_REF = "alpha";
 /** Splits `.dev.vars` / file text into lines (CRLF or LF). */
 const NEWLINE_SPLIT = /\r?\n/u;
 
+/** A CR or LF — illegal in a `.dev.vars` value (it would inject a spurious line). */
+const NEWLINE_PRESENT = /[\r\n]/u;
+
 /** Mirror init's `--source` gate. */
 const isSafeSource = (source: string): boolean => {
     if (source.includes("..")) {
@@ -190,9 +193,17 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
             throw new Error(`registry.json "${itemName}": files[${String(index)}].merge must be "create-or-skip" or "schema-extension"`);
         }
 
-        // Reject path traversal in destinations: items must stay inside the project.
-        if (to.includes("..") || to.startsWith("/")) {
-            throw new Error(`registry.json "${itemName}": files[${String(index)}].to "${to}" must be a relative path without ".."`);
+        // Reject path traversal on BOTH sides. `to` must stay inside the project;
+        // `from` must stay inside the (possibly untrusted, giget-fetched) item dir —
+        // otherwise a malicious manifest could read an arbitrary host file
+        // (`from: "../../../../etc/passwd"`) and copy/print it.
+        for (const [field, value] of [
+            ["from", from],
+            ["to", to],
+        ] as const) {
+            if (value.includes("..") || value.startsWith("/")) {
+                throw new Error(`registry.json "${itemName}": files[${String(index)}].${field} "${value}" must be a relative path without ".."`);
+            }
         }
 
         return { from, merge, to };
@@ -224,6 +235,12 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
               )
               .map((entry) => {
                   const hasValue = typeof entry.value === "string";
+
+                  // `.dev.vars` is line-oriented; a newline in a value would inject a
+                  // spurious key. Reject at parse time, before anything is written.
+                  if (hasValue && NEWLINE_PRESENT.test(entry.value as string)) {
+                      throw new Error(`registry.json "${itemName}": envVars["${entry.name}"].value must not contain a newline`);
+                  }
 
                   return {
                       ...(typeof entry.description === "string" ? { description: entry.description } : {}),
@@ -363,9 +380,20 @@ const resolvePlan = async (
         items.push({ directory, manifest });
     };
 
-    for (const name of names) {
-        // eslint-disable-next-line no-await-in-loop
-        await visit(name);
+    try {
+        for (const name of names) {
+            // eslint-disable-next-line no-await-in-loop
+            await visit(name);
+        }
+    } catch (error) {
+        // A mid-plan failure (e.g. a later item 404s) must not leak the staging
+        // dirs already fetched for earlier items — the caller only wires up
+        // cleanup on success.
+        for (const cleanup of cleanups) {
+            cleanup();
+        }
+
+        throw error;
     }
 
     return { cleanups, items };
@@ -1026,7 +1054,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
     }
 
     if (options.names.length === 0) {
-        options.logger.error("add requires at least one item name. Usage: cirrus add <name> [...names]");
+        options.logger.error("add requires at least one item name. Usage: cirrus registry add <name> [...names]");
 
         return { ...empty, code: 1 };
     }
@@ -1104,7 +1132,7 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
     const empty: AddCommandResult = { bindings: [], code: 0, deps: [], skipped: [], written: [] };
 
     if (options.names.length === 0) {
-        options.logger.error("view requires an item name. Usage: cirrus view <name>");
+        options.logger.error("view requires an item name. Usage: cirrus registry view <name>");
 
         return { ...empty, code: 1 };
     }

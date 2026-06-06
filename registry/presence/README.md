@@ -7,7 +7,7 @@ Built entirely from primitives Cirrus already has — a live-query table plus a 
 ## Install
 
 ```bash
-cirrus add presence
+cirrus registry add presence
 ```
 
 This:

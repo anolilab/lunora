@@ -82,6 +82,25 @@ describe("cirrus add", () => {
                 /relative path/,
             );
         });
+
+        it("rejects path traversal in from (arbitrary host-file read)", () => {
+            expect.assertions(1);
+
+            expect(() => parseManifest({ files: [{ from: "../../../../etc/passwd", merge: "create-or-skip", to: "cirrus/x.ts" }], name: "x" }, "x")).toThrow(
+                /relative path/,
+            );
+        });
+
+        it("rejects a newline in an env var value (.dev.vars injection)", () => {
+            expect.assertions(1);
+
+            expect(() =>
+                parseManifest(
+                    { envVars: [{ name: "A", value: "x\nINJECTED=evil" }], files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }], name: "x" },
+                    "x",
+                ),
+            ).toThrow(/newline/);
+        });
     });
 
     describe("plan / dry-run", () => {

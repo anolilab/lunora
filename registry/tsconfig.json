@@ -1,5 +1,5 @@
 {
-    "//": "Type-checks the shipped `cirrus add` registry items (registry/<item>/*.ts) against the workspace packages they import. Not a build — `noEmit`. Run via the root `lint:types:registry` script, which the full `lint:types` chains after `vis run lint:types` has built every package's dist. `@cirrus/*` maps to each package's built declarations (not src) so the items are checked exactly as a consumer sees them, without recompiling package internals (which would pull Cloudflare-Workers globals from DO-backed packages). `bundler` resolution lets an item's `./schema.js` specifier resolve to its sibling `.ts`.",
+    "//": "Type-checks the shipped registry items (registry/<item>/*.ts) against the workspace packages they import. Not a build — `noEmit`. Run via the root `lint:types:registry` script, which builds all packages first (`build:packages`) so every `@cirrus/*` dist exists regardless of caller. `@cirrus/*` maps to each package's built declarations (not src) so items are checked exactly as a consumer sees them, without recompiling package internals (which would pull Cloudflare-Workers globals from DO-backed packages). `bundler` resolution lets an item's `./schema.js` specifier resolve to its sibling `.ts`.",
     "extends": "../tsconfig.base.json",
     "compilerOptions": {
         "noEmit": true,

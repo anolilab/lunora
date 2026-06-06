@@ -78,6 +78,51 @@ describe("cirrus CLI entry", () => {
         expect(stderr).toContain("unknown command");
     });
 
+    describe("registry subcommands", () => {
+        const registryRoot = resolve(testDirectory, "..", "..", "..", "registry");
+
+        it("`registry list --from <root>` exits 0", async () => {
+            expect.assertions(1);
+
+            const code = await runCli({ argv: ["registry", "list", "--from", registryRoot] });
+
+            expect(code).toBe(0);
+        });
+
+        it("`registry add <name> --dry-run` plans without writing and exits 0", async () => {
+            expect.assertions(1);
+
+            const code = await runCli({ argv: ["registry", "add", "presence", "--dry-run", "--from", registryRoot] });
+
+            expect(code).toBe(0);
+        });
+
+        it("`registry build --check` confirms the committed catalog is current", async () => {
+            expect.assertions(1);
+
+            const code = await runCli({ argv: ["registry", "build", "--check", "--from", registryRoot] });
+
+            expect(code).toBe(0);
+        });
+
+        it("an unknown registry subcommand exits non-zero", async () => {
+            expect.assertions(2);
+
+            const code = await runCli({ argv: ["registry", "frobnicate"] });
+
+            expect(code).toBe(1);
+            expect(stderr).toContain("unknown subcommand");
+        });
+
+        it("the former top-level `add` command is gone", async () => {
+            expect.assertions(1);
+
+            const code = await runCli({ argv: ["add", "presence"] });
+
+            expect(code).toBe(1);
+        });
+    });
+
     describe("argv reorder (option-after-positional)", () => {
         // The published cerebro@2.1.5 swallows space-separated options that
         // appear after a positional argument into the positional array; we
