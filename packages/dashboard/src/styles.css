@@ -1,0 +1,14 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* Theme tokens (shadcn palette, @custom-variant, @layer base) live in the shared
+   theme.css so the library CSS and the standalone apps/dashboard never drift. */
+@import "./theme.css";
+
+/* Scan this library's own source so every utility class the panels use is
+   compiled into the shipped stylesheet. The library ships as JS, which
+   Tailwind's source detection would otherwise skip — `@source "./"` makes the
+   precompiled `dist/styles.css` self-sufficient for any host that just links
+   it (e.g. the `@cirrus/vite` dev route), with no Tailwind in the host app. */
+@source "./";
