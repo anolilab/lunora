@@ -17,6 +17,22 @@ The following gaps are now closed (see the tiered tables below for the original 
 - **#11 / #12 / #13 File serving** — `serveStorageObject(ctx, key, request)` httpAction helper with HTTP **Range/206** + `Content-Range`/416, `ETag`, and `sha256` surfaced in object metadata.
 - **#7 / #8 Observability adapters** — built-in `consoleSink` / `webhookSink` (Axiom/Datadog) / `sentrySink` / `combineSinks`, exported from `@cirrus/runtime`.
 
+## ✅ Shipped since this analysis (Phase B — 2026-06-06)
+
+A second wave closed the query-layer DX gaps the original inventory had counted as
+"at parity" but were actually missing, plus several tracked items. These supersede the
+relevant rows/tally below (the **117 full / 15 partial / 17 missing** counts predate this wave):
+
+- **Function composition** — `ctx.runQuery` / `ctx.runMutation` from queries & mutations (in-process, same ctx), with a `RUN_DEPTH_EXCEEDED` cycle guard.
+- **Query builder** — `.order("asc"|"desc")`, `.unique()`, and `ctx.db.normalizeId(table, id)`.
+- **Reactive pagination** — range-bounded `(cursor, endCursor]` pages with client-side split/join rebalancing (the page-boundary half of **#20**; the wire-level delta *merge* is still open).
+- **Optimistic `localStore`** — multi-query optimistic updates (`useMutation(...).withOptimisticUpdate`), generalizing the per-call rollback.
+- **Code-first crons** — `cronJobs()` builder → codegen discovery/emit → `wrangler.jsonc` sync → runtime `scheduled()` dispatch (incl. internal functions via a system-dispatch header) + a `cirrus-cron` generator.
+- **Client auth identity** — `useAuth().user` populated from the session endpoint (closes the client side of the Phase-6 auth gap).
+- **Storage metadata** — `ctx.storage.getMetadata(key)`.
+- **`ctx.db.system` system tables** — read-only `_scheduled_functions` / `_storage` proxies (eventually-consistent, not transaction-snapshot — documented).
+- **Component table isolation** — schema-extension tables auto-namespaced (`${key}_table`, runtime-enforced) + codegen `.extend()` discovery + type-safe `RankIndexName` (see **#5**, re-scoped below).
+
 ---
 
 ## Where Cirrus already leads Convex
@@ -43,7 +59,7 @@ These are differentiators — do not regress them.
 | 2   | **Cross-shard / global transactions**      | missing         | Mutations are ACID only within a single shard (DO). No atomic write across shards, or across sharded↔global(D1) tables; cross-backend cascades are one-way (documented consistency loss). Convex mutations are globally serializable.                                                                                                                                                                                                       |
 | 3   | **Cross-query consistency snapshot**       | partial         | Per-shard consistency with row-dependency tracking, but no cross-shard MVCC / version vectors / causal snapshot across shards.                                                                                                                                                                                                                                                                                                              |
 | 4   | **Durable action execution**               | missing         | No `@convex-dev/workpool` (bounded-concurrency pools) and no action-retrier (retry w/ backoff). Action retry/pooling must be hand-rolled via `ctx.scheduler`.                                                                                                                                                                                                                                                                               |
-| 5   | **Installable Component ecosystem**        | partial/missing | `defineComponent`/`definePlugin` exist but are local plugins/schema-extensions: namespacing is conventional (not runtime-enforced), all plugin tables share the host DB (no sandboxed storage boundary), functions must be manually re-exported (no auto codegen namespacing — flagged as a v1 follow-up in `plugin.ts:214`), and there's no per-component scheduler/queue. No `@convex-dev/*`-style installable, sandboxed npm components. |
+| 5   | **Component ecosystem** (re-scoped 2026-06-06) | partial | **Decision: pursue the kitcn/shadcn "registry" model, NOT Convex's sandboxed-component model.** Convex's `@convex-dev/*` components are black-box, runtime-sandboxed npm packages (own tables/storage/scheduler the app can't read; writes join the caller's transaction). That model exists for a _managed, multi-tenant_ backend running untrusted third-party code, and it would require **cross-DO transactions (gap #2 — inherently hard on the sharding substrate)** and per-component storage isolation to replicate. It also clashes with Cirrus's _user-owned-infra_ positioning, and Convex is FSL (ideas-only, can't vendor). **Won't-do: sandboxed runtime components.** Instead, build on the existing kitcn-style plugin contract — `definePlugin`/`defineSchemaExtension`/`.extend()` with **auto table-namespacing (now runtime-enforced)** and **codegen `.extend()` discovery (shipped Phase B)** — plus a `cirrus add <name>` registry that scaffolds **user-owned** schema+functions+middleware into the project (shadcn-style, white-box, editable; PLAN2 §3.6). **Remaining:** the `cirrus add` registry (planner / dependency resolution / ownership tracking) and **auto function-namespacing via codegen** so a plugin's queries/mutations surface under `api.<key>.*` + a typed `ctx.api.<key>` (closes the "manual re-export" half). See `COMPONENT-REGISTRY.md`. |
 
 ### Tier 2 — Meaningful product gaps
 
@@ -78,7 +94,7 @@ These are differentiators — do not regress them.
 
 ## Recommendation (effort × value)
 
-- **Biggest strategic gaps:** #2 (cross-shard transactions) and #4/#5 (durable actions + installable components). #2 is partly inherent to the DO-sharding model that gives Cirrus its scaling lead — treat it as a deliberate trade-off, not a bug.
+- **Biggest strategic gaps:** #2 (cross-shard transactions) and #4 (durable actions). #2 is partly inherent to the DO-sharding model that gives Cirrus its scaling lead — treat it as a deliberate trade-off, not a bug. **#5 is re-scoped (2026-06-06):** the Convex sandboxed-component model is a deliberate **won't-do** (wrong fit for user-owned infra + needs gap #2); the on-brand path is the kitcn-style `cirrus add` registry — see `COMPONENT-REGISTRY.md`.
 - **Highest effort-to-value (bounded, additive):** #7/#8/#9 (log/Sentry/export adapters) and #10–#13 (in-handler upload + range serving + serve-from-httpAction). These are self-contained features with no architectural risk.
 - **Quick DX wins:** #21 (expose scheduler list/inspect on the client), #10 (`generateUploadUrl` on `ctx.storage`).
 
