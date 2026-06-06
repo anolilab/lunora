@@ -41,6 +41,7 @@
         "test": "vitest run"
     },
     "dependencies": {
+        "@better-auth/passkey": "catalog:auth",
         "better-auth": "catalog:auth"
     },
     "devDependencies": {

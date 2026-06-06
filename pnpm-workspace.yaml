@@ -122,6 +122,7 @@ catalogs:
     "next": ^16.2.7
     "tailwindcss": ^4.3.0
   auth:
+    "@better-auth/passkey": ^1.6.14
     "better-auth": ^1.6.14
   drizzle:
     drizzle-orm: ^0.45.2

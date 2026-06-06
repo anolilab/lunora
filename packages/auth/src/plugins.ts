@@ -48,6 +48,7 @@
  * the plugin factories with a Cirrus-namespaced import path.
  */
 
+export { passkey } from "@better-auth/passkey";
 export { admin } from "better-auth/plugins/admin";
 export { anonymous } from "better-auth/plugins/anonymous";
 export { bearer } from "better-auth/plugins/bearer";

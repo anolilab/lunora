@@ -1,6 +1,8 @@
 import type { BetterAuthOptions } from "better-auth";
 import { betterAuth } from "better-auth";
 
+import { validateSessionPolicy } from "./session.js";
+
 /**
  * Cirrus's options pass straight through to better-auth — the only thing we
  * provide is the convention that `database` defaults to `env.DB` (a Cloudflare
@@ -10,6 +12,11 @@ import { betterAuth } from "better-auth";
  * better-auth's `database` field accepts a D1Database directly (as well as a
  * Kysely instance / dialect), so passing `env.DB` is sufficient — no extra
  * adapter wiring needed.
+ *
+ * Session rotation / richer session policies are configured via the `session`
+ * field (a `SessionPolicy`); Cirrus validates it for obviously-broken
+ * durations and forwards it verbatim to better-auth. See `sessionPresets`
+ * for ready-made rotation/expiry trade-offs.
  */
 export type CirrusAuthOptions = BetterAuthOptions;
 
@@ -33,6 +40,14 @@ export const createAuth = (options: CirrusAuthOptions): CirrusAuth => {
     // first sign-in attempt.
     if (!options.secret || options.secret.trim() === "") {
         throw new Error("@cirrus/auth: `secret` is required");
+    }
+
+    // Catch obviously-broken session durations (negative / non-finite) at
+    // construction time. Validation is a pass-through, so `options.session` is
+    // forwarded to better-auth 1:1 — we don't reshape the object (which would
+    // narrow better-auth's inferred `Auth<…>` type away from `CirrusAuth`).
+    if (options.session) {
+        validateSessionPolicy(options.session);
     }
 
     return betterAuth(options);

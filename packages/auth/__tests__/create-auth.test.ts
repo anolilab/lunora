@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { createAuth } from "../src/create-auth.js";
 import { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "../src/handler.js";
+import { sessionPresets } from "../src/session.js";
 
 const SECRET_PATTERN = /secret/i;
 
@@ -34,6 +35,48 @@ describe("createAuth", () => {
 
         expect(auth.api).toBeDefined();
         expect(auth.options.secret).toBe("s".repeat(32));
+    });
+
+    it("forwards a configured session policy to the underlying betterAuth options", () => {
+        expect.assertions(3);
+
+        const auth = createAuth({
+            secret: "s".repeat(32),
+            session: {
+                disableSessionRefresh: false,
+                expiresIn: 60 * 60 * 24 * 3,
+                freshAge: 60 * 5,
+                updateAge: 60 * 30,
+            },
+        });
+
+        expect(auth.options.session?.expiresIn).toBe(60 * 60 * 24 * 3);
+        expect(auth.options.session?.updateAge).toBe(60 * 30);
+        expect(auth.options.session?.freshAge).toBe(60 * 5);
+    });
+
+    it("forwards a session preset to the underlying betterAuth options", () => {
+        expect.assertions(2);
+
+        const auth = createAuth({
+            secret: "s".repeat(32),
+            session: sessionPresets.strict,
+        });
+
+        expect(auth.options.session?.expiresIn).toBe(sessionPresets.strict.expiresIn);
+        expect(auth.options.session?.updateAge).toBe(sessionPresets.strict.updateAge);
+    });
+
+    it("rejects a negative session duration", () => {
+        expect.assertions(1);
+
+        expect(() => createAuth({ secret: "s".repeat(32), session: { expiresIn: -1 } })).toThrow(/non-negative/i);
+    });
+
+    it("rejects a non-finite session duration", () => {
+        expect.assertions(1);
+
+        expect(() => createAuth({ secret: "s".repeat(32), session: { updateAge: Number.POSITIVE_INFINITY } })).toThrow(/finite/i);
     });
 });
 
