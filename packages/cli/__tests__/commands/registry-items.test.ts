@@ -69,6 +69,31 @@ describe("shipped registry items", () => {
         expect(itemNames).toContain("presence");
     });
 
+    it("index.json catalog matches the item directories (no drift)", () => {
+        expect.assertions(1);
+
+        const index = JSON.parse(readFileSync(join(registryRoot, "index.json"), "utf8")) as { items: { name: string }[] };
+        const indexed = index.items.map((entry) => entry.name).toSorted((a, b) => a.localeCompare(b));
+
+        expect(indexed).toStrictEqual(itemNames.toSorted((a, b) => a.localeCompare(b)));
+    });
+
+    it("`list` reads the catalog and reports every item", async () => {
+        // eslint-disable-next-line vitest/prefer-expect-assertions -- one assertion per discovered item; data-driven, so not a literal
+        expect.assertions(itemNames.length);
+
+        const lines: string[] = [];
+        const capturing: Logger = { error: (m) => lines.push(m), info: (m) => lines.push(m), success: (m) => lines.push(m), warn: (m) => lines.push(m) };
+
+        await runAddCommand({ cwd: workdir, from: registryRoot, list: true, logger: capturing, names: [] });
+
+        const output = lines.join("\n");
+
+        for (const name of itemNames) {
+            expect(output).toContain(name);
+        }
+    });
+
     describe.each(itemNames)("%s", (name) => {
         const manifestRaw = JSON.parse(readFileSync(join(registryRoot, name, "registry.json"), "utf8")) as unknown;
         const manifest = parseManifest(manifestRaw, name);

@@ -21,6 +21,8 @@
 import { createInterface } from "node:readline";
 
 import type { Logger } from "../util/logger.js";
+import type { RegistryLock } from "../util/registry-lock.js";
+import { hashContent, readLock, recordedHash, recordFile, writeLock } from "../util/registry-lock.js";
 
 /** A single file the item scaffolds into the project. */
 interface RegistryFile {
@@ -335,6 +337,7 @@ const reconcileFile = async (
     itemDirectory: string,
     projectRoot: string,
     logger: Logger,
+    lock: RegistryLock,
 ): Promise<{ kind: "skipped" | "written"; path: string }> => {
     const { existsSync, mkdirSync, readFileSync, writeFileSync } = await import("node:fs");
     const { dirname, join } = await import("@visulima/path");
@@ -378,18 +381,55 @@ const reconcileFile = async (
         throw new Error(`schema-extension merge failed for "${itemKey}": ${result.reason}`);
     }
 
-    // create-or-skip
-    if (existsSync(destinationPath)) {
+    // create-or-skip — lock-aware 3-way reconcile (base = last-written hash in
+    // the lock, yours = on-disk, theirs = incoming registry copy).
+    const incoming = readFileSync(sourcePath, "utf8");
+
+    if (!existsSync(destinationPath)) {
+        mkdirSync(dirname(destinationPath), { recursive: true });
+        writeFileSync(destinationPath, incoming, "utf8");
+        recordFile(lock, itemKey, file.to, incoming);
+        logger.success(`write: ${file.to}`);
+
+        return { kind: "written", path: destinationPath };
+    }
+
+    const current = readFileSync(destinationPath, "utf8");
+    const currentHash = hashContent(current);
+
+    if (currentHash === hashContent(incoming)) {
+        // Already byte-identical — record provenance (in case it was untracked) and skip.
+        recordFile(lock, itemKey, file.to, incoming);
         logger.warn(`skip (exists): ${file.to}`);
 
         return { kind: "skipped", path: destinationPath };
     }
 
-    mkdirSync(dirname(destinationPath), { recursive: true });
-    writeFileSync(destinationPath, readFileSync(sourcePath, "utf8"), "utf8");
-    logger.success(`write: ${file.to}`);
+    const base = recordedHash(lock, itemKey, file.to);
 
-    return { kind: "written", path: destinationPath };
+    if (base === undefined) {
+        // No provenance — `add` never wrote this file, so an "upgrade" could
+        // silently destroy unrelated user content. Leave it untouched.
+        logger.warn(`skip (exists, untracked): ${file.to} — refusing to overwrite a file cirrus didn't add`);
+
+        return { kind: "skipped", path: destinationPath };
+    }
+
+    if (base === currentHash) {
+        // Unedited since the last add → a clean upgrade. Overwrite and re-record.
+        writeFileSync(destinationPath, incoming, "utf8");
+        recordFile(lock, itemKey, file.to, incoming);
+        logger.success(`update: ${file.to}`);
+
+        return { kind: "written", path: destinationPath };
+    }
+
+    // The file changed on both sides (local edits + an upstream update). Never
+    // clobber the user's edits; drop the incoming copy beside it for manual merge.
+    writeFileSync(`${destinationPath}.new`, incoming, "utf8");
+    logger.warn(`conflict: ${file.to} has local edits and an upstream update — wrote ${file.to}.new for manual merge`);
+
+    return { kind: "skipped", path: destinationPath };
 };
 
 /** Add deps to the project package.json (structural, preserving formatting). Returns added names. */
@@ -482,54 +522,140 @@ const applyBindings = async (bindings: ReadonlyArray<RegistryBinding>, projectRo
     return applied;
 };
 
-/** `cirrus list` / `cirrus add --list`: enumerate available registry items. */
-const runListCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
-    const empty: AddCommandResult = { bindings: [], code: 0, deps: [], skipped: [], written: [] };
+/** One catalog entry as `cirrus list` reports it. */
+interface CatalogItem {
+    description?: string;
+    name: string;
+}
 
-    if (options.from === undefined) {
-        // Listing the remote registry requires an index endpoint we don't ship
-        // in the MVP. Point the user at `--from` / the docs instead of guessing.
-        options.logger.info("cirrus list: remote registry index is not available yet — pass --from <dir> to list a local registry");
-
-        return empty;
-    }
-
+/**
+ * Collect the catalog from a resolved registry root. Prefers a top-level
+ * `index.json` (`{ items: [{ name, description }] }`) — the curated, single-file
+ * catalog the remote ships — and falls back to enumerating each subdirectory's
+ * `registry.json` when no index is present (e.g. an ad-hoc local `--from` root).
+ */
+const collectCatalog = async (root: string): Promise<CatalogItem[]> => {
     const { existsSync, readdirSync, readFileSync, statSync } = await import("node:fs");
     const { join } = await import("@visulima/path");
 
-    if (!existsSync(options.from)) {
-        options.logger.error(`registry root not found: ${options.from}`);
+    const indexPath = join(root, "index.json");
+
+    if (existsSync(indexPath)) {
+        const parsed = JSON.parse(readFileSync(indexPath, "utf8")) as { items?: unknown };
+
+        if (Array.isArray(parsed.items)) {
+            return parsed.items
+                .filter((entry): entry is CatalogItem => typeof entry === "object" && entry !== null && typeof (entry as CatalogItem).name === "string")
+                .map((entry) => {
+                    return { description: entry.description, name: entry.name };
+                });
+        }
+    }
+
+    return readdirSync(root)
+        .filter((entry) => {
+            const full = join(root, entry);
+
+            return statSync(full).isDirectory() && existsSync(join(full, "registry.json"));
+        })
+        .map((name) => {
+            const raw = JSON.parse(readFileSync(join(root, name, "registry.json"), "utf8")) as { description?: string };
+
+            return { description: raw.description, name };
+        });
+};
+
+/**
+ * Resolve the registry root for listing: a local `--from` dir (offline), or a
+ * giget-fetched copy of the remote registry base. Returns the root plus a
+ * cleanup callback the caller runs when finished.
+ */
+const resolveRegistryRoot = async (options: AddCommandOptions): Promise<{ cleanup: () => void; root: string }> => {
+    if (options.from !== undefined) {
+        const { existsSync } = await import("node:fs");
+
+        if (!existsSync(options.from)) {
+            throw new Error(`registry root not found: ${options.from}`);
+        }
+
+        return { cleanup: () => {}, root: options.from };
+    }
+
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("@visulima/path");
+    const { downloadTemplate } = await import("giget");
+
+    const base = options.source ?? DEFAULT_SOURCE_BASE;
+    const remote = `${base}#${DEFAULT_SOURCE_REF}`;
+
+    const stagingRoot = mkdtempSync(join(tmpdir(), "cirrus-list-fetch-"));
+    const stagingDirectory = join(stagingRoot, "registry");
+
+    options.logger.info(`fetching registry catalog from ${remote}`);
+
+    try {
+        await downloadTemplate(remote, { cwd: stagingRoot, dir: stagingDirectory, force: true, install: false, silent: true });
+
+        return {
+            cleanup: () => {
+                rmSync(stagingRoot, { force: true, recursive: true });
+            },
+            root: stagingDirectory,
+        };
+    } catch (error) {
+        rmSync(stagingRoot, { force: true, recursive: true });
+
+        throw error;
+    }
+};
+
+/** `cirrus list` / `cirrus add --list`: enumerate available registry items (local `--from` or remote). */
+const runListCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
+    const empty: AddCommandResult = { bindings: [], code: 0, deps: [], skipped: [], written: [] };
+
+    // Mirror init's --source gate for the remote-fetch path.
+    if (
+        options.from === undefined &&
+        options.source !== undefined &&
+        options.source.length > 0 &&
+        !options.allowUnsafeSource &&
+        !isSafeSource(options.source)
+    ) {
+        options.logger.error(`list: refusing --source ${options.source} — only gh:, github:, or https:// sources are allowed (and may not contain "..").`);
 
         return { ...empty, code: 1 };
     }
 
-    const names = readdirSync(options.from).filter((entry) => {
-        const full = join(options.from as string, entry);
+    let cleanup: () => void = () => {};
 
-        return statSync(full).isDirectory() && existsSync(join(full, "registry.json"));
-    });
+    try {
+        const resolved = await resolveRegistryRoot(options);
 
-    if (options.json) {
-        const records = names.map((name) => {
-            const raw = JSON.parse(readFileSync(join(options.from as string, name, "registry.json"), "utf8")) as { description?: string };
+        cleanup = resolved.cleanup;
 
-            return { description: raw.description, name };
-        });
+        const items = await collectCatalog(resolved.root);
 
-        process.stdout.write(`${JSON.stringify(records, undefined, 2)}\n`);
+        if (options.json) {
+            process.stdout.write(`${JSON.stringify(items, undefined, 2)}\n`);
+
+            return empty;
+        }
+
+        options.logger.info(`available registry items (${String(items.length)}):`);
+
+        for (const item of items) {
+            options.logger.info(`  ${item.name}${item.description ? ` — ${item.description}` : ""}`);
+        }
 
         return empty;
+    } catch (error) {
+        options.logger.error(`list failed: ${error instanceof Error ? error.message : String(error)}`);
+
+        return { ...empty, code: 1 };
+    } finally {
+        cleanup();
     }
-
-    options.logger.info(`available registry items (${String(names.length)}):`);
-
-    for (const name of names) {
-        const raw = JSON.parse(readFileSync(join(options.from, name, "registry.json"), "utf8")) as { description?: string };
-
-        options.logger.info(`  ${name}${raw.description ? ` — ${raw.description}` : ""}`);
-    }
-
-    return empty;
 };
 
 /**
@@ -570,12 +696,16 @@ const reconcileItems = async (
     const depsAdded: string[] = [];
     const bindingsApplied: string[] = [];
 
+    // The whole-file reconcile lock (records last-written hashes for the 3-way
+    // upgrade check). Read once, mutated as files are reconciled, persisted below.
+    const lock = readLock(cwd);
+
     // Sequential by design: reconciling cirrus/schema.ts is read-modify-write,
     // so two items extending the schema must not interleave their edits.
     for (const { directory, manifest } of items) {
         for (const file of manifest.files) {
             // eslint-disable-next-line no-await-in-loop
-            const outcome = await reconcileFile(file, manifest.name, directory, cwd, logger);
+            const outcome = await reconcileFile(file, manifest.name, directory, cwd, logger, lock);
 
             if (outcome.kind === "written") {
                 written.push(outcome.path);
@@ -593,6 +723,12 @@ const reconcileItems = async (
             // eslint-disable-next-line no-await-in-loop
             bindingsApplied.push(...(await applyBindings(manifest.bindings, cwd, logger)));
         }
+    }
+
+    // Persist the lock only once it has something to track — items that ship
+    // nothing but a schema extension leave no whole-file provenance.
+    if (Object.keys(lock.items).length > 0) {
+        writeLock(cwd, lock);
     }
 
     return { bindings: bindingsApplied, deps: depsAdded, skipped, written };
