@@ -131,8 +131,8 @@ export type WithArg<T extends keyof DataModel> = {
     [K in keyof Relations[T]]?: Relations[T][K] extends ManyRelation<infer Target>
         ? boolean | (QueryArgs<Doc<Target>> & { with?: WithArg<Target> })
         : Relations[T][K] extends OneRelation<infer Target>
-          ? boolean | { with?: WithArg<Target> }
-          : never;
+            ? boolean | { with?: WithArg<Target> }
+            : never;
 } & {
     _count?: { [K in keyof Relations[T]]?: true };
 };
@@ -141,12 +141,11 @@ export type WithArg<T extends keyof DataModel> = {
 type NestedWithArg<WK> = WK extends { with: infer NW } ? NW : {};
 
 /** Resolve a single relation descriptor + its with-value to the loaded type. */
-type LoadRelation<R, WK> =
-    R extends OneRelation<infer Target>
-        ? LoadWith<Target, NestedWithArg<WK>> | null
-        : R extends ManyRelation<infer Target>
-          ? Array<LoadWith<Target, NestedWithArg<WK>>>
-          : never;
+type LoadRelation<R, WK> = R extends OneRelation<infer Target>
+    ? LoadWith<Target, NestedWithArg<WK>> | null
+    : R extends ManyRelation<infer Target>
+        ? Array<LoadWith<Target, NestedWithArg<WK>>>
+        : never;
 
 /** The relation keys of `W` that were actually requested (not `false`/`undefined`). */
 type LoadedRelations<T extends keyof DataModel, W> = {

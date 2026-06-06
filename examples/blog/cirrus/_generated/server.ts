@@ -12,10 +12,12 @@ import {
     internalQuery as internalQueryBase,
     mutation as mutationBase,
     query as queryBase,
+    v as vBase,
 } from "@cirrus/server";
 import type {
     ActionCtx as ActionCtxBase,
     ArgsValidator,
+    ColumnValidator,
     DatabaseReader,
     DatabaseWriter,
     InferArgs,
@@ -26,9 +28,9 @@ import type {
     RegisteredQuery,
 } from "@cirrus/server";
 
-import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, OrmReader, OrmWriter } from "./dataModel.js";
+import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
 
-export type { DataModel, Doc, Id } from "./dataModel.js";
+export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /**
  * Project-typed contexts. The base contexts from `@cirrus/server` are
@@ -88,15 +90,36 @@ export const internalAction = internalActionBase as unknown as <A extends ArgsVa
 }) => RegisteredAction<A, R>;
 
 /**
+ * The validator builder `v`, with `v.id(...)` constrained to THIS schema's
+ * table names — so the argument autocompletes and returns a precise
+ * `Id<"table">`. Identical to `@cirrus/server`'s `v` at runtime; the only
+ * difference is the tightened `id` type.
+ *
+ * Import `v` from here (`./_generated/server`) in your queries/mutations/actions
+ * to get table-name autocomplete. `cirrus/schema.ts` can't use it — it is the
+ * file that defines the table names, so they aren't known yet there; pass the
+ * names as string literals and the generated `Id<"table">` types still catch a
+ * typo wherever the id is used.
+ */
+export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
+    id: <T extends TableName>(table: T) => ColumnValidator<IdOfTable<T>, IdOfTable<T>>;
+};
+
+/**
  * Single registered function, narrowed to the shape `handleRpc` needs.
  * The real argument validators / return types are checked elsewhere — at
  * the dispatch site we erase to `unknown` so a single map can host every
  * registered function.
  */
 export interface RegisteredCirrusFunction {
-    kind: "action" | "mutation" | "query";
+    kind: "action" | "mutation" | "query" | "stream";
     args: Record<string, unknown>;
-    handler: (context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown;
+    /**
+     * For `"action" | "mutation" | "query"` the handler is awaited and its result returned.
+     * For `"stream"` the handler returns an `AsyncIterable` synchronously and takes an
+     * `AbortSignal` as a third argument — the runtime drives it frame-by-frame.
+     */
+    handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /** `"internal"` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
@@ -150,7 +173,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     cleanup: {
-        purgeStaleDrafts: (args?: {}) => Promise<{ deleted: number }>;
+        purgeStaleDrafts: (args?: {}) => Promise<{ deleted: number; }>;
     };
     drafts: {
         listMine: (args?: {}) => Promise<unknown>;
@@ -160,8 +183,8 @@ export interface Caller {
         get: (args: { id: Id<"posts"> }) => Promise<unknown>;
         list: (args?: {}) => Promise<unknown>;
         publish: (args: { title: string; body: string; imageKey?: string }) => Promise<Id<"posts">>;
-        requestImageUpload: (args: { contentType: string }) => Promise<{ key: string; url: string }>;
-        search: (args: { text: string; topK?: number }) => Promise<{ id: Id<"posts">; score: number; title: string }[]>;
+        requestImageUpload: (args: { contentType: string }) => Promise<{ key: string; url: string; }>;
+        search: (args: { text: string; topK?: number }) => Promise<{ id: Id<"posts">; score: number; title: string; }[]>;
     };
 }
 
