@@ -126,13 +126,14 @@ Independent per-package versioning via `multi-semantic-release`. All 15 packages
 
 ### Internal scaffolding (`vis generate`)
 
-The CLI no longer ships a `cirrus new` subcommand. Internal scaffolding — adding a query/mutation/action/table to `cirrus/`, or scaffolding a fresh `@cirrus/<name>` workspace package — is done with `vis generate`. Templates live at `.vis/templates/cirrus-*.ts` and are discovered automatically.
+The CLI no longer ships a `cirrus new` subcommand. Internal scaffolding — adding a query/mutation/action/table/cron to `cirrus/`, or scaffolding a fresh `@cirrus/<name>` workspace package — is done with `vis generate`. Templates live at `.vis/templates/cirrus-*.ts` and are discovered automatically.
 
 ```bash
 vis generate cirrus-query --name=listMessages              # → cirrus/listMessages.ts
 vis generate cirrus-mutation --name=sendMessage
 vis generate cirrus-action --name=syncWithStripe
 vis generate cirrus-table --name=invoices                  # AST-merges into cirrus/schema.ts (creates it if missing)
+vis generate cirrus-cron --name='clear presence'           # AST-appends to cirrus/crons.ts (creates it if missing)
 vis generate cirrus-package --name=foo --description='…'   # → packages/foo/
 vis generate --list                                         # show all available generators
 ```
