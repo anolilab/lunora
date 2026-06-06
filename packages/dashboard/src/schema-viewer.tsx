@@ -3,8 +3,9 @@ import { useCirrus } from "@cirrus/react";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { TableInfo, TablePage } from "./admin.js";
+import type { TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
+import { Badge } from "./components/ui/badge.js";
 import { Button } from "./components/ui/button.js";
 import { useT } from "./i18n-context.js";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
@@ -20,6 +21,7 @@ interface SchemaViewerProps {
 }
 
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
+const LIST_TABLE_INDEXES = adminRef(ADMIN_FUNCTIONS.listTableIndexes);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 
 /** Hoisted empty edge list so the graph props don't allocate a fresh array each render. */
@@ -70,6 +72,8 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
     const [tables, setTables] = useState<TableInfo[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [columns, setColumns] = useState<Record<string, string[]>>({});
+    // Declared indexes per `${shardKey}:${table}`, loaded lazily alongside columns on expand.
+    const [indexes, setIndexes] = useState<Record<string, TableIndexInfo[]>>({});
     const [expanded, setExpanded] = useState<null | string>(null);
 
     // Foreign-key edges for the shard tier, keyed by shard so a shard switch
@@ -92,6 +96,7 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
                 recordShard(shard);
                 setTables(result);
                 setColumns({});
+                setIndexes({});
                 setExpanded(null);
                 // Drop cached relationships for this shard so the graph re-probes
                 // against the freshly listed tables.
@@ -139,14 +144,22 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
                 return;
             }
 
-            try {
-                const page = (await client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey))) as TablePage;
+            // Probe columns and indexes concurrently. Indexes are best-effort: an
+            // older worker without `listTableIndexes` (or one without an admin
+            // token for that read) still shows the column list.
+            const [page, indexResult] = await Promise.allSettled([
+                client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey)) as Promise<TablePage>,
+                client.query(LIST_TABLE_INDEXES, { table }, callOptions(shardKey)) as Promise<TableIndexesResult>,
+            ]);
 
-                setColumns((previous) => {
-                    return { ...previous, [cacheKey]: page.columns };
-                });
-            } catch (error_) {
-                setError(errorMessage(error_));
+            if (page.status === "fulfilled") {
+                setColumns((previous) => {return { ...previous, [cacheKey]: page.value.columns }});
+            } else {
+                setError(errorMessage(page.reason));
+            }
+
+            if (indexResult.status === "fulfilled") {
+                setIndexes((previous) => {return { ...previous, [cacheKey]: indexResult.value.indexes }});
             }
         },
         [client, columns, expanded, shardKey],
@@ -323,6 +336,18 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
                                             <ul data-testid={`sc-columns-${table.name}`}>
                                                 {(columns[`${shardKey}:${table.name}`] ?? []).map((column) => (
                                                     <li key={column}>{column}</li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                        {expanded === table.name && (indexes[`${shardKey}:${table.name}`] ?? []).length > 0 && (
+                                            <ul className="mt-1 flex flex-col gap-1" data-testid={`sc-indexes-${table.name}`}>
+                                                {(indexes[`${shardKey}:${table.name}`] ?? []).map((index) => (
+                                                    <li className="flex flex-wrap items-center gap-1.5 text-xs" key={`${index.type}:${index.name}`}>
+                                                        <span className="font-mono">{index.name}</span>
+                                                        <Badge variant="outline">{index.type}</Badge>
+                                                        {index.unique === true && <Badge variant="secondary">unique</Badge>}
+                                                        <span className="text-muted-foreground">{index.fields.join(", ")}</span>
+                                                    </li>
                                                 ))}
                                             </ul>
                                         )}

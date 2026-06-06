@@ -1042,11 +1042,46 @@ const buildTableReferences = (schema: SchemaIR): Record<string, Record<string, s
     return references;
 };
 
+/** One flattened index entry per table, mirroring `@cirrus/do`'s `TableIndexInfo`. */
+interface EmittedTableIndex {
+    fields: string[];
+    name: string;
+    type: "index" | "rank" | "search" | "vector";
+    unique?: boolean;
+}
+
+/**
+ * Declared-index map per table for the schema viewer: `{ table: [{ name, type,
+ * fields, unique? }] }`, flattening secondary (`.index`), search, rank, and
+ * vector indexes into one list. The generated shard hands this to the base
+ * `tableIndexes` hook so the admin `listTableIndexes` can report field names the
+ * physical `json_extract` indexes can't.
+ */
+const buildTableIndexes = (schema: SchemaIR): Record<string, EmittedTableIndex[]> => {
+    const byTable: Record<string, EmittedTableIndex[]> = {};
+
+    for (const table of schema.tables) {
+        const entries: EmittedTableIndex[] = [
+            ...table.indexes.map((index) => {return { fields: [...index.fields], name: index.name, type: "index" as const, ...(index.unique === true ? { unique: true } : {}) }}),
+            ...table.searchIndexes.map((index) => {return { fields: [index.field, ...(index.filterFields ?? [])], name: index.name, type: "search" as const }}),
+            ...table.rankIndexes.map((index) => {return { fields: index.sortBy.map((key) => key.field), name: index.name, type: "rank" as const }}),
+            ...table.vectorIndexes.map((index) => {return { fields: index.field === undefined ? [] : [index.field], name: index.name, type: "vector" as const }}),
+        ];
+
+        if (entries.length > 0) {
+            byTable[table.name] = entries;
+        }
+    }
+
+    return byTable;
+};
+
 const emitShard = (schema: SchemaIR): string => {
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     const hasTables = schema.tables.length > 0;
     const tableReferences = buildTableReferences(schema);
+    const tableIndexes = buildTableIndexes(schema);
 
     const doTypeImports = [
         ...(hasTables ? ["AggregateOptions", "GroupByOptions"] : []),
@@ -1281,6 +1316,9 @@ interface FunctionReference {
 /** Foreign-key columns per table (\`v.id("target")\` fields) for the data browser. */
 const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringify(tableReferences, undefined, 4)};
 
+/** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
+const CIRRUS_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = ${JSON.stringify(tableIndexes, undefined, 4)};
+
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -1419,6 +1457,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return CIRRUS_TABLE_REFS[table];
+        }
+
+        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
+            return CIRRUS_TABLE_INDEXES[table] ?? [];
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {

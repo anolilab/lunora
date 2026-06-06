@@ -16,6 +16,19 @@ interface FunctionReference {
 /** Foreign-key columns per table (`v.id("target")` fields) for the data browser. */
 const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = {};
 
+/** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
+const CIRRUS_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
+    "todos": [
+        {
+            "fields": [
+                "createdAt"
+            ],
+            "name": "by_creation",
+            "type": "index"
+        }
+    ]
+};
+
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -190,6 +203,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return CIRRUS_TABLE_REFS[table];
+        }
+
+        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
+            return CIRRUS_TABLE_INDEXES[table] ?? [];
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {

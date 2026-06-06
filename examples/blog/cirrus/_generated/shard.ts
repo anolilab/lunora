@@ -25,6 +25,45 @@ const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = {
     }
 };
 
+/** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
+const CIRRUS_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
+    "users": [
+        {
+            "fields": [
+                "email"
+            ],
+            "name": "by_email",
+            "type": "index",
+            "unique": true
+        }
+    ],
+    "posts": [
+        {
+            "fields": [
+                "publishedAt"
+            ],
+            "name": "by_published",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "body"
+            ],
+            "name": "posts_search",
+            "type": "vector"
+        }
+    ],
+    "drafts": [
+        {
+            "fields": [
+                "updatedAt"
+            ],
+            "name": "by_updated",
+            "type": "index"
+        }
+    ]
+};
+
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -267,6 +306,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
             return CIRRUS_TABLE_REFS[table];
+        }
+
+        protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
+            return CIRRUS_TABLE_INDEXES[table] ?? [];
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {

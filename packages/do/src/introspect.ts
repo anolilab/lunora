@@ -19,6 +19,7 @@ const ADMIN_FUNCTIONS = {
     cdcSync: "__cirrus_admin__:cdcSync",
     exportShard: "__cirrus_admin__:exportShard",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
+    listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
     importShard: "__cirrus_admin__:importShard",
@@ -62,6 +63,26 @@ interface FunctionCallStat {
     path: string;
     /** Summed handler wall-clock across every dispatch; divide by `calls` for the mean. */
     totalDurationMs: number;
+}
+
+/**
+ * One declared index on a table, flattened across cirrus's index kinds for the
+ * schema viewer. `fields` is the indexed columns (a secondary index's columns,
+ * a rank index's sort fields, a search index's text + filter fields, or a vector
+ * index's source field). `unique` is set only for unique secondary indexes.
+ * Sourced from the schema (the codegen subclass overrides the base hook), since
+ * the physical SQLite indexes are `json_extract` expressions with no field names.
+ */
+interface TableIndexInfo {
+    fields: string[];
+    name: string;
+    type: "index" | "rank" | "search" | "vector";
+    unique?: boolean;
+}
+
+/** Payload of a `__cirrus_admin__:listTableIndexes` call: every declared index on the table. */
+interface TableIndexesResult {
+    indexes: TableIndexInfo[];
 }
 
 /** Payload of a `__cirrus_admin__:getFunctionStats` call. */
@@ -291,4 +312,4 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
 };
 
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage };
-export type { FunctionCallStat, FunctionStatsResult, ReadTablePageOptions, TableInfo, TablePage };
+export type { FunctionCallStat, FunctionStatsResult, ReadTablePageOptions, TableIndexesResult, TableIndexInfo, TableInfo, TablePage };

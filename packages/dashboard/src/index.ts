@@ -14,6 +14,8 @@ export type {
     MigrationStatusRow,
     RunMigrationArgs,
     ShardMetrics,
+    TableIndexesResult,
+    TableIndexInfo,
     TableInfo,
     TablePage,
     WriteRowArgs,

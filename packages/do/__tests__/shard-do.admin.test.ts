@@ -115,6 +115,31 @@ describe("shardDO admin introspection", () => {
         });
     });
 
+    it("reports no indexes from the base hook, and the subclass-declared ones when overridden", async () => {
+        expect.assertions(2);
+
+        // Base ShardDO can't see the user schema, so it reports an empty list.
+        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.listTableIndexes, { table: "messages" }, ADMIN_TOKEN));
+
+        await expect(baseResponse.json()).resolves.toEqual({ result: { indexes: [] } });
+
+        // The codegen subclass overrides `tableIndexes` from the schema; mimic it.
+        class IndexedShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override tableIndexes(table: string): { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[] {
+                return table === "messages" ? [{ fields: ["author"], name: "by_author", type: "index", unique: true }] : [];
+            }
+        }
+
+        const indexed = new IndexedShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await indexed.fetch(adminRequest(ADMIN_FUNCTIONS.listTableIndexes, { table: "messages" }, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({
+            result: { indexes: [{ fields: ["author"], name: "by_author", type: "index", unique: true }] },
+        });
+    });
+
     it("is disabled (403) when no admin token is configured, even with a bearer", async () => {
         expect.assertions(2);
 

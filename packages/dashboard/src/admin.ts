@@ -20,6 +20,7 @@ export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
 export const ADMIN_FUNCTIONS = {
     exportShard: "__cirrus_admin__:exportShard",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
+    listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
     importShard: "__cirrus_admin__:importShard",
@@ -90,6 +91,24 @@ export interface FunctionCallStat {
 export interface FunctionStatsResult {
     functions: FunctionCallStat[];
     sinceMs: number;
+}
+
+/**
+ * One declared index on a table, mirroring `@cirrus/do`'s `TableIndexInfo`.
+ * `type` is the index kind; `fields` the indexed columns (sort fields for rank,
+ * text + filter fields for search, source field for vector); `unique` is set
+ * only for unique secondary indexes.
+ */
+export interface TableIndexInfo {
+    fields: string[];
+    name: string;
+    type: "index" | "rank" | "search" | "vector";
+    unique?: boolean;
+}
+
+/** Payload of a `__cirrus_admin__:listTableIndexes` call, mirroring `@cirrus/do`'s `TableIndexesResult`. */
+export interface TableIndexesResult {
+    indexes: TableIndexInfo[];
 }
 
 /** Severity of a buffered log entry, mirroring `@cirrus/do`'s `LogLevel`. */

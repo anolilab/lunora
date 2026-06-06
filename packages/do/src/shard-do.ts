@@ -10,7 +10,7 @@ import type { MigrationDirection, MigrationRunResult } from "./data-migration.js
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
 import { createDependencyTracker } from "./dependency-tracker.js";
-import type { FunctionCallStat, FunctionStatsResult } from "./introspect.js";
+import type { FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 import { LogBuffer } from "./log-buffer.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
@@ -1155,6 +1155,19 @@ abstract class ShardDO {
     }
 
     /**
+     * Declared indexes for `table` (secondary, search, rank, vector), surfaced by
+     * the schema viewer via `__cirrus_admin__:listTableIndexes`. Like
+     * {@link tableRefs}, the base class can't see the user's `schema.ts`, so it
+     * reports none; the codegen subclass overrides this with the schema-derived
+     * list. Schema-sourced rather than read from SQLite because cirrus's physical
+     * indexes are `json_extract` expressions whose field names PRAGMA can't recover.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to read the generated schema's index metadata
+    protected tableIndexes(_table: string): TableIndexInfo[] {
+        return [];
+    }
+
+    /**
      * Export every row this shard owns across the requested tables (or every
      * shard-local user table when none are specified) as `{table, doc}` records.
      * Globals are not the DO's concern; the worker reads those from D1.
@@ -1783,6 +1796,12 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
             return this.readAdminTablePage(sql, args);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.listTableIndexes) {
+            const table = typeof args["table"] === "string" ? args["table"] : "";
+
+            return { result: { indexes: this.tableIndexes(table) }, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {

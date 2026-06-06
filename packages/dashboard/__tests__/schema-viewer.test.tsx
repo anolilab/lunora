@@ -31,6 +31,12 @@ const createClient = (): MockClientHooks =>
                 return { columns: table === "messages" ? ["__id__", "text"] : ["__id__", "name"], rows: [], total: 0 };
             }
 
+            if (reference === ADMIN_FUNCTIONS.listTableIndexes) {
+                const { table } = args as { table: string };
+
+                return { indexes: table === "messages" ? [{ fields: ["author"], name: "by_author", type: "index", unique: true }] : [] };
+            }
+
             throw new Error(`unexpected ${reference}`);
         },
         readGlobalTablePage: ({ table }) => {
@@ -75,6 +81,33 @@ describe("schemaViewer", () => {
         const pageCalls = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.readTablePage);
 
         expect(pageCalls).toHaveLength(1);
+    });
+
+    it("shows declared indexes alongside columns when a table is expanded", async () => {
+        expect.assertions(3);
+
+        render(renderViewer(createClient()));
+
+        fireEvent.click(await screen.findByTestId("sc-toggle-messages"));
+
+        const list = await screen.findByTestId("sc-indexes-messages");
+
+        // The unique secondary index on `author` renders name, kind, and fields.
+        expect(list.textContent).toContain("by_author");
+        expect(list.textContent).toContain("author");
+        expect(list.textContent).toContain("unique");
+    });
+
+    it("omits the index list for a table with no declared indexes", async () => {
+        expect.assertions(1);
+
+        render(renderViewer(createClient()));
+
+        fireEvent.click(await screen.findByTestId("sc-toggle-users"));
+        await screen.findByTestId("sc-columns-users");
+
+        // `users` returns an empty index list, so no index sub-list is rendered.
+        expect(screen.queryByTestId("sc-indexes-users")).toBeNull();
     });
 
     it("lists global (D1) tables in their own tier-labelled section", async () => {
