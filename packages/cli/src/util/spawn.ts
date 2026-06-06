@@ -41,8 +41,11 @@ export const defaultSpawner: Spawner = (descriptor) =>
             reject(error);
         });
 
-        child.on("exit", (code) => {
-            resolve({ code: code ?? 0 });
+        child.on("exit", (code, signal) => {
+            // A signal-killed child reports `code === null`; treat that as a
+            // failure (non-zero) rather than silently passing — e.g. an
+            // OOM-killed `tsc` must not read as a clean type-check.
+            resolve({ code: code ?? (signal ? 1 : 0) });
         });
 
         if (hasInput && child.stdin) {

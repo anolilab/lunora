@@ -99,6 +99,7 @@ const BOOLEAN_OPTIONS: Set<string> = new Set<string>([
     "list",
     "no-codegen",
     "no-dashboard",
+    "no-typecheck",
     "overwrite",
     "prod",
     "remote",
@@ -679,14 +680,15 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.addCommand({
-        description: "Validate wrangler.jsonc + run codegen in dry-run mode (no files written)",
-        execute: async () => {
+        description: "Validate wrangler.jsonc + codegen dry-run + tsc --noEmit (no files written)",
+        execute: async ({ options: parsed }) => {
             const { runVerifyCommand } = await import("./commands/verify.js");
-            const result = runVerifyCommand({ cwd, logger });
+            const result = await runVerifyCommand({ cwd, logger, typecheck: parsed.noTypecheck === true ? false : undefined });
 
             exitCode.value = result.code;
         },
         name: "verify",
+        options: [{ description: "Skip the TypeScript type-check step", name: "no-typecheck", type: Boolean }],
     });
 
     cli.addCommand({
@@ -826,7 +828,7 @@ Commands:
          | restore <id|file>   restore --to <iso-time> replays CDC for point-in-time recovery
          [--to <time>]         [--dir <d>] [--tables <t1,t2>] [--prod] [--url <url>] [--token <t>]
   reset [--all] [--yes]         Clear local Miniflare state (and .cirrus-cache with --all)
-  verify                        Validate wrangler.jsonc + run codegen in dry-run mode
+  verify [--no-typecheck]       Validate wrangler.jsonc + codegen dry-run + tsc --noEmit
   info [--json]                 Print resolved project config (packages, wrangler, schema)
   env <sub> [args]              Manage .dev.vars (list | get <K> | set <K> <V> | unset <K> | push --yes [--prod])
   analyze [--json]              Run wrangler dry-run and report bundle size + top modules
