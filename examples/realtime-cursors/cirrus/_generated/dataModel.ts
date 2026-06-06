@@ -40,6 +40,13 @@ export interface SearchIndexNamesByTable {
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
 
+/** Per-table rank-index name union. `never` for tables without a rankIndex. */
+export interface RankIndexNamesByTable {
+    cursors: never;
+}
+
+export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
+
 /** Union of declared vector index names. `never` when none are declared. */
 export type VectorIndexName = never;
 
@@ -249,13 +256,13 @@ export interface TableReaderFacade<T extends keyof DataModel> {
      * row count. `null` when the row isn't in the index. Honors the same
      * `baseWhere` / `restrictsCounts` RLS seam as `count()`.
      */
-    rank: (indexName: string, options: TableRankOptions<Doc<T>>) => Promise<null | RankResult>;
+    rank: (indexName: RankIndexName<T>, options: TableRankOptions<Doc<T>>) => Promise<null | RankResult>;
     /**
      * Walk the rank companion in declared sort order — sorted pagination
      * accelerator. `options.where` may pin the partition; `cursor`/`take`
      * follow the Convex-style keyset shape.
      */
-    rankPage: (indexName: string, options?: TableRankPageOptions<Doc<T>>) => Promise<RankPage<Doc<T>>>;
+    rankPage: (indexName: RankIndexName<T>, options?: TableRankPageOptions<Doc<T>>) => Promise<RankPage<Doc<T>>>;
 }
 
 /** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
