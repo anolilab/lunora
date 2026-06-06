@@ -1,3 +1,5 @@
+export type { AirbyteMessage, ConnectorChange, ConnectorSyncPage, FivetranResponse } from "./connector-format.js";
+export { toAirbyteMessages, toFivetranResponse } from "./connector-format.js";
 export type {
     AdminTableResolver,
     AuthIntrospector,

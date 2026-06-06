@@ -1,3 +1,4 @@
+import type { ConnectorChange, ConnectorSyncPage } from "./connector-format.js";
 import type { FunctionArgumentDescriptor } from "./describe-args.js";
 import { describeArguments } from "./describe-args.js";
 import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors.js";
@@ -654,6 +655,7 @@ const SCHEDULER_DISPATCH_PATH = "/_cirrus/scheduler/dispatch";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
 const SYNC_PATH = "/_cirrus/admin/sync";
+const CONNECTOR_SYNC_PATH = "/_cirrus/admin/connector/sync";
 const APPLY_PATH = "/_cirrus/admin/apply";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
@@ -951,6 +953,109 @@ const readJsonBodyWithLimit = async (request: Request): Promise<Record<string, u
 
         throw new CirrusError("Request body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
+};
+
+/**
+ * Decoded shape of the connector sync endpoint's opaque cursor token. Encodes
+ * the per-shard CDC cursor map plus the global (D1) cursor behind a single
+ * base64url string so a warehouse connector treats the whole multi-source
+ * position as one black-box `state` value (the contract Fivetran/Airbyte expect).
+ */
+interface ConnectorCursorState {
+    /** Global (D1) CDC `seq` last read through. */
+    g: number;
+    /** Per-shard CDC `seq` last read through, keyed by shard key. */
+    s: Record<string, number>;
+    /** Token format version, so the shape can evolve without breaking old cursors. */
+    v: 1;
+}
+
+/**
+ * Encode a {@link ConnectorCursorState} as an opaque base64url token. The
+ * consumer stores it verbatim and re-posts it to resume — it never parses it,
+ * so the internal shape stays free to change behind the version tag.
+ */
+const encodeConnectorCursor = (state: ConnectorCursorState): string => {
+    const json = JSON.stringify(state);
+    const bytes = NDJSON_ENCODER.encode(json);
+    let binary = "";
+
+    for (const byte of bytes) {
+        binary += String.fromCodePoint(byte);
+    }
+
+    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+};
+
+/**
+ * Decode an opaque connector cursor token back to its {@link ConnectorCursorState}.
+ * A missing / empty / malformed token decodes to the zero state (sync from the
+ * beginning) so a fresh consumer can omit the cursor and a corrupt one can't
+ * crash the endpoint — the worst case is a full re-sync, which is safe (upsert).
+ */
+const decodeConnectorCursor = (token: unknown): ConnectorCursorState => {
+    const empty: ConnectorCursorState = { g: 0, s: {}, v: 1 };
+
+    if (typeof token !== "string" || token.length === 0) {
+        return empty;
+    }
+
+    try {
+        const binary = atob(token.replaceAll("-", "+").replaceAll("_", "/"));
+        const bytes = new Uint8Array(binary.length);
+
+        for (let index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.codePointAt(index) ?? 0;
+        }
+
+        const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Partial<ConnectorCursorState>;
+        const shards = parsed.s && typeof parsed.s === "object" ? (parsed.s) : {};
+        const sanitized: Record<string, number> = {};
+
+        for (const [key, value] of Object.entries(shards)) {
+            if (typeof value === "number" && Number.isFinite(value)) {
+                sanitized[key] = value;
+            }
+        }
+
+        return { g: typeof parsed.g === "number" && Number.isFinite(parsed.g) ? parsed.g : 0, s: sanitized, v: 1 };
+    } catch {
+        return empty;
+    }
+};
+
+/**
+ * Flatten one raw CDC change record (the `{ id, op, seq, table, ts, doc? }` shape
+ * both the shard and D1 change feeds emit) into a {@link ConnectorChange} the
+ * connector-format helpers consume. A delete carries no post-image `doc`, so the
+ * row is reduced to its primary key (`_id`) from the change's `id`; an unknown
+ * `op` collapses to `"upsert"`.
+ */
+const flattenCdcChange = (change: Record<string, unknown>): ConnectorChange => {
+    const table = typeof change["table"] === "string" ? change["table"] : "";
+    const rawOp = typeof change["op"] === "string" ? change["op"] : "";
+    const op: ConnectorChange["op"] = rawOp === "delete" || rawOp === "insert" || rawOp === "update" ? rawOp : "upsert";
+    const id = typeof change["id"] === "string" ? change["id"] : undefined;
+    const postImage = change["doc"] && typeof change["doc"] === "object" ? (change["doc"] as Record<string, unknown>) : undefined;
+    // A delete has no post-image; surface the primary key so the consumer can
+    // tombstone the row. Insert/update carry the full post-image.
+    const documentRow: Record<string, unknown> = postImage ?? (id === undefined ? {} : { _id: id });
+
+    return { doc: documentRow, op, table };
+};
+
+/**
+ * Fold one source's CDC page (a shard's or the global plane's) into the
+ * accumulating connector page: flatten its changes onto `changes` and report
+ * whether it filled the requested `limit` (a full page signals more rows likely
+ * remain past this cursor). Pure routing — the caller owns cursor bookkeeping.
+ */
+const foldCdcPage = (changes: ConnectorChange[], pageChanges: ReadonlyArray<Record<string, unknown>>, limit: number | undefined): boolean => {
+    for (const change of pageChanges) {
+        changes.push(flattenCdcChange(change));
+    }
+
+    return limit !== undefined && pageChanges.length >= limit;
 };
 
 /**
@@ -1760,6 +1865,84 @@ const createWorker = (
     };
 
     /**
+     * Turn-key incremental-sync source for warehouse connectors (Fivetran custom
+     * functions, Airbyte incremental sources). Wraps the same CDC machinery as
+     * {@link handleCdcSync} but exposes the standard connector contract:
+     *
+     * Request: `{ cursor?: string, limit?: number, tables?: string[] }` — `cursor`
+     * is the opaque token from the previous page (omit / empty for a fresh sync).
+     *
+     * Response ({@link ConnectorSyncPage}): `{ changes, nextCursor, hasMore }`.
+     * `changes` is a flat list of `{ table, op, doc }` rows across every shard and
+     * the global plane, ordered shard-local first then global. `nextCursor` is the
+     * opaque token to resume from; `hasMore` is `true` while any shard or the
+     * global plane returned a full page (more changes likely remain) — page until
+     * it is `false` (caught up). Stateless: the consumer owns the cursor.
+     *
+     * Incremental semantics are real CDC: the change feed records insert / update /
+     * delete with a monotonic per-source `seq`, so deletes ARE captured (a delete
+     * surfaces as `{ op: "delete", doc: { _id } }`). A consumer maps the response
+     * onto Fivetran/Airbyte via `toFivetranResponse` / `toAirbyteMessages`.
+     */
+    const handleConnectorSync = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Connector sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin connector sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const coordinator = options.queryCoordinator;
+
+        if (!coordinator) {
+            throw new CirrusError("Connector sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const raw = await readJsonBodyWithLimit(request);
+        const state = decodeConnectorCursor(raw["cursor"]);
+        const limit = typeof raw["limit"] === "number" && raw["limit"] > 0 ? raw["limit"] : undefined;
+        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        // Shard discovery mirrors export/sync: explicit tables, else every known table.
+        const probeTables = requestedTables ?? collectKnownTables(options.resolveTableSharding);
+
+        const shardResult = await coordinator.orchestrateCdcSync(options.shardDO, {
+            cursors: state.s,
+            headers: forwardedHeaders,
+            limit,
+            tables: probeTables,
+        });
+
+        const changes: ConnectorChange[] = [];
+        const nextShardCursors: Record<string, number> = { ...state.s };
+        let hasMore = false;
+
+        for (const shard of shardResult.shards) {
+            // A full page signals more rows likely remain past this cursor.
+            hasMore = foldCdcPage(changes, shard.changes ?? [], limit) || hasMore;
+            nextShardCursors[shard.shardKey] = shard.cursor;
+        }
+
+        // Global (D1) plane: same CDC contract, paged from the global cursor.
+        let nextGlobalCursor = state.g;
+
+        if (options.syncGlobals) {
+            const global = await options.syncGlobals({ limit, sinceSeq: state.g });
+
+            hasMore = foldCdcPage(changes, global.changes, limit) || hasMore;
+            nextGlobalCursor = global.cursor;
+        }
+
+        const nextCursor = encodeConnectorCursor({ g: nextGlobalCursor, s: nextShardCursors, v: 1 });
+        const page: ConnectorSyncPage = { changes, hasMore, nextCursor };
+
+        return Response.json(page, { status: 200 });
+    };
+
+    /**
      * Replay endpoint behind `cirrus backup restore --to &lt;time>`. Accepts
      * per-shard pre-bucketed batches (the shape `/sync` emits, so the caller
      * just forwards each shard's changes back to the same shard — no
@@ -2506,6 +2689,7 @@ const createWorker = (
         [EXPORT_PATH]: (request, env) => handleExport(request, env),
         [IMPORT_PATH]: (request, env) => handleImport(request, env),
         [SYNC_PATH]: (request, env) => handleCdcSync(request, env),
+        [CONNECTOR_SYNC_PATH]: (request, env) => handleConnectorSync(request, env),
         [APPLY_PATH]: (request, env) => handleApplyCdc(request, env),
         [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
