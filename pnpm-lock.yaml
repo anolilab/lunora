@@ -893,6 +893,9 @@ importers:
 
   packages/codegen:
     dependencies:
+      '@cirrus/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0
@@ -1337,6 +1340,9 @@ importers:
 
   packages/server:
     dependencies:
+      '@cirrus/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@cirrus/values':
         specifier: workspace:*
         version: link:../values

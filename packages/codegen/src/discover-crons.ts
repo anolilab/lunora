@@ -1,7 +1,7 @@
+import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression } from "@cirrus/scheduler";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression } from "./cron-compile.js";
 import { listCirrusSourceFiles } from "./discover-functions.js";
 import type { CronJobIR } from "./ir.js";
 import sanitizeNamespace from "./paths.js";

@@ -31,6 +31,7 @@
         "bench": "vitest bench --run"
     },
     "dependencies": {
+        "@cirrus/scheduler": "workspace:*",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {

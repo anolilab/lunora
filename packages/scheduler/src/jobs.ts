@@ -141,11 +141,14 @@ const compileMonthly = (schedule: MonthlySchedule): string => {
 /** The ergonomic builder methods, excluding the raw `.cron` escape hatch. */
 type CronScheduleKind = "daily" | "interval" | "monthly" | "weekly";
 
+/** The ergonomic schedule kinds as a runtime set (codegen reads this to detect cron builder methods). */
+const CRON_SCHEDULE_KINDS: ReadonlySet<CronScheduleKind> = new Set<CronScheduleKind>(["daily", "interval", "monthly", "weekly"]);
+
 /**
  * Compile one of the ergonomic schedule forms into a standard cron expression.
  * Exposed as a pure function so `@cirrus/codegen` can reuse the exact same
- * compilation (and thus stay byte-for-byte in sync with the runtime builder)
- * when it statically lifts a `crons.{kind}(...)` call out of the AST.
+ * compilation when it statically lifts a `crons.{kind}(...)` call out of the
+ * AST — codegen imports this directly (no duplicated mirror).
  */
 const compileCronSchedule = (kind: CronScheduleKind, schedule: DailySchedule | IntervalSchedule | MonthlySchedule | WeeklySchedule): string => {
     switch (kind) {
@@ -248,5 +251,5 @@ const cronJobs = (): CronJobsBuilder => {
     return builder;
 };
 
-export { compileCronSchedule, cronJobs };
+export { compileCronSchedule, CRON_SCHEDULE_KINDS, cronJobs };
 export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule };

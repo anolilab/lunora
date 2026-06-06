@@ -123,6 +123,10 @@ export type {
     VectorUpsertInput,
 } from "./types.js";
 export { anyApi } from "./types.js";
+// Re-export the code-first cron builder so users declare crons from the main
+// package alongside query/mutation/action (it lives in @cirrus/scheduler).
+export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "@cirrus/scheduler";
+export { cronJobs } from "@cirrus/scheduler";
 export type { ColumnValidator, Id, Infer, Validator, ValidatorKind } from "@cirrus/values";
 export { v } from "@cirrus/values";
 export { ValidationError } from "@cirrus/values";

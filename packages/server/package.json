@@ -41,6 +41,7 @@
         "bench": "vitest bench --run"
     },
     "dependencies": {
+        "@cirrus/scheduler": "workspace:*",
         "@cirrus/values": "workspace:*",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"
