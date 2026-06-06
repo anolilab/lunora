@@ -22,7 +22,7 @@
         fill="#FFFFFF"
     >cirrus</text>
     <!-- Accent dot on "i" -->
-    <circle cx="664" cy="200" r="13" fill="#7CC4FF" />
+    <circle cx="664" cy="200" r="13" fill="#FCC419" />
     <!-- Tagline -->
     <text
         x="560"
@@ -47,6 +47,6 @@
         font-family="JetBrains Mono, Menlo, Consolas, monospace"
         font-size="22"
         font-weight="400"
-        fill="#7CC4FF"
+        fill="#FCC419"
     >github.com/anolilab/cirrus</text>
 </svg>
