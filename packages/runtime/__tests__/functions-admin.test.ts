@@ -70,11 +70,43 @@ describe("createWorker — functions admin endpoint", () => {
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({
             functions: [
-                { kind: "action", path: "billing:sync" },
-                { kind: "query", path: "messages:list" },
-                { kind: "mutation", path: "messages:send" },
+                { args: [], kind: "action", path: "billing:sync" },
+                { args: [], kind: "query", path: "messages:list" },
+                { args: [], kind: "mutation", path: "messages:send" },
             ],
         });
+    });
+
+    it("includes each function's argument signature derived from its validators", async () => {
+        expect.assertions(1);
+
+        // Structural validator stand-ins — the endpoint reads `kind` + `_meta`.
+        const registry: FunctionRegistryLike = {
+            "messages:send": {
+                args: {
+                    channelId: { _meta: { tableName: "channels" }, kind: "id" },
+                    replyTo: { _meta: { inner: { _meta: { tableName: "messages" }, kind: "id" } }, kind: "optional" },
+                    text: { kind: "string" },
+                },
+                kind: "mutation",
+            },
+        };
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, functions: registry, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/functions", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        const body: { functions: { args: unknown }[] } = await response.json();
+
+        expect(body.functions[0]?.args).toEqual([
+            { kind: "id", name: "channelId", optional: false, table: "channels" },
+            { kind: "id", name: "replyTo", optional: true, table: "messages" },
+            { kind: "string", name: "text", optional: false },
+        ]);
     });
 
     it("rejects non-GET (405)", async () => {

@@ -7,6 +7,7 @@ import { Badge } from "./components/ui/badge.js";
 import { Button } from "./components/ui/button.js";
 import { Label } from "./components/ui/label.js";
 import { Textarea } from "./components/ui/textarea.js";
+import { argumentsTemplate, formatSignature } from "./function-signature.js";
 import { useT } from "./i18n-context.js";
 import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
 import { recordShard } from "./shard-history.js";
@@ -205,6 +206,12 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
         fireAndForget(run());
     }, [run]);
 
+    // Replace the args box with a minimal JSON template (required args only)
+    // derived from the selected function's signature.
+    const prefillArgs = useCallback((): void => {
+        setArgsText(argumentsTemplate(selected?.args));
+    }, [selected]);
+
     return (
         <div className="flex flex-col gap-4" data-testid="cirrus-function-runner">
             {discoverError !== null && (
@@ -230,10 +237,23 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
                             </option>
                         ))}
                     </select>
+                    {selected !== undefined && (
+                        <p className="text-xs text-muted-foreground">
+                            <span className="mr-1.5 font-medium">{t("Signature")}</span>
+                            <code className="font-mono" data-testid="function-signature">
+                                {formatSignature(selected.args)}
+                            </code>
+                        </p>
+                    )}
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="args-input">{t("Arguments")}</Label>
+                    <div className="flex items-center justify-between gap-2">
+                        <Label htmlFor="args-input">{t("Arguments")}</Label>
+                        <Button data-testid="prefill-button" disabled={selected === undefined} onClick={prefillArgs} size="xs" type="button" variant="ghost">
+                            {t("Prefill")}
+                        </Button>
+                    </div>
                     <Textarea
                         aria-label={t("Arguments")}
                         className="font-mono text-xs"

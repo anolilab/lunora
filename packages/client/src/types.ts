@@ -242,11 +242,31 @@ export interface StorageListPage {
 }
 
 /**
+ * One argument of a registered function, derived from its `v.*` validator by the
+ * worker. A compact signature shape — enough to render a function's API without
+ * the build-time codegen types.
+ */
+export interface FunctionArgumentDescriptor {
+    /** Element validator kind for an `array` arg (one level), e.g. `string`. */
+    element?: string;
+    /** The (optional-unwrapped) validator kind, e.g. `string`, `id`, `object`. */
+    kind: string;
+    /** The argument name. */
+    name: string;
+    /** True when the arg is wrapped in `v.optional(...)`. */
+    optional: boolean;
+    /** Target table for an `id` arg (`v.id("table")`). */
+    table?: string;
+}
+
+/**
  * One registered function, as returned by the worker's
- * `GET /_cirrus/admin/functions` endpoint: its `&lt;file>:&lt;function>` path and
- * which client method (`query` / `mutation` / `action`) invokes it.
+ * `GET /_cirrus/admin/functions` endpoint: its `&lt;file>:&lt;function>` path, which
+ * client method (`query` / `mutation` / `action`) invokes it, and its argument
+ * signature. `args` is absent on responses from an older worker.
  */
 export interface FunctionDescriptor {
+    args?: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
     path: string;
 }

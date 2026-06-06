@@ -1,3 +1,5 @@
+import type { FunctionArgumentDescriptor } from "./describe-args.js";
+import { describeArguments } from "./describe-args.js";
 import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors.js";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
 import { emitRpcEvent } from "./observability.js";
@@ -146,6 +148,8 @@ interface StorageObject {
  * the {@link FunctionRegistryLike} value shape.
  */
 interface FunctionDescriptor {
+    /** The function's declared argument schema, derived from its `v.*` validators. */
+    args: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
     /** The `&lt;file>:&lt;function>` identifier, e.g. `messages:list`. */
     path: string;
@@ -155,6 +159,8 @@ interface FunctionDescriptor {
 
 /** One value in {@link FunctionRegistryLike} — the bits of a registered function the discovery endpoint reads. */
 interface FunctionRegistryEntry {
+    /** The function's `v.*` args validator map; read structurally for the signature view. */
+    args?: unknown;
     kind: "action" | "mutation" | "query";
     visibility?: "internal" | "public";
 }
@@ -1944,7 +1950,7 @@ const createWorker = (
         const functions: FunctionDescriptor[] = Object.entries(registry)
             .filter(([, entry]) => entry.visibility !== "internal")
             .map(([path, entry]) => {
-                return { kind: entry.kind, path };
+                return { args: describeArguments(entry.args), kind: entry.kind, path };
             })
             .toSorted((a, b) => a.path.localeCompare(b.path));
 

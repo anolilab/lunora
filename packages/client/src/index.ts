@@ -22,6 +22,7 @@ export type {
     BookmarkStorage,
     CirrusClientOptions,
     ClientMessage,
+    FunctionArgumentDescriptor,
     FunctionDescriptor,
     FunctionReference,
     GlobalTableInfo,

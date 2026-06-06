@@ -14,6 +14,19 @@ const functions: FunctionDescriptor[] = [
     { kind: "action", path: "stripe:sync" },
 ];
 
+// Hoisted to module scope so the `functions` JSX prop isn't a fresh array each render.
+const FUNCTIONS_WITH_ARGS: FunctionDescriptor[] = [
+    {
+        args: [
+            { kind: "id", name: "channelId", optional: false, table: "channels" },
+            { kind: "string", name: "text", optional: false },
+            { kind: "number", name: "limit", optional: true },
+        ],
+        kind: "mutation",
+        path: "messages:send",
+    },
+];
+
 const renderRunner = (mock: MockClientHooks): ReactElement => (
     <CirrusProvider client={mock.asClient}>
         <FunctionRunner functions={functions} />
@@ -32,6 +45,26 @@ describe("functionRunner", () => {
 
         expect(select.value).toBe("messages:list");
         expect(screen.getAllByRole("option")).toHaveLength(3);
+    });
+
+    it("shows the selected function's signature and prefills a required-args template", () => {
+        expect.assertions(3);
+
+        render(
+            <CirrusProvider client={createMockClient().asClient}>
+                <FunctionRunner functions={FUNCTIONS_WITH_ARGS} />
+            </CirrusProvider>,
+        );
+
+        expect(screen.getByTestId("function-signature").textContent).toBe("(channelId: id<channels>, text: string, limit?: number)");
+
+        fireEvent.click(screen.getByTestId("prefill-button"));
+
+        // Prefill drops the optional `limit` and seeds placeholders by kind.
+        const argsInput = screen.getByTestId<HTMLTextAreaElement>("args-input");
+
+        expect(JSON.parse(argsInput.value)).toStrictEqual({ channelId: "", text: "" });
+        expect(argsInput.value).not.toContain("limit");
     });
 
     it("runs the selected query with parsed JSON args and renders the result", async () => {
