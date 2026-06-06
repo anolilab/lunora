@@ -1,0 +1,207 @@
+/**
+ * The `cirrus dev` dashboard server — the non-Vite path to the same dev
+ * dashboard the `@cirrus/vite` plugin serves at `/__cirrus`.
+ *
+ * It's a tiny `node:http` server that:
+ * - serves the prebuilt static `@cirrus/dashboard` bundle (with the admin token
+ * and basepath injected, via the shared `@cirrus/dashboard-host` helpers), and
+ * - reverse-proxies `/_cirrus/*` — both HTTP and the WebSocket upgrade — to the
+ * `wrangler dev` worker.
+ *
+ * Because the dashboard and its API are then same-origin (this server), the
+ * dashboard auto-connects with no CORS and no worker changes — the same
+ * experience as the Vite route, where the worker is embedded in Vite.
+ */
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
+import { connect } from "node:net";
+import type { Duplex } from "node:stream";
+
+// eslint-disable-next-line import/no-extraneous-dependencies -- bundled at build time (packem inlines it), so it's a devDependency, not a runtime dep consumers must install
+import { loadDashboardAssets, renderDashboardHtml, resolveAdminToken } from "@cirrus/dashboard-host";
+
+/** Request paths the dashboard server reverse-proxies to the worker (admin RPC, RPC, WS). */
+const PROXY_PREFIX = "/_cirrus";
+
+const pathnameOf = (url: string): string => {
+    const queryIndex = url.indexOf("?");
+
+    return queryIndex === -1 ? url : url.slice(0, queryIndex);
+};
+
+/** Forward an HTTP request to the worker and pipe its response back. */
+const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: URL): void => {
+    const upstream = httpRequest(
+        {
+            headers: { ...request.headers, host: worker.host },
+            hostname: worker.hostname,
+            method: request.method,
+            path: request.url,
+            port: worker.port,
+        },
+        (upstreamResponse) => {
+            response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+            upstreamResponse.pipe(response);
+        },
+    );
+
+    upstream.on("error", (error: Error) => {
+        // The worker may still be booting — surface a 502 rather than hang.
+        response.statusCode = 502;
+        response.end(`cirrus dev: worker unreachable (${error.message})`);
+    });
+
+    request.pipe(upstream);
+};
+
+/** Milliseconds to wait for the upstream TCP connect before giving up (worker still booting). */
+const UPGRADE_CONNECT_TIMEOUT_MS = 5000;
+
+/**
+ * Proxy a WebSocket upgrade to the worker by opening a raw TCP socket and
+ * replaying the upgrade handshake, then piping both directions. The dashboard's
+ * live admin subscriptions ride this; the WS auth token travels in the request
+ * URL, forwarded unchanged. The headers `node:http` parsed are normalized (lower-
+ * cased/de-duplicated), so this is a normalized replay — and `host` is rewritten
+ * to the worker, mirroring {@link proxyHttp}, so the worker sees its own origin.
+ */
+const proxyUpgrade = (request: IncomingMessage, clientSocket: Duplex, head: Buffer, worker: URL): void => {
+    const upstream = connect({ host: worker.hostname, port: Number(worker.port) }, () => {
+        upstream.setTimeout(0);
+
+        const lines = [`${request.method ?? "GET"} ${request.url ?? "/"} HTTP/1.1`];
+
+        for (const [key, value] of Object.entries(request.headers)) {
+            // Rewrite Host to the worker; the original would point at the dashboard server.
+            if (key === "host") {
+                continue;
+            }
+
+            for (const item of Array.isArray(value) ? value : [value]) {
+                if (item !== undefined) {
+                    lines.push(`${key}: ${item}`);
+                }
+            }
+        }
+
+        lines.push(`host: ${worker.host}`, "", "");
+        upstream.write(lines.join("\r\n"));
+
+        if (head.length > 0) {
+            upstream.write(head);
+        }
+
+        upstream.pipe(clientSocket);
+        clientSocket.pipe(upstream);
+    });
+
+    // Fail the upgrade fast if the worker isn't accepting yet, rather than hang
+    // the client socket until the OS TCP timeout.
+    upstream.setTimeout(UPGRADE_CONNECT_TIMEOUT_MS, () => upstream.destroy());
+    upstream.on("error", () => clientSocket.destroy());
+    clientSocket.on("error", () => upstream.destroy());
+};
+
+/**
+ * Start the dashboard server and resolve once it is listening. Loads the static
+ * bundle + renders the host HTML once up front; serves them and proxies
+ * `/_cirrus/*` (HTTP + WS) to the worker.
+ */
+export const startDashboardServer = async (options: DashboardServerOptions): Promise<DashboardServerHandle> => {
+    const host = options.host ?? "127.0.0.1";
+    const worker = new URL(options.workerOrigin);
+    // Resolve `@cirrus/dashboard` from THIS module (a `@cirrus/cli` file, which
+    // depends on it) rather than from the shared `@cirrus/dashboard-host` (which
+    // doesn't).
+    const assets = loadDashboardAssets(options.logger, import.meta.url);
+    const html = renderDashboardHtml({
+        adminToken: resolveAdminToken(options.cwd),
+        basePath: "/",
+        scriptSrc: "/dashboard.js",
+        styleHref: "/styles.css",
+    });
+
+    const sendAsset = (response: ServerResponse, body: Buffer, contentType: string): void => {
+        response.statusCode = 200;
+        response.setHeader("Content-Type", contentType);
+        response.end(body);
+    };
+
+    const document = Buffer.from(html);
+    const server: Server = createServer((request, response) => {
+        const pathname = pathnameOf(request.url ?? "/");
+
+        // Worker proxy first.
+        if (pathname.startsWith(PROXY_PREFIX)) {
+            proxyHttp(request, response, worker);
+
+            return;
+        }
+
+        // Static assets are exact paths.
+        if (pathname === "/dashboard.js" || pathname === "/styles.css") {
+            if (assets === undefined) {
+                response.statusCode = 501;
+                response.setHeader("Content-Type", "text/plain");
+                response.end("Cirrus dashboard assets not found — install and build @cirrus/dashboard.");
+
+                return;
+            }
+
+            const isScript = pathname === "/dashboard.js";
+
+            sendAsset(response, isScript ? assets.script : assets.styles, isScript ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8");
+
+            return;
+        }
+
+        // Everything else is an SPA route → serve the document (history fallback),
+        // so a hard load of a deep link like `/globals` boots the router there.
+        sendAsset(response, document, "text/html; charset=utf-8");
+    });
+
+    server.on("upgrade", (request, socket, head) => {
+        if (pathnameOf(request.url ?? "").startsWith(PROXY_PREFIX)) {
+            proxyUpgrade(request, socket, head, worker);
+        } else {
+            socket.destroy();
+        }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(options.port, host, () => {
+            resolve();
+        });
+    });
+
+    return {
+        close: () =>
+            new Promise<void>((resolve) => {
+                server.close(() => {
+                    resolve();
+                });
+            }),
+        url: `http://${host === "0.0.0.0" || host === "::" ? "localhost" : host}:${String(options.port)}`,
+    };
+};
+
+export interface DashboardServerOptions {
+    /** Project root — `.dev.vars` is read from here for the admin token. */
+    cwd: string;
+    /** Loopback host to bind. Defaults to `127.0.0.1` (admin tooling stays local). */
+    host?: string;
+    /** One-time warning sink for a missing/unbuilt `@cirrus/dashboard`. */
+    logger?: { warnOnce?: (message: string) => void };
+    /** Port to listen on. */
+    port: number;
+    /** Origin of the `wrangler dev` worker, e.g. `http://localhost:8787`. */
+    workerOrigin: string;
+}
+
+export interface DashboardServerHandle {
+    /** Stop listening and release the port. */
+    close: () => Promise<void>;
+    /** The URL to open in a browser. */
+    url: string;
+}
