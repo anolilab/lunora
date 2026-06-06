@@ -1,4 +1,5 @@
 export { default as createScheduler } from "./create-scheduler.js";
+export { default as createWorkpool } from "./create-workpool.js";
 export type { CronTriggerOptions, CronTriggerSnippet } from "./cron.js";
 export { createCronTrigger } from "./cron.js";
 export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "./jobs.js";
@@ -11,9 +12,13 @@ export type {
     DurableObjectIdLike,
     DurableObjectNamespaceLike,
     DurableObjectStubLike,
+    EnqueueOptions,
     FunctionReference,
+    RetryPolicy,
     RunOptions,
     Scheduler,
     ScheduleRecord,
+    Workpool,
+    WorkpoolOptions,
 } from "./types.js";
 export { assertValidCronExpression, isValidCronExpression } from "./validate-cron.js";

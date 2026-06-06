@@ -59,6 +59,11 @@ const createScheduler = (options: CirrusSchedulerOptions): Scheduler => {
             args,
             functionPath: function_.__cirrusRef,
             originUrl: options.originUrl,
+            // Optional workpool / retry-policy passthrough. Absent for ordinary
+            // `runAfter`/`runAt` calls, which keeps the wire payload (and the
+            // DO's behaviour) identical to before this feature.
+            pool: options_.pool,
+            retry: options_.retry,
             scheduledFor,
             shardKey: options_.shardKey,
         });

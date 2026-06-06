@@ -1473,6 +1473,34 @@ const createWorker = (
     };
 
     /**
+     * Release a workpool job's concurrency slot after its action settles, by
+     * calling the SAME SchedulerDO instance's `/complete` (routed via the echoed
+     * `instanceName`). No-op for non-pooled jobs. Best-effort: a failure must not
+     * fail the dispatch the scheduler awaits — the pool's next drain reconciles.
+     */
+    const releasePoolSlot = async (candidate: { id?: unknown; instanceName?: unknown; pool?: unknown }): Promise<void> => {
+        const pool = typeof candidate.pool === "string" && candidate.pool.length > 0 ? candidate.pool : undefined;
+
+        if (!pool || !options.schedulerDO || typeof candidate.id !== "string") {
+            return;
+        }
+
+        const instanceName = typeof candidate.instanceName === "string" && candidate.instanceName.length > 0 ? candidate.instanceName : "default";
+
+        try {
+            await options.schedulerDO.get(options.schedulerDO.idFromName(instanceName)).fetch(
+                new Request("https://scheduler.internal/complete", {
+                    body: JSON.stringify({ id: candidate.id, pool }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+        } catch {
+            // best-effort — reconciled by the pool's next drain pass
+        }
+    };
+
+    /**
      * Receiver for the `SchedulerDO`'s scheduled-job dispatch. The scheduler DO
      * POSTs `{ functionPath, args, shardKey, scheduledFor, id }` as raw JSON,
      * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
@@ -1524,7 +1552,7 @@ const createWorker = (
             throw new CirrusError("Scheduler dispatch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; shardKey?: unknown };
+        const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; id?: unknown; instanceName?: unknown; pool?: unknown; shardKey?: unknown };
 
         if (typeof candidate.functionPath !== "string" || candidate.functionPath.length === 0) {
             throw new CirrusError("Scheduler dispatch is missing `functionPath`", { code: "BAD_REQUEST", status: 400 });
@@ -1536,7 +1564,13 @@ const createWorker = (
         // Re-apply per-shard authorization (inside `dispatchToShard`) so a
         // scheduled job cannot reach a shard a direct RPC for the same shard
         // would be denied — the scheduler runs jobs with no end-user identity.
-        return dispatchToShard(candidate.functionPath, args, shardKey);
+        const response = await dispatchToShard(candidate.functionPath, args, shardKey);
+
+        // Workpool jobs hold a concurrency slot until the action settles; release
+        // it best-effort (a missed release is reconciled by the pool's next drain).
+        await releasePoolSlot(candidate);
+
+        return response;
     };
 
     type ExportRow = { doc: Record<string, unknown>; table: string };

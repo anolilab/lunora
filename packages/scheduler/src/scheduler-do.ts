@@ -1,4 +1,4 @@
-import type { ScheduleRecord } from "./types.js";
+import type { RetryPolicy, ScheduleRecord } from "./types.js";
 
 /**
  * Minimal projection of `DurableObjectState` for the SchedulerDO. Declared
@@ -52,8 +52,13 @@ interface SchedulerEnv {
 const HEADER_PREFIX = "id:";
 const RETRY_PREFIX = "retry:";
 const DEAD_PREFIX = "dead:";
+const POOL_PREFIX = "pool:";
 const MAX_RETRY_ATTEMPTS = 5;
 const RETRY_BASE_DELAY_MS = 30_000;
+// When a pooled job can't run because its pool is at `maxConcurrency`, it is
+// re-armed this far in the future so a later alarm drains it as slots free.
+// Small enough to feel responsive, large enough to avoid a busy alarm loop.
+const POOL_BACKPRESSURE_DELAY_MS = 1000;
 // Maximum valid `Date` in epoch milliseconds (per ECMAScript). Past this,
 // `String(scheduledFor)` would switch to exponential notation and corrupt the
 // zero-padded time index — see indexKey() and handleSchedule().
@@ -78,13 +83,39 @@ interface ScheduleRequestBody {
     functionPath: string;
 
     /**
+     * The scheduler/workpool instance name the enqueuing client routed to
+     * (`createWorkpool({ instanceName })`). Echoed in the dispatch payload so the
+     * runtime can call back the SAME DO instance's `/complete` to release a
+     * pooled job's slot. Defaults to `"default"`.
+     */
+    instanceName?: string;
+
+    /**
+     * Workpool concurrency cap, sent alongside `pool` by `Workpool.enqueue`.
+     * Persisted on the pool's `pool:&lt;name>` storage row so the alarm-time
+     * concurrency gate has a value even if the in-memory client is gone.
+     */
+    maxConcurrency?: number;
+
+    /**
      * Legacy field accepted but ignored: dispatch always uses
      * `env.CIRRUS_ORIGIN_URL`. Kept on the wire so older `@cirrus/scheduler`
      * clients can still talk to this DO.
      */
     originUrl?: string;
+    /** Logical workpool name; gates dispatch behind {@link ScheduleRequestBody.maxConcurrency}. */
+    pool?: string;
+    /** Per-job retry policy; overrides the DO's built-in defaults when present. */
+    retry?: RetryPolicy;
     scheduledFor: number;
     shardKey?: string;
+}
+
+/** Durable per-pool state stored under `pool:&lt;name>`. */
+interface PoolState {
+    /** Jobs currently dispatched-but-not-yet-completed. The concurrency semaphore. */
+    inFlight: number;
+    maxConcurrency: number;
 }
 
 interface CancelRequestBody {
@@ -116,6 +147,60 @@ class SchedulerDO {
         return SchedulerDO.json({ error: { code, message } }, status);
     }
 
+    /**
+     * Resolve the effective retry parameters for a record: its per-job
+     * {@link RetryPolicy} merged over the DO's built-in defaults. Callers that
+     * never set `record.retry` get today's behaviour verbatim
+     * (`maxAttempts: 5`, exponential, `baseMs: 30_000`, no ceiling).
+     */
+    private static resolveRetry(record: ScheduleRecord): { backoff: "exponential" | "linear"; baseMs: number; maxAttempts: number; maxMs?: number } {
+        const policy = record.retry;
+        const maxAttempts =
+            typeof policy?.maxAttempts === "number" && Number.isInteger(policy.maxAttempts) && policy.maxAttempts > 0 ? policy.maxAttempts : MAX_RETRY_ATTEMPTS;
+        const baseMs = typeof policy?.baseMs === "number" && Number.isFinite(policy.baseMs) && policy.baseMs >= 0 ? policy.baseMs : RETRY_BASE_DELAY_MS;
+        const backoff = policy?.backoff === "linear" ? "linear" : "exponential";
+        const maxMs = typeof policy?.maxMs === "number" && Number.isFinite(policy.maxMs) && policy.maxMs >= 0 ? policy.maxMs : undefined;
+
+        return { backoff, baseMs, maxAttempts, maxMs };
+    }
+
+    /** Clamp an untrusted `maxConcurrency` to a positive integer, else fall back. */
+    private static normalizeConcurrency(value: unknown, fallback: number): number {
+        return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+    }
+
+    /**
+     * Sanitize an untrusted retry policy from the wire into a `RetryPolicy` (or
+     * `undefined` when nothing valid was provided). Keeps obviously-bad values
+     * out of storage so {@link SchedulerDO.resolveRetry} never has to re-guard.
+     */
+    private static normalizeRetry(value: unknown): RetryPolicy | undefined {
+        if (typeof value !== "object" || value === null) {
+            return undefined;
+        }
+
+        const raw = value as Record<string, unknown>;
+        const policy: RetryPolicy = {};
+
+        if (typeof raw.maxAttempts === "number" && Number.isInteger(raw.maxAttempts) && raw.maxAttempts > 0) {
+            policy.maxAttempts = raw.maxAttempts;
+        }
+
+        if (typeof raw.baseMs === "number" && Number.isFinite(raw.baseMs) && raw.baseMs >= 0) {
+            policy.baseMs = raw.baseMs;
+        }
+
+        if (raw.backoff === "exponential" || raw.backoff === "linear") {
+            policy.backoff = raw.backoff;
+        }
+
+        if (typeof raw.maxMs === "number" && Number.isFinite(raw.maxMs) && raw.maxMs >= 0) {
+            policy.maxMs = raw.maxMs;
+        }
+
+        return Object.keys(policy).length === 0 ? undefined : policy;
+    }
+
     protected readonly state: SchedulerDOState;
 
     protected readonly env: SchedulerEnv;
@@ -140,12 +225,20 @@ class SchedulerDO {
             return this.handleCancel(request);
         }
 
+        if (url.pathname === "/complete" && request.method === "POST") {
+            return this.handleComplete(request);
+        }
+
         if (url.pathname === "/get" && request.method === "GET") {
             return this.handleGet(url);
         }
 
         if (url.pathname === "/list" && request.method === "GET") {
             return this.handleList();
+        }
+
+        if (url.pathname === "/pool" && request.method === "GET") {
+            return this.handlePoolStatus(url);
         }
 
         return Response.json(
@@ -184,6 +277,14 @@ class SchedulerDO {
             }
         }
 
+        // Per-pool budget for THIS drain pass. The durable `pool:<name>` row
+        // tracks how many of the pool's jobs are already in flight; the budget
+        // is the remaining slots. We dispatch up to that many pooled jobs and
+        // re-arm the rest for a near-future alarm so they drain as slots free —
+        // bounded concurrency without busy-looping. Cached in `pools` so the
+        // budget is decremented across the loop without re-reading storage.
+        const pools = new Map<string, PoolState>();
+
         for (const record of due) {
             // Claim the job BEFORE dispatching by dropping its time-index entry.
             // If the alarm re-fires (or this run is interrupted and retried) the
@@ -191,12 +292,7 @@ class SchedulerDO {
             // the `id:` header and any `retry:` row survive for cleanup/retry.
             // recordRetry() recreates a fresh index entry on failure.
             await this.state.storage.delete(SchedulerDO.indexKey(record.scheduledFor, record.id));
-
-            const ok = await this.dispatch(record);
-
-            // On success, a single batched delete (one storage round-trip instead
-            // of two) clears the header + retry rows; on failure, re-arm for retry.
-            await (ok ? this.state.storage.delete([`${HEADER_PREFIX}${record.id}`, `${RETRY_PREFIX}${record.id}`]) : this.recordRetry(record));
+            await this.drainRecord(record, pools);
         }
         /* eslint-enable no-await-in-loop */
 
@@ -243,6 +339,12 @@ class SchedulerDO {
             args: record.args,
             functionPath: record.functionPath,
             id: record.id,
+            // Echoed so the receiver can call back the SAME DO instance.
+            instanceName: record.instanceName,
+            // When the job belongs to a workpool, the receiver must report
+            // completion back to the SchedulerDO (`POST /complete { pool, id }`)
+            // so the pool's concurrency slot is released — see handleComplete().
+            pool: record.pool,
             scheduledFor: record.scheduledFor,
             shardKey: record.shardKey,
         });
@@ -284,6 +386,71 @@ class SchedulerDO {
         } catch {
             return false;
         }
+    }
+
+    /**
+     * Process one due (already index-claimed) record within an alarm drain:
+     * apply the workpool concurrency gate, dispatch, and settle the result.
+     * A saturated pool re-arms the job (backpressure, no attempt charged); a
+     * free slot is reserved durably before dispatch and released immediately if
+     * the kick fails (success holds it until the runtime reports completion).
+     * Success clears the `id:`/`retry:` rows; failure routes to
+     * {@link recordRetry}. `pools` caches each pool's {@link PoolState} for the
+     * lifetime of the drain so the budget decrements without re-reading storage.
+     */
+    private async drainRecord(record: ScheduleRecord, pools: Map<string, PoolState>): Promise<void> {
+        const reserved = await this.reservePoolSlot(record, pools);
+
+        if (!reserved) {
+            // Pool at capacity — re-armed by reservePoolSlot(); skip dispatch.
+            return;
+        }
+
+        const ok = await this.dispatch(record);
+
+        if (!ok && record.pool !== undefined) {
+            // The kick itself failed: no completion callback is coming, so free
+            // the reserved slot immediately. recordRetry() then re-arms the job.
+            const pool = pools.get(record.pool);
+
+            if (pool !== undefined) {
+                pool.inFlight = Math.max(0, pool.inFlight - 1);
+                await this.savePool(record.pool, pool);
+            }
+        }
+
+        // On success, a single batched delete (one storage round-trip instead
+        // of two) clears the header + retry rows; on failure, re-arm for retry.
+        await (ok ? this.state.storage.delete([`${HEADER_PREFIX}${record.id}`, `${RETRY_PREFIX}${record.id}`]) : this.recordRetry(record));
+    }
+
+    /**
+     * Concurrency gate for a pooled record. Returns `false` (and re-arms the
+     * job via {@link requeuePooled}) when the pool is at `maxConcurrency`;
+     * otherwise reserves a slot durably and returns `true`. Non-pooled records
+     * always return `true` without touching any pool state.
+     */
+    private async reservePoolSlot(record: ScheduleRecord, pools: Map<string, PoolState>): Promise<boolean> {
+        if (record.pool === undefined) {
+            return true;
+        }
+
+        const pool = pools.get(record.pool) ?? (await this.loadPool(record.pool));
+
+        pools.set(record.pool, pool);
+
+        if (pool.inFlight >= pool.maxConcurrency) {
+            await this.requeuePooled(record);
+
+            return false;
+        }
+
+        // Reserve a slot durably BEFORE dispatching so neither a concurrent
+        // alarm nor this same pass can oversubscribe the pool.
+        pool.inFlight += 1;
+        await this.savePool(record.pool, pool);
+
+        return true;
     }
 
     /**
@@ -368,14 +535,16 @@ class SchedulerDO {
     }
 
     /**
-     * Move a failed record into the retry pipeline with exponential backoff.
-     * After {@link MAX_RETRY_ATTEMPTS} attempts the record is parked under a
-     * `dead:` key for manual inspection.
+     * Move a failed record into the retry pipeline with configurable backoff.
+     * The retry budget/backoff comes from the record's {@link RetryPolicy}
+     * (falling back to the DO defaults); on exhaustion the record is parked
+     * under a `dead:` key for manual inspection.
      */
     private async recordRetry(record: ScheduleRecord): Promise<void> {
         const attempts = (record.attempts ?? 0) + 1;
+        const { backoff, baseMs, maxAttempts, maxMs } = SchedulerDO.resolveRetry(record);
 
-        if (attempts > MAX_RETRY_ATTEMPTS) {
+        if (attempts > maxAttempts) {
             await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
             // Park is terminal; clear the pending retry row AND the live header
             // row in one batched delete. Leaving `id:<id>` behind would keep the
@@ -387,7 +556,8 @@ class SchedulerDO {
             return;
         }
 
-        const delayMs = RETRY_BASE_DELAY_MS * 2 ** (attempts - 1);
+        const rawDelay = backoff === "linear" ? baseMs * attempts : baseMs * 2 ** (attempts - 1);
+        const delayMs = maxMs === undefined ? rawDelay : Math.min(rawDelay, maxMs);
         const nextScheduledFor = Date.now() + delayMs;
         const retryRecord: ScheduleRecord = {
             ...record,
@@ -399,6 +569,83 @@ class SchedulerDO {
         // Re-arm via the standard time index so the alarm fires at the right moment.
         await this.state.storage.put(`${HEADER_PREFIX}${record.id}`, retryRecord);
         await this.state.storage.put(SchedulerDO.indexKey(nextScheduledFor, record.id), record.id);
+    }
+
+    /** Read the durable `pool:&lt;name>` row, defaulting to a fresh `inFlight: 0` pool. */
+    private async loadPool(name: string, maxConcurrencyHint?: number): Promise<PoolState> {
+        const stored = await this.state.storage.get<PoolState>(`${POOL_PREFIX}${name}`);
+
+        if (stored !== undefined) {
+            return { inFlight: Math.max(0, stored.inFlight), maxConcurrency: stored.maxConcurrency };
+        }
+
+        return { inFlight: 0, maxConcurrency: SchedulerDO.normalizeConcurrency(maxConcurrencyHint, 1) };
+    }
+
+    private async savePool(name: string, pool: PoolState): Promise<void> {
+        await this.state.storage.put(`${POOL_PREFIX}${name}`, pool);
+    }
+
+    /**
+     * Re-arm a pooled job that couldn't run because its pool was at capacity.
+     * No attempt is charged (this is backpressure, not a failure): the job is
+     * pushed `POOL_BACKPRESSURE_DELAY_MS` into the future so a later alarm
+     * drains it once a slot frees, keeping its `id:` header and retry policy.
+     */
+    private async requeuePooled(record: ScheduleRecord): Promise<void> {
+        const nextScheduledFor = Date.now() + POOL_BACKPRESSURE_DELAY_MS;
+        const requeued: ScheduleRecord = { ...record, scheduledFor: nextScheduledFor };
+
+        await this.state.storage.put(`${HEADER_PREFIX}${record.id}`, requeued);
+        await this.state.storage.put(SchedulerDO.indexKey(nextScheduledFor, record.id), record.id);
+    }
+
+    /**
+     * Release a pool slot when the runtime reports an action finished. This is
+     * the durable-semaphore decrement: dispatch() only KICKS the action and
+     * holds the slot; the runtime calls back here (`POST /complete { id }`) once
+     * the action settles, freeing the slot for the next queued job. Idempotent
+     * and safe if the job/pool is already gone.
+     */
+    private async handleComplete(request: Request): Promise<Response> {
+        const body = (await request.json().catch(() => undefined)) as { id?: string; pool?: string } | undefined;
+        const poolName = typeof body?.pool === "string" && body.pool.length > 0 ? body.pool : undefined;
+
+        if (poolName === undefined) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "pool is required");
+        }
+
+        const pool = await this.loadPool(poolName);
+
+        pool.inFlight = Math.max(0, pool.inFlight - 1);
+        await this.savePool(poolName, pool);
+
+        // A freed slot means a queued job can now run; pull the alarm forward so
+        // the drain happens promptly instead of waiting for the backpressure tick.
+        await this.armAlarmIfEarlier(Date.now());
+
+        return SchedulerDO.json({ inFlight: pool.inFlight });
+    }
+
+    /** `GET /pool?name=` — inspect a pool's slot usage + queued count. */
+    private async handlePoolStatus(url: URL): Promise<Response> {
+        const name = url.searchParams.get("name");
+
+        if (name === null || name.length === 0) {
+            return SchedulerDO.error(400, "INVALID_INPUT", "name is required");
+        }
+
+        const pool = await this.loadPool(name);
+        const headers = await this.state.storage.list<ScheduleRecord>({ prefix: HEADER_PREFIX });
+        let queued = 0;
+
+        for (const record of headers.values()) {
+            if (record.pool === name) {
+                queued += 1;
+            }
+        }
+
+        return SchedulerDO.json({ inFlight: pool.inFlight, maxConcurrency: pool.maxConcurrency, queued });
     }
 
     private async handleSchedule(request: Request): Promise<Response> {
@@ -433,6 +680,9 @@ class SchedulerDO {
             return SchedulerDO.error(500, "ORIGIN_NOT_CONFIGURED", "CIRRUS_ORIGIN_URL env binding must be set on the SchedulerDO");
         }
 
+        const pool = typeof body.pool === "string" && body.pool.length > 0 ? body.pool : undefined;
+        const instanceName = typeof body.instanceName === "string" && body.instanceName.length > 0 ? body.instanceName : undefined;
+        const retry = SchedulerDO.normalizeRetry(body.retry);
         const id = generateId();
         const record: ScheduleRecord = {
             // body is parsed from an untrusted request; args may be absent at runtime
@@ -442,9 +692,23 @@ class SchedulerDO {
             enqueuedAt: Date.now(),
             functionPath: body.functionPath,
             id,
+            ...(instanceName === undefined ? {} : { instanceName }),
+            ...(pool === undefined ? {} : { pool }),
+            ...(retry === undefined ? {} : { retry }),
             scheduledFor: body.scheduledFor,
             shardKey: body.shardKey,
         };
+
+        // Persist (or refresh) the pool's concurrency cap so the alarm-time gate
+        // has a durable maxConcurrency even after the enqueuing client is gone.
+        if (pool !== undefined) {
+            const current = await this.loadPool(pool, body.maxConcurrency);
+
+            await this.savePool(pool, {
+                inFlight: current.inFlight,
+                maxConcurrency: SchedulerDO.normalizeConcurrency(body.maxConcurrency, current.maxConcurrency),
+            });
+        }
 
         await this.state.storage.put(`${HEADER_PREFIX}${id}`, record);
         await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, id), id);
