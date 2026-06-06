@@ -1,11 +1,15 @@
 import type { GlobalTableInfo } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import type { CSSProperties, ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { TableInfo, TablePage } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
+import { Button } from "./components/ui/button.js";
+import { useT } from "./i18n-context.js";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
+import type { SchemaEdge } from "./schema-graph.js";
+import { SchemaGraph } from "./schema-graph.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
 import { StorageTierBadge, StorageTierHint } from "./storage-tier.js";
@@ -17,6 +21,27 @@ interface SchemaViewerProps {
 
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
+
+/** Hoisted empty edge list so the graph props don't allocate a fresh array each render. */
+const EMPTY_EDGES: ReadonlyArray<SchemaEdge> = [];
+
+/** How the schema is presented: a textual table list, or the relationship graph. */
+type SchemaView = "graph" | "list";
+
+/**
+ * Turn a `readTablePage`'s `refs` map (column → target table) into directed
+ * foreign-key edges from `from` to each referenced target. Tolerates a missing
+ * `refs` field (the probe failed or the table has no `v.id` columns).
+ */
+const referencesToEdges = (from: string, references: Record<string, string> | undefined): SchemaEdge[] => {
+    if (references === undefined) {
+        return [];
+    }
+
+    return Object.entries(references).map(([column, to]) => {
+        return { column, from, to };
+    });
+};
 
 const SECTION_STYLE: CSSProperties = { margin: "0 0 20px" };
 const SECTION_HEADING_STYLE: CSSProperties = { alignItems: "center", display: "flex", gap: 8, margin: "0 0 4px" };
@@ -38,12 +63,19 @@ const SECTION_TITLE_STYLE: CSSProperties = { fontSize: 14, fontWeight: 600, marg
  */
 export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactElement => {
     const client = useCirrus();
+    const t = useT();
 
+    const [view, setView] = useState<SchemaView>("list");
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [tables, setTables] = useState<TableInfo[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [columns, setColumns] = useState<Record<string, string[]>>({});
     const [expanded, setExpanded] = useState<null | string>(null);
+
+    // Foreign-key edges for the shard tier, keyed by shard so a shard switch
+    // can't show a previous shard's relationships. Built by probing each table's
+    // `refs` (one-row `readTablePage`) lazily when the graph view is opened.
+    const [shardEdges, setShardEdges] = useState<Record<string, SchemaEdge[]>>({});
 
     const [globalTables, setGlobalTables] = useState<GlobalTableInfo[] | null>(null);
     const [globalError, setGlobalError] = useState<null | string>(null);
@@ -61,6 +93,9 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
                 setTables(result);
                 setColumns({});
                 setExpanded(null);
+                // Drop cached relationships for this shard so the graph re-probes
+                // against the freshly listed tables.
+                setShardEdges((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
             } catch (error_) {
                 setTables(null);
                 setError(errorMessage(error_));
@@ -149,6 +184,60 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
         fireAndForget(refreshGlobal());
     }, [refresh, refreshGlobal, shardKey]);
 
+    // Probe each shard table's `refs` (one row apiece) and collect the foreign-key
+    // edges for the graph. A single table's probe failing must not blank the
+    // graph, so each probe's rejection is swallowed and that table simply
+    // contributes no edges.
+    const probeShardEdges = useCallback(
+        async (shard: string, names: string[]): Promise<void> => {
+            const results = await Promise.all(
+                names.map(async (table): Promise<SchemaEdge[]> => {
+                    try {
+                        const page = (await client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shard))) as TablePage;
+
+                        return referencesToEdges(table, page.refs);
+                    } catch {
+                        return [];
+                    }
+                }),
+            );
+
+            setShardEdges((previous) => {
+                return { ...previous, [shard]: results.flat() };
+            });
+        },
+        [client],
+    );
+
+    // When the graph opens (or the shard's tables change) probe the relationships
+    // once per shard. List view never probes, so the graph cost is opt-in. This is
+    // a genuine lazy data-load, not a click handler: it must also re-run when the
+    // shard's `tables` change (after Refresh) or `shardKey` switches, so it stays
+    // an effect keyed on those values rather than firing from the toggle's onClick.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- lazy data-load gated on view + shard, not an event handler
+        if (view !== "graph" || tables === null || shardEdges[shardKey] !== undefined) {
+            return;
+        }
+
+        fireAndForget(
+            probeShardEdges(
+                shardKey,
+                tables.map((table) => table.name),
+            ),
+        );
+    }, [view, tables, shardKey, shardEdges, probeShardEdges]);
+
+    const shardTableNames = useMemo<string[]>(() => (tables ?? []).map((table) => table.name), [tables]);
+    const globalTableNames = useMemo<string[]>(() => (globalTables ?? []).map((table) => table.name), [globalTables]);
+
+    const showList = useCallback((): void => {
+        setView("list");
+    }, []);
+    const showGraph = useCallback((): void => {
+        setView("graph");
+    }, []);
+
     return (
         <div data-testid="cirrus-schema">
             <div>
@@ -158,91 +247,135 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
                 </button>
             </div>
 
-            <section data-testid="sc-shard-section" style={SECTION_STYLE}>
-                <div style={SECTION_HEADING_STYLE}>
-                    <StorageTierBadge tier="shard" />
-                    <h3 style={SECTION_TITLE_STYLE}>Shard tables</h3>
+            <div aria-label={t("Schema view")} className="my-3 flex gap-1.5" data-testid="sc-view-toggle" role="group">
+                <Button
+                    aria-pressed={view === "list"}
+                    data-testid="sc-view-list"
+                    onClick={showList}
+                    size="xs"
+                    type="button"
+                    variant={view === "list" ? "default" : "outline"}
+                >
+                    {t("Table list")}
+                </Button>
+                <Button
+                    aria-pressed={view === "graph"}
+                    data-testid="sc-view-graph"
+                    onClick={showGraph}
+                    size="xs"
+                    type="button"
+                    variant={view === "graph" ? "default" : "outline"}
+                >
+                    {t("Graph")}
+                </Button>
+            </div>
+
+            {view === "graph" && (
+                <div className="flex flex-col gap-5" data-testid="sc-graph-view">
+                    {error !== null && (
+                        <p data-testid="sc-error" role="alert">
+                            {error}
+                        </p>
+                    )}
+                    <SchemaGraph edges={shardEdges[shardKey] ?? EMPTY_EDGES} tables={shardTableNames} testIdPrefix="sc-graph-shard" tier="shard" />
+                    {globalError !== null && (
+                        <p data-testid="sc-global-error" role="alert">
+                            {globalError}
+                        </p>
+                    )}
+                    <SchemaGraph edges={EMPTY_EDGES} tables={globalTableNames} testIdPrefix="sc-graph-global" tier="global" />
                 </div>
-                <StorageTierHint tier="shard" />
+            )}
 
-                {error !== null && (
-                    <p data-testid="sc-error" role="alert">
-                        {error}
-                    </p>
-                )}
+            {view === "list" && (
+                <>
+                    <section data-testid="sc-shard-section" style={SECTION_STYLE}>
+                        <div style={SECTION_HEADING_STYLE}>
+                            <StorageTierBadge tier="shard" />
+                            <h3 style={SECTION_TITLE_STYLE}>Shard tables</h3>
+                        </div>
+                        <StorageTierHint tier="shard" />
 
-                {tables !== null && tables.length === 0 && <p data-testid="sc-empty">No tables in this shard.</p>}
+                        {error !== null && (
+                            <p data-testid="sc-error" role="alert">
+                                {error}
+                            </p>
+                        )}
 
-                {tables !== null && tables.length > 0 && (
-                    <ul data-testid="sc-table-list">
-                        {tables.map((table) => (
-                            <li data-testid={`sc-table-${table.name}`} key={table.name}>
-                                <button
-                                    aria-expanded={expanded === table.name}
-                                    data-testid={`sc-toggle-${table.name}`}
-                                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row toggle closes over table.name; admin dev-tool render path
-                                    onClick={() => {
-                                        fireAndForget(toggle(table.name));
-                                    }}
-                                    type="button"
-                                >
-                                    {table.name} ({table.rowCount})
-                                </button>
-                                {expanded === table.name && (
-                                    <ul data-testid={`sc-columns-${table.name}`}>
-                                        {(columns[`${shardKey}:${table.name}`] ?? []).map((column) => (
-                                            <li key={column}>{column}</li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </section>
+                        {tables !== null && tables.length === 0 && <p data-testid="sc-empty">No tables in this shard.</p>}
 
-            <section data-testid="sc-global-section" style={SECTION_STYLE}>
-                <div style={SECTION_HEADING_STYLE}>
-                    <StorageTierBadge tier="global" />
-                    <h3 style={SECTION_TITLE_STYLE}>Global tables</h3>
-                </div>
-                <StorageTierHint tier="global" />
+                        {tables !== null && tables.length > 0 && (
+                            <ul data-testid="sc-table-list">
+                                {tables.map((table) => (
+                                    <li data-testid={`sc-table-${table.name}`} key={table.name}>
+                                        <button
+                                            aria-expanded={expanded === table.name}
+                                            data-testid={`sc-toggle-${table.name}`}
+                                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row toggle closes over table.name; admin dev-tool render path
+                                            onClick={() => {
+                                                fireAndForget(toggle(table.name));
+                                            }}
+                                            type="button"
+                                        >
+                                            {table.name} ({table.rowCount})
+                                        </button>
+                                        {expanded === table.name && (
+                                            <ul data-testid={`sc-columns-${table.name}`}>
+                                                {(columns[`${shardKey}:${table.name}`] ?? []).map((column) => (
+                                                    <li key={column}>{column}</li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </section>
 
-                {globalError !== null && (
-                    <p data-testid="sc-global-error" role="alert">
-                        {globalError}
-                    </p>
-                )}
+                    <section data-testid="sc-global-section" style={SECTION_STYLE}>
+                        <div style={SECTION_HEADING_STYLE}>
+                            <StorageTierBadge tier="global" />
+                            <h3 style={SECTION_TITLE_STYLE}>Global tables</h3>
+                        </div>
+                        <StorageTierHint tier="global" />
 
-                {globalTables !== null && globalTables.length === 0 && <p data-testid="sc-global-empty">No global tables.</p>}
+                        {globalError !== null && (
+                            <p data-testid="sc-global-error" role="alert">
+                                {globalError}
+                            </p>
+                        )}
 
-                {globalTables !== null && globalTables.length > 0 && (
-                    <ul data-testid="sc-global-table-list">
-                        {globalTables.map((table) => (
-                            <li data-testid={`sc-global-table-${table.name}`} key={table.name}>
-                                <button
-                                    aria-expanded={globalExpanded === table.name}
-                                    data-testid={`sc-global-toggle-${table.name}`}
-                                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row toggle closes over table.name; admin dev-tool render path
-                                    onClick={() => {
-                                        fireAndForget(toggleGlobal(table.name));
-                                    }}
-                                    type="button"
-                                >
-                                    {table.name} ({table.rowCount})
-                                </button>
-                                {globalExpanded === table.name && (
-                                    <ul data-testid={`sc-global-columns-${table.name}`}>
-                                        {(globalColumns[table.name] ?? []).map((column) => (
-                                            <li key={column}>{column}</li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </section>
+                        {globalTables !== null && globalTables.length === 0 && <p data-testid="sc-global-empty">No global tables.</p>}
+
+                        {globalTables !== null && globalTables.length > 0 && (
+                            <ul data-testid="sc-global-table-list">
+                                {globalTables.map((table) => (
+                                    <li data-testid={`sc-global-table-${table.name}`} key={table.name}>
+                                        <button
+                                            aria-expanded={globalExpanded === table.name}
+                                            data-testid={`sc-global-toggle-${table.name}`}
+                                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row toggle closes over table.name; admin dev-tool render path
+                                            onClick={() => {
+                                                fireAndForget(toggleGlobal(table.name));
+                                            }}
+                                            type="button"
+                                        >
+                                            {table.name} ({table.rowCount})
+                                        </button>
+                                        {globalExpanded === table.name && (
+                                            <ul data-testid={`sc-global-columns-${table.name}`}>
+                                                {(globalColumns[table.name] ?? []).map((column) => (
+                                                    <li key={column}>{column}</li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </section>
+                </>
+            )}
         </div>
     );
 };
