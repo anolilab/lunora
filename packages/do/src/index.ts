@@ -82,6 +82,18 @@ export type {
 export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration.js";
 export type { DependencyTracker } from "./dependency-tracker.js";
 export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker.js";
+export type { FunctionMetricBucket, RecordFunctionMetricInput } from "./function-metrics.js";
+export {
+    ensureFunctionMetricsTables,
+    FUNCTION_METRICS_BUCKET_MS,
+    FUNCTION_METRICS_BUCKET_RETENTION,
+    FUNCTION_METRICS_BUCKETS_TABLE,
+    FUNCTION_METRICS_TABLE,
+    readFunctionMetricBuckets,
+    readFunctionMetrics,
+    readFunctionMetricsTotals,
+    recordFunctionMetric,
+} from "./function-metrics.js";
 export type {
     AuditEntry,
     AuditLogResult,

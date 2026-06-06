@@ -11,6 +11,8 @@ import type { MigrationDirection, MigrationRunResult } from "./data-migration.js
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
 import { createDependencyTracker } from "./dependency-tracker.js";
+import type { FunctionMetricBucket } from "./function-metrics.js";
+import { readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics.js";
 import type { AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 import { LogBuffer } from "./log-buffer.js";
@@ -1551,14 +1553,23 @@ abstract class ShardDO {
 
     /**
      * Assemble the health snapshot served by `__cirrus_admin__:getMetrics`:
-     * lifetime request/error counts since this instance woke, the live SQLite
-     * size, and (when an opt-in reactive cache is configured) its hit/miss
-     * stats. All cheap, in-memory reads — no table scans.
+     * lifetime request/error counts, the live SQLite size, and (when an opt-in
+     * reactive cache is configured) its hit/miss stats.
+     *
+     * `requests`/`errors` now report the **durable** lifetime totals from the
+     * `__cirrus_metrics` table (source of truth) so they survive
+     * hibernation/restart; the in-memory counters are used only as a fallback
+     * when the durable read throws. The response is extended additively with
+     * `functions` (per-function persisted rows) and `history` (the coarse
+     * time-series buckets) so the dashboard can read durable per-function
+     * metrics and chart history without breaking the existing fields.
      */
     private collectMetrics(): {
         cache: null | { bytes: number; entries: number; evictions: number; hits: number; misses: number };
         databaseSize: null | number;
         errors: number;
+        functions: FunctionCallStat[];
+        history: (FunctionMetricBucket & { path: string })[];
         requests: number;
         shard: string;
         sinceMs: number;
@@ -1567,13 +1578,29 @@ abstract class ShardDO {
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- structural state: a test double may omit `storage.sql` even though the type marks it required
         const size = this.state.storage.sql?.databaseSize;
 
+        // Durable totals are the source of truth; fall back to the in-memory
+        // counters only if the persisted read is unavailable.
+        let {requests} = this.metrics;
+        let {errors} = this.metrics;
+
+        try {
+            const totals = readFunctionMetricsTotals(this.state.storage.sql as unknown as SqlExec);
+
+            requests = totals.requests;
+            errors = totals.errors;
+        } catch {
+            // Keep the in-memory fallback already assigned above.
+        }
+
         return {
             // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `cache` is `null | {...}`, null reported when the reactive cache is disabled
             cache: this.reactiveCache ? this.reactiveCache.stats() : null,
             // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `databaseSize` is `null | number`, null when the runtime doesn't expose a size
             databaseSize: typeof size === "number" ? size : null,
-            errors: this.metrics.errors,
-            requests: this.metrics.requests,
+            errors,
+            functions: this.collectFunctionStats().functions,
+            history: this.collectFunctionMetricBuckets(),
+            requests,
             shard: this.state.id?.name ?? ROOT_SHARD_NAME,
             sinceMs: this.metrics.sinceMs,
             uptimeMs: Date.now() - this.metrics.sinceMs,
@@ -1583,12 +1610,34 @@ abstract class ShardDO {
     /**
      * Fold one dispatch into the per-function counters keyed by `functionPath`,
      * creating the entry on first sight. `errorMessage` is supplied only when
-     * the handler threw, in which case the failure counters advance too. Cheap
-     * in-memory bookkeeping — the sole writer of {@link functionStats}, called
+     * the handler threw, in which case the failure counters advance too. Called
      * once per `/rpc` dispatch alongside the aggregate `metrics` update.
+     *
+     * Two writes happen here. The in-memory {@link functionStats} map is kept
+     * for the fast warm-instance path, and the durable `__cirrus_metrics`
+     * table is upserted so the counters survive hibernation/restart — the
+     * persisted table is the source of truth the admin RPCs read from. The
+     * persist is best-effort: a SQL failure (e.g. a test double without a
+     * `sql` handle) must never turn a successful dispatch into a failed one,
+     * so it is swallowed and the in-memory counters still advance.
      */
     private recordFunctionCall(functionPath: string, durationMs: number, errorMessage?: string): void {
         const now = Date.now();
+
+        // Durable upsert on the hot path: two PK-keyed INSERT…ON CONFLICT
+        // statements plus a bounded bucket trim. Survives restart/hibernation.
+        try {
+            recordFunctionMetric(this.state.storage.sql as unknown as SqlExec, {
+                durationMs,
+                errored: errorMessage !== undefined,
+                errorMessage,
+                path: functionPath,
+                ts: now,
+            });
+        } catch {
+            // Best-effort: never let metrics persistence fail the request.
+        }
+
         const existing = this.functionStats.get(functionPath);
         const stat: FunctionCallStat = existing ?? {
             calls: 0,
@@ -1623,11 +1672,39 @@ abstract class ShardDO {
      * Assemble the per-function readout served by
      * `__cirrus_admin__:getFunctionStats`, sorted most-recently-called first so
      * the busiest functions surface at the top of the dashboard table.
+     *
+     * Reads from the durable `__cirrus_metrics` table — the source of truth —
+     * so the counts reflect the function's lifetime, not just calls since this
+     * instance woke. Falls back to the in-memory map only if the durable read
+     * throws (e.g. a test double without a usable `sql` handle), keeping the
+     * warm-instance counters available even then. The wire shape is unchanged
+     * (`{ functions, sinceMs }`), so existing dashboard/runtime consumers keep
+     * working; the rows are now backed by persisted data.
      */
     private collectFunctionStats(): FunctionStatsResult {
-        const functions = [...this.functionStats.values()].toSorted((a, b) => b.lastCalledAt - a.lastCalledAt);
+        try {
+            const functions = readFunctionMetrics(this.state.storage.sql as unknown as SqlExec);
 
-        return { functions, sinceMs: this.metrics.sinceMs };
+            return { functions, sinceMs: this.metrics.sinceMs };
+        } catch {
+            const functions = [...this.functionStats.values()].toSorted((a, b) => b.lastCalledAt - a.lastCalledAt);
+
+            return { functions, sinceMs: this.metrics.sinceMs };
+        }
+    }
+
+    /**
+     * Per-function coarse time-series served additively by the metrics RPC, so
+     * the dashboard can chart call/error history. Reads the durable
+     * `__cirrus_metrics_buckets` table; returns `[]` when persistence is
+     * unavailable so the response stays well-formed.
+     */
+    private collectFunctionMetricBuckets(): (FunctionMetricBucket & { path: string })[] {
+        try {
+            return readFunctionMetricBuckets(this.state.storage.sql as unknown as SqlExec);
+        } catch {
+            return [];
+        }
     }
 
     private maybeWarnRootSize(): void {
