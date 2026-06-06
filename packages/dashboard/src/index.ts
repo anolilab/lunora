@@ -1,6 +1,8 @@
 export type {
     CacheStats,
     ExportRow,
+    FilterClause,
+    FilterOperator,
     FunctionCallStat,
     FunctionStatsResult,
     ImportError,
@@ -32,6 +34,8 @@ export type { DashboardProps, DashboardTab } from "./dashboard.js";
 export { Dashboard } from "./dashboard.js";
 export type { DataBrowserProps } from "./data-browser.js";
 export { DataBrowser } from "./data-browser.js";
+export type { EditableFilter } from "./data-filters.js";
+export { DataFilters, toFilterClauses } from "./data-filters.js";
 export type { Insight, InsightKind, InsightSeverity, InsightThresholds } from "./derive-insights.js";
 export { DEFAULT_INSIGHT_THRESHOLDS, deriveInsights } from "./derive-insights.js";
 export type { ErrorBoundaryProps } from "./error-boundary.js";

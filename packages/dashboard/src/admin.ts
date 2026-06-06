@@ -31,6 +31,20 @@ export const ADMIN_FUNCTIONS = {
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
+/** Comparison a {@link FilterClause} applies, mirroring `@cirrus/do`'s `FilterOperator`. `contains` is a substring (LIKE). */
+export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+
+/**
+ * One structured column filter passed to `readTablePage`, mirroring `@cirrus/do`'s
+ * `FilterClause`. AND-combined with the substring search and the other clauses.
+ * `value` is sent as-is and bound server-side, so it never injects SQL.
+ */
+export interface FilterClause {
+    column: string;
+    operator: FilterOperator;
+    value?: unknown;
+}
+
 /** Which single-row mutation a {@link WriteRowArgs} performs. */
 export type WriteRowOp = "delete" | "insert" | "patch" | "replace";
 

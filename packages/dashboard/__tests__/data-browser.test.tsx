@@ -745,3 +745,113 @@ describe("dataBrowser — editable", () => {
         expect(screen.getByTestId("db-ref-authorId")).toBeDefined();
     });
 });
+
+interface FilterArg {
+    column: string;
+    operator: string;
+    value: unknown;
+}
+
+/** A stateful client over a mutable `messages` table that honours structured `filters` and `writeRow` deletes. */
+const createFilterableClient = (): MockClientHooks => {
+    let rows = [
+        { __id__: "m1", status: "active", text: "hello" },
+        { __id__: "m2", status: "active", text: "world" },
+        { __id__: "m3", status: "archived", text: "again" },
+    ];
+
+    return createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: rows.length }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.writeRow) {
+                const { id, op } = args as { id?: string; op: string };
+
+                if (op === "delete" && id !== undefined) {
+                    rows = rows.filter((row) => row["__id__"] !== id);
+                }
+
+                return { id: id ?? null, op };
+            }
+
+            // readTablePage: apply each structured filter (eq only, enough here).
+            const { filters = [], limit = 50, offset = 0, table } = args as { filters?: FilterArg[]; limit?: number; offset?: number; table: string };
+
+            if (table !== "messages") {
+                throw new Error(`unknown table: ${table}`);
+            }
+
+            const matched = rows.filter((row) => filters.every((clause) => clause.operator !== "eq" || String((row as Record<string, unknown>)[clause.column]) === String(clause.value)));
+
+            return { columns: ["__id__", "status", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
+        },
+    });
+};
+
+describe("dataBrowser — structured filters and bulk delete", () => {
+    it("passes a structured filter to readTablePage and narrows the page", async () => {
+        expect.assertions(2);
+
+        const mock = createFilterableClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        // Add a clause and set it to `status = archived` → only m3 survives.
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(screen.getByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(screen.getByTestId("db-filter-value"), { target: { value: "archived" } });
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 1) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "archived" }]);
+        expect(screen.getByTestId("db-row").textContent).toContain("again");
+    });
+
+    it("bulk-deletes every row matching the active filter", async () => {
+        expect.assertions(2);
+
+        const mock = createFilterableClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        // Filter to the two active rows, then bulk-delete them.
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(screen.getByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(screen.getByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 2) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-bulk-delete"));
+        fireEvent.click(screen.getByTestId("db-bulk-delete-confirm"));
+
+        // Both active rows deleted → the filtered page is now empty.
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length > 0) {
+                throw new Error("rows not deleted yet");
+            }
+        });
+
+        const deletes = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
+
+        expect(deletes).toHaveLength(2);
+        expect(deletes.every((call) => (call[1] as { op: string }).op === "delete")).toBe(true);
+    });
+});

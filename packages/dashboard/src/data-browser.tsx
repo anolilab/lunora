@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TableInfo, TablePage, WriteRowResult } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
+import type { EditableFilter } from "./data-filters.js";
+import { DataFilters, toFilterClauses } from "./data-filters.js";
 import { adminRef, callOptions, fireAndForget, formatCell } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { RowDetailDrawer } from "./row-detail.js";
@@ -32,6 +34,9 @@ interface DataBrowserProps {
 }
 
 const DEFAULT_PAGE_SIZE = 50;
+
+/** Hard ceiling on bulk-delete read/delete batches, so "delete matching" can never run unbounded. */
+const MAX_BULK_DELETE_BATCHES = 200;
 
 /** Height of the virtualized scroll viewport, in px. */
 const SCROLL_HEIGHT = 400;
@@ -203,47 +208,64 @@ const DataBrowserTableList = ({
  * lives in the parent; this component is purely the control bar markup.
  */
 const DataBrowserViewControls = ({
+    columns,
     editable,
     filter,
+    filters,
     live,
     liveError,
     onAddRow,
+    onBulkDelete,
     onFilterChange,
+    onFiltersChange,
     onRefresh,
     onShowJson,
     onShowTable,
     onToggleLive,
+    total,
     viewMode,
 }: {
+    columns: string[];
     editable: boolean;
     filter: string;
+    filters: EditableFilter[];
     live: boolean;
     liveError: string | undefined;
     onAddRow: () => void;
+    onBulkDelete: () => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    onFiltersChange: (filters: EditableFilter[]) => void;
     onRefresh: () => void;
     onShowJson: () => void;
     onShowTable: () => void;
     onToggleLive: () => void;
+    total: number;
     viewMode: "json" | "table";
 }): ReactElement => (
     <div data-testid="db-view-toggle">
-        <button aria-pressed={viewMode === "table"} data-testid="db-view-table" onClick={onShowTable} type="button">
-            Table
-        </button>
-        <button aria-pressed={viewMode === "json"} data-testid="db-view-json" onClick={onShowJson} type="button">
-            JSON
-        </button>
-        <button data-testid="db-refresh" onClick={onRefresh} type="button">
-            Refresh
-        </button>
-        <LiveToggle live={live} liveError={liveError} onToggle={onToggleLive} prefix="db" />
-        <input aria-label="Search rows" data-testid="db-filter" onChange={onFilterChange} placeholder="search table…" value={filter} />
-        {editable && (
-            <button data-testid="db-add-row" onClick={onAddRow} type="button">
-                Add row
+        <div className="flex flex-wrap items-center gap-1.5">
+            <button aria-pressed={viewMode === "table"} data-testid="db-view-table" onClick={onShowTable} type="button">
+                Table
             </button>
-        )}
+            <button aria-pressed={viewMode === "json"} data-testid="db-view-json" onClick={onShowJson} type="button">
+                JSON
+            </button>
+            <button data-testid="db-refresh" onClick={onRefresh} type="button">
+                Refresh
+            </button>
+            <LiveToggle live={live} liveError={liveError} onToggle={onToggleLive} prefix="db" />
+            {editable && (
+                <button data-testid="db-add-row" onClick={onAddRow} type="button">
+                    Add row
+                </button>
+            )}
+            {editable && total > 0 && (filter !== "" || filters.length > 0) && (
+                <ConfirmButton confirmLabel={`Delete ${total.toString()} matching?`} onConfirm={onBulkDelete} testId="db-bulk-delete">
+                    {`Delete ${total.toString()} matching`}
+                </ConfirmButton>
+            )}
+        </div>
+        <DataFilters columns={columns} filters={filters} onFiltersChange={onFiltersChange} onSearchChange={onFilterChange} search={filter} />
     </div>
 );
 
@@ -540,9 +562,12 @@ const useDataBrowserTable = (
 /** Everything {@link useDataBrowser} exposes to the {@link DataBrowser} render. */
 interface DataBrowserModel {
     addRow: () => void;
+    bulkDelete: () => void;
     cancelEdit: () => void;
+    columns: string[];
     editing: null | { docText: string; id: null | string };
     filter: string;
+    filters: EditableFilter[];
     goNext: () => void;
     goPrevious: () => void;
     hasNext: boolean;
@@ -553,6 +578,7 @@ interface DataBrowserModel {
     navigateToRef: (target: string, id: string) => void;
     onEditorDocumentChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    onFiltersChange: (filters: EditableFilter[]) => void;
     onRowDelete: (id: null | string) => void;
     onRowEdit: (id: null | string, original: TableRow) => void;
     page: TablePage | null;
@@ -607,6 +633,14 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     const [filter, setFilter] = useState<string>("");
     const search = useDebounced(filter.trim(), 300);
 
+    // Structured column filters. Held in a ref too so `fetchPage` reads the
+    // current value without threading them through its five call sites; an effect
+    // re-fetches from offset 0 when they change (mirroring the debounced search).
+    const [filters, setFilters] = useState<EditableFilter[]>([]);
+    const filtersRef = useRef<EditableFilter[]>(filters);
+
+    filtersRef.current = filters;
+
     // Edit state: the row being edited (its id, or `""` for a new insert) and
     // the JSON-doc draft. `null` when no editor is open. `writeError` surfaces a
     // rejected write without disturbing the page-read error.
@@ -619,7 +653,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     // loads (in fetchPage), so the live subscription follows what's displayed —
     // not the shard-key input as it's typed, nor a table selection whose offset
     // reset hasn't landed yet. Keyed independently of `shardKey`/`offset` state.
-    const [loaded, setLoaded] = useState<null | { offset: number; search: string; shard: string; table: string }>(null);
+    const [loaded, setLoaded] = useState<null | { filters: EditableFilter[]; offset: number; search: string; shard: string; table: string }>(null);
 
     const fetchTables = useCallback(
         async (shard: string): Promise<void> => {
@@ -642,16 +676,18 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         async (shard: string, table: string, nextOffset: number, searchQuery: string): Promise<void> => {
             setPageError(null);
 
+            const activeFilters = filtersRef.current;
+
             try {
                 const result = (await client.query(
                     READ_TABLE_PAGE,
-                    { limit: pageSize, offset: nextOffset, search: searchQuery, table },
+                    { filters: toFilterClauses(activeFilters), limit: pageSize, offset: nextOffset, search: searchQuery, table },
                     callOptions(shard),
                 )) as TablePage;
 
                 setPage(result);
                 setOffset(nextOffset);
-                setLoaded({ offset: nextOffset, search: searchQuery, shard, table });
+                setLoaded({ filters: activeFilters, offset: nextOffset, search: searchQuery, shard, table });
             } catch (error) {
                 setPage(null);
                 setPageError((error as Error).message);
@@ -673,7 +709,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     // still pending — and only runs once a page has actually loaded.
     useLiveAdmin(
         ADMIN_FUNCTIONS.readTablePage,
-        { limit: pageSize, offset: loaded?.offset ?? 0, search: loaded?.search ?? "", table: loaded?.table ?? "" },
+        { filters: toFilterClauses(loaded?.filters ?? []), limit: pageSize, offset: loaded?.offset ?? 0, search: loaded?.search ?? "", table: loaded?.table ?? "" },
         loaded?.shard ?? "",
         (result) => {
             setPageError(null);
@@ -703,9 +739,11 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
 
     const selectTable = useCallback(
         (table: string): void => {
-            // A fresh table means the previous sort/search no longer apply.
+            // A fresh table means the previous sort/search/filters no longer apply.
             setSorting([]);
             setFilter("");
+            setFilters([]);
+            filtersRef.current = [];
             setSelectedTable(table);
             fireAndForget(fetchPage(shardKey, table, 0, ""));
         },
@@ -718,6 +756,8 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     const navigateToRef = useCallback(
         (targetTable: string, id: string): void => {
             setSorting([]);
+            setFilters([]);
+            filtersRef.current = [];
             setSelectedTable(targetTable);
             setFilter(id);
             // Seed the page immediately with the search applied; the debounced
@@ -750,6 +790,18 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
 
         fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
     }, [search, selectedTable, shardKey, loaded, fetchPage]);
+
+    // Re-run from offset 0 when the structured filters change for the loaded
+    // table — same shape as the debounced-search effect above. `fetchPage` reads
+    // the live `filtersRef`, so the new clauses apply immediately.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- reacting to a changed filter set (a value, not a discrete event) is the correct pattern, mirroring the debounced-search effect above.
+        if (selectedTable === null || loaded === null || loaded.filters === filters) {
+            return;
+        }
+
+        fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
+    }, [filters, selectedTable, shardKey, loaded, search, fetchPage]);
 
     // Issue a writeRow op then reload the current page so the change shows. A
     // delete passes no doc; insert (id === "") / patch carry the JSON draft.
@@ -788,6 +840,50 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         [client, fetchPage, offset, search, selectedTable, shardKey],
     );
 
+    // Bulk delete every row matching the active search + filters, by reading the
+    // matching set a page at a time (offset 0 — each batch's deletes shrink it)
+    // and issuing the same schema-aware single-row delete the row button uses, so
+    // FTS / aggregate / rank shadow tables stay in sync. Bounded by
+    // `MAX_BULK_DELETE_BATCHES` so it can never run unbounded.
+    const deleteMatching = useCallback(async (): Promise<void> => {
+        if (selectedTable === null) {
+            return;
+        }
+
+        setWriteError(null);
+        const filterClauses = toFilterClauses(filtersRef.current);
+
+        try {
+            for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
+                // Sequential by design: each batch's deletes shrink the matching
+                // set the next read sees, so the reads can't be parallelised.
+                // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each read reflects the prior batch's deletes)
+                const result = (await client.query(
+                    READ_TABLE_PAGE,
+                    { filters: filterClauses, limit: pageSize, offset: 0, search, table: selectedTable },
+                    callOptions(shardKey),
+                )) as TablePage;
+
+                const ids = result.rows.map((row) => rowId(row)).filter((id): id is string => id !== null);
+
+                if (ids.length === 0) {
+                    break;
+                }
+
+                for (const id of ids) {
+                    // Sequential single-row deletes through the writer; parallel
+                    // writes to one DO would contend on OCC, so we serialise them.
+                    // eslint-disable-next-line no-await-in-loop -- serialise writes to avoid OCC contention on the shard DO
+                    await client.query(WRITE_ROW, { id, op: "delete", table: selectedTable }, callOptions(shardKey));
+                }
+            }
+
+            await fetchPage(shardKey, selectedTable, 0, search);
+        } catch (error) {
+            setWriteError((error as Error).message);
+        }
+    }, [client, fetchPage, pageSize, search, selectedTable, shardKey]);
+
     // Headless table model + virtualizer for the loaded page. The page-local
     // `sorting` state stays here (table switches reset it via `setSorting`); the
     // hook owns only the derived react-table/virtualizer wiring.
@@ -814,6 +910,10 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     const refreshPage = useCallback((): void => {
         goToPage(offset);
     }, [goToPage, offset]);
+
+    const bulkDelete = useCallback((): void => {
+        fireAndForget(deleteMatching());
+    }, [deleteMatching]);
 
     const onFilterChange = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
         setFilter(event.target.value);
@@ -863,9 +963,12 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
 
     return {
         addRow,
+        bulkDelete,
         cancelEdit,
+        columns: page?.columns ?? [],
         editing,
         filter,
+        filters,
         goNext,
         goPrevious,
         hasNext,
@@ -876,6 +979,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         navigateToRef,
         onEditorDocumentChange,
         onFilterChange,
+        onFiltersChange: setFilters,
         onRowDelete,
         onRowEdit,
         page,
@@ -920,9 +1024,12 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
 export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement => {
     const {
         addRow,
+        bulkDelete,
         cancelEdit,
+        columns,
         editing,
         filter,
+        filters,
         goNext,
         goPrevious,
         hasNext,
@@ -933,6 +1040,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         navigateToRef,
         onEditorDocumentChange,
         onFilterChange,
+        onFiltersChange,
         onRowDelete,
         onRowEdit,
         page,
@@ -986,16 +1094,21 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
             {page !== null && (
                 <div data-testid="db-page">
                     <DataBrowserViewControls
+                        columns={columns}
                         editable={editable}
                         filter={filter}
+                        filters={filters}
                         live={live}
                         liveError={liveError}
                         onAddRow={addRow}
+                        onBulkDelete={bulkDelete}
                         onFilterChange={onFilterChange}
+                        onFiltersChange={onFiltersChange}
                         onRefresh={refreshPage}
                         onShowJson={showJson}
                         onShowTable={showTable}
                         onToggleLive={toggleLive}
+                        total={total}
                         viewMode={viewMode}
                     />
 
