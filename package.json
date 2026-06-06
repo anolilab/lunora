@@ -51,6 +51,7 @@
         "@eslint-react/eslint-plugin": "catalog:lint",
         "@ospm/eslint-plugin-react-unhookify": "catalog:lint",
         "@tanstack/eslint-plugin-query": "catalog:lint",
+        "@tanstack/eslint-plugin-router": "1.162.0",
         "@types/node": "catalog:types",
         "@visulima/tabular": "catalog:prod",
         "@visulima/vis": "catalog:prod",

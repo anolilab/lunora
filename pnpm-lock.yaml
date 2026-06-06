@@ -280,7 +280,7 @@ importers:
         version: 10.0.1(@commitlint/cli@21.0.2(@types/node@25.9.1)(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.4.0)(typescript@6.0.3))(@types/node@25.9.1)(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.4.0)(typescript@6.0.3)
       '@anolilab/eslint-config':
         specifier: catalog:lint
-        version: 27.0.2(58c68740dd26ce828b6c7e9d84751e44)
+        version: 27.0.2(79d67bda645ab56ef4a5e0296e33a4e4)
       '@anolilab/multi-semantic-release':
         specifier: catalog:prod
         version: 4.4.4(semantic-release@25.0.3(typescript@6.0.3))(typescript@6.0.3)
@@ -308,6 +308,9 @@ importers:
       '@tanstack/eslint-plugin-query':
         specifier: catalog:lint
         version: 5.101.0(eslint@10.4.1(jiti@2.7.0))(typescript@6.0.3)
+      '@tanstack/eslint-plugin-router':
+        specifier: 1.162.0
+        version: 1.162.0(eslint@10.4.1(jiti@2.7.0))(typescript@6.0.3)
       '@types/node':
         specifier: catalog:types
         version: 25.9.1
@@ -5215,6 +5218,11 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
+
+  '@tanstack/eslint-plugin-router@1.162.0':
+    resolution: {integrity: sha512-0mv+5fOnWXeorh6zd3VyHVfpejIzc7+z68Ts0CQMDzMiwjM5rvea46fyl2m50zx5JFennsu7RO/QJAfnqkKJXw==}
+    peerDependencies:
+      eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
 
   '@tanstack/history@1.162.0':
     resolution: {integrity: sha512-79pf/RkhteYZTRgcR4F9kbk84P2N8rugQJswxfIqovlbRiT3yI7eBE+5QorIrZaOKktsgzRlXh1l/du/xpl4iA==}
@@ -12009,7 +12017,7 @@ snapshots:
       - conventional-commits-parser
       - typescript
 
-  '@anolilab/eslint-config@27.0.2(58c68740dd26ce828b6c7e9d84751e44)':
+  '@anolilab/eslint-config@27.0.2(79d67bda645ab56ef4a5e0296e33a4e4)':
     dependencies:
       '@e18e/eslint-plugin': 0.4.1(eslint@10.4.1(jiti@2.7.0))(oxlint@1.67.0)
       '@eslint-community/eslint-plugin-eslint-comments': 4.7.1(eslint@10.4.1(jiti@2.7.0))
@@ -12068,6 +12076,7 @@ snapshots:
       '@eslint-react/eslint-plugin': 5.8.12(eslint@10.4.1(jiti@2.7.0))(typescript@6.0.3)
       '@ospm/eslint-plugin-react-unhookify': 1.0.2(@types/react@19.2.16)(eslint@10.4.1(jiti@2.7.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/eslint-plugin-query': 5.101.0(eslint@10.4.1(jiti@2.7.0))(typescript@6.0.3)
+      '@tanstack/eslint-plugin-router': 1.162.0(eslint@10.4.1(jiti@2.7.0))(typescript@6.0.3)
       eslint-plugin-jsx-a11y: 6.10.2(eslint@10.4.1(jiti@2.7.0))
       eslint-plugin-react: 7.37.5(eslint@10.4.1(jiti@2.7.0))
       eslint-plugin-react-compiler: 19.1.0-rc.2(eslint@10.4.1(jiti@2.7.0))
@@ -15252,6 +15261,14 @@ snapshots:
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
+
+  '@tanstack/eslint-plugin-router@1.162.0(eslint@10.4.1(jiti@2.7.0))(typescript@6.0.3)':
+    dependencies:
+      '@typescript-eslint/utils': 8.60.1(eslint@10.4.1(jiti@2.7.0))(typescript@6.0.3)
+      eslint: 10.4.1(jiti@2.7.0)
+    transitivePeerDependencies:
+      - supports-color
+      - typescript
 
   '@tanstack/history@1.162.0': {}
 
