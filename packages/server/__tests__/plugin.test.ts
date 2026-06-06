@@ -12,12 +12,13 @@ describe("defineSchemaExtension", () => {
 
         const extension = defineSchemaExtension("ratelimit", {
             tables: {
-                ratelimit_buckets: defineTable({ count: v.number(), key: v.string() }),
+                // Authors write the bare name; prefixing happens at merge.
+                buckets: defineTable({ count: v.number(), key: v.string() }),
             },
         });
 
         expect(extension.key).toBe("ratelimit");
-        expect(extension.tables).toHaveProperty("ratelimit_buckets");
+        expect(extension.tables).toHaveProperty("buckets");
     });
 
     it("rejects empty keys", () => {
@@ -77,37 +78,117 @@ describe("definePlugin", () => {
 });
 
 describe("mergeSchemaExtension", () => {
-    it("adds extension tables to the base schema", () => {
-        expect.assertions(2);
+    it("auto-namespaces extension tables by the extension key", () => {
+        expect.assertions(3);
 
         const base = defineSchema({ todos: defineTable({ title: v.string() }) });
         const extension = defineSchemaExtension("auth", {
-            tables: { auth_users: defineTable({ email: v.string() }) },
+            // Bare `users` — auto-prefixed to `auth_users`.
+            tables: { users: defineTable({ email: v.string() }) },
         });
 
         const merged = mergeSchemaExtension(base, extension);
 
         expect(Object.keys(merged.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["auth_users", "todos"]);
+        expect(merged.tables).not.toHaveProperty("users");
         // Non-mutating — the base must still only have its original tables.
         expect(Object.keys(base.tables)).toEqual(["todos"]);
     });
 
-    it("throws on name collision (no silent shadow)", () => {
+    it("lets app and component share a bare table name without colliding", () => {
+        expect.assertions(2);
+
+        // The app already has its own `users` table; the component ships one too.
+        const base = defineSchema({ users: defineTable({ name: v.string() }) });
+        const extension = defineSchemaExtension("auth", {
+            tables: { users: defineTable({ email: v.string() }) },
+        });
+
+        const merged = mergeSchemaExtension(base, extension);
+
+        // No throw — different namespaces. App keeps `users`; component is `auth_users`.
+        expect(Object.keys(merged.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["auth_users", "users"]);
+        expect(merged.tables).toHaveProperty("auth_users");
+    });
+
+    it("rewrites intra-extension relation targets to the prefixed name", () => {
+        expect.assertions(2);
+
+        const base = defineSchema({ todos: defineTable({ title: v.string() }) });
+        const extension = defineSchemaExtension("blog", {
+            tables: {
+                authors: defineTable({ name: v.string() }),
+                posts: defineTable({ authorId: v.string(), title: v.string() }).relations((r) => {
+                    return {
+                        // Bare reference to a sibling extension table…
+                        author: r.one("authors", { field: "authorId" }),
+                    };
+                }),
+            },
+        });
+
+        const merged = mergeSchemaExtension(base, extension);
+
+        // …is rewritten to the prefixed sibling name.
+        expect(merged.tables["blog_posts"]?.relationMap["author"]?.table).toBe("blog_authors");
+        expect(merged.tables).toHaveProperty("blog_authors");
+    });
+
+    it("does NOT rewrite a relation that targets a base/app table", () => {
+        expect.assertions(1);
+
+        const base = defineSchema({ users: defineTable({ name: v.string() }) });
+        const extension = defineSchemaExtension("blog", {
+            tables: {
+                posts: defineTable({ authorId: v.string() }).relations((r) => {
+                    return {
+                        // `users` is an APP table, not an extension table — left bare.
+                        author: r.one("users", { field: "authorId" }),
+                    };
+                }),
+            },
+        });
+
+        const merged = mergeSchemaExtension(base, extension);
+
+        expect(merged.tables["blog_posts"]?.relationMap["author"]?.table).toBe("users");
+    });
+
+    it("rewrites aggregate- and rank-index `on` fields to the prefixed name", () => {
+        expect.assertions(2);
+
+        const base = defineSchema({ todos: defineTable({ title: v.string() }) });
+        const extension = defineSchemaExtension("blog", {
+            tables: {
+                posts: defineTable({ score: v.number(), userId: v.string() })
+                    .aggregateIndex("byUser", { by: ["userId"] })
+                    .rankIndex("topScore", { sortBy: [{ direction: "desc", field: "score" }] }),
+            },
+        });
+
+        const merged = mergeSchemaExtension(base, extension);
+
+        expect(merged.tables["blog_posts"]?.aggregateIndexes[0]?.on).toBe("blog_posts");
+        expect(merged.tables["blog_posts"]?.rankIndexes[0]?.on).toBe("blog_posts");
+    });
+
+    it("throws when two same-key extensions produce the same prefixed table", () => {
         expect.assertions(1);
 
         const base = defineSchema({ todos: defineTable({ title: v.string() }) });
-        const colliding = defineSchemaExtension("rogue", {
-            tables: { todos: defineTable({ x: v.string() }) },
-        });
+        const first = defineSchemaExtension("rl", { tables: { buckets: defineTable({ x: v.string() }) } });
+        const second = defineSchemaExtension("rl", { tables: { buckets: defineTable({ y: v.string() }) } });
 
-        expect(() => mergeSchemaExtension(base, colliding)).toThrow(/table "todos" already exists/);
+        const intermediate = mergeSchemaExtension(base, first);
+
+        expect(() => mergeSchemaExtension(intermediate, second)).toThrow(/table "rl_buckets" already exists/);
     });
 
     it("preserves vectorIndexes from the base", () => {
         expect.assertions(1);
 
         const base = defineSchema({ todos: defineTable({ title: v.string() }) });
-        const extension = defineSchemaExtension("x", { tables: { x_thing: defineTable({ k: v.string() }) } });
+        const extension = defineSchemaExtension("x", { tables: { thing: defineTable({ k: v.string() }) } });
 
         const merged = mergeSchemaExtension(base, extension);
 
@@ -116,8 +197,8 @@ describe("mergeSchemaExtension", () => {
         expect(merged.vectorIndexes).toStrictEqual(base.vectorIndexes);
     });
 
-    it("merges vectorIndexes contributed by the extension", () => {
-        expect.assertions(2);
+    it("merges + prefixes vectorIndexes contributed by the extension, rewriting the table reference", () => {
+        expect.assertions(4);
 
         const base = defineSchema(
             { docs: defineTable({ body: v.string() }) },
@@ -131,13 +212,14 @@ describe("mergeSchemaExtension", () => {
             },
         );
         const extension = defineSchemaExtension("x", {
-            tables: { x_thing: defineTable({ body: v.string() }) },
+            tables: { thing: defineTable({ body: v.string() }) },
             vectorIndexes: {
-                x_idx: defineVectorIndex({
+                idx: defineVectorIndex({
                     dimensions: 3,
                     embed: async () => [0, 0, 0],
                     metric: "cosine",
-                    source: { select: (row) => String(row["body"]), table: "x_thing" },
+                    // Bare reference to the extension's own table.
+                    source: { select: (row) => String(row["body"]), table: "thing" },
                 }),
             },
         });
@@ -146,15 +228,18 @@ describe("mergeSchemaExtension", () => {
 
         expect(merged.vectorIndexes).toHaveProperty("base_idx");
         expect(merged.vectorIndexes).toHaveProperty("x_idx");
+        expect(merged.vectorIndexes).not.toHaveProperty("idx");
+        // The vector index's `table` is rewritten to the prefixed extension table.
+        expect(merged.vectorIndexes["x_idx"]?.table).toBe("x_thing");
     });
 
-    it("throws on a vector-index name collision", () => {
+    it("throws on a same-key vector-index name collision", () => {
         expect.assertions(1);
 
         const base = defineSchema(
             { docs: defineTable({ body: v.string() }) },
             {
-                shared: defineVectorIndex({
+                x_shared: defineVectorIndex({
                     dimensions: 3,
                     embed: async () => [0, 0, 0],
                     metric: "cosine",
@@ -163,28 +248,29 @@ describe("mergeSchemaExtension", () => {
             },
         );
         const colliding = defineSchemaExtension("x", {
-            tables: { x_thing: defineTable({ body: v.string() }) },
+            tables: { thing: defineTable({ body: v.string() }) },
             vectorIndexes: {
                 shared: defineVectorIndex({
                     dimensions: 3,
                     embed: async () => [0, 0, 0],
                     metric: "cosine",
-                    source: { select: (row) => String(row["body"]), table: "x_thing" },
+                    source: { select: (row) => String(row["body"]), table: "thing" },
                 }),
             },
         });
 
-        expect(() => mergeSchemaExtension(base, colliding)).toThrow(/vector index "shared" already exists/);
+        expect(() => mergeSchemaExtension(base, colliding)).toThrow(/vector index "x_shared" already exists/);
     });
 });
 
 describe("defineSchema(...).extend(...)", () => {
-    it("returns an extended schema with merged tables", () => {
+    it("returns an extended schema with auto-namespaced tables", () => {
         expect.assertions(1);
 
         const ratelimit = definePlugin("ratelimit", {
             extension: defineSchemaExtension("ratelimit", {
-                tables: { ratelimit_buckets: defineTable({ count: v.number() }) },
+                // Bare name — merges in as `ratelimit_buckets`.
+                tables: { buckets: defineTable({ count: v.number() }) },
             }),
         });
 
@@ -193,11 +279,11 @@ describe("defineSchema(...).extend(...)", () => {
         expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
     });
 
-    it("chains multiple extensions", () => {
+    it("chains multiple extensions, namespacing each by its own key", () => {
         expect.assertions(1);
 
-        const a = defineSchemaExtension("a", { tables: { a_one: defineTable({ x: v.string() }) } });
-        const b = defineSchemaExtension("b", { tables: { b_two: defineTable({ y: v.string() }) } });
+        const a = defineSchemaExtension("a", { tables: { one: defineTable({ x: v.string() }) } });
+        const b = defineSchemaExtension("b", { tables: { two: defineTable({ y: v.string() }) } });
 
         const schema = defineSchema({ base: defineTable({ z: v.string() }) })
             .extend(a)
@@ -206,19 +292,19 @@ describe("defineSchema(...).extend(...)", () => {
         expect(Object.keys(schema.tables).toSorted((left, right) => left.localeCompare(right))).toEqual(["a_one", "b_two", "base"]);
     });
 
-    it("a chained call's collision is reported under the offending extension's key", () => {
+    it("two extensions with the same key + table collide under the shared prefix", () => {
         expect.assertions(1);
 
         const conflicting = defineSchemaExtension("dupes", {
             tables: { same: defineTable({ x: v.string() }) },
         });
-        const second = defineSchemaExtension("alsoDupes", {
+        const second = defineSchemaExtension("dupes", {
             tables: { same: defineTable({ x: v.string() }) },
         });
 
         const intermediate = defineSchema({ ok: defineTable({ x: v.string() }) }).extend(conflicting);
 
-        expect(() => intermediate.extend(second)).toThrow(/extend\("alsoDupes"\): table "same" already exists/);
+        expect(() => intermediate.extend(second)).toThrow(/extend\("dupes"\): table "dupes_same" already exists/);
     });
 });
 

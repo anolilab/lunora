@@ -1,6 +1,6 @@
 import type { Validator } from "@cirrus/values";
 
-import type { SchemaExtension } from "./plugin.js";
+import type { PrefixedTables, SchemaExtension } from "./plugin.js";
 import { mergeSchemaExtension } from "./plugin.js";
 import type {
     AggregateIndexDefinition,
@@ -385,17 +385,24 @@ const defineRankIndex = (name: string, options: RankIndexOptions): RankIndexDefi
  * can compose plugin schemas: `defineSchema({...}).extend(authPlugin.extension)`.
  *
  * `extend` is non-mutating — returns a fresh `ExtendableSchema` containing
- * the merged tables. Chains: `defineSchema(...).extend(a).extend(b)` is the
- * typed equivalent of merging `a`'s tables then `b`'s.
+ * the merged tables. Extension tables are auto-namespaced by the extension
+ * `key` (`buckets` → `ratelimit_buckets`), so the merged type carries the
+ * prefixed names via {@link PrefixedTables}. Chains:
+ * `defineSchema(...).extend(a).extend(b)` is the typed equivalent of merging
+ * `a`'s prefixed tables then `b`'s.
  */
 type ExtendableSchema<T extends Record<string, TableDefinition>> = Schema<T> & {
-    extend: <X extends Record<string, TableDefinition>>(extension: SchemaExtension<X>) => ExtendableSchema<T & X>;
+    extend: <X extends Record<string, TableDefinition>, Key extends string>(
+        extension: SchemaExtension<X> & { readonly key: Key },
+    ) => ExtendableSchema<PrefixedTables<X, Key> & T>;
 };
 
 const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>): ExtendableSchema<T> => {
     return {
         ...schema,
-        extend<X extends Record<string, TableDefinition>>(extension: SchemaExtension<X>): ExtendableSchema<T & X> {
+        extend<X extends Record<string, TableDefinition>, Key extends string>(
+            extension: SchemaExtension<X> & { readonly key: Key },
+        ): ExtendableSchema<PrefixedTables<X, Key> & T> {
             return withExtend(mergeSchemaExtension(schema, extension));
         },
     };

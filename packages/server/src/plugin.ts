@@ -18,14 +18,15 @@
  * const ratelimit = definePlugin("ratelimit", {
  *     extension: defineSchemaExtension("ratelimit", {
  *         tables: {
- *             ratelimit_buckets: defineTable({...}),
+ *             // Bare name — prefixing happens automatically at merge.
+ *             buckets: defineTable({...}),
  *         },
  *     }),
  *     middleware: ({ ctx, next }) =>
  *         next({ ctx: { api: { ...ctx.api, ratelimit: makeRatelimitApi(ctx) } } }),
  * });
  *
- * // app schema:
+ * // app schema — `buckets` merges in as `ratelimit_buckets`:
  * export const schema = defineSchema({ todos: ... }).extend(ratelimit.extension);
  *
  * // procedure that uses the plugin:
@@ -35,13 +36,20 @@
  *
  * Design notes:
  *
- *   - **Plugin key is a runtime + type-level tag.** Tables added by a
- *     plugin are namespaced in source (`ratelimit_buckets`, not just
- *     `buckets`) so two plugins can't shadow each other; the key is the
- *     conventional prefix.
- *   - **Collision is a hard error.** `defineSchema(...).extend(...)`
- *     throws if any extension table name overlaps with an existing table.
- *     Silent shadow would let one plugin invisibly hijack another's data.
+ *   - **Plugin key is a runtime + type-level tag and an auto-prefix.**
+ *     Extension authors write **bare** table names (`buckets`); at merge
+ *     time each table is prefixed with the extension key
+ *     (`ratelimit_buckets`), Convex-Components-style, so a component table
+ *     can never collide with an app table and two plugins can't shadow each
+ *     other. Intra-extension references (relations, aggregate/rank index
+ *     `on`, vector index `table`) are rewritten to the prefixed names so
+ *     they stay consistent; references to base/app tables are left alone.
+ *   - **Collision is a hard error only for the real remaining case.**
+ *     App↔component collisions are impossible after prefixing (separate
+ *     namespaces). `defineSchema(...).extend(...)` still throws if two
+ *     extensions share the same key and produce the same prefixed table
+ *     name — silent shadow would let one plugin invisibly hijack another's
+ *     data.
  *   - **Middleware composability.** Plugins re-export middleware as
  *     plain `Middleware&lt;...>` values; users compose them via the
  *     existing `.use(...)` chain. No "install" verb that consumes the
@@ -49,7 +57,66 @@
  */
 
 import type { Middleware } from "./builder/types.js";
-import type { FunctionKind, RegisteredFunction, Schema, TableDefinition, VectorIndexDefinition } from "./types.js";
+import type {
+    AggregateIndexDefinition,
+    FunctionKind,
+    RankIndexDefinition,
+    RegisteredFunction,
+    RelationDefinition,
+    Schema,
+    TableDefinition,
+    VectorIndexDefinition,
+} from "./types.js";
+
+/**
+ * Apply the extension's `key` prefix to a single bare table name. Centralised
+ * so the merge and any future caller produce identical names.
+ */
+const prefixTableName = (key: string, bareName: string): string => `${key}_${bareName}`;
+
+/**
+ * Rewrite a single intra-extension table reference to its prefixed name. A
+ * reference is "intra-extension" only when its target is one of the extension's
+ * own bare table names — references to base/app tables (names not in
+ * `bareNames`) are returned unchanged so a component can still point at app
+ * tables.
+ */
+const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<string>): string =>
+    bareNames.has(target) ? prefixTableName(key, target) : target;
+
+/**
+ * Produce a copy of an extension table with every intra-extension table
+ * reference rewritten to its prefixed name: relation targets, aggregate /
+ * rank index `on` fields. (Inline `TableVectorIndex` entries carry no table
+ * reference — the source column is always on the owning table — so they need
+ * no rewrite; standalone `vectorIndexes` are handled separately.)
+ *
+ * `ownBareName` is the extension table's own bare key. Inline
+ * `.aggregateIndex(...)` / `.rankIndex(...)` declarations stash an empty `on`
+ * placeholder (it is normally filled by `defineSchema`, which extension tables
+ * never pass through); an empty `on` means "this table", so it resolves to the
+ * owning table's prefixed name.
+ */
+const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: ReadonlySet<string>, ownBareName: string): TableDefinition => {
+    const ownPrefixed = prefixTableName(key, ownBareName);
+    const rewriteOn = (on: string): string => (on === "" ? ownPrefixed : rewriteReference(on, key, bareNames));
+
+    const relationMap: Record<string, RelationDefinition> = {};
+
+    for (const [accessor, relation] of Object.entries(table.relationMap)) {
+        relationMap[accessor] = { ...relation, table: rewriteReference(relation.table, key, bareNames) };
+    }
+
+    const aggregateIndexes: AggregateIndexDefinition[] = table.aggregateIndexes.map((index) => {
+        return { ...index, on: rewriteOn(index.on) };
+    });
+
+    const rankIndexes: RankIndexDefinition[] = table.rankIndexes.map((index) => {
+        return { ...index, on: rewriteOn(index.on) };
+    });
+
+    return { ...table, aggregateIndexes, rankIndexes, relationMap };
+};
 
 /**
  * Schema fragment a plugin contributes. Same shape as the `tables` map
@@ -60,7 +127,12 @@ import type { FunctionKind, RegisteredFunction, Schema, TableDefinition, VectorI
 export interface SchemaExtension<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
     /** Stable key identifying the plugin that owns this extension. */
     readonly key: string;
-    /** Extension tables. Names should be namespaced by `key` (e.g. `ratelimit_buckets`). */
+
+    /**
+     * Extension tables, keyed by **bare** name (e.g. `buckets`). At merge time
+     * each is auto-prefixed with `key` (`ratelimit_buckets`) so it can't
+     * collide with an app table; do **not** namespace manually.
+     */
     readonly tables: T;
 
     /**
@@ -202,7 +274,8 @@ export interface DefineComponentOptions<
  *
  * ```ts
  * export const ratelimit = defineComponent("ratelimit", {
- *     extension: defineSchemaExtension("ratelimit", { tables: { ratelimit_buckets } }),
+ *     // Bare `buckets` merges in as `ratelimit_buckets`.
+ *     extension: defineSchemaExtension("ratelimit", { tables: { buckets } }),
  *     middleware: ({ ctx, next }) => next({ ctx: { ...ctx, ratelimit: api(ctx) } }),
  *     functions: {
  *         check: query({ args: { key: v.string() }, handler: async ({ ctx, args }) => ... }),
@@ -235,42 +308,70 @@ export const defineComponent = <
 };
 
 /**
- * Merge a {@link SchemaExtension} into an existing schema. Returns a new
- * schema object — never mutates the input. Throws on name collision: two
- * tables with the same key would silently shadow each other otherwise.
+ * Map every key `K` of an extension's table map `X` to its auto-prefixed name
+ * `${Key}_${K}`. Mirrors the runtime prefixing in {@link mergeSchemaExtension}
+ * so the typed `.extend(...)` chain reflects the real merged table names.
  */
-export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, X extends Record<string, TableDefinition>>(
+export type PrefixedTables<X extends Record<string, TableDefinition>, Key extends string> = {
+    [K in keyof X as K extends string ? `${Key}_${K}` : K]: X[K];
+};
+
+/**
+ * Merge a {@link SchemaExtension} into an existing schema. Returns a new
+ * schema object — never mutates the input.
+ *
+ * Extension tables are auto-namespaced: each bare table name is prefixed with
+ * the extension `key` (`buckets` → `ratelimit_buckets`), Convex-Components
+ * style, and every intra-extension reference (relation targets, aggregate /
+ * rank index `on`, standalone vector index `table`) is rewritten to match.
+ * References to base/app tables are left untouched.
+ *
+ * Because each extension lives in its own `key` namespace, app↔component
+ * collisions are impossible. The only remaining hard error is two extensions
+ * sharing the same `key` and producing the same prefixed table (or vector
+ * index) name — silent shadow would let one plugin hijack another's data.
+ */
+export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, X extends Record<string, TableDefinition>, Key extends string = string>(
     base: Schema<T>,
-    extension: SchemaExtension<X>,
-): Schema<T & X> => {
+    extension: SchemaExtension<X> & { readonly key: Key },
+): Schema<PrefixedTables<X, Key> & T> => {
+    const { key } = extension;
+    const bareNames = new Set(Object.keys(extension.tables));
     const merged: Record<string, TableDefinition> = { ...base.tables };
 
-    for (const [name, table] of Object.entries(extension.tables)) {
-        if (Object.hasOwn(merged, name)) {
+    for (const [bareName, table] of Object.entries(extension.tables)) {
+        const prefixed = prefixTableName(key, bareName);
+
+        if (Object.hasOwn(merged, prefixed)) {
             throw new Error(
-                `defineSchema(...).extend("${extension.key}"): table "${name}" already exists in the base schema — extension tables must be namespaced (e.g. "${extension.key}_${name}")`,
+                `defineSchema(...).extend("${key}"): table "${prefixed}" already exists in the base schema — another extension with the same key already contributed it`,
             );
         }
 
-        merged[name] = table;
+        merged[prefixed] = rewriteTableReferences(table, key, bareNames, bareName);
     }
 
     const mergedVectorIndexes: Record<string, VectorIndexDefinition> = { ...base.vectorIndexes };
 
     if (extension.vectorIndexes) {
-        for (const [name, index] of Object.entries(extension.vectorIndexes)) {
-            if (Object.hasOwn(mergedVectorIndexes, name)) {
+        for (const [bareIndexName, index] of Object.entries(extension.vectorIndexes)) {
+            const prefixed = prefixTableName(key, bareIndexName);
+
+            if (Object.hasOwn(mergedVectorIndexes, prefixed)) {
                 throw new Error(
-                    `defineSchema(...).extend("${extension.key}"): vector index "${name}" already exists in the base schema — extension vector indexes must be namespaced (e.g. "${extension.key}_${name}")`,
+                    `defineSchema(...).extend("${key}"): vector index "${prefixed}" already exists in the base schema — another extension with the same key already contributed it`,
                 );
             }
 
-            mergedVectorIndexes[name] = index;
+            // The vector index's `table` is an intra-extension reference too:
+            // rewrite it to the prefixed table when it points at an extension
+            // table, leave it alone when it points at a base/app table.
+            mergedVectorIndexes[prefixed] = { ...index, table: rewriteReference(index.table, key, bareNames) };
         }
     }
 
     return {
-        tables: merged as T & X,
+        tables: merged as PrefixedTables<X, Key> & T,
         vectorIndexes: mergedVectorIndexes,
     };
 };
