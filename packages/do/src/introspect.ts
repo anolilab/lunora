@@ -146,7 +146,7 @@ const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/g, (chara
  * siblings).
  */
 const isInternalTable = (name: string): boolean =>
-    name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__cirrus") || name.includes("__fts_");
+    name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__miniflare") || name.startsWith("__cirrus") || name.includes("__fts_");
 
 /** Double-quote a SQL identifier, escaping any embedded double quotes. */
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;

@@ -274,4 +274,67 @@ describe("d1 ctx-db search", () => {
             ).rejects.toThrow(/pagination is not supported/u);
         });
     });
+
+    describe("d1 ctx-db search — .unique()", () => {
+        it("returns null when no document matches the search", async () => {
+            expect.assertions(1);
+
+            const writer = await setupWriter();
+
+            await writer.insert("docs", { body: "alpha", channel: "x", title: "a" });
+
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "absent"))
+                    .unique(),
+            ).resolves.toBeNull();
+        });
+
+        it("returns the single matching document", async () => {
+            expect.assertions(1);
+
+            const writer = await setupWriter();
+
+            await writer.insert("docs", { body: "unicorn", channel: "x", title: "solo" });
+            await writer.insert("docs", { body: "horse", channel: "x", title: "other" });
+
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "unicorn"))
+                    .unique(),
+            ).resolves.toMatchObject({ title: "solo" });
+        });
+
+        it("throws when more than one document matches the search", async () => {
+            expect.assertions(1);
+
+            const writer = await setupWriter();
+
+            await writer.insert("docs", { body: "shared term", channel: "x", title: "a" });
+            await writer.insert("docs", { body: "shared term", channel: "x", title: "b" });
+
+            await expect(
+                writer
+                    .query("docs")
+                    .withSearchIndex("by_body", (q) => q.search("body", "shared"))
+                    .unique(),
+            ).rejects.toThrow(/matched 2 documents/u);
+        });
+    });
+
+    describe("d1 ctx-db — normalizeId", () => {
+        it("validates an id structurally without reading the database", async () => {
+            expect.assertions(4);
+
+            const writer = await setupWriter();
+
+            // Pure structural check — never inserted, yet a valid id round-trips.
+            expect(writer.normalizeId("docs", "d_42")).toBe("d_42");
+            expect(writer.normalizeId("docs", "")).toBeNull();
+            expect(writer.normalizeId("docs", "has space")).toBeNull();
+            expect(() => writer.normalizeId("missing", "x")).toThrow(/unknown table/u);
+        });
+    });
 });

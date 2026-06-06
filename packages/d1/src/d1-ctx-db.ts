@@ -55,8 +55,10 @@ import {
     hasTrigger,
     matchesRankStaticWhere,
     mergeWhere,
+    normalizeIdStructurally,
     normalizeOrderKeys,
     NotFoundError,
+    NotUniqueError,
     RANK_TIEBREAK,
     rankTableName,
     readAggregateValue,
@@ -72,6 +74,8 @@ import {
     stringifySearchText,
     tokenizeSearch,
 } from "@cirrus/do";
+
+import { columnRef, frameworkColumnDdl, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "./dialect.js";
 
 /**
  * Async SQL surface the D1 ORM needs: `all` for reads, `run` for writes.
@@ -117,7 +121,6 @@ const throwingScheduler: SchedulerLike = {
     },
 };
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
  * Closed allowlist mapping each reducer `op` to the literal SQL function it may
@@ -203,22 +206,6 @@ const normalizeCountArgument = (argument: RestrictableQueryOptions | undefined |
     }
 
     return { where: argument as WhereInput };
-};
-
-/**
- * D1 column dialect: a field resolves to its own SQLite column. `_id`/`id`
- * both map to the physical `id` column; `_creationTime` to its own column.
- */
-const columnRef = (field: string): string => {
-    if (field === "_id" || field === "id") {
-        return quoteIdentifier("id");
-    }
-
-    if (field === "_creationTime") {
-        return quoteIdentifier("_creationTime");
-    }
-
-    return quoteIdentifier(field);
 };
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
@@ -527,6 +514,10 @@ const createTableNameCache = (): {
  * small fixed scan — we fan the probes out in parallel and return on the first
  * hit. A small LRU caches successful lookups so a hot id (e.g. the same row
  * updated repeatedly within a request) avoids the fan-out on every call.
+ *
+ * Callers route through the ctx-db's `resolveTableName`, which provisions the
+ * tables (memoized) first — so the probes always hit existing tables and no
+ * missing-table handling is needed here.
  */
 const tableNameFromId = async (exec: D1Exec, schema: SchemaLike, id: string, cache: ReturnType<typeof createTableNameCache>): Promise<string | undefined> => {
     const cached = cache.get(id);
@@ -955,6 +946,80 @@ const forEachRowPaged = async (
 };
 
 /**
+ * SQLite affinity for a column. Resolves the *effective* validator kind (so
+ * `v.optional(inner)` stores as `inner` would) and defers to the shared dialect
+ * (`@cirrus/d1/dialect`) — the same mapping the `cirrus migrate generate` SQL
+ * emitter uses, so auto-provisioned and hand-migrated tables stay identical.
+ */
+const globalColumnAffinity = (validator: ValidatorLike): ReturnType<typeof sqlAffinityForKind> => sqlAffinityForKind(effectiveColumnKind(validator));
+
+/**
+ * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
+ * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
+ * declared field, then its secondary and `.unique()` indexes. This is the D1
+ * twin of `@cirrus/do`'s `runShardMigrations` (which self-creates shard-local
+ * tables) — it makes the schema the single source of truth for global tables
+ * too, so a fresh database serves them without a hand-applied migration. The
+ * column set and dialect match exactly what this module reads and writes
+ * (`columnRef`, `serializeColumnValue`, `decodeGlobalRow`).
+ *
+ * Idempotent (`CREATE TABLE/INDEX IF NOT EXISTS`); additive only — it never
+ * drops or retypes an existing column, so destructive schema changes still need
+ * an explicit migration.
+ */
+const runD1GlobalTableMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        if (definition.shardMode?.kind !== "global") {
+            continue;
+        }
+
+        const fieldColumns: string[] = [];
+
+        for (const [field, validator] of Object.entries(definition.shape)) {
+            if (!validator._meta?.column) {
+                continue;
+            }
+
+            // Required, non-optional fields get NOT NULL; optional ones stay
+            // nullable so an insert that omits them can't trip a constraint.
+            const notNull = validator._meta.column.notNull && validator.kind !== "optional" ? " NOT NULL" : "";
+
+            fieldColumns.push(`${quoteIdentifier(field)} ${globalColumnAffinity(validator)}${notNull}`);
+        }
+
+        const columns = [...frameworkColumnDdl(), ...fieldColumns].join(", ");
+
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes below.
+        await exec.run(`CREATE TABLE IF NOT EXISTS ${quoteIdentifier(tableName)} (${columns})`, []);
+
+        for (const index of definition.indexes) {
+            const expressions = index.fields.map((field) => columnRef(field)).join(", ");
+
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+            await exec.run(
+                `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${physicalIndexName(tableName, index.name)} ON ${quoteIdentifier(tableName)} (${expressions})`,
+                [],
+            );
+        }
+
+        // `.unique()` columns synthesize a UNIQUE index so SQLite enforces the
+        // constraint (the write layer maps breaches to ConflictError), mirroring
+        // the DO twin's `migrateSecondaryIndexes`.
+        for (const [field, column] of tableColumns(definition)) {
+            if (!column.unique) {
+                continue;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+            await exec.run(
+                `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(`${tableName}_unique_${field}`)} ON ${quoteIdentifier(tableName)} (${columnRef(field)})`,
+                [],
+            );
+        }
+    }
+};
+
+/**
  * Materialize the `__agg_&lt;index>` companion tables for every declared
  * `aggregateIndex` on a global table. Global tables in Cirrus ship their own
  * DDL — counter tables are opt-in so production hosts can decide where they
@@ -1198,6 +1263,9 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
     const ensureMigrated = async (): Promise<void> => {
         migratedPromise ??= (async (): Promise<void> => {
+            // Base `.global()` tables first — the companion migrations below and
+            // every read/write path assume they exist.
+            await runD1GlobalTableMigrations(exec, schema);
             await runD1AggregateMigrations(exec, schema);
             await runD1RankMigrations(exec, schema);
             await runD1SearchMigrations(exec, schema);
@@ -1215,6 +1283,19 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         });
 
         return migratedPromise;
+    };
+
+    /**
+     * Resolve the table an `id` belongs to — the single choke-point for the
+     * id-addressed ops (`get`/`patch`/`replace`/`delete`). Provisioning runs
+     * first (memoized), so the per-table probe always hits existing tables: the
+     * tables are a hard precondition, not a maybe, which is why `tableNameFromId`
+     * needs no missing-table handling.
+     */
+    const resolveTableName = async (id: string): Promise<string | undefined> => {
+        await ensureMigrated();
+
+        return tableNameFromId(exec, schema, id, tableNameCache);
     };
 
     // Per-(table, index) backfill state. The map records the outcome of the
@@ -2062,7 +2143,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         },
 
         async delete(id) {
-            const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
+            const tableName = await resolveTableName(id);
 
             if (!tableName) {
                 return;
@@ -2077,10 +2158,6 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             if (!definition) {
                 return;
             }
-
-            // Companion DDL must exist before the sync hooks below run an
-            // INSERT/DELETE against the fts/agg/rank tables.
-            await ensureMigrated();
 
             const snapshot = await rawRow(tableName, id);
             const existing = decodeRow(definition, snapshot);
@@ -2165,6 +2242,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`unknown table: ${tableName}`);
             }
 
+            // The primary list read — provision the global tables first so a
+            // fresh database returns an empty page instead of `no such table`.
+            await ensureMigrated();
+
             const orderKeys = normalizeOrderKeys(args.orderBy);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
@@ -2222,7 +2303,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         },
 
         async get(id) {
-            const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
+            const tableName = await resolveTableName(id);
 
             if (!tableName) {
                 // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null`; an unresolved id returns null.
@@ -2375,8 +2456,12 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             return id;
         },
 
+        normalizeId(tableName, id) {
+            return normalizeIdStructurally(schema, tableName, id);
+        },
+
         async patch(id, patch) {
-            const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
+            const tableName = await resolveTableName(id);
 
             if (!tableName) {
                 throw new Error(`document not found: ${id}`);
@@ -2387,10 +2472,6 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             if (!definition) {
                 throw new Error(`document not found: ${id}`);
             }
-
-            // Companion DDL must exist before the sync hooks below run an
-            // INSERT/DELETE against the fts/agg/rank tables.
-            await ensureMigrated();
 
             // Capture the RAW stored row alongside the decoded `existing` — the
             // raw values seed the optimistic-concurrency CAS below, before the
@@ -2480,6 +2561,13 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                         // eslint-disable-next-line unicorn/no-null -- documented `first()` result shape (Doc | null) returned to callers
                         return rows[0] ?? null;
                     },
+                    order() {
+                        // `.order()` is meaningful only on the scan/index reader,
+                        // which D1 doesn't expose (search returns relevance order);
+                        // it stays chainable so a non-search chain still surfaces
+                        // the same legacy-reader error at its terminal.
+                        return reader;
+                    },
                     // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike.paginate returns a Promise; search queries don't support pagination on either backend
                     async paginate() {
                         if (stage) {
@@ -2494,6 +2582,22 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                         }
 
                         return runSearch(stage, limit);
+                    },
+                    async unique() {
+                        if (!stage) {
+                            throw new Error(LEGACY_READER_ERROR);
+                        }
+
+                        // Over-fetch one past the single row we expect: 0 → null,
+                        // 1 → the row, ≥2 → ambiguous (an error). Mirrors Convex.
+                        const rows = await runSearch(stage, 2);
+
+                        if (rows.length > 1) {
+                            throw new NotUniqueError(`unique() on table "${tableName}" matched ${String(rows.length)} documents; expected at most one`);
+                        }
+
+                        // eslint-disable-next-line unicorn/no-null -- documented `unique()` result shape (Doc | null) returned to callers
+                        return rows[0] ?? null;
                     },
                     withIndex() {
                         throw new Error(LEGACY_READER_ERROR);
@@ -2691,7 +2795,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         },
 
         async replace(id, document) {
-            const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
+            const tableName = await resolveTableName(id);
 
             if (!tableName) {
                 throw new Error(`document not found: ${id}`);
@@ -2702,10 +2806,6 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             if (!definition) {
                 throw new Error(`document not found: ${id}`);
             }
-
-            // Companion DDL must exist before the sync hooks below run an
-            // INSERT/DELETE against the fts/agg/rank tables.
-            await ensureMigrated();
 
             // Always snapshot the RAW stored row — it seeds the optimistic-
             // concurrency CAS below. `previous` (the decoded prior doc) is only
@@ -2766,6 +2866,7 @@ export {
     readD1CdcChanges,
     runD1AggregateMigrations,
     runD1CdcMigration,
+    runD1GlobalTableMigrations,
     runD1RankMigrations,
     runD1SearchMigrations,
     trimD1CdcChanges,

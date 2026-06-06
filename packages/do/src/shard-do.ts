@@ -1089,12 +1089,25 @@ abstract class ShardDO {
     }
 
     /**
+     * Lazily provision the shard's physical tables before an operation that
+     * depends on them existing. The base class has no `schema.ts`, so it does
+     * nothing; the codegen subclass overrides this to run `runShardMigrations`
+     * once (guarded by an idempotent `migrated` flag). Kept here so base-class
+     * paths — notably admin introspection — can materialise tables on demand
+     * without knowing the schema, which is what keeps the data browser from
+     * showing an empty shard on first load.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to run the generated schema's migrations
+    protected ensureMigrated(): void {}
+
+    /**
      * Foreign-key map for `table`: doc field → target table, for every field
      * declared `v.id("target")` in the schema, so the data browser can render
      * those cells as links. The base class can't see the user's `schema.ts`, so
      * it returns `undefined` (no links); the codegen subclass overrides this with
      * the schema-derived map.
      */
+
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to read the generated schema's foreign keys
     protected tableRefs(_table: string): Record<string, string> | undefined {
         return undefined;
@@ -1655,6 +1668,10 @@ abstract class ShardDO {
      * pushes when the recomputed value is byte-identical.
      */
     private readAdminOp(functionPath: string, args: Record<string, unknown>): { result: unknown; tables: Set<string> } | null {
+        // Materialise the shard's tables before any introspection read, so the
+        // data browser sees a freshly-provisioned shard instead of an empty one.
+        this.ensureMigrated();
+
         const sql = this.state.storage.sql as unknown as SqlExec;
 
         if (functionPath === ADMIN_FUNCTIONS.listTables) {

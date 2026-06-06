@@ -17,6 +17,8 @@ describe("introspect", () => {
         // this Node build's `node:sqlite` ships without the fts5 module, and the
         // exclusion filter keys off the name alone.
         database.raw(`CREATE TABLE "_cf_KV" ("k" TEXT, "v" BLOB)`);
+        // Miniflare's local-dev internal table — must not surface in the browser.
+        database.raw(`CREATE TABLE "__miniflare_do_name" ("name" TEXT)`);
         database.raw(`CREATE TABLE "messages__fts_body" ("__text__" TEXT, "__id__" TEXT)`);
         database.raw(`CREATE TABLE "messages__fts_body_data" ("id" INTEGER, "block" BLOB)`);
 
