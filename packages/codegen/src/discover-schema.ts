@@ -1,7 +1,7 @@
 import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import type { IndexIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir.js";
+import type { IndexIR, RankIndexIR, RankSortKeyIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir.js";
 import { parseObjectShape } from "./parse-validator.js";
 
 const VECTOR_METRICS = new Set(["cosine", "dot-product", "euclidean"]);
@@ -201,6 +201,53 @@ const parseSearchIndexCall = (args: ReadonlyArray<Node>): SearchIndexIR => {
     return { field, filterFields, name: indexNameOf(indexName) };
 };
 
+/**
+ * Parse one `{ field, direction? }` entry of a rank index's `sortBy` array into a
+ * {@link RankSortKeyIR}. `direction` defaults to `"asc"`, mirroring the runtime
+ * `.rankIndex(...)` builder.
+ */
+const rankSortKeyFromElement = (element: Node): RankSortKeyIR | undefined => {
+    if (!Node.isObjectLiteralExpression(element)) {
+        return undefined;
+    }
+
+    const field = getStringProperty(element, "field");
+
+    if (field === undefined) {
+        return undefined;
+    }
+
+    const direction = getStringProperty(element, "direction");
+
+    return { direction: direction === "desc" ? "desc" : "asc", field };
+};
+
+/** Parse a `.rankIndex(name, { sortBy, partitionBy?, where? })` call into a {@link RankIndexIR}. */
+const parseRankIndexCall = (args: ReadonlyArray<Node>): RankIndexIR => {
+    const [indexName, optionsExpression] = args;
+    let sortBy: RankSortKeyIR[] = [];
+    let partitionBy: string[] | undefined;
+
+    if (optionsExpression && Node.isObjectLiteralExpression(optionsExpression)) {
+        const sortByProperty = optionsExpression.getProperty("sortBy");
+
+        if (sortByProperty && Node.isPropertyAssignment(sortByProperty)) {
+            const initializer = sortByProperty.getInitializer();
+
+            if (initializer && Node.isArrayLiteralExpression(initializer)) {
+                sortBy = initializer
+                    .getElements()
+                    .map((element) => rankSortKeyFromElement(element))
+                    .filter((key): key is RankSortKeyIR => key !== undefined);
+            }
+        }
+
+        partitionBy = getStringArrayProperty(optionsExpression, "partitionBy");
+    }
+
+    return { name: indexNameOf(indexName), partitionBy, sortBy };
+};
+
 /** Parse a `.vectorize(field, { ... })` call into a {@link VectorIndexIR}, or `undefined` when options are absent. */
 const parseVectorizeCall = (args: ReadonlyArray<Node>, table: string): VectorIndexIR | undefined => {
     const [fieldArgument, optionsExpression] = args;
@@ -223,6 +270,7 @@ const parseVectorizeCall = (args: ReadonlyArray<Node>, table: string): VectorInd
 /** Accumulator the builder-chain walk mutates as it unwinds a `defineTable(...)` chain. */
 interface TableBuilderAccumulator {
     indexes: IndexIR[];
+    rankIndexes: RankIndexIR[];
     relations: RelationIR[];
     searchIndexes: SearchIndexIR[];
     shardMode: TableIR["shardMode"];
@@ -240,6 +288,12 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
 
         case "index": {
             accumulator.indexes.push(parseIndexCall(args));
+
+            break;
+        }
+
+        case "rankIndex": {
+            accumulator.rankIndexes.push(parseRankIndexCall(args));
 
             break;
         }
@@ -285,7 +339,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
 };
 
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
-    const accumulator: TableBuilderAccumulator = { indexes: [], relations: [], searchIndexes: [], shardMode: "root", vectorIndexes: [] };
+    const accumulator: TableBuilderAccumulator = { indexes: [], rankIndexes: [], relations: [], searchIndexes: [], shardMode: "root", vectorIndexes: [] };
     let shape: Record<string, ValidatorIR> = {};
     let current: Expression = expression;
 
@@ -314,6 +368,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     return {
         indexes: accumulator.indexes,
         name,
+        rankIndexes: accumulator.rankIndexes,
         relations: accumulator.relations,
         searchIndexes: accumulator.searchIndexes,
         shape,
@@ -413,8 +468,15 @@ const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<st
  * owning (bare) table name onto each `vectorIndexes[].table`, which is always
  * an intra-extension reference, so it always resolves to the prefixed owner.
  *
- * Aggregate / rank indexes are not represented in the codegen IR (the table
- * builder walk doesn't capture them), so there is nothing extra to rewrite
+ * Rank indexes (`table.rankIndexes`) are captured in the IR but carry no
+ * cross-table reference — a rank index's owner is always the table it is
+ * declared on, which is `ownPrefixed`. So the `...table` spread carries them
+ * onto the prefixed table verbatim; there is nothing extra to rewrite, and the
+ * emitted `RankIndexNamesByTable` keys them under the prefixed name for free.
+ *
+ * Aggregate indexes are not represented in the codegen IR (the table builder
+ * walk doesn't capture them) and have no name consumer in the generated query
+ * API (they resolve by `{op, field?, where?}`), so there is nothing to rewrite
  * here — unlike the runtime, which additionally rewrites their `on` fields.
  */
 const namespaceExtensionTable = (table: TableIR, key: string, bareNames: ReadonlySet<string>): TableIR => {

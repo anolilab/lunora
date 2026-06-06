@@ -63,6 +63,29 @@ export interface VectorIndexIR {
     table: string;
 }
 
+/**
+ * One ordering key on a rank index's `sortBy`: the column and direction.
+ * Mirrors the runtime `RankSortKey` (defaults `direction` to `"asc"`).
+ */
+export interface RankSortKeyIR {
+    direction: "asc" | "desc";
+    field: string;
+}
+
+/**
+ * A `.rankIndex(name, { sortBy, partitionBy?, where? })` declaration. The owning
+ * table is always the table the index is declared on, so — unlike a vector index
+ * — there is no separate `on`/`table` reference to carry: it rides along on its
+ * {@link TableIR}. Only the fields needed for type emission are captured.
+ */
+export interface RankIndexIR {
+    name: string;
+    /** Columns scoping each ranking; omitted ⇒ one global rank over the table. */
+    partitionBy?: ReadonlyArray<string>;
+    /** Ordered sort keys driving the rank. */
+    sortBy: ReadonlyArray<RankSortKeyIR>;
+}
+
 export interface RelationIR {
     /** FK column: on this table for `one`, on the target table for `many`. */
     field: string;
@@ -80,6 +103,8 @@ export interface RelationIR {
 export interface TableIR {
     indexes: ReadonlyArray<IndexIR>;
     name: string;
+    /** Rank indexes declared inline via `.rankIndex(name, …)`. */
+    rankIndexes: ReadonlyArray<RankIndexIR>;
     /** Declared relations (via `.relations((r) => …)`), keyed in source order. */
     relations: ReadonlyArray<RelationIR>;
     searchIndexes: ReadonlyArray<SearchIndexIR>;

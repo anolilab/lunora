@@ -104,6 +104,113 @@ describe("discoverSchema", () => {
         expect(messages?.searchIndexes[0]).toMatchObject({ field: "text", name: "by_text" });
     });
 
+    it("captures a .rankIndex() name + sortBy + partitionBy into the IR", () => {
+        expect.assertions(3);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                scores: defineTable({
+                    boardId: v.id("boards"),
+                    points: v.number(),
+                })
+                    .rankIndex("by_points", { sortBy: [{ field: "points", direction: "desc" }], partitionBy: ["boardId"] }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const scores = schema.tables.find((table) => table.name === "scores");
+
+        expect(scores?.rankIndexes).toHaveLength(1);
+        expect(scores?.rankIndexes[0]).toEqual({
+            name: "by_points",
+            partitionBy: ["boardId"],
+            sortBy: [{ direction: "desc", field: "points" }],
+        });
+
+        // `direction` defaults to "asc" when omitted on a sortBy key.
+        const { project: project2, schemaPath: schemaPath2 } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                scores: defineTable({ points: v.number() }).rankIndex("g", { sortBy: [{ field: "points" }] }),
+            });
+        `);
+
+        expect(discoverSchema(project2, schemaPath2).tables[0]?.rankIndexes[0]).toEqual({
+            name: "g",
+            partitionBy: undefined,
+            sortBy: [{ direction: "asc", field: "points" }],
+        });
+    });
+
+    it("tables without rankIndex calls expose an empty rankIndexes array", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                users: defineTable({ email: v.string() }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables[0]?.rankIndexes).toEqual([]);
+    });
+
+    it("emits a per-table RankIndexName union and wires it into rank/rankPage", () => {
+        expect.assertions(4);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                scores: defineTable({ points: v.number() }).rankIndex("by_points", { sortBy: [{ field: "points" }] }),
+                users: defineTable({ email: v.string() }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const dataModel = emitDataModel(schema);
+
+        expect(dataModel).toContain("export interface RankIndexNamesByTable");
+        // Per-table union: declared name for `scores`, `never` for `users`.
+        expect(dataModel).toContain('scores: "by_points";');
+        expect(dataModel).toContain("export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];");
+        // The method signatures are constrained to the per-table union, not `string`.
+        expect(dataModel).toContain("rank: (indexName: RankIndexName<T>, options: TableRankOptions<Doc<T>>) => Promise<null | RankResult>;");
+    });
+
+    it("carries a rankIndex declared on an extension table onto the prefixed table", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(
+                defineSchemaExtension("ext", {
+                    tables: {
+                        scores: defineTable({ points: v.number() })
+                            .rankIndex("by_points", { sortBy: [{ field: "points", direction: "desc" }] }),
+                    },
+                }),
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const scores = schema.tables.find((table) => table.name === "ext_scores");
+
+        // The rank index rides along onto the prefixed owning table verbatim.
+        expect(scores?.rankIndexes[0]?.name).toBe("by_points");
+        // …and the emitted union keys it under the prefixed table name.
+        expect(emitDataModel(schema)).toContain('ext_scores: "by_points";');
+    });
+
     it("parses a literal `unique: true` on an index", () => {
         expect.assertions(1);
 

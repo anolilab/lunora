@@ -410,6 +410,7 @@ describe("run-codegen", () => {
                     {
                         indexes: [],
                         name: "docs",
+                        rankIndexes: [],
                         relations: [],
                         searchIndexes: [],
                         shape: { body: { kind: "string" } },
@@ -442,6 +443,7 @@ describe("run-codegen", () => {
                     {
                         indexes: [],
                         name: "docs",
+                        rankIndexes: [],
                         relations: [],
                         searchIndexes: [],
                         shape: { body: { kind: "string" } },
@@ -468,6 +470,7 @@ describe("run-codegen", () => {
                     {
                         indexes: [],
                         name: "messages",
+                        rankIndexes: [],
                         relations: [],
                         searchIndexes: [],
                         shape: { text: { kind: "string" } },
@@ -477,6 +480,7 @@ describe("run-codegen", () => {
                     {
                         indexes: [],
                         name: "users",
+                        rankIndexes: [],
                         relations: [],
                         searchIndexes: [],
                         shape: { email: { kind: "string" } },
@@ -507,6 +511,7 @@ describe("run-codegen", () => {
                     {
                         indexes: [],
                         name: "messages",
+                        rankIndexes: [],
                         relations: [],
                         searchIndexes: [],
                         shape: { text: { kind: "string" } },
@@ -533,6 +538,7 @@ describe("run-codegen", () => {
                     {
                         indexes: [],
                         name: "messages",
+                        rankIndexes: [],
                         relations: [],
                         searchIndexes: [],
                         shape: { text: { kind: "string" } },
@@ -608,6 +614,7 @@ describe("run-codegen", () => {
                 {
                     indexes: [],
                     name: "events",
+                    rankIndexes: [],
                     relations: [],
                     searchIndexes: [],
                     shape: { at: { kind: "timestamp" }, due: { kind: "date" } },
