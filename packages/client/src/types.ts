@@ -104,6 +104,12 @@ export interface PersistenceAdapter {
 }
 
 export interface CirrusClientOptions {
+    /**
+     * Base path the worker mounts better-auth at, used by the client's
+     * `getCurrentUser()` to reach the `get-session` route. Defaults to
+     * `/api/auth` (matching `@cirrus/auth`'s `DEFAULT_AUTH_BASE_PATH`).
+     */
+    authBasePath?: string;
     bookmarkStorage?: BookmarkStorage;
     fetch?: typeof fetch;
     offlineQueue?: OfflineQueueOptions;
@@ -202,10 +208,21 @@ export interface ServerChunkMessage {
 
 export type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage;
 
+/**
+ * The authenticated user as exposed client-side, mirroring better-auth's
+ * `user` row (the `user` field of the `get-session` response). Kept minimal
+ * and structural — only `id` is guaranteed; the rest are the common better-auth
+ * fields, and the index signature carries any plugin-contributed extras.
+ */
 export interface User {
-    readonly email?: string;
+    readonly createdAt?: NullableTimestamp;
+    readonly email?: null | string;
+    readonly emailVerified?: boolean | null;
     readonly id: string;
+    readonly image?: null | string;
+    readonly name?: null | string;
     readonly [key: string]: unknown;
+    readonly updatedAt?: NullableTimestamp;
 }
 
 /**

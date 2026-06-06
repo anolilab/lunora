@@ -32,6 +32,7 @@ import type {
     StorageListPage,
     StorageObject,
     Unsubscribe,
+    User,
 } from "./types.js";
 
 const RPC_PATH = "/_cirrus/rpc";
@@ -53,6 +54,15 @@ const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
 const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
 const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
+
+/**
+ * Default better-auth session endpoint. The worker mounts better-auth at
+ * `/api/auth` (see `@cirrus/auth`'s `DEFAULT_AUTH_BASE_PATH`); `get-session`
+ * is the better-auth route that returns the current `{ user, session }` (or
+ * `null` when signed out). Override the base via `CirrusClientOptions.authBasePath`.
+ */
+const DEFAULT_AUTH_BASE_PATH = "/api/auth";
+const GET_SESSION_PATH = "/get-session";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
 
@@ -291,6 +301,9 @@ class CirrusClient {
 
     private wsToken: string | undefined;
 
+    /** Better-auth base path (trailing slash stripped) for the `get-session` lookup. */
+    private readonly authBasePath: string;
+
     private readonly fetchImpl: typeof fetch | undefined;
 
     private readonly WebSocketImpl: typeof WebSocket | undefined;
@@ -349,6 +362,9 @@ class CirrusClient {
         this.url = options.url;
         this.wsUrl = options.wsUrl ?? joinUrl(deriveWsUrl(options.url), WS_PATH);
         this.wsToken = options.wsToken;
+        const authBase = options.authBasePath ?? DEFAULT_AUTH_BASE_PATH;
+
+        this.authBasePath = authBase.endsWith("/") ? authBase.slice(0, -1) : authBase;
         this.fetchImpl = options.fetch ?? (typeof fetch === "function" ? fetch.bind(globalThis) : undefined);
         this.WebSocketImpl = options.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
         this.bookmark = options.bookmarkStorage ?? createInMemoryBookmarkStorage();
@@ -415,6 +431,53 @@ class CirrusClient {
         return () => {
             this.authTokenListeners.delete(listener);
         };
+    }
+
+    /**
+     * Fetch the currently authenticated user from better-auth's `get-session`
+     * endpoint, returning the `user` record or `null` when signed out. Sends
+     * the stored bearer token (if any) and `credentials: "include"` so a
+     * cookie-session is also honoured. A network/parse failure or a non-OK
+     * response resolves to `null` rather than throwing — callers treat "couldn't
+     * resolve identity" as "signed out".
+     *
+     * Framework-agnostic: pair it with {@link onAuthTokenChange} to refetch when
+     * the token changes (that's what `@cirrus/react`'s `useAuth` does).
+     */
+    public async getCurrentUser(): Promise<User | null> {
+        if (this.closed || !this.fetchImpl) {
+            // eslint-disable-next-line unicorn/no-null -- signed-out / unavailable sentinel matches the User | null contract
+            return null;
+        }
+
+        const headers: Record<string, string> = {};
+
+        if (this.authToken) {
+            headers["authorization"] = `Bearer ${this.authToken}`;
+        }
+
+        try {
+            const response = await this.fetchImpl(joinUrl(this.url, `${this.authBasePath}${GET_SESSION_PATH}`), {
+                credentials: "include",
+                headers,
+                method: "GET",
+            });
+
+            if (!response.ok) {
+                // eslint-disable-next-line unicorn/no-null -- non-OK (e.g. 401) means signed out
+                return null;
+            }
+
+            // better-auth returns `{ user, session }` when authenticated and
+            // `null` (or an empty body) when not. Narrow defensively.
+            const body: { user?: User } | null = await response.json();
+
+            // eslint-disable-next-line unicorn/no-null -- explicit signed-out sentinel
+            return body?.user ?? null;
+        } catch {
+            // eslint-disable-next-line unicorn/no-null -- network/parse failure ⇒ treat as signed out
+            return null;
+        }
     }
 
     /**

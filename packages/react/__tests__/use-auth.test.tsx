@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useEffect } from "react";
 import { describe, expect, it } from "vitest";
@@ -20,7 +20,7 @@ const Display = (): ReactElement => {
 
     return (
         <div data-testid="display">
-            {token ?? "null"}|{user ? "user" : "anon"}
+            {token ?? "null"}|{user ? user.id : "anon"}
         </div>
     );
 };
@@ -68,5 +68,79 @@ describe("useAuth", () => {
 
         expect(screen.getByTestId("display").textContent).toBe("null|anon");
         expect(mock.setAuthToken).toHaveBeenLastCalledWith(null);
+    });
+
+    it("user is null when no token is set", () => {
+        expect.assertions(2);
+
+        const mock = createMockClient();
+
+        mock.setCurrentUser({ id: "u_1" });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <Display />
+            </CirrusProvider>,
+        );
+
+        // No token ⇒ getCurrentUser is short-circuited, user stays anon.
+        expect(screen.getByTestId("display").textContent).toBe("null|anon");
+        expect(mock.getCurrentUser).not.toHaveBeenCalled();
+    });
+
+    it("populates user after a token is set and the session fetch resolves", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        mock.setCurrentUser({ email: "a@b.co", id: "u_42" });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <Display />
+            </CirrusProvider>,
+        );
+
+        expect(screen.getByTestId("display").textContent).toBe("null|anon");
+
+        act(() => {
+            setTokenHandle!("jwt-xyz");
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe("jwt-xyz|u_42");
+        });
+    });
+
+    it("clears user on sign-out (token → null)", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        mock.setCurrentUser({ id: "u_7" });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <Display />
+            </CirrusProvider>,
+        );
+
+        // Sign in, then wait for the user to resolve.
+        act(() => {
+            setTokenHandle!("seeded");
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe("seeded|u_7");
+        });
+
+        // Sign out: token cleared ⇒ user resolves back to anon.
+        act(() => {
+            setTokenHandle!(null);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe("null|anon");
+        });
     });
 });

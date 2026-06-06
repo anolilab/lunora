@@ -1,4 +1,4 @@
-import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/client";
+import type { CirrusClient, FunctionReference, Unsubscribe, User } from "@cirrus/client";
 import { vi } from "vitest";
 
 interface MockClientHooks {
@@ -8,10 +8,13 @@ interface MockClientHooks {
     /** Manually push a value to all active subscribers for `ref`. */
     emit: (ref: string, value: unknown) => void;
     getAuthToken: ReturnType<typeof vi.fn>;
+    getCurrentUser: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
     onAuthTokenChange: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
     setAuthToken: ReturnType<typeof vi.fn>;
+    /** Set the user `getCurrentUser` resolves to on its next call. */
+    setCurrentUser: (user: User | null) => void;
     subscribe: ReturnType<typeof vi.fn>;
 }
 
@@ -64,6 +67,12 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
     );
     const closeFunction = vi.fn<() => void>();
 
+    let currentUser: User | null = null;
+    const getCurrentUserFunction = vi.fn<() => Promise<User | null>>(async () => currentUser);
+    const setCurrentUser = (user: User | null): void => {
+        currentUser = user;
+    };
+
     const emit = (ref: string, value: unknown): void => {
         for (const entry of subs) {
             if (entry.ref === ref) {
@@ -76,6 +85,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         action: actionFunction,
         close: closeFunction,
         getAuthToken: getAuthTokenFunction,
+        getCurrentUser: getCurrentUserFunction,
         mutation: mutationFunction,
         onAuthTokenChange: onAuthTokenChangeFunction,
         query: queryFunction,
@@ -89,10 +99,12 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         close: closeFunction,
         emit,
         getAuthToken: getAuthTokenFunction,
+        getCurrentUser: getCurrentUserFunction,
         mutation: mutationFunction,
         onAuthTokenChange: onAuthTokenChangeFunction,
         query: queryFunction,
         setAuthToken: setAuthTokenFunction,
+        setCurrentUser,
         subscribe: subscribeFunction,
     };
 };

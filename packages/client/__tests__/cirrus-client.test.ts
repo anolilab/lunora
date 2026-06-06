@@ -1269,4 +1269,89 @@ describe("cirrusClient", () => {
             vi.useRealTimers();
         });
     });
+
+    // --- getCurrentUser ---------------------------------------------------------
+
+    describe("cirrusClient — getCurrentUser", () => {
+        it("fetches better-auth get-session and returns the user, sending the bearer token", async () => {
+            expect.assertions(4);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ session: { id: "s_1" }, user: { email: "a@b.co", id: "u_1" } }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.setAuthToken("jwt-1");
+
+            const user = await client.getCurrentUser();
+
+            expect(user).toEqual({ email: "a@b.co", id: "u_1" });
+
+            const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(requestUrl).toBe("https://app.example/api/auth/get-session");
+            expect(init.method).toBe("GET");
+            expect((init.headers as Record<string, string>).authorization).toBe("Bearer jwt-1");
+        });
+
+        it("returns null when the session response has no user", async () => {
+            expect.assertions(1);
+
+            const client = new CirrusClient({
+                fetch: vi.fn<typeof fetch>(async () => jsonResponse(null)),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.getCurrentUser()).resolves.toBeNull();
+        });
+
+        it("returns null on a non-OK response", async () => {
+            expect.assertions(1);
+
+            const client = new CirrusClient({
+                fetch: vi.fn<typeof fetch>(async () => jsonResponse({}, { status: 401 })),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.getCurrentUser()).resolves.toBeNull();
+        });
+
+        it("returns null when the fetch rejects", async () => {
+            expect.assertions(1);
+
+            const client = new CirrusClient({
+                fetch: vi.fn<typeof fetch>(async () => {
+                    throw new Error("offline");
+                }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.getCurrentUser()).resolves.toBeNull();
+        });
+
+        it("honours a custom authBasePath", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ user: { id: "u_9" } }));
+
+            const client = new CirrusClient({
+                authBasePath: "/auth/",
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.getCurrentUser();
+
+            const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(requestUrl).toBe("https://app.example/auth/get-session");
+        });
+    });
 });
