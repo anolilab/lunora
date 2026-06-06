@@ -16,6 +16,7 @@ import { createScheduler } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
 import { buildSignedUrl, createStorage } from "@cirrus/storage";
 
+import { CIRRUS_CRONS } from "../../cirrus/_generated/crons.js";
 import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/server.js";
 import { createShardDO } from "../../cirrus/_generated/shard.js";
 import schema from "../../cirrus/schema.js";
@@ -180,6 +181,10 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         adminToken: env.CIRRUS_ADMIN_TOKEN,
         // Exposes /_cirrus/admin/auth/* so the dashboard can browse users/sessions.
         authIntrospector: env.DB ? authIntrospector(env.DB as D1DatabaseLike) : undefined,
+        // Code-first crons: the worker's `scheduled()` entry dispatches every job
+        // declared in `cirrus/crons.ts` (compiled into the generated CIRRUS_CRONS
+        // map) on its firing trigger. Empty until a `crons.ts` is added.
+        cronJobs: CIRRUS_CRONS,
         d1: env.DB,
         // Exposes /_cirrus/admin/functions so the dashboard's runner can
         // auto-discover queries/mutations/actions. The generated registry's
