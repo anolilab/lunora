@@ -54,6 +54,15 @@ interface QueryPage {
     continueCursor: null | string;
     isDone: boolean;
     page: Record<string, unknown>[];
+
+    /**
+     * Reactive-pagination only: the cursor of the page's middle row, present on
+     * a bounded `(start, end]` page so a client growing past its target size can
+     * SPLIT it at this midpoint into two adjacent ranges without re-encoding
+     * cursors itself. Omitted for legacy (open-ended) pages and for bounded
+     * pages too small to split (< 2 rows).
+     */
+    splitCursor?: null | string;
 }
 
 interface OrderKey {
@@ -192,5 +201,59 @@ const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput =
     return { OR: branches };
 };
 
-export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys };
+/**
+ * The per-column comparator {@link buildSeekBeforeWhere} emits: every column
+ * runs in the mirror direction of the strict seek (asc → `lt`, desc → `gt`),
+ * except the final id tiebreak which is inclusive (`lte`/`gte`) so the boundary
+ * row stays inside the page.
+ */
+const seekBeforeOperator = (direction: SortDirection, isFinal: boolean): string => {
+    if (direction === "desc") {
+        return isFinal ? "gte" : "gt";
+    }
+
+    return isFinal ? "lte" : "lt";
+};
+
+/**
+ * Build the `where` tree that selects rows at-or-before the cursor under the
+ * given sort — the inclusive upper bound that pairs with {@link buildSeekWhere}
+ * to express a half-open page range `(start, end]`. For keys `[a ASC, b DESC]`
+ * (plus the id tiebreak) it expands to the lexicographic seek
+ * `(a lt ?) OR (a eq ? AND b gt ?) OR (a eq ? AND b eq ? AND id lte ?)`: the
+ * strict direction is the mirror of {@link buildSeekWhere} on every column, and
+ * the final id tiebreak is `lte` (inclusive) so the boundary row itself stays in
+ * the page it terminates. Reactive pagination uses this for a page's fixed end
+ * cursor; the shared compiler renders it per dialect.
+ */
+const buildSeekBeforeWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => {
+    const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field)) ? keys : [...keys, { direction: "asc", field: TIEBREAK_FIELD }];
+
+    const branches: WhereInput[] = [];
+
+    for (const [pivot, pivotColumn] of columns.entries()) {
+        const conditions: WhereInput[] = [];
+
+        for (const [prefix, prefixColumn] of columns.slice(0, pivot).entries()) {
+            conditions.push({ [prefixColumn.field]: { eq: cursorValues[prefix] } });
+        }
+
+        const isFinal = pivot === columns.length - 1;
+        // The terminal id tiebreak is inclusive (`lte`/`gte`) so the boundary
+        // row is part of `(start, end]`; every earlier column is strictly past
+        // the cursor in the opposite direction from {@link buildSeekWhere}
+        // (asc → `lt`, desc → `gt`).
+        const operator = seekBeforeOperator(pivotColumn.direction, isFinal);
+
+        conditions.push({ [pivotColumn.field]: { [operator]: cursorValues[pivot] } });
+
+        const [first] = conditions;
+
+        branches.push(conditions.length === 1 && first !== undefined ? first : { AND: conditions });
+    }
+
+    return { OR: branches };
+};
+
+export { buildSeekBeforeWhere, buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys };
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection };

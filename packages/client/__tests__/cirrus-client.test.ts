@@ -276,6 +276,44 @@ describe("cirrusClient", () => {
             expect(last).toEqual({ id: sub.id, type: "unsubscribe" });
         });
 
+        it("keys reactive page subscriptions by their (lower, upper] cursor range", () => {
+            expect.assertions(3);
+
+            const client = new CirrusClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // Two adjacent reactive pages over the same feed differ only by their
+            // paginationOpts range — (null, C1] vs (C1, C2]. Each must open its
+            // own subscription so a delta lands on exactly one page.
+            client.subscribe(fnRef("messages:list"), { paginationOpts: { cursor: null, endCursor: "C1", numItems: 5 } }, () => undefined);
+            client.subscribe(fnRef("messages:list"), { paginationOpts: { cursor: "C1", endCursor: "C2", numItems: 5 } }, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // Distinct ranges ⇒ two distinct subscribe envelopes with distinct ids.
+            expect(socket.sent).toHaveLength(2);
+
+            const sentIds = socket.sent.map((raw) => JSON.parse(raw).id);
+
+            expect(new Set(sentIds).size).toBe(2);
+
+            // Ack both so the registry dedup guard (acked) engages, then
+            // re-subscribe the exact same first-page range: it reuses the
+            // existing subscription id rather than opening a third.
+            for (const id of sentIds) {
+                socket.receive({ id, type: "ack" });
+            }
+
+            client.subscribe(fnRef("messages:list"), { paginationOpts: { cursor: null, endCursor: "C1", numItems: 5 } }, () => undefined);
+
+            expect(socket.sent).toHaveLength(2);
+        });
+
         it("appends wsToken to the WebSocket URL so the upgrade can authorize it", () => {
             expect.assertions(2);
 

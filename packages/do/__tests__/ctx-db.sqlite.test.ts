@@ -255,4 +255,219 @@ describe("ctx-db against real SQLite", () => {
             await expect(writer.query("messages").first()).resolves.toMatchObject({ _id: "a" });
         });
     });
+
+    describe("ctx-db against real SQLite — .order()", () => {
+        const seed = async (writer: DatabaseWriterLike): Promise<void> => {
+            // Insert out of creation order so the ORDER BY is doing real work.
+            await writer.insert("messages", { _id: "a", authorId: "u1", channelId: "c1", text: "first" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "b", authorId: "u1", channelId: "c1", text: "second" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "c", authorId: "u1", channelId: "c1", text: "third" }, { allowExplicitId: true });
+        };
+
+        it("defaults to ascending creation order", async () => {
+            expect.assertions(1);
+
+            let now = 0;
+            const { writer } = setupWriter({
+                clock: () => {
+                    now += 10;
+
+                    return now;
+                },
+            });
+
+            await seed(writer);
+
+            const rows = await writer.query("messages").collect();
+
+            expect(rows.map((row) => row["_id"])).toStrictEqual(["a", "b", "c"]);
+        });
+
+        it("order('desc') reverses creation order", async () => {
+            expect.assertions(1);
+
+            let now = 0;
+            const { writer } = setupWriter({
+                clock: () => {
+                    now += 10;
+
+                    return now;
+                },
+            });
+
+            await seed(writer);
+
+            const rows = await writer.query("messages").order("desc").collect();
+
+            expect(rows.map((row) => row["_id"])).toStrictEqual(["c", "b", "a"]);
+        });
+
+        it("order('desc') composes with first() and take()", async () => {
+            expect.assertions(2);
+
+            let now = 0;
+            const { writer } = setupWriter({
+                clock: () => {
+                    now += 10;
+
+                    return now;
+                },
+            });
+
+            await seed(writer);
+
+            await expect(writer.query("messages").order("desc").first()).resolves.toMatchObject({ _id: "c" });
+            await expect(writer.query("messages").order("desc").take(2)).resolves.toMatchObject([{ _id: "c" }, { _id: "b" }]);
+        });
+
+        it("order('desc') composes with withIndex() and filter()", async () => {
+            expect.assertions(1);
+
+            let now = 0;
+            const { writer } = setupWriter({
+                clock: () => {
+                    now += 10;
+
+                    return now;
+                },
+            });
+
+            await writer.insert("messages", { _id: "a", authorId: "u1", channelId: "c1", text: "keep1" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "b", authorId: "u1", channelId: "c2", text: "other" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "c", authorId: "u1", channelId: "c1", text: "keep2" }, { allowExplicitId: true });
+
+            const rows = await writer
+                .query("messages")
+                .withIndex("by_channel_creation", (q) => q.eq("channelId", "c1"))
+                .filter((document) => String(document["text"]).startsWith("keep"))
+                .order("desc")
+                .collect();
+
+            expect(rows.map((row) => row["_id"])).toStrictEqual(["c", "a"]);
+        });
+
+        it("order('desc') composes with paginate()", async () => {
+            expect.assertions(2);
+
+            let now = 0;
+            const { writer } = setupWriter({
+                clock: () => {
+                    now += 10;
+
+                    return now;
+                },
+            });
+
+            await seed(writer);
+
+            const firstPage = await writer.query("messages").order("desc").paginate({ cursor: null, numItems: 2 });
+
+            expect(firstPage.page.map((row) => row["_id"])).toStrictEqual(["c", "b"]);
+
+            const secondPage = await writer.query("messages").order("desc").paginate({ cursor: firstPage.continueCursor, numItems: 2 });
+
+            expect(secondPage.page.map((row) => row["_id"])).toStrictEqual(["a"]);
+        });
+    });
+
+    describe("ctx-db against real SQLite — .unique()", () => {
+        it("returns null when nothing matches", async () => {
+            expect.assertions(1);
+
+            const { writer } = setupWriter();
+
+            await expect(
+                writer
+                    .query("messages")
+                    .withIndex("by_channel", (q) => q.eq("channelId", "absent"))
+                    .unique(),
+            ).resolves.toBeNull();
+        });
+
+        it("returns the single matching document", async () => {
+            expect.assertions(1);
+
+            const { writer } = setupWriter();
+
+            await writer.insert("messages", { _id: "a", authorId: "u1", channelId: "solo", text: "only" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "b", authorId: "u1", channelId: "other", text: "x" }, { allowExplicitId: true });
+
+            await expect(
+                writer
+                    .query("messages")
+                    .withIndex("by_channel", (q) => q.eq("channelId", "solo"))
+                    .unique(),
+            ).resolves.toMatchObject({ _id: "a" });
+        });
+
+        it("throws when more than one document matches", async () => {
+            expect.assertions(1);
+
+            const { writer } = setupWriter();
+
+            await writer.insert("messages", { _id: "a", authorId: "u1", channelId: "dup", text: "x" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "b", authorId: "u1", channelId: "dup", text: "y" }, { allowExplicitId: true });
+
+            await expect(
+                writer
+                    .query("messages")
+                    .withIndex("by_channel", (q) => q.eq("channelId", "dup"))
+                    .unique(),
+            ).rejects.toThrow(/matched 2 documents/u);
+        });
+
+        it("applies .filter() before deciding uniqueness", async () => {
+            expect.assertions(1);
+
+            const { writer } = setupWriter();
+
+            await writer.insert("messages", { _id: "a", authorId: "u1", channelId: "dup", text: "keep" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "b", authorId: "u1", channelId: "dup", text: "drop" }, { allowExplicitId: true });
+
+            await expect(
+                writer
+                    .query("messages")
+                    .withIndex("by_channel", (q) => q.eq("channelId", "dup"))
+                    .filter((document) => document["text"] === "keep")
+                    .unique(),
+            ).resolves.toMatchObject({ _id: "a" });
+        });
+    });
+
+    describe("ctx-db against real SQLite — normalizeId", () => {
+        it("returns the id for a structurally valid string", () => {
+            expect.assertions(1);
+
+            const { writer } = setupWriter();
+
+            expect(writer.normalizeId("messages", "m_123")).toBe("m_123");
+        });
+
+        it("returns null for empty or whitespace-bearing ids", () => {
+            expect.assertions(3);
+
+            const { writer } = setupWriter();
+
+            expect(writer.normalizeId("messages", "")).toBeNull();
+            expect(writer.normalizeId("messages", "has space")).toBeNull();
+            expect(writer.normalizeId("messages", " padded ")).toBeNull();
+        });
+
+        it("does not read the database (a valid id for an absent row still normalizes)", () => {
+            expect.assertions(1);
+
+            const { writer } = setupWriter();
+
+            // No row with this id exists, yet a structurally valid id round-trips.
+            expect(writer.normalizeId("messages", "never-inserted")).toBe("never-inserted");
+        });
+
+        it("throws on an unknown table", () => {
+            expect.assertions(1);
+
+            const { writer } = setupWriter();
+
+            expect(() => writer.normalizeId("nope", "x")).toThrow(/unknown table/u);
+        });
+    });
 });

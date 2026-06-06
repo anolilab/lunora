@@ -122,7 +122,7 @@ export type {
     VectorUpsertInput,
 } from "./types.js";
 export { anyApi } from "./types.js";
-export type { Id, Infer, Validator, ValidatorKind } from "@cirrus/values";
+export type { ColumnValidator, Id, Infer, Validator, ValidatorKind } from "@cirrus/values";
 export { v } from "@cirrus/values";
 export { ValidationError } from "@cirrus/values";
 

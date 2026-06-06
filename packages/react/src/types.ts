@@ -19,6 +19,13 @@ export interface PaginationResult<T = unknown> {
     continueCursor: null | string;
     isDone: boolean;
     page: T[];
+
+    /**
+     * Reactive-pagination only: the midpoint cursor of a bounded
+     * `(cursor, endCursor]` page, used to split an over-grown page into two
+     * adjacent ranges. Absent on legacy (open-ended) pages.
+     */
+    splitCursor?: null | string;
 }
 
 /**

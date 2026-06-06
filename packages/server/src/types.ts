@@ -241,6 +241,15 @@ interface RegisteredStream<A extends ArgsValidator, R> {
  */
 interface DatabaseReader {
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
+
+    /**
+     * Validate an untrusted `id` string against the structural shape of an id
+     * for `tableName`, returning the branded {@link Id} when it is well-formed
+     * and `null` otherwise. Pure structural validation — it never reads the
+     * database, so a structurally valid id for a row that doesn't exist still
+     * returns the branded id (mirrors Convex's `db.normalizeId`).
+     */
+    normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
 }
 
@@ -248,6 +257,17 @@ interface DatabaseReader {
 interface PaginationOptions {
     /** Opaque cursor from the prior page's `continueCursor`; `null`/omitted starts at the first page. */
     cursor?: null | string;
+
+    /**
+     * Optional inclusive upper bound for reactive pagination. When supplied the
+     * page covers the fixed half-open range `(cursor, endCursor]` (ignoring
+     * `numItems`): every row strictly after `cursor` up to and including the
+     * boundary row `endCursor` encodes. The page's `isDone` is `true` and its
+     * `continueCursor` echoes `endCursor`, so the next page keeps starting where
+     * this one ends even as rows are inserted/deleted inside the range. Omit (or
+     * pass `null`) for the legacy "first `numItems` after `cursor`" behaviour.
+     */
+    endCursor?: null | string;
     /** Maximum rows to return for this page. */
     numItems: number;
 }
@@ -259,14 +279,36 @@ interface PaginationResult<T = Record<string, unknown>> {
     /** `true` when this page is the last one. */
     isDone: boolean;
     page: T[];
+
+    /**
+     * Reactive-pagination only: the midpoint cursor of a bounded
+     * `(cursor, endCursor]` page, used by the client to split an over-grown page
+     * into two adjacent ranges. Absent on legacy (open-ended) pages.
+     */
+    splitCursor?: null | string;
 }
 
 interface TableReader {
     collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReader;
     first: () => Promise<Record<string, unknown> | null>;
+
+    /**
+     * Set the result order. Orders by the active `.withIndex()` (or by
+     * `_creationTime` when none is staged), `"asc"` by default; `"desc"`
+     * reverses it. Composes with `.withIndex()`, `.filter()`, and every
+     * terminal (`collect`/`first`/`take`/`paginate`/`unique`). Mirrors Convex's
+     * `.order("asc" | "desc")`.
+     */
+    order: (direction: "asc" | "desc") => TableReader;
     paginate: (options: PaginationOptions) => Promise<PaginationResult>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
+
+    /**
+     * Return the single matching document. Returns `null` when nothing matches
+     * and throws when more than one row matches. Mirrors Convex's `.unique()`.
+     */
+    unique: () => Promise<Record<string, unknown> | null>;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader;
 
     /**
@@ -626,6 +668,16 @@ interface VectorSearch extends VectorSearchReader {
 interface QueryCtx {
     readonly auth: AuthState;
     readonly db: DatabaseReader;
+
+    /**
+     * Compose a read-only subquery in-process, reusing this query's read
+     * context (same transaction, same `db`). Executes the referenced query's
+     * handler directly — no fresh DO RPC round-trip — so it observes the exact
+     * same snapshot. A query may only call other queries; there is no
+     * `runMutation` on a `QueryCtx` (writes are not allowed from a query).
+     * Mirrors Convex's `ctx.runQuery`.
+     */
+    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly storage: ReadOnlyStorage;
     readonly vectors: VectorSearchReader;
 }
@@ -634,6 +686,23 @@ interface QueryCtx {
 interface MutationCtx {
     readonly auth: AuthState;
     readonly db: DatabaseWriter;
+
+    /**
+     * Compose a submutation in-process, reusing this mutation's transaction and
+     * `db` writer. Executes the referenced mutation's handler directly — no
+     * fresh DO RPC — so its writes land in the SAME transaction: if the
+     * submutation throws, the whole enclosing mutation rolls back atomically.
+     * Mirrors Convex's `ctx.runMutation`.
+     */
+    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
+
+    /**
+     * Compose a read-only subquery in-process, reusing this mutation's
+     * transaction and `db`. Executes the referenced query's handler directly —
+     * no fresh DO RPC — so it observes this mutation's in-flight writes. Mirrors
+     * Convex's `ctx.runQuery`.
+     */
+    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
     readonly storage: ReadOnlyStorage;
     readonly vectors: VectorSearch;

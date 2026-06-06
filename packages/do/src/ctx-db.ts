@@ -36,7 +36,7 @@ import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIn
 import { SCAN_DEP } from "./dependency-tracker.js";
 import NotFoundError from "./not-found-error.js";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
-import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
+import { buildSeekBeforeWhere, buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
 import type { RankBeforeOptions, RankBeforeResult, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult } from "./rank.js";
 import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank.js";
 import type { ReactiveCache } from "./reactive-cache.js";
@@ -250,6 +250,20 @@ interface SearchFilterBuilderLike {
 interface PaginationOptions {
     /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
     cursor?: null | string;
+
+    /**
+     * Optional inclusive upper bound for reactive pagination. When supplied the
+     * page covers the fixed half-open range `(cursor, endCursor]` — every row
+     * strictly after `cursor` up to and including the boundary row `endCursor`
+     * encodes, ignoring `numItems`. `isDone` is always `true` for a bounded page
+     * (its end is fixed) and `continueCursor` is the unchanged `endCursor`, so a
+     * following page keeps starting exactly where this one ends even as rows are
+     * inserted or deleted inside the range.
+     *
+     * Omit (or pass `null`) for the legacy single-cursor behaviour: the first
+     * `numItems` rows after `cursor`, with a fresh `continueCursor`/`isDone`.
+     */
+    endCursor?: null | string;
     /** Maximum rows to return for this page. */
     numItems: number;
 }
@@ -258,8 +272,21 @@ interface TableReaderLike {
     collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
     first: () => Promise<Record<string, unknown> | null>;
+
+    /**
+     * Set the result order: by the active `.withIndex()` (or `_creationTime`
+     * when none is staged), `"asc"` by default; `"desc"` reverses it. Composes
+     * with `.withIndex()`, `.filter()`, and every terminal. Mirrors Convex.
+     */
+    order: (direction: "asc" | "desc") => TableReaderLike;
     paginate: (options: PaginationOptions) => Promise<QueryPage>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
+
+    /**
+     * Return the single matching row, `null` when none match, throwing when
+     * more than one matches. Mirrors Convex's `.unique()`.
+     */
+    unique: () => Promise<Record<string, unknown> | null>;
     withIndex: (indexName: string, range?: (q: IndexRangeBuilderLike) => IndexRangeBuilderLike) => TableReaderLike;
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
 }
@@ -315,6 +342,14 @@ interface DatabaseWriterLike {
      * becomes the row's primary key.
      */
     insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean }) => Promise<string>;
+
+    /**
+     * Validate an untrusted `id` against the structural shape of an id for
+     * `tableName`, returning it when well-formed and `null` otherwise. Pure —
+     * it never reads the database (a valid id for an absent row still returns
+     * the id), matching Convex's `db.normalizeId`. Throws on an unknown table.
+     */
+    normalizeId: (tableName: string, id: string) => null | string;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
 
@@ -573,6 +608,8 @@ interface QueryStage {
     indexFields: ReadonlyArray<string>;
     indexName: string | undefined;
     inMemoryFilters: ((record: Record<string, unknown>) => boolean)[];
+    /** Result order set by `.order()`; defaults to ascending. */
+    order: "asc" | "desc";
     search?: SearchStage;
     sqlConditions: { comparator: string; field: string; value: unknown }[];
 }
@@ -746,22 +783,32 @@ const doWhereStrategy: WhereCompilerStrategy = { fieldRef: jsonPath, serialize: 
 /** Invert the reader's staged SQL comparators back into `where`-tree operators. */
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
 
-/** Order keys for a paginated stage: the staged index, else creation order. */
+/** Order keys for a paginated stage: the staged index, else creation order, in the staged direction. */
 const paginateOrderKeys = (stage: QueryStage): OrderKey[] => {
+    const direction = stage.order;
+
     if (stage.indexFields.length > 0) {
         return stage.indexFields.map((field) => {
-            return { direction: "asc" as const, field };
+            return { direction, field };
         });
     }
 
-    return [{ direction: "asc" as const, field: "_creationTime" }];
+    return [{ direction, field: "_creationTime" }];
 };
 
 /**
  * Re-express the staged `.withIndex()` range as a `where` tree and AND the
  * keyset seek onto it, so a single shared compiler renders the page predicate.
+ * `cursor` is the (exclusive) lower bound; `endCursor`, when supplied, adds the
+ * inclusive upper bound so the page selects exactly `(cursor, endCursor]` —
+ * the fixed range a reactive page subscribes to.
  */
-const paginateWhere = (stage: QueryStage, orderKeys: OrderKey[], cursor: null | string | undefined): undefined | WhereInput => {
+const paginateWhere = (
+    stage: QueryStage,
+    orderKeys: OrderKey[],
+    cursor: null | string | undefined,
+    endCursor?: null | string,
+): undefined | WhereInput => {
     const clauses: WhereInput[] = stage.sqlConditions.map((condition) => {
         return {
             [condition.field]: { [COMPARATOR_TO_OPERATOR[condition.comparator] ?? "eq"]: condition.value },
@@ -770,6 +817,10 @@ const paginateWhere = (stage: QueryStage, orderKeys: OrderKey[], cursor: null | 
 
     if (cursor) {
         clauses.push(buildSeekWhere(orderKeys, decodeCursor(cursor)));
+    }
+
+    if (endCursor) {
+        clauses.push(buildSeekBeforeWhere(orderKeys, decodeCursor(endCursor)));
     }
 
     if (clauses.length === 0) {
@@ -804,11 +855,21 @@ const scanDocs = (rows: Record<string, unknown>[], filters: QueryStage["inMemory
  * `isDone`. With in-memory `.filter()`s the SQL row count no longer tracks the
  * post-filter page size, so we scan unbounded and bound after filtering rather
  * than let a `LIMIT` drop rows that pass the predicate.
+ *
+ * Reactive pagination (`options.endCursor` set) instead selects the whole fixed
+ * range `(cursor, endCursor]`: no `LIMIT`, no over-fetch, `isDone` always `true`
+ * (the page's end is pinned), and `continueCursor` echoed as the unchanged
+ * `endCursor` so the next page keeps starting exactly where this one ends. The
+ * range stays stable under inserts/deletes inside it — the page simply grows or
+ * shrinks while its boundaries hold.
  */
 const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, options: PaginationOptions): QueryPage => {
     const numberItems = Math.max(0, Math.floor(options.numItems));
     const orderKeys = paginateOrderKeys(stage);
-    const { params, sql: whereSql } = compileWhere(paginateWhere(stage, orderKeys, options.cursor), doWhereStrategy);
+    // A cursor is always a non-empty base64 string, so truthiness distinguishes
+    // a bounded page (endCursor set) from the legacy open-ended one (null/omitted).
+    const bounded = typeof options.endCursor === "string";
+    const { params, sql: whereSql } = compileWhere(paginateWhere(stage, orderKeys, options.cursor, options.endCursor), doWhereStrategy);
 
     let querySql = `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`;
 
@@ -820,12 +881,34 @@ const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, optio
 
     const filtered = stage.inMemoryFilters.length > 0;
 
-    if (!filtered) {
+    // A bounded page returns its entire range, so never cap the SQL scan. An
+    // unbounded, unfiltered page over-fetches one row to learn `isDone`.
+    if (!filtered && !bounded) {
         querySql += ` LIMIT ${String(numberItems + 1)}`;
     }
 
     const rows = runSql(sql, querySql, ...params).toArray();
-    const docs = scanDocs(rows, stage.inMemoryFilters, filtered ? numberItems : undefined);
+    const docs = scanDocs(rows, stage.inMemoryFilters, filtered || bounded ? undefined : numberItems);
+
+    if (bounded) {
+        // The end is fixed: every row in `(cursor, endCursor]` belongs to this
+        // page. Echo `endCursor` so the next page's lower bound is this page's
+        // upper bound — shared stable boundaries are what eliminate the
+        // dup/skip drift the keyset model suffered under live edits.
+        //
+        // Surface the middle row's cursor so a client whose page has grown past
+        // its target size can split this range in two at a stable midpoint.
+        const middle = docs.length >= 2 ? docs[Math.floor(docs.length / 2) - 1] : undefined;
+
+        return {
+            // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`; a bounded page echoes its fixed endCursor (never null in this branch since `bounded` requires it), the `?? null` only satisfies the type
+            continueCursor: options.endCursor ?? null,
+            isDone: true,
+            page: docs,
+            // eslint-disable-next-line unicorn/no-null -- splitCursor is `null | string`; null marks "too small to split" so the client can read the field unconditionally
+            splitCursor: middle ? encodeCursor(middle, orderKeys) : null,
+        };
+    }
 
     const hasMore = docs.length > numberItems;
     const page = hasMore ? docs.slice(0, numberItems) : docs;
@@ -839,6 +922,55 @@ const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, optio
     };
 };
 
+/**
+ * Thrown by `.unique()` when more than one row matches. Like {@link ConflictError}
+ * / `NotFoundError`, `code` / `status` are declared as own properties so the
+ * cross-package structural error mapper renders it as a 400 without an
+ * `instanceof` check against `@cirrus/do`.
+ */
+class NotUniqueError extends Error {
+    public readonly code: string = "NOT_UNIQUE";
+
+    public readonly status: number = 400;
+
+    public constructor(message: string = "unique() found more than one matching document") {
+        super(message);
+        this.name = "NotUniqueError";
+    }
+}
+
+/**
+ * Pure structural id validation shared by both ORM dialects (the DO writer here
+ * and the D1 twin). An id is well-formed when it is a non-empty string carrying
+ * no whitespace (interior, leading, or trailing) and no NUL byte — the shape
+ * every minter in the stack produces (`crypto.randomUUID()` by default; a custom
+ * `idGenerator` or an `allowExplicitId` import path may supply another opaque
+ * string). Cirrus ids carry no embedded table tag, so this is the strongest
+ * structural check the format admits; it never touches the database, matching
+ * Convex's `normalizeId`. Returns the id unchanged when valid, else `null`.
+ * Throws on an unknown table so a typo'd table name surfaces loudly rather than
+ * silently returning `null`.
+ */
+// Hoisted to module scope so the matcher is compiled once, not per normalizeId call.
+// NUL is matched via String.fromCharCode so the pattern stays free of control characters.
+const ID_WHITESPACE_PATTERN = /\s/u;
+const NUL_CHARACTER = String.fromCodePoint(0);
+
+const normalizeIdStructurally = (schema: SchemaLike, tableName: string, id: string): null | string => {
+    if (!schema.tables[tableName]) {
+        throw new Error(`unknown table: ${tableName}`);
+    }
+
+    // Reject empties and any id carrying whitespace or a NUL byte — no minter in
+    // the stack produces those, so their presence marks the string as not an id.
+    if (typeof id !== "string" || id.length === 0 || ID_WHITESPACE_PATTERN.test(id) || id.includes(NUL_CHARACTER)) {
+        // eslint-disable-next-line unicorn/no-null -- documented `normalizeId` result shape (Id | null); null is the "not a valid id" sentinel
+        return null;
+    }
+
+    return id;
+};
+
 const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): TableReaderLike => {
     const tableDefinition = schema.tables[tableName];
 
@@ -850,6 +982,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         indexFields: [],
         indexName: undefined,
         inMemoryFilters: [],
+        order: "asc",
         sqlConditions: [],
     };
 
@@ -883,6 +1016,13 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         return result;
     };
 
+    const buildOrderClause = (): string => {
+        const orderFields = stage.indexFields.length > 0 ? stage.indexFields : ["_creationTime"];
+        const orderDirection = stage.order === "desc" ? "DESC" : "ASC";
+
+        return orderFields.map((field) => `${jsonPath(field)} ${orderDirection}`).join(", ");
+    };
+
     const runFetch = (limit: number | undefined): Record<string, unknown>[] => {
         if (stage.search) {
             return runSearchFetch(limit);
@@ -902,10 +1042,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
             querySql += ` WHERE ${where.join(" AND ")}`;
         }
 
-        const orderFields = stage.indexFields.length > 0 ? stage.indexFields : ["_creationTime"];
-        const orderClause = orderFields.map((field) => `${jsonPath(field)} ASC`).join(", ");
-
-        querySql += ` ORDER BY ${orderClause}`;
+        querySql += ` ORDER BY ${buildOrderClause()}`;
 
         if (typeof limit === "number" && stage.inMemoryFilters.length === 0) {
             querySql += ` LIMIT ${String(Math.max(0, Math.floor(limit)))}`;
@@ -950,6 +1087,11 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
             // eslint-disable-next-line unicorn/no-null -- documented `first()` result shape (Doc | null) returned to callers
             return rows[0] ?? null;
         },
+        order(direction) {
+            stage.order = direction === "desc" ? "desc" : "asc";
+
+            return reader;
+        },
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async paginate(options) {
             if (stage.search) {
@@ -961,6 +1103,19 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async take(limit) {
             return runFetch(limit);
+        },
+        // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
+        async unique() {
+            // Over-fetch one past the single row we expect: 0 → null, 1 → the
+            // row, ≥2 → ambiguous, which is an error (mirrors Convex).
+            const rows = runFetch(stage.inMemoryFilters.length > 0 ? undefined : 2);
+
+            if (rows.length > 1) {
+                throw new NotUniqueError(`unique() on table "${tableName}" matched ${String(rows.length)} documents; expected at most one`);
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- documented `unique()` result shape (Doc | null) returned to callers
+            return rows[0] ?? null;
         },
         withIndex(indexName, range) {
             const definition = tableDefinition.indexes.find((index) => index.name === indexName);
@@ -1423,11 +1578,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         for (const trigger of Object.values(definition.triggerMap ?? {})) {
-            triggerMatchers.add(`${tableName} ${trigger.timing} ${trigger.op}`);
+            triggerMatchers.add(`${tableName} ${trigger.timing} ${trigger.op}`);
         }
     }
 
-    const hasMatchingTrigger = (tableName: string, timing: TriggerTimingLike, op: TriggerOpLike): boolean => triggerMatchers.has(`${tableName} ${timing} ${op}`);
+    const hasMatchingTrigger = (tableName: string, timing: TriggerTimingLike, op: TriggerOpLike): boolean => triggerMatchers.has(`${tableName} ${timing} ${op}`);
 
     /** Fire matching triggers with a depth guard against runaway self-triggering. */
     const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
@@ -2443,6 +2598,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return id;
         },
 
+        normalizeId(tableName, id) {
+            return normalizeIdStructurally(schema, tableName, id);
+        },
+
         async patch(id, patch) {
             // Single probe — eliminates the redundant `tableNameFromId` +
             // `writer.get` chain that doubled the SQL round-trips per patch
@@ -3128,6 +3287,8 @@ export {
     CDC_LOG_TABLE,
     createShardCtxDb,
     migrateCdcLog,
+    normalizeIdStructurally,
+    NotUniqueError,
     readCdcChanges,
     runShardMigrations,
     trimCdcChanges,

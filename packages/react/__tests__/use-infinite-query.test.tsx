@@ -153,14 +153,18 @@ describe("useInfiniteQuery", () => {
             expect(result.current.pages).toHaveLength(2);
         });
 
-        // Push a delta only to page 0's subscription (cursor === null) so page 1 stays untouched.
-        const pageZeroCall = mock.subscribe.mock.calls.find(
+        // Push a delta only to page 0's subscription (cursor === null) so page 1
+        // stays untouched. Reactive pagination pins page 0 to a bounded range
+        // once page 1 opens, so its subscription is re-keyed (endCursor set) —
+        // target the LATEST cursor===null subscribe, which is the live one.
+        const pageZeroCall = mock.subscribe.mock.calls.findLast(
             ([, args]) => (args as { paginationOpts: { cursor: null | string } }).paginationOpts.cursor === null,
         );
         const pageZeroCallback = pageZeroCall?.[2] as (value: unknown) => void;
+        const pageZeroEnd = (pageZeroCall?.[1] as { paginationOpts: { endCursor: null | string } }).paginationOpts.endCursor;
 
         act(() => {
-            pageZeroCallback({ continueCursor: "3", isDone: false, page: ["a", "b", "x"] });
+            pageZeroCallback({ continueCursor: pageZeroEnd, isDone: true, page: ["a", "b", "x"], splitCursor: "1" });
         });
 
         expect(result.current.pages).toEqual([

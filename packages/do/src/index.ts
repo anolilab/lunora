@@ -63,6 +63,8 @@ export {
     backfillRankIndexes,
     CDC_LOG_TABLE,
     createShardCtxDb,
+    normalizeIdStructurally,
+    NotUniqueError,
     readCdcChanges,
     runShardMigrations,
     trimCdcChanges,

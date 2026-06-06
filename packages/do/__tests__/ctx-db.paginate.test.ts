@@ -157,6 +157,146 @@ describe("ctx-db paginate", () => {
         });
     });
 
+    describe("reader.paginate — reactive range (start + end cursor)", () => {
+        it("returns exactly the half-open range (start, end]", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            // Two adjacent pages over the p1 feed (t5, t1, t2, t3 in seq order).
+            const first = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ numItems: 2 });
+
+            // Re-fetch page 1 as a *bounded* page pinned to its own end cursor:
+            // covers (null, C1] where C1 is page 1's continueCursor.
+            const bounded = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ endCursor: first.continueCursor, numItems: 2 });
+
+            // Exactly the rows up to and including the boundary — t5 and t1.
+            expect(ids(bounded.page)).toEqual(["t5", "t1"]);
+            // A bounded page is always done and echoes its fixed end cursor.
+            expect(bounded.isDone).toBe(true);
+            expect(bounded.continueCursor).toBe(first.continueCursor);
+        });
+
+        it("inserting into a page's range grows it without touching adjacent pages", async () => {
+            expect.assertions(4);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            // Establish two stable page boundaries: C1 = end of page 1, C2 = end of page 2.
+            const first = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ numItems: 2 });
+            const second = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ cursor: first.continueCursor, numItems: 2 });
+
+            const c1 = first.continueCursor;
+            const c2 = second.continueCursor;
+
+            // Insert a row INTO page 1's range (seq 0.5 sits between t5@0 and t1@1).
+            await writer.insert("todos", { _id: "t6", archived: false, projectId: "p1", seq: 0.5 }, { allowExplicitId: true });
+
+            const page1 = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ cursor: null, endCursor: c1, numItems: 2 });
+            const page2 = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ cursor: c1, endCursor: c2, numItems: 2 });
+
+            // Page 1 GREW to include t6 (seq 0.5 ⇒ t5, t6, t1); its boundary
+            // (t1) still terminates it.
+            expect(ids(page1.page)).toEqual(["t5", "t6", "t1"]);
+            // Page 2 is untouched — no dup, no skip across the shared C1 boundary.
+            expect(ids(page2.page)).toEqual(["t2", "t3"]);
+
+            // The flattened feed has every row exactly once, in order.
+            const flat = [...ids(page1.page), ...ids(page2.page)];
+
+            expect(flat).toEqual(["t5", "t6", "t1", "t2", "t3"]);
+            expect(new Set(flat).size).toBe(flat.length);
+        });
+
+        it("deleting a boundary-adjacent row leaves no gap and spares the neighbor", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            const first = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ numItems: 2 });
+            const second = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ cursor: first.continueCursor, numItems: 2 });
+
+            const c1 = first.continueCursor;
+            const c2 = second.continueCursor;
+
+            // Delete the first row of page 2 (t2) — adjacent to the C1 boundary.
+            await writer.delete("t2");
+
+            const page1 = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ cursor: null, endCursor: c1, numItems: 2 });
+            const page2 = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .paginate({ cursor: c1, endCursor: c2, numItems: 2 });
+
+            // Page 1 unaffected; page 2 simply shrank to {t3}. No gap, no dup.
+            expect(ids(page1.page)).toEqual(["t5", "t1"]);
+            expect(ids(page2.page)).toEqual(["t3"]);
+
+            const flat = [...ids(page1.page), ...ids(page2.page)];
+
+            expect(flat).toEqual(["t5", "t1", "t3"]);
+        });
+
+        it("a bounded final page composes with .order(desc) and .filter()", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            // Descending p1 feed: t3, t2, t1, t5. Page 1 = [t3, t2].
+            const first = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .order("desc")
+                .paginate({ numItems: 2 });
+
+            const bounded = await writer
+                .query("todos")
+                .withIndex("by_project_seq", (q) => q.eq("projectId", "p1"))
+                .order("desc")
+                .filter((document) => document["archived"] === false)
+                .paginate({ endCursor: first.continueCursor, numItems: 2 });
+
+            // (null, C1] descending with the archived filter: t3, t2 both pass.
+            expect(ids(bounded.page)).toEqual(["t3", "t2"]);
+            expect(bounded.isDone).toBe(true);
+        });
+    });
+
     describe("reader.paginate — with .filter()", () => {
         it("applies the in-memory predicate while keeping the cursor on a returned row", async () => {
             expect.assertions(6);
