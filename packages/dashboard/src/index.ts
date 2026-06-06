@@ -38,6 +38,8 @@ export type { FunctionRunnerProps } from "./function-runner.js";
 export { FunctionRunner } from "./function-runner.js";
 export type { GlobalDataBrowserProps } from "./global-data-browser.js";
 export { GlobalDataBrowser } from "./global-data-browser.js";
+export type { HealthPanelProps } from "./health-panel.js";
+export { HealthPanel } from "./health-panel.js";
 export type { DashboardCatalogs, MessageId, TFunction } from "./i18n-context.js";
 export { createDashboardI18n, dashboardI18n, DEFAULT_LOCALE, useT } from "./i18n-context.js";
 export type { DashboardI18nProviderProps } from "./i18n-provider.js";
