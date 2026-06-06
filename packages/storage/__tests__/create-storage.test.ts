@@ -37,6 +37,13 @@ const fakeBucket = (): R2BucketLike & { deletes: string[]; puts: { body: unknown
                 text: async () => "ok",
             } satisfies R2ObjectBodyLike;
         }),
+        head: vi.fn<NonNullable<R2BucketLike["head"]>>(async (key) => {
+            if (key === "missing") {
+                return null;
+            }
+
+            return fakeObject(key);
+        }),
         list: vi.fn<R2BucketLike["list"]>(async (options) => {
             return {
                 cursor: options?.cursor ? undefined : "next-cursor",
@@ -139,6 +146,107 @@ describe("createStorage", () => {
         await storage.delete("k");
 
         expect(bucket.deletes).toEqual(["k"]);
+    });
+
+    it("getMetadata() returns body-free metadata from a HEAD, including custom metadata", async () => {
+        expect.assertions(6);
+
+        const bucket = fakeBucket();
+
+        vi.spyOn(bucket, "head").mockImplementation(async (key) => {
+            if (key === "missing") {
+                return null;
+            }
+
+            return {
+                customMetadata: { uploadedBy: "alice" },
+                etag: "etag-1",
+                httpMetadata: { contentType: "image/png" },
+                key,
+                size: 42,
+                uploaded: new Date(1_700_000_000_000),
+            } satisfies R2ObjectLike;
+        });
+
+        const storage = createStorage({ bucket });
+
+        const meta = await storage.getMetadata("avatars/alice.png");
+
+        expect(meta).toEqual({
+            contentType: "image/png",
+            customMetadata: { uploadedBy: "alice" },
+            key: "avatars/alice.png",
+            sha256: undefined,
+            size: 42,
+            uploaded: 1_700_000_000_000,
+        });
+        expect(bucket.head).toHaveBeenCalledWith("avatars/alice.png");
+        // HEAD must not pull the body — `get` is never touched on the found path.
+        expect(bucket.get).not.toHaveBeenCalled();
+
+        const missing = await storage.getMetadata("missing");
+
+        expect(missing).toBeNull();
+
+        // A bad key is rejected before any HEAD round-trip.
+        await expect(storage.getMetadata("../escape")).rejects.toThrow(/path component/);
+        await expect(storage.getMetadata("")).rejects.toThrow(/non-empty/);
+    });
+
+    it("getMetadata() derives a hex sha256 from R2 checksums", async () => {
+        expect.assertions(1);
+
+        const checksum = new Uint8Array([0xde, 0xad, 0xbe, 0xef]).buffer;
+        const bucket = fakeBucket();
+
+        vi.spyOn(bucket, "head").mockImplementation(async (key) => {
+            return {
+                checksums: { sha256: checksum },
+                etag: "e",
+                key,
+                size: 4,
+            };
+        });
+
+        const storage = createStorage({ bucket });
+
+        const meta = await storage.getMetadata("uploads/x.bin");
+
+        expect(meta?.sha256).toBe("deadbeef");
+    });
+
+    it("getMetadata() falls back to a 0-length ranged GET when the bucket has no head()", async () => {
+        expect.assertions(3);
+
+        const bucket = fakeBucket();
+
+        // No `head` on this double — exercises the ranged-GET fallback path.
+        delete bucket.head;
+
+        vi.spyOn(bucket, "get").mockImplementation(async (key) => {
+            if (key === "missing") {
+                return null;
+            }
+
+            return {
+                ...fakeObject(key),
+                arrayBuffer: async () => new ArrayBuffer(0),
+                body: null,
+                size: 7,
+                text: async () => "",
+            } satisfies R2ObjectBodyLike;
+        });
+
+        const storage = createStorage({ bucket });
+
+        const meta = await storage.getMetadata("hello.txt");
+
+        expect(meta).toMatchObject({ contentType: "text/plain", key: "hello.txt", size: 7 });
+        expect(bucket.get).toHaveBeenCalledWith("hello.txt", { range: { length: 0 } });
+
+        const missing = await storage.getMetadata("missing");
+
+        expect(missing).toBeNull();
     });
 
     it("list() returns objects + cursor", async () => {

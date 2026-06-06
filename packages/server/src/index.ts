@@ -87,6 +87,7 @@ export type {
     SearchIndexDefinition,
     ShardMode,
     Storage,
+    StorageMetadata,
     TableDefinition,
     TableReader,
     TableVectorIndex,

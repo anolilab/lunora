@@ -1,5 +1,5 @@
 import { buildSignedUrl } from "./signed-url.js";
-import type { CirrusStorageOptions, ListOptions, R2ObjectBodyLike, R2ObjectLike, R2RangeLike, SignedUrlOptions, Storage, UploadOptions } from "./types.js";
+import type { CirrusStorageOptions, ListOptions, ObjectMetadata, R2ObjectBodyLike, R2ObjectLike, R2RangeLike, SignedUrlOptions, Storage, UploadOptions } from "./types.js";
 
 /** R2's documented key-length ceiling. */
 const MAX_KEY_LENGTH = 1024;
@@ -87,6 +87,24 @@ const withSha256 = <T extends R2ObjectLike>(object: T): T => {
             return property === "sha256" || property === "sha256Base64" || Reflect.has(target, property);
         },
     });
+};
+
+/**
+ * Project an {@link R2ObjectLike} (from `head()` or a ranged `get()`) into the
+ * flat, body-free {@link ObjectMetadata} shape. `sha256` is derived from R2's
+ * checksum when present; `uploaded` is normalised from R2's `Date` to epoch ms.
+ */
+const toMetadata = (object: R2ObjectLike): ObjectMetadata => {
+    const raw = object.checksums?.sha256;
+
+    return {
+        contentType: object.httpMetadata?.contentType,
+        customMetadata: object.customMetadata,
+        key: object.key,
+        sha256: raw === undefined ? undefined : toHex(raw),
+        size: object.size,
+        uploaded: object.uploaded === undefined ? undefined : object.uploaded.getTime(),
+    };
 };
 
 /** Trailing-slash trimmer for `publicBaseUrl` — a linear scan (no regex backtracking). */
@@ -222,6 +240,23 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         await options.bucket.delete(key);
     };
 
+    const getMetadata = async (key: string): Promise<ObjectMetadata | null> => {
+        validateKey(key);
+
+        // Prefer a true HEAD (no body transfer) when the binding exposes one.
+        // Fall back to a 0-length ranged GET (`{ length: 0 }`) so we still avoid
+        // streaming the body when running against a `head`-less double or runtime.
+        if (options.bucket.head) {
+            const head = await options.bucket.head(key);
+
+            return head && toMetadata(head);
+        }
+
+        const object = await options.bucket.get(key, { range: { length: 0 } });
+
+        return object && toMetadata(object);
+    };
+
     const list = async (prefix?: string, listOptions: ListOptions = {}): Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }> => {
         // `prefix` is intentionally permissive: it's read-only and a malformed
         // value just produces an empty result. We still reject NUL bytes since
@@ -290,5 +325,5 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
     const store = async (key: string, body: ReadableStream | ArrayBuffer | Blob, storeOptions: UploadOptions = {}): Promise<{ etag: string; key: string }> =>
         upload(key, body, storeOptions);
 
-    return { delete: deleteObject, download, generateUploadUrl, getSignedUrl, getUrl, list, store, upload };
+    return { delete: deleteObject, download, generateUploadUrl, getMetadata, getSignedUrl, getUrl, list, store, upload };
 };

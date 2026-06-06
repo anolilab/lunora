@@ -1292,6 +1292,9 @@ const storageStub = {
     download: async () => {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
+    getMetadata: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
+    },
     getSignedUrl: async () => {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },

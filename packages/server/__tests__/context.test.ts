@@ -19,6 +19,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
         // both `QueryCtx["storage"]` and `MutationCtx["storage"]`.
         const storage: ReadOnlyStorage = {
             download: async (_key) => null,
+            getMetadata: async (_key) => null,
             getSignedUrl: async (key, options) => `signed://${key}?expires=${String(options?.expiresInSeconds ?? 60)}`,
             getUrl: (key) => `https://cdn.example.com/${key}`,
         };
@@ -64,6 +65,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
 
         const storage: ReadOnlyStorage = {
             download: async () => null,
+            getMetadata: async () => null,
             getSignedUrl: async (key, options) => {
                 calls.push({ expiresInSeconds: options?.expiresInSeconds, key });
 

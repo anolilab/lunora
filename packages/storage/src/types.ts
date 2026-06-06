@@ -13,6 +13,14 @@ export type R2RangeLike = { length: number; offset?: number } | { length?: numbe
 export interface R2BucketLike {
     delete: (key: string) => Promise<void>;
     get: (key: string, options?: { range?: R2RangeLike }) => Promise<R2ObjectBodyLike | null>;
+
+    /**
+     * Fetch an object's metadata without its body (R2 HEAD). Returns `null` when
+     * the object is absent. Declared optional so existing test doubles that only
+     * implement `get`/`put`/`list`/`delete` still satisfy the type; callers that
+     * need metadata fall back to a 0-length ranged `get()` when `head` is absent.
+     */
+    head?: (key: string) => Promise<R2ObjectLike | null>;
     list: (options?: { cursor?: string; delimiter?: string; limit?: number; prefix?: string }) => Promise<{
         cursor?: string;
         objects: R2ObjectLike[];
@@ -51,6 +59,13 @@ export interface R2ObjectLike {
      */
     sha256Base64?: string;
     size: number;
+
+    /**
+     * When the object was written. The real binding exposes this as a `Date`;
+     * declared optional so fakes that omit it still type-check.
+     * {@link Storage.getMetadata} normalises it to epoch ms.
+     */
+    uploaded?: Date;
 }
 
 export interface R2ObjectBodyLike extends R2ObjectLike {
@@ -100,6 +115,26 @@ export interface SignedUrlOptions {
     method?: "GET" | "PUT";
 }
 
+/**
+ * Per-object metadata returned by {@link Storage.getMetadata} — a flat,
+ * body-free projection of {@link R2ObjectLike}. Mirrors the shape Convex
+ * surfaces for `ctx.storage.getMetadata` / the `_storage` system table.
+ */
+export interface ObjectMetadata {
+    /** The object's `Content-Type` (R2 `httpMetadata.contentType`), if recorded. */
+    contentType?: string;
+    /** Custom metadata set at upload time (R2 `customMetadata`), if any. */
+    customMetadata?: Record<string, string>;
+    /** The object's key. */
+    key: string;
+    /** Hex-encoded SHA-256 of the body, when R2 carries a checksum. */
+    sha256?: string;
+    /** Body length in bytes. */
+    size: number;
+    /** When the object was last written (epoch ms), when R2 reports it. */
+    uploaded?: number;
+}
+
 export interface Storage {
     delete: (key: string) => Promise<void>;
 
@@ -116,6 +151,15 @@ export interface Storage {
      * built on {@link Storage.getSignedUrl} with `method: "PUT"`.
      */
     generateUploadUrl: (key: string, options?: { contentType?: string; expiresInSeconds?: number }) => Promise<string>;
+
+    /**
+     * Read a stored object's metadata (size, content-type, sha256, upload time,
+     * custom metadata) without fetching its body. Returns `null` when the object
+     * is absent. Backed by an R2 HEAD (`bucket.head`) when available, falling
+     * back to a 0-length ranged `get()` otherwise. Mirrors Convex's
+     * `ctx.storage.getMetadata`.
+     */
+    getMetadata: (key: string) => Promise<ObjectMetadata | null>;
     getSignedUrl: (key: string, options?: SignedUrlOptions) => Promise<string>;
     getUrl: (key: string) => string;
     list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }>;

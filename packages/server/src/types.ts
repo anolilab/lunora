@@ -572,6 +572,27 @@ interface TriggerBuilder<Shape extends Record<string, Validator> = Record<string
 }
 
 /**
+ * Per-file metadata returned by {@link ReadOnlyStorage.getMetadata}. A clean
+ * public mirror of `@cirrus/storage`'s `ObjectMetadata` — re-declared here so
+ * the ctx surface carries no dependency on the storage package's types. Matches
+ * the columns Convex surfaces for `ctx.storage.getMetadata` / `_storage`.
+ */
+interface StorageMetadata {
+    /** The object's `Content-Type`, when recorded. */
+    contentType?: string;
+    /** Custom metadata set at upload time, if any. */
+    customMetadata?: Record<string, string>;
+    /** The object's key. */
+    key: string;
+    /** Hex-encoded SHA-256 of the body, when R2 carries a checksum. */
+    sha256?: string;
+    /** Body length in bytes. */
+    size: number;
+    /** When the object was last written (epoch ms), when reported. */
+    uploaded?: number;
+}
+
+/**
  * Read-only projection of `Storage` exposed on `QueryCtx` / `MutationCtx`.
  *
  * Queries are pure reads, and mutations run inside a transactional scope —
@@ -584,6 +605,13 @@ interface TriggerBuilder<Shape extends Record<string, Validator> = Record<string
 interface ReadOnlyStorage {
     /** Fetch the body of an existing object. Returns `null` when absent. */
     download: (key: string) => Promise<ReadableStream | null>;
+
+    /**
+     * Read a file's metadata (size, content-type, sha256, upload time, custom
+     * metadata) without fetching its body. Returns `null` when the object is
+     * absent. Mirrors Convex's `ctx.storage.getMetadata`.
+     */
+    getMetadata: (key: string) => Promise<StorageMetadata | null>;
     /** Resolve a short-lived signed URL for an existing object. */
     getSignedUrl: (key: string, options?: { expiresInSeconds?: number }) => Promise<string>;
     /** Public URL pointing at the configured base for `key`. */
@@ -804,6 +832,7 @@ export type {
     SearchIndexDefinition,
     ShardMode,
     Storage,
+    StorageMetadata,
     TableDefinition,
     TableReader,
     TableVectorIndex,
