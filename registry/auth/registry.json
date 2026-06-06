@@ -1,0 +1,26 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "auth",
+    "title": "Auth",
+    "description": "Cookie-session authentication for Cirrus — email/password sign-up/sign-in on top of @cirrus/auth (a thin wrapper over better-auth), with the auth instance and request handler wired into your project.",
+    "docs": "Mount handleAuthRequest in your Worker entry (see the README), set BETTER_AUTH_SECRET (a 32+ char secret — `openssl rand -base64 32`) and BETTER_AUTH_URL, then apply better-auth's schema to your D1 database. In dev, ensureMigrated(auth) auto-applies it; in production prefer compileMigrationsSql(auth.options) piped to `wrangler d1 execute`.",
+    "requires": [],
+    "deps": {
+        "@cirrus/auth": "workspace:*",
+        "@cirrus/server": "workspace:*"
+    },
+    "envVars": [
+        {
+            "name": "BETTER_AUTH_SECRET",
+            "description": "Encryption secret for better-auth sessions (min 32 chars). Generate with `openssl rand -base64 32`.",
+            "secret": true
+        },
+        {
+            "name": "BETTER_AUTH_URL",
+            "description": "Public base URL of your app, used by better-auth for callbacks and cookies.",
+            "value": "http://localhost:8787",
+            "secret": false
+        }
+    ],
+    "files": [{ "from": "index.ts", "to": "cirrus/auth/index.ts", "merge": "create-or-skip" }]
+}

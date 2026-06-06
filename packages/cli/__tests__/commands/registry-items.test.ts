@@ -86,6 +86,20 @@ describe("shipped registry items", () => {
         expect(result.code).toBe(0);
     });
 
+    it("array bindings (r2_buckets) merge across items instead of overwriting", async () => {
+        expect.assertions(2);
+
+        // storage + backup each contribute an r2_buckets entry; adding both must
+        // keep both bindings (the second must not clobber the first).
+        await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: ["storage"], yes: true });
+        await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: ["backup"], yes: true });
+
+        const wrangler = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+        expect(wrangler).toContain("UPLOADS");
+        expect(wrangler).toContain("BACKUP_BUCKET");
+    });
+
     it("`list` reads the catalog and reports every item", async () => {
         // eslint-disable-next-line vitest/prefer-expect-assertions -- one assertion per discovered item; data-driven, so not a literal
         expect.assertions(itemNames.length);

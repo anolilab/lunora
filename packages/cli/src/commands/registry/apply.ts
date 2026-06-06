@@ -154,7 +154,7 @@ const applyBindings = async (bindings: ReadonlyArray<RegistryBinding>, projectRo
         return [];
     }
 
-    const { applyEdits, modify } = await import("jsonc-parser");
+    const { applyEdits, modify, parse } = await import("jsonc-parser");
 
     const candidates = ["wrangler.jsonc", "wrangler.json"];
     const wranglerPath = candidates.map((candidate) => join(projectRoot, candidate)).find((candidate) => existsSync(candidate));
@@ -168,8 +168,43 @@ const applyBindings = async (bindings: ReadonlyArray<RegistryBinding>, projectRo
     let text = readFileSync(wranglerPath, "utf8");
     const applied: string[] = [];
 
+    /** Narrowing guard that yields `unknown[]` (not `any[]`) from `Array.isArray`. */
+    const isUnknownArray = (value: unknown): value is unknown[] => Array.isArray(value);
+
+    /** Read the current value at a jsonc key path (comments tolerated). */
+    const readAt = (path: ReadonlyArray<string>): unknown => {
+        let node: unknown = parse(text);
+
+        for (const segment of path) {
+            if (typeof node !== "object" || node === null) {
+                return undefined;
+            }
+
+            node = (node as Record<string, unknown>)[segment];
+        }
+
+        return node;
+    };
+
     for (const binding of bindings) {
-        const edits = modify(text, [...binding.path], binding.value, {
+        // `RegistryBinding.value` is `unknown`; destructure then narrow below.
+        let { value } = binding;
+
+        // Array bindings (e.g. `r2_buckets`) MERGE into any existing array rather
+        // than replacing it — otherwise adding `storage` then `backup` (or adding
+        // into a project that already has buckets) would silently drop the
+        // earlier entries. Dedupe by structural equality so re-runs are idempotent.
+        if (isUnknownArray(value)) {
+            const existing = readAt(binding.path);
+
+            if (isUnknownArray(existing)) {
+                const seen = new Set(existing.map((entry) => JSON.stringify(entry)));
+                // `value` is the narrowed incoming array; evaluated before reassignment.
+                value = [...existing, ...value.filter((entry) => !seen.has(JSON.stringify(entry)))];
+            }
+        }
+
+        const edits = modify(text, [...binding.path], value, {
             formattingOptions: { insertSpaces: true, tabSize: 4 },
         });
 

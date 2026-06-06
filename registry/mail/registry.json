@@ -1,0 +1,26 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "mail",
+    "title": "Mail",
+    "description": "Transactional email for Cirrus — a sendEmail action (plus a fire-and-forget queueEmail) built on @cirrus/mail's Resend transport, with CR/LF + header-injection-safe address handling.",
+    "docs": "Set RESEND_API_KEY (wrangler secret put RESEND_API_KEY) and MAIL_FROM in your env/.dev.vars, then re-export from cirrus/index.ts so codegen emits api.mail.sendEmail. Drop React email templates next to cirrus/mail/index.ts and pass them via the `react` option. queueEmail needs a Cloudflare Queue binding — see the README before enabling it.",
+    "requires": [],
+    "deps": {
+        "@cirrus/mail": "workspace:*",
+        "@cirrus/server": "workspace:*"
+    },
+    "envVars": [
+        {
+            "name": "RESEND_API_KEY",
+            "description": "Resend API key for the default mail transport. Create one at https://resend.com/api-keys.",
+            "secret": true
+        },
+        {
+            "name": "MAIL_FROM",
+            "description": "Default sender address. Use a verified Resend domain; `Name <addr@host>` or bare `addr@host`.",
+            "value": "Acme <noreply@acme.test>",
+            "secret": false
+        }
+    ],
+    "files": [{ "from": "mail.ts", "to": "cirrus/mail/index.ts", "merge": "create-or-skip" }]
+}

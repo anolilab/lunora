@@ -1,0 +1,24 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "backup",
+    "title": "Backup",
+    "description": "Scheduled, in-deployment snapshots — a cron-driven internalAction that exports a configured set of tables to a timestamped NDJSON object in a dedicated R2 bucket. The point-in-time-recovery building block; pairs with `cirrus backup restore`.",
+    "docs": "Register the snapshot on a schedule in cirrus/crons.ts: `crons.daily(\"backup snapshot\", { hourUTC: 3, minuteUTC: 0 }, internal.backup.snapshot, {})`, then `cirrus codegen`. Edit the TABLES list in cirrus/backup/index.ts to cover every table you want backed up (codegen cannot enumerate tables for you). Add the BACKUP_BUCKET r2_buckets binding (added to wrangler.jsonc on install) and set retention yourself. Restore with `cirrus backup restore <id|file>`.",
+    "requires": [],
+    "deps": {
+        "@cirrus/server": "workspace:*",
+        "@cirrus/storage": "workspace:*"
+    },
+    "bindings": [
+        {
+            "path": ["r2_buckets"],
+            "value": [
+                {
+                    "binding": "BACKUP_BUCKET",
+                    "bucket_name": "cirrus-backups"
+                }
+            ]
+        }
+    ],
+    "files": [{ "from": "backup.ts", "to": "cirrus/backup/index.ts", "merge": "create-or-skip" }]
+}

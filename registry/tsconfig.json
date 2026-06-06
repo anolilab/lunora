@@ -6,8 +6,11 @@
         "moduleResolution": "bundler",
         "types": ["node"],
         "paths": {
-            "@cirrus/*": ["../packages/*/dist/index.d.ts"]
+            "@cirrus/*": ["../packages/*/dist/index.d.ts"],
+            "better-auth/plugins/generic-oauth": ["../packages/auth/node_modules/better-auth/dist/plugins/generic-oauth/index.d.mts"]
         }
     },
+    "// exclude": "Only cron-registration templates are excluded: they import `./_generated/api`, a *relative* path that exists only after codegen in the user's project and which ambient module declarations cannot stub. (The auth provider snippets import `better-auth`, which IS checkable — it's mapped above to the workspace copy — so they stay in.)",
+    "exclude": ["**/node_modules/**", "crons/crons.ts"],
     "include": ["**/*.ts"]
 }
