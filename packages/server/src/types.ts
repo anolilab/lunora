@@ -688,19 +688,20 @@ interface MutationCtx {
     readonly db: DatabaseWriter;
 
     /**
-     * Compose a submutation in-process, reusing this mutation's transaction and
-     * `db` writer. Executes the referenced mutation's handler directly — no
-     * fresh DO RPC — so its writes land in the SAME transaction: if the
-     * submutation throws, the whole enclosing mutation rolls back atomically.
-     * Mirrors Convex's `ctx.runMutation`.
+     * Compose a submutation in-process, reusing this mutation's `db` writer.
+     * Executes the referenced mutation's handler directly — no fresh DO RPC —
+     * so its writes apply through the same shard invocation as the enclosing
+     * mutation. Note: writes are not wrapped in a SQL transaction, so a partial
+     * failure does not roll back earlier writes (the same as a top-level
+     * mutation). Mirrors Convex's `ctx.runMutation`.
      */
     readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
 
     /**
-     * Compose a read-only subquery in-process, reusing this mutation's
-     * transaction and `db`. Executes the referenced query's handler directly —
-     * no fresh DO RPC — so it observes this mutation's in-flight writes. Mirrors
-     * Convex's `ctx.runQuery`.
+     * Compose a read-only subquery in-process, reusing this mutation's `db`.
+     * Executes the referenced query's handler directly — no fresh DO RPC — so
+     * it observes this mutation's in-flight writes. Mirrors Convex's
+     * `ctx.runQuery`.
      */
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
