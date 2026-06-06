@@ -301,6 +301,21 @@ describe("shardDO admin data migrations", () => {
         expect(versions()).toEqual([1, 1, 1]);
     });
 
+    it("records an audit entry after a successful runMigration", async () => {
+        expect.assertions(3);
+
+        const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, { id: "bump-version" }));
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAuditLog, {}));
+        const body = await response.json<{ result: { entries: { detail?: Record<string, unknown>; op: string; seq: number }[] } }>();
+
+        expect(response.status).toBe(200);
+        expect(body.result.entries).toHaveLength(1);
+        expect(body.result.entries[0]).toMatchObject({ detail: { changed: 3, processed: 3 }, op: "runMigration" });
+    });
+
     it("dryRun previews counts without rewriting rows", async () => {
         expect.assertions(3);
 

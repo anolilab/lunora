@@ -1,4 +1,6 @@
 export type {
+    AuditEntry,
+    AuditLogResult,
     CacheStats,
     ExportRow,
     FilterClause,
@@ -27,6 +29,8 @@ export type {
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS } from "./admin.js";
 export type { DashboardAppProps } from "./app.js";
 export { DashboardApp } from "./app.js";
+export type { AuditPanelProps } from "./audit-panel.js";
+export { AuditPanel } from "./audit-panel.js";
 export type { ConfirmButtonProps } from "./confirm-button.js";
 export { ConfirmButton } from "./confirm-button.js";
 export { default as ConnectionBadge } from "./connection-badge.js";

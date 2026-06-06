@@ -4,13 +4,14 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { ExportRow, ImportShardResult } from "./admin-export-import.js";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import.js";
+import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log.js";
 import type { CdcChange, SqlExec } from "./ctx-db.js";
 import { CDC_LOG_TABLE, readCdcChanges } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
 import { createDependencyTracker } from "./dependency-tracker.js";
-import type { FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
+import type { AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 import { LogBuffer } from "./log-buffer.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
@@ -1711,12 +1712,15 @@ abstract class ShardDO {
             }
 
             if (functionPath === ADMIN_FUNCTIONS.runMigration) {
-                const result = await this.runShardDataMigration(parseRunMigrationArgs(args));
+                const parsed = parseRunMigrationArgs(args);
+                const result = await this.runShardDataMigration(parsed);
 
                 // The migration rewrites rows through the writer, which records
                 // the touched tables; flush so live subscribers re-run against
                 // the new values. No-op on a dryRun (nothing was written).
                 await this.flushChangedTables();
+
+                this.recordAudit("runMigration", { id: parsed.id, detail: { changed: result.changed, direction: result.direction, dryRun: result.dryRun, processed: result.processed } });
 
                 return jsonResponse({ result }, 200);
             }
@@ -1743,15 +1747,20 @@ abstract class ShardDO {
                 // touched tables; flush so live subscribers re-run.
                 await this.flushChangedTables();
 
+                this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
+
                 return jsonResponse({ result }, 200);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.writeRow) {
-                const result = await this.runShardWrite(parseWriteRowArgs(args));
+                const parsed = parseWriteRowArgs(args);
+                const result = await this.runShardWrite(parsed);
 
                 // The write went through the writer, which records the touched
                 // table; flush so live subscribers re-run against the new value.
                 await this.flushChangedTables();
+
+                this.recordAudit("writeRow", { table: parsed.table, id: result.id ?? parsed.id, detail: { op: result.op } });
 
                 return jsonResponse({ result }, 200);
             }
@@ -1781,6 +1790,8 @@ abstract class ShardDO {
 
                 await this.flushChangedTables();
 
+                this.recordAudit("applyCdc", { detail: { applied: result.applied } });
+
                 return jsonResponse({ result }, 200);
             }
 
@@ -1788,6 +1799,21 @@ abstract class ShardDO {
         } catch (error: unknown) {
             return this.errorToResponse(error);
         }
+    }
+
+    /**
+     * Append one durable audit entry for a state-changing admin op that just
+     * succeeded, folding the acting user (from `getCurrentUserId`) into `detail`.
+     * Called only on the success path, so a rejected/validated op leaves no
+     * trace. Best-effort: the write happens after the op's own commit, so it
+     * never blocks or fails the response.
+     */
+    private recordAudit(op: string, fields: { detail?: Record<string, unknown>; id?: string; table?: string } = {}): void {
+        const sql = this.state.storage.sql as unknown as SqlExec;
+        const userId = this.getCurrentUserId();
+        const detail = userId === undefined ? fields.detail : { ...fields.detail, userId };
+
+        appendAuditEntry(sql, { detail, id: fields.id, op, table: fields.table, ts: Date.now() });
     }
 
     /**
@@ -1824,6 +1850,10 @@ abstract class ShardDO {
             return { result: this.collectFunctionStats(), tables: new Set([ADMIN_WILDCARD]) };
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.getAuditLog) {
+            return this.readAdminAuditLog(sql, args);
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.getLogs) {
             return { result: { entries: this.logs.entries() }, tables: new Set([ADMIN_WILDCARD]) };
         }
@@ -1846,6 +1876,20 @@ abstract class ShardDO {
 
         // eslint-disable-next-line unicorn/no-null -- `null` signals "not a recognized admin read", matching the subscription-outcome contract codegen subclasses implement
         return null;
+    }
+
+    /** Resolve a `getAuditLog` admin read, parsing the optional `limit`/`sinceSeq` cursor args and ensuring the reserved table first. */
+    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers and future per-instance state
+    private readAdminAuditLog(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        // Defensive: the table may not exist yet on a shard that has never
+        // recorded an admin op, so ensure it before the read.
+        ensureAuditTable(sql);
+
+        const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
+        const sinceSeq = typeof args["sinceSeq"] === "number" ? args["sinceSeq"] : undefined;
+        const result: AuditLogResult = { entries: readAuditLog(sql, { limit, sinceSeq }) };
+
+        return { result, tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /** Resolve a `readTablePage` admin read, parsing the loosely-typed args into the reader's options. */

@@ -18,6 +18,7 @@ const ADMIN_FUNCTIONS = {
     applyCdc: "__cirrus_admin__:applyCdc",
     cdcSync: "__cirrus_admin__:cdcSync",
     exportShard: "__cirrus_admin__:exportShard",
+    getAuditLog: "__cirrus_admin__:getAuditLog",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
@@ -35,6 +36,36 @@ const ADMIN_FUNCTIONS = {
 interface TableInfo {
     name: string;
     rowCount: number;
+}
+
+/**
+ * One recorded admin operation served by `__cirrus_admin__:getAuditLog`, sourced
+ * from the reserved `__cirrus_audit__` table (see `audit-log.ts`). Unlike the
+ * in-memory `getMetrics`/`getFunctionStats` counters, the audit log is durable —
+ * it survives hibernation/restart and is bounded only by a retention cap. `seq`
+ * is a monotonic per-shard cursor the dashboard pages through; `op` is the short
+ * op name (`writeRow`, `runMigration`, `importShard`, `applyCdc`); `table`/`id`
+ * are present when the op targets one; `detail` carries op-specific context
+ * (notably the acting `userId`).
+ */
+interface AuditEntry {
+    /** JSON extra context (acting user, op-specific counts, …); absent when none was recorded. */
+    detail?: Record<string, unknown>;
+    /** Primary key of the affected row, when the op targets one. */
+    id?: string;
+    /** Short op identifier, e.g. `writeRow`. */
+    op: string;
+    /** Monotonic per-shard cursor — strictly increasing, never reused. */
+    seq: number;
+    /** Affected table, when the op targets one. */
+    table?: string;
+    /** Epoch-ms the op was recorded. */
+    ts: number;
+}
+
+/** Payload of a `__cirrus_admin__:getAuditLog` call: the recorded entries, newest first. */
+interface AuditLogResult {
+    entries: AuditEntry[];
 }
 
 /**
@@ -386,4 +417,16 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
 };
 
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage };
-export type { FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, ReadTablePageOptions, TableIndexesResult, TableIndexInfo, TableInfo, TablePage };
+export type {
+    AuditEntry,
+    AuditLogResult,
+    FilterClause,
+    FilterOperator,
+    FunctionCallStat,
+    FunctionStatsResult,
+    ReadTablePageOptions,
+    TableIndexesResult,
+    TableIndexInfo,
+    TableInfo,
+    TablePage,
+};

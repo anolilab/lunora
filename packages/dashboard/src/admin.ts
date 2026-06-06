@@ -19,6 +19,7 @@ export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
  */
 export const ADMIN_FUNCTIONS = {
     exportShard: "__cirrus_admin__:exportShard",
+    getAuditLog: "__cirrus_admin__:getAuditLog",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
@@ -143,6 +144,28 @@ export interface LogEntry {
 /** Payload of a `__cirrus_admin__:getLogs` call: the buffered entries, newest first. */
 export interface LogsResult {
     entries: LogEntry[];
+}
+
+/**
+ * One recorded admin operation returned by `__cirrus_admin__:getAuditLog`,
+ * mirroring `@cirrus/do`'s `AuditEntry`. Unlike the in-memory logs, the audit
+ * log is durable and survives hibernation/restart. `seq` is a monotonic
+ * per-shard cursor; `op` the short op name (`writeRow`, `runMigration`,
+ * `importShard`, `applyCdc`); `table`/`id` are present when the op targets one;
+ * `detail` carries op-specific context (notably the acting `userId`).
+ */
+export interface AuditEntry {
+    detail?: Record<string, unknown>;
+    id?: string;
+    op: string;
+    seq: number;
+    table?: string;
+    ts: number;
+}
+
+/** Payload of a `__cirrus_admin__:getAuditLog` call: the recorded entries, newest first. */
+export interface AuditLogResult {
+    entries: AuditEntry[];
 }
 
 /** A user table plus its current row count. */

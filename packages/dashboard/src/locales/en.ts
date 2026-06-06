@@ -222,6 +222,16 @@ const MESSAGE_IDS = [
     "{count} entries evicted recently.",
     "Slowest call took {duration}.",
     "{rate} of calls failed.",
+    // Audit panel.
+    "Audit",
+    "A durable log of admin state-changing operations.",
+    "Filter audit log",
+    "filter op, table, id",
+    "No audit entries.",
+    "time",
+    "op",
+    "table",
+    "detail",
 ] as const;
 
 /** A known dashboard message id — one of the entries in {@link MESSAGE_IDS}. */

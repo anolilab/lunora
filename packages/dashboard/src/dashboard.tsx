@@ -13,6 +13,7 @@ import {
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo } from "react";
 
+import { AuditPanel } from "./audit-panel.js";
 import { Skeleton } from "./components/ui/skeleton.js";
 import { DataBrowser } from "./data-browser.js";
 import { ErrorBoundary } from "./error-boundary.js";
@@ -36,7 +37,7 @@ import type { FunctionDescriptor } from "./types.js";
 import { UsersPanel } from "./users-panel.js";
 
 /** Identifier for each built-in dashboard tab. */
-type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "health" | "insights" | "logs" | "metrics" | "migrations" | "schedule" | "schema" | "users";
+type DashboardTab = "audit" | "data" | "export" | "files" | "functions" | "globals" | "health" | "insights" | "logs" | "metrics" | "migrations" | "schedule" | "schema" | "users";
 
 interface DashboardProps {
     /**
@@ -95,6 +96,7 @@ type NavGroupKey = "auth" | "database" | "logic" | "observability" | "storage";
  * from the active/hover nav state in the scoped stylesheet.
  */
 const TAB_ICONS: Record<DashboardTab, ReactNode> = {
+    audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
     data: (
         <path d="M5 6c0-1.4 3.1-2.5 7-2.5s7 1.1 7 2.5-3.1 2.5-7 2.5S5 7.4 5 6Zm0 0v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
     ),
@@ -120,7 +122,7 @@ const NAV_GROUPS: ReadonlyArray<{ readonly key: NavGroupKey; readonly tabs: Read
     { key: "logic", tabs: ["functions", "migrations", "schedule"] },
     { key: "storage", tabs: ["files", "export"] },
     { key: "auth", tabs: ["users"] },
-    { key: "observability", tabs: ["health", "insights", "metrics", "logs"] },
+    { key: "observability", tabs: ["health", "insights", "metrics", "logs", "audit"] },
 ];
 
 const TabIcon = ({ tab }: { readonly tab: DashboardTab }): ReactElement => (
@@ -139,7 +141,7 @@ const TabIcon = ({ tab }: { readonly tab: DashboardTab }): ReactElement => (
 );
 
 /** Flat list of every tab, in sidebar order; drives the route table. */
-const TABS = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "health", "insights", "metrics", "logs"] as const;
+const TABS = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "health", "insights", "metrics", "logs", "audit"] as const;
 
 /** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `data`. */
 const tabFromPathname = (pathname: string): DashboardTab => {
@@ -166,6 +168,7 @@ const DashboardLayout = (): ReactElement => {
     // locale changes but aren't rebuilt on every unrelated render.
     const tabLabel = useMemo<Record<DashboardTab, string>>(() => {
         return {
+            audit: t("Audit"),
             data: t("Data"),
             export: t("Export / Import"),
             files: t("Files"),
@@ -195,6 +198,7 @@ const DashboardLayout = (): ReactElement => {
     // One-line section descriptions for the page header.
     const tabDescription = useMemo<Record<DashboardTab, string>>(() => {
         return {
+            audit: t("A durable log of admin state-changing operations."),
             data: t("Browse and edit rows in your shard tables."),
             export: t("Export a shard to NDJSON, or import rows from it."),
             files: t("Browse objects in your R2 storage buckets."),
@@ -321,6 +325,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
     const rootRoute = createRootRoute({ component: DashboardLayout });
 
     const panels: Record<DashboardTab, ReactElement> = {
+        audit: <AuditPanel initialShardKey={initialShardKey} />,
         data: <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,

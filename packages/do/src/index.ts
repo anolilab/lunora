@@ -82,7 +82,7 @@ export type {
 export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration.js";
 export type { DependencyTracker } from "./dependency-tracker.js";
 export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker.js";
-export type { FunctionCallStat, FunctionStatsResult, ReadTablePageOptions, TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "./introspect.js";
+export type { AuditEntry, AuditLogResult, FunctionCallStat, FunctionStatsResult, ReadTablePageOptions, TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "./introspect.js";
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 export type { LogEntry, LogLevel } from "./log-buffer.js";
 export { LogBuffer } from "./log-buffer.js";
