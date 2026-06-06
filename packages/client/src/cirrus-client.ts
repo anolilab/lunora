@@ -1,4 +1,5 @@
 import createInMemoryBookmarkStorage from "./bookmark.js";
+import { applyDelta, isMutationDelta } from "./delta-merge.js";
 import type { OptimisticUpdate } from "./local-store.js";
 import { createLocalStore } from "./local-store.js";
 import type { QueuedMutation } from "./offline-queue.js";
@@ -1642,7 +1643,7 @@ class CirrusClient {
             return;
         }
 
-        const payload = "data" in message && message.data !== undefined ? message.data : message.delta;
+        const payload = this.resolveDataPayload(message, state);
 
         state.lastValue = payload;
         state.serverVersion += 1;
@@ -1654,6 +1655,40 @@ class CirrusClient {
                 /* user callback threw — ignore */
             }
         }
+    }
+
+    /**
+     * Resolve the value to publish for a `data`/`delta` frame.
+     *
+     * A `data` frame is an authoritative snapshot (the server re-execution path)
+     * and always replaces the cached value wholesale. A `delta` frame carrying a
+     * structured `MutationDelta` (the `broadcastDelta` row-change path) is
+     * merged incrementally into the cached list — preserving order, no dup/loss —
+     * so each subscription (including every paginated page) updates by delta
+     * rather than a full re-send. We fall back to full replacement when the
+     * delta isn't a recognisable row change, when there's no cached value yet,
+     * or when it can't be applied cleanly against the current cached shape.
+     */
+    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other message handlers; reads no shared client state
+    private resolveDataPayload(message: ServerDataMessage, state: SubscriptionState): unknown {
+        if ("data" in message && message.data !== undefined) {
+            return message.data;
+        }
+
+        const { delta } = message;
+
+        if (isMutationDelta(delta) && state.lastValue !== undefined) {
+            const merged = applyDelta(state.lastValue, delta);
+
+            if (merged !== undefined) {
+                return merged;
+            }
+        }
+
+        // Opaque delta payload (e.g. a full result the server sent verbatim), no
+        // cached base to merge into, or an unmergeable shape: replace wholesale,
+        // preserving the historical behaviour. The next snapshot reconciles.
+        return delta;
     }
 
     private handleCompleteMessage(id: string): void {

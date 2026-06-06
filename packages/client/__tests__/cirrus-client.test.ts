@@ -468,6 +468,100 @@ describe("cirrusClient", () => {
             // Now an unsubscribe should fire.
             expect(socket.sent.filter((s) => JSON.parse(s).type === "unsubscribe")).toHaveLength(1);
         });
+
+        it("merges structured row deltas into the cached list incrementally", () => {
+            expect.assertions(4);
+
+            const client = new CirrusClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = JSON.parse(socket.sent[0]!);
+
+            socket.receive({ id: sub.id, type: "ack" });
+
+            // Initial snapshot seeds the cached list.
+            socket.receive({ data: [{ _id: "a", text: "one" }], id: sub.id, type: "data" });
+            // Structured insert delta is merged (appended), not replaced.
+            socket.receive({ delta: { key: "b", op: "insert", row: { _id: "b", text: "two" }, table: "messages" }, id: sub.id, type: "delta" });
+            // Update in place, position preserved.
+            socket.receive({ delta: { key: "a", op: "update", row: { _id: "a", text: "ONE" }, table: "messages" }, id: sub.id, type: "delta" });
+            // Delete removes only the matching row.
+            socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: sub.id, type: "delta" });
+
+            expect(received[0]).toStrictEqual([{ _id: "a", text: "one" }]);
+            expect(received[1]).toStrictEqual([{ _id: "a", text: "one" }, { _id: "b", text: "two" }]);
+            expect(received[2]).toStrictEqual([{ _id: "a", text: "ONE" }, { _id: "b", text: "two" }]);
+            expect(received[3]).toStrictEqual([{ _id: "b", text: "two" }]);
+        });
+
+        it("a full data snapshot replaces the cached list wholesale", () => {
+            expect.assertions(1);
+
+            const client = new CirrusClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = JSON.parse(socket.sent[0]!);
+
+            socket.receive({ id: sub.id, type: "ack" });
+            socket.receive({ data: [{ _id: "a" }, { _id: "b" }], id: sub.id, type: "data" });
+            socket.receive({ delta: { key: "c", op: "insert", row: { _id: "c" }, table: "messages" }, id: sub.id, type: "delta" });
+            // A fresh snapshot wins outright, discarding the merged state.
+            socket.receive({ data: [{ _id: "z" }], id: sub.id, type: "data" });
+
+            expect(received.at(-1)).toStrictEqual([{ _id: "z" }]);
+        });
+
+        it("falls back to full replacement when a delta can't merge into the cached shape", () => {
+            expect.assertions(2);
+
+            const client = new CirrusClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = JSON.parse(socket.sent[0]!);
+
+            socket.receive({ id: sub.id, type: "ack" });
+            // Cached value is a scalar aggregate, not an id-keyed list.
+            socket.receive({ data: { count: 0 }, id: sub.id, type: "data" });
+            // A structured delta can't splice into a non-array; the opaque delta
+            // payload replaces the cached value (historical behaviour).
+            socket.receive({ delta: { key: "a", op: "insert", row: { _id: "a" }, table: "messages" }, id: sub.id, type: "delta" });
+
+            expect(received[0]).toStrictEqual({ count: 0 });
+            expect(received[1]).toStrictEqual({ key: "a", op: "insert", row: { _id: "a" }, table: "messages" });
+        });
     });
 
     // --- Offline queue ----------------------------------------------------------
