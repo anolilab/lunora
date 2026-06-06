@@ -11,10 +11,12 @@ import {
     internalQuery as internalQueryBase,
     mutation as mutationBase,
     query as queryBase,
+    v as vBase,
 } from "@cirrus/server";
 import type {
     ActionCtx as ActionCtxBase,
     ArgsValidator,
+    ColumnValidator,
     DatabaseReader,
     DatabaseWriter,
     InferArgs,
@@ -25,9 +27,9 @@ import type {
     RegisteredQuery,
 } from "@cirrus/server";
 
-import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, OrmReader, OrmWriter } from "./dataModel.js";
+import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
 
-export type { DataModel, Doc, Id } from "./dataModel.js";
+export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /**
  * Project-typed contexts. The base contexts from `@cirrus/server` are
@@ -85,6 +87,22 @@ export const internalAction = internalActionBase as unknown as <A extends ArgsVa
     args: A;
     handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
 }) => RegisteredAction<A, R>;
+
+/**
+ * The validator builder `v`, with `v.id(...)` constrained to THIS schema's
+ * table names — so the argument autocompletes and returns a precise
+ * `Id<"table">`. Identical to `@cirrus/server`'s `v` at runtime; the only
+ * difference is the tightened `id` type.
+ *
+ * Import `v` from here (`./_generated/server`) in your queries/mutations/actions
+ * to get table-name autocomplete. `cirrus/schema.ts` can't use it — it is the
+ * file that defines the table names, so they aren't known yet there; pass the
+ * names as string literals and the generated `Id<"table">` types still catch a
+ * typo wherever the id is used.
+ */
+export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
+    id: <T extends TableName>(table: T) => ColumnValidator<IdOfTable<T>, IdOfTable<T>>;
+};
 
 /**
  * Single registered function, narrowed to the shape `handleRpc` needs.

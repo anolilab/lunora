@@ -115,7 +115,7 @@ describe("run-codegen", () => {
         });
 
         it("emits server.ts with project-typed query/mutation/action wrappers", () => {
-            expect.assertions(15);
+            expect.assertions(16);
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -142,9 +142,13 @@ describe("run-codegen", () => {
             expect(result.generated.server).toContain("readonly db: DatabaseWriter & DatabaseWriterFacade;");
             // `Id` is pulled into the facade import because the typed `Caller` arg
             // types reference it (the `messages:*` functions take `Id<"channels">`).
+            // `Id as IdOfTable` + `TableName` back the typed `v.id(...)`.
             expect(result.generated.server).toContain(
-                'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, OrmReader, OrmWriter } from "./dataModel.js"',
+                'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js"',
             );
+            // The typed `v` whose `id(...)` autocompletes the schema's tables.
+            // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
+            expect(result.generated.server).toContain("id: <T extends TableName>(table: T) => ColumnValidator<IdOfTable<T>, IdOfTable<T>>;");
         });
 
         it("emits a typed createCaller covering public and internal functions", () => {
@@ -594,7 +598,7 @@ describe("run-codegen", () => {
             expect(output).not.toContain("const callRegistered");
 
             // Nothing references Doc/Id, so the facade import stays minimal (ORM types are always pulled in).
-            expect(output).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade, OrmReader, OrmWriter } from "./dataModel.js";');
+            expect(output).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";');
         });
     });
 

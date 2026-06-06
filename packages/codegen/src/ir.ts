@@ -135,7 +135,26 @@ export interface MigrationIR {
     table: string;
 }
 
+/**
+ * A single cron job lifted from a `cronJobs()` builder in `cirrus/crons.ts`.
+ * Mirrors `@cirrus/scheduler`'s `CronJob`: {@link CronJobIR.cron} is the compiled
+ * standard cron expression, {@link CronJobIR.functionPath} is the target
+ * `__cirrusRef` (`namespace:fn`), and {@link CronJobIR.args} is the static
+ * argument object passed at registration.
+ */
+export interface CronJobIR {
+    /** Static args object (source-text JSON), defaults to `{}`. */
+    args: Record<string, unknown>;
+    /** Compiled standard cron expression, e.g. `"0 9 * * *"`. */
+    cron: string;
+    /** Target function ref `namespace:fn`. */
+    functionPath: string;
+    /** Unique, human-readable job name. */
+    name: string;
+}
+
 export interface ProjectIR {
+    crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;
     migrations: ReadonlyArray<MigrationIR>;
     schema: SchemaIR;

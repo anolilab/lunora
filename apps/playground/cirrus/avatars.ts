@@ -1,4 +1,4 @@
-import { mutation, query, v } from "@cirrus/server";
+import { mutation, query, v } from "./_generated/server.js";
 
 /**
  * Issue a short-lived PUT signed URL so the browser can upload an avatar

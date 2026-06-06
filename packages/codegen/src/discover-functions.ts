@@ -35,12 +35,25 @@ interface DiscoveredFunction {
 }
 
 /**
+ * Module specifiers a registration factory (`query`/`mutation`/`action`/their
+ * `internal*` twins) may legitimately come from: the public `@cirrus/server`
+ * surface, or the generated `_generated/server` re-export. The latter is the
+ * Convex idiom — user code imports `query`/`mutation`/`v` from `_generated/server`
+ * so `v.id(...)` is table-name typed — and discovery must treat those imports as
+ * real registrations too, not local bindings.
+ */
+const GENERATED_SERVER_RE = /(?:^|\/)_generated\/server(?:\.js)?$/u;
+
+const isCirrusSurfaceModule = (moduleSpecifier: string): boolean =>
+    moduleSpecifier === "@cirrus/server" || GENERATED_SERVER_RE.test(moduleSpecifier);
+
+/**
  * Resolve a callee identifier through its import declaration, returning the
- * **imported** name (i.e. the name as exported from `@cirrus/server`). This
- * handles aliasing like `import { query as q }` where the call site uses `q`
- * but the registration kind is `query`. Returns `undefined` when the identifier
- * is not imported from `@cirrus/server`, so we don't accidentally pick up
- * a local `const query = ...`.
+ * **imported** name (i.e. the name as exported from `@cirrus/server` or the
+ * generated `_generated/server` re-export). This handles aliasing like
+ * `import { query as q }` where the call site uses `q` but the registration kind
+ * is `query`. Returns `undefined` when the identifier is not imported from the
+ * Cirrus surface, so we don't accidentally pick up a local `const query = ...`.
  */
 const resolveCalleeKind = (identifier: Identifier): string | undefined => {
     const symbol = identifier.getSymbol();
@@ -62,8 +75,9 @@ const resolveCalleeKind = (identifier: Identifier): string | undefined => {
         const importDeclaration = declaration.getImportDeclaration();
         const moduleSpecifier = importDeclaration.getModuleSpecifierValue();
 
-        // Only trust identifiers imported from the public Cirrus surface.
-        if (moduleSpecifier !== "@cirrus/server") {
+        // Only trust identifiers imported from the Cirrus surface (the public
+        // package or the generated `_generated/server` re-export).
+        if (!isCirrusSurfaceModule(moduleSpecifier)) {
             return undefined;
         }
 

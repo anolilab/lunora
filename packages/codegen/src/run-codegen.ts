@@ -3,10 +3,11 @@ import { dirname, join } from "node:path";
 
 import { Project } from "ts-morph";
 
+import discoverCrons from "./discover-crons.js";
 import { discoverFunctions } from "./discover-functions.js";
 import discoverMigrations from "./discover-migrations.js";
 import discoverSchema from "./discover-schema.js";
-import { emitApi, emitDataModel, emitDrizzleSchema, emitServer, emitShard } from "./emit.js";
+import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitServer, emitShard, emitWranglerCronTriggers } from "./emit.js";
 
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
@@ -65,11 +66,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const schema = discoverSchema(project, schemaPath);
     const functions = discoverFunctions(project, cirrusDirectory);
     const migrations = discoverMigrations(project, cirrusDirectory);
+    const crons = discoverCrons(project, cirrusDirectory);
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
     const serverContent = emitServer(functions, migrations);
     const shardContent = emitShard(schema);
+    const cronsContent = emitCrons(crons);
     const drizzleFiles = emitDrizzleSchema(schema);
 
     const outputDirectory = join(cirrusDirectory, "_generated");
@@ -83,13 +86,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
         writeIfChanged(join(outputDirectory, "server.ts"), serverContent);
         writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
+        writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);
         writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
         writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
     }
 
     return {
+        cronTriggers: emitWranglerCronTriggers(crons),
         generated: {
             api: apiContent,
+            crons: cronsContent,
             dataModel: dataModelContent,
             drizzleGlobal: drizzleFiles.global,
             drizzleShard: drizzleFiles.shard,
@@ -115,8 +121,15 @@ export interface CodegenOptions {
 }
 
 export interface CodegenResult {
+    /**
+     * Deduplicated cron schedules discovered from `cronJobs()` definitions —
+     * the array the vite plugin reconciles into `wrangler.jsonc`'s
+     * `triggers.crons`. Empty when the project declares no crons.
+     */
+    cronTriggers: ReadonlyArray<string>;
     generated: {
         api: string;
+        crons: string;
         dataModel: string;
         drizzleGlobal: string;
         drizzleShard: string;

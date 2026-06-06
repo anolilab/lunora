@@ -93,6 +93,32 @@ describe("discoverFunctions", () => {
             expect(byName.get("send")?.kind).toBe("mutation");
         });
 
+        it("discovers registrations imported from the generated `_generated/server` re-export", () => {
+            expect.hasAssertions();
+
+            // The Convex idiom: user code imports `query`/`mutation` from
+            // `./_generated/server` (so `v.id(...)` is table-name typed) rather
+            // than straight from `@cirrus/server`. Discovery must treat those as
+            // real registrations, otherwise every function silently vanishes
+            // from the generated `api.ts`.
+            writeFunction(
+                "messages.ts",
+                `
+            import { mutation, query } from "./_generated/server.js";
+            export const list = query({ args: {}, handler: () => null });
+            export const send = mutation({ args: {}, handler: () => null });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+
+            const byName = new Map(result.map((f) => [f.exportName, f]));
+
+            expect(byName.get("list")?.kind).toBe("query");
+            expect(byName.get("send")?.kind).toBe("mutation");
+        });
+
         it("ignores a local `const query` shadowing the @cirrus/server import", () => {
             expect.assertions(1);
 

@@ -92,6 +92,9 @@ const globalDbStub: DatabaseWriterLike = {
     insert: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
     },
+    normalizeId: () => {
+        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+    },
     patch: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
     },
@@ -363,7 +366,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return { applied: args.changes.length };
         }
 
-        private ensureMigrated(): void {
+        protected override ensureMigrated(): void {
             if (this.migrated) {
                 return;
             }
