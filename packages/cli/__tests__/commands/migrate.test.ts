@@ -56,7 +56,7 @@ describe("cirrus migrate", () => {
         });
 
         it("first run on a global table emits CREATE TABLE", () => {
-            expect.assertions(8);
+            expect.assertions(10);
 
             writeSchema(
                 `import { defineSchema, defineTable, v } from "@cirrus/server";
@@ -83,8 +83,10 @@ export const schema = defineSchema({
             const sql = readFileSync(result.migrationFile, "utf8");
 
             expect(sql).toContain('CREATE TABLE IF NOT EXISTS "users"');
+            expect(sql).toContain('"id" TEXT PRIMARY KEY');
+            expect(sql).toContain('"_creationTime" REAL NOT NULL');
             expect(sql).toContain('"email" TEXT NOT NULL');
-            expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "by_email"');
+            expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "users_by_email"');
 
             // Snapshot file is written next to the migration.
             const snapshotPath = join(workdir, "cirrus", "migrations", ".snapshot.json");

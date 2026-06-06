@@ -17,12 +17,18 @@ const snapshot = (tables: SchemaSnapshot["tables"]): SchemaSnapshot => {
 };
 
 describe("validatorKindToSqlType", () => {
-    it("maps boolean/number/bigint to INTEGER", () => {
-        expect.assertions(3);
+    it("maps boolean to INTEGER", () => {
+        expect.assertions(1);
 
         expect(validatorKindToSqlType("boolean")).toBe("INTEGER");
-        expect(validatorKindToSqlType("number")).toBe("INTEGER");
-        expect(validatorKindToSqlType("bigint")).toBe("INTEGER");
+    });
+
+    it("maps number/timestamp/date to REAL (matching the @cirrus/d1 dialect)", () => {
+        expect.assertions(3);
+
+        expect(validatorKindToSqlType("number")).toBe("REAL");
+        expect(validatorKindToSqlType("timestamp")).toBe("REAL");
+        expect(validatorKindToSqlType("date")).toBe("REAL");
     });
 
     it("maps bytes to BLOB", () => {
@@ -31,12 +37,13 @@ describe("validatorKindToSqlType", () => {
         expect(validatorKindToSqlType("bytes")).toBe("BLOB");
     });
 
-    it("maps string/id/literal to TEXT", () => {
-        expect.assertions(3);
+    it("maps string/id/literal/bigint to TEXT (bigint is serialized as a decimal string)", () => {
+        expect.assertions(4);
 
         expect(validatorKindToSqlType("string")).toBe("TEXT");
         expect(validatorKindToSqlType("id")).toBe("TEXT");
         expect(validatorKindToSqlType("literal")).toBe("TEXT");
+        expect(validatorKindToSqlType("bigint")).toBe("TEXT");
     });
 
     it("falls back to TEXT for compound kinds", () => {
@@ -49,12 +56,12 @@ describe("validatorKindToSqlType", () => {
 });
 
 describe("sQL renderers", () => {
-    it("renderCreateTable emits an `_id` primary key + columns", () => {
-        expect.assertions(6);
+    it("renderCreateTable emits the `id` + `_creationTime` framework columns + fields", () => {
+        expect.assertions(7);
 
         const sql = renderCreateTable({
             columns: {
-                age: { nullable: true, sqlType: "INTEGER" },
+                age: { nullable: true, sqlType: "REAL" },
                 email: { nullable: false, sqlType: "TEXT" },
             },
             indexes: {},
@@ -62,10 +69,12 @@ describe("sQL renderers", () => {
         });
 
         expect(sql).toContain('CREATE TABLE IF NOT EXISTS "users"');
-        expect(sql).toContain('"_id" TEXT PRIMARY KEY');
+        // Physical framework columns the @cirrus/d1 runtime reads/writes.
+        expect(sql).toContain('"id" TEXT PRIMARY KEY');
+        expect(sql).toContain('"_creationTime" REAL NOT NULL');
         expect(sql).toContain('"email" TEXT NOT NULL');
-        expect(sql).toContain('"age" INTEGER');
-        expect(sql).not.toMatch(/"age"\s+INTEGER\s+NOT NULL/u);
+        expect(sql).toContain('"age" REAL');
+        expect(sql).not.toMatch(/"age"\s+REAL\s+NOT NULL/u);
         expect(sql.trim().endsWith(";")).toBe(true);
     });
 
@@ -83,18 +92,26 @@ describe("sQL renderers", () => {
         expect(renderDropTable("users")).toBe('DROP TABLE IF EXISTS "users";');
     });
 
-    it("renderCreateIndex emits the named index", () => {
+    it("renderCreateIndex emits a `<table>_<name>` index over the physical columns", () => {
         expect.assertions(1);
 
         const sql = renderCreateIndex("users", { fields: ["email"], name: "by_email", unique: true });
 
-        expect(sql).toBe('CREATE UNIQUE INDEX IF NOT EXISTS "by_email" ON "users" ("email");');
+        expect(sql).toBe('CREATE UNIQUE INDEX IF NOT EXISTS "users_by_email" ON "users" ("email");');
     });
 
-    it("renderDropIndex emits DROP INDEX IF EXISTS", () => {
+    it("renderCreateIndex maps `_id`/`_creationTime` index fields to their physical columns", () => {
         expect.assertions(1);
 
-        expect(renderDropIndex("by_email")).toBe('DROP INDEX IF EXISTS "by_email";');
+        const sql = renderCreateIndex("posts", { fields: ["_creationTime"], name: "by_created", unique: false });
+
+        expect(sql).toBe('CREATE INDEX IF NOT EXISTS "posts_by_created" ON "posts" ("_creationTime");');
+    });
+
+    it("renderDropIndex emits DROP INDEX IF EXISTS for the physical index name", () => {
+        expect.assertions(1);
+
+        expect(renderDropIndex("users", "by_email")).toBe('DROP INDEX IF EXISTS "users_by_email";');
     });
 });
 

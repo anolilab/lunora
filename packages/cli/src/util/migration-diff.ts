@@ -20,7 +20,14 @@
  *
  * Any unsupported delta is surfaced via {@link SchemaDiff.unsupported} so the
  * caller can write a comment block into the migration file.
+ *
+ * The physical D1 dialect (column affinities, framework columns, index naming,
+ * identifier quoting) is NOT re-derived here — it's imported from the canonical
+ * `@cirrus/d1/dialect`, the same source the runtime's `runD1GlobalTableMigrations`
+ * uses, so a generated migration is byte-identical to what the runtime would
+ * auto-provision.
  */
+import { columnRef, frameworkColumnDdl, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "@cirrus/d1/dialect";
 
 /** Compact snapshot of a single global table — what we persist + diff. */
 interface TableSnapshot {
@@ -69,34 +76,15 @@ interface SchemaDiff {
     unsupported: ReadonlyArray<UnsupportedEntry>;
 }
 
-/** Map a Cirrus validator kind to a SQLite type affinity. */
-const validatorKindToSqlType = (kind: string): ColumnSnapshot["sqlType"] => {
-    switch (kind) {
-        case "bigint":
-        case "boolean":
-        case "number": {
-            return "INTEGER";
-        }
-        case "bytes": {
-            return "BLOB";
-        }
-        case "id":
-        case "literal":
-        case "string": {
-            return "TEXT";
-        }
-        // Default: store as TEXT (JSON-encoded) — matches how `@cirrus/d1`
-        // round-trips object/array/union values today.
-        default: {
-            return "TEXT";
-        }
-    }
-};
-
-const escapeIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+/**
+ * Map a Cirrus validator kind to a SQLite type affinity — the canonical
+ * `@cirrus/d1/dialect` mapping. Re-exported under this name because
+ * `schema-snapshot.ts` builds the persisted snapshot from it.
+ */
+const validatorKindToSqlType = (kind: string): ColumnSnapshot["sqlType"] => sqlAffinityForKind(kind);
 
 const renderColumnDefinition = (name: string, column: ColumnSnapshot): string => {
-    const parts = [escapeIdentifier(name), column.sqlType];
+    const parts = [quoteIdentifier(name), column.sqlType];
 
     if (!column.nullable) {
         parts.push("NOT NULL");
@@ -107,27 +95,25 @@ const renderColumnDefinition = (name: string, column: ColumnSnapshot): string =>
 
 /** Emit `CREATE TABLE` SQL for a new global table. */
 const renderCreateTable = (table: TableSnapshot): string => {
-    const id = `${escapeIdentifier("_id")} TEXT PRIMARY KEY`;
-    const columns = Object.entries(table.columns)
-        .map(([columnName, column]) => `    ${renderColumnDefinition(columnName, column)}`)
-        .join(",\n");
+    const columns = Object.entries(table.columns).map(([columnName, column]) => `    ${renderColumnDefinition(columnName, column)}`);
+    const lines = [...frameworkColumnDdl().map((column) => `    ${column}`), ...columns].join(",\n");
 
-    return `CREATE TABLE IF NOT EXISTS ${escapeIdentifier(table.name)} (\n    ${id}${columns.length > 0 ? `,\n${columns}` : ""}\n);`;
+    return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(table.name)} (\n${lines}\n);`;
 };
 
-const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${escapeIdentifier(tableName)};`;
+const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
 
 const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string =>
-    `ALTER TABLE ${escapeIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, column)};`;
+    `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, column)};`;
 
 const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
-    const fields = index.fields.map((field) => escapeIdentifier(field)).join(", ");
+    const fields = index.fields.map((field) => columnRef(field)).join(", ");
     const uniqueClause = index.unique ? "UNIQUE " : "";
 
-    return `CREATE ${uniqueClause}INDEX IF NOT EXISTS ${escapeIdentifier(index.name)} ON ${escapeIdentifier(tableName)} (${fields});`;
+    return `CREATE ${uniqueClause}INDEX IF NOT EXISTS ${physicalIndexName(tableName, index.name)} ON ${quoteIdentifier(tableName)} (${fields});`;
 };
 
-const renderDropIndex = (indexName: string): string => `DROP INDEX IF EXISTS ${escapeIdentifier(indexName)};`;
+const renderDropIndex = (tableName: string, indexName: string): string => `DROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)};`;
 
 /** Surface type/nullability changes on an existing column as unsupported deltas. */
 const diffExistingColumn = (tableName: string, columnName: string, old: ColumnSnapshot, column: ColumnSnapshot, unsupported: UnsupportedEntry[]): void => {
@@ -221,7 +207,7 @@ const diffIndexes = (
         if (next[indexName] === undefined) {
             entries.push({
                 kind: "dropIndex",
-                sql: renderDropIndex(indexName),
+                sql: renderDropIndex(tableName, indexName),
                 summary: `DROP INDEX ${indexName}`,
             });
         }

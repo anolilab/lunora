@@ -1,5 +1,3 @@
-import { pathToFileURL } from "node:url";
-
 import { boxen } from "@visulima/boxen";
 import { Cerebro } from "@visulima/cerebro";
 import { bold, cyan, dim } from "@visulima/colorize";
@@ -90,7 +88,7 @@ interface BuildCliResult {
  * options to the front of argv. We need to know which options take a value
  * so we can keep "option value" pairs together during the reorder.)
  */
-const BOOLEAN_OPTIONS: Set<string> = new Set<string>(["all", "allow-unsafe-source", "dry-run", "json", "no-vite", "prod", "remote", "yes"]);
+const BOOLEAN_OPTIONS: Set<string> = new Set<string>(["all", "allow-unsafe-source", "dry-run", "json", "no-codegen", "no-dashboard", "prod", "remote", "yes"]);
 
 const LEADING_DASHES = /^-+/u;
 
@@ -115,7 +113,7 @@ const optionTakesValue = (token: string): boolean => {
  * positional as their value.
  *
  * For example `["init", "my-app", "-t", "vite"]` becomes
- * `["init", "-t", "vite", "my-app"]`, while `["dev", "--no-vite", "--port", "1"]`
+ * `["init", "-t", "vite", "my-app"]`, while `["dev", "--no-dashboard", "--port", "1"]`
  * is unchanged.
  */
 interface ArgvBuckets {
@@ -247,24 +245,26 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.addCommand({
-        description: "Run the dev server (Vite + wrangler, or wrangler alone)",
+        description: "Run the dev stack: wrangler worker + dashboard + codegen watch",
         execute: async ({ options: parsed }) => {
-            const port = toNumberOrUndefined(parsed.port);
-
             const { runDevCommand } = await import("./commands/dev.js");
             const result = await runDevCommand({
+                codegen: parsed.noCodegen === true ? false : undefined,
                 cwd,
+                dashboard: parsed.noDashboard === true ? false : undefined,
                 logger,
-                noVite: parsed.noVite === true,
-                port,
+                port: toNumberOrUndefined(parsed.port),
+                workerPort: toNumberOrUndefined(parsed.workerPort),
             });
 
             exitCode.value = result.code;
         },
         name: "dev",
         options: [
-            { description: "Port for the dev server", name: "port", type: Number },
-            { description: "Skip the Vite frontend dev server", name: "no-vite", type: Boolean },
+            { description: "Dashboard server port (default 6173)", name: "port", type: Number },
+            { description: "wrangler dev port (default 8787)", name: "worker-port", type: Number },
+            { description: "Don't start the embedded dashboard server", name: "no-dashboard", type: Boolean },
+            { description: "Don't watch + regenerate codegen", name: "no-codegen", type: Boolean },
         ],
     });
 
@@ -711,7 +711,8 @@ Usage: cirrus <command> [options]
 Commands:
   init [name] [-t <template>]   Scaffold a new Cirrus project (templates: vite, standalone, tanstack-start, next)
        [--from <path>] [--source <src>]  Use a local templates dir or override the remote source
-  dev  [--port <n>] [--no-vite] Run the dev server (Vite + wrangler, or wrangler alone)
+  dev  [--port <n>] [--worker-port <n>]  Run the dev stack: wrangler worker + dashboard + codegen watch
+       [--no-dashboard] [--no-codegen]
   codegen                       Run codegen for cirrus/ functions and schema
   deploy [--env <name>]         Codegen, validate wrangler, then wrangler deploy
   logs [worker]                 Stream live logs from a deployed Worker via wrangler tail
@@ -793,38 +794,6 @@ const runCli = async (options: RunCliOptions = {}): Promise<number> => {
 
     return exitCode.value;
 };
-
-const isMain = (): boolean => {
-    const entry = process.argv[1];
-
-    if (!entry) {
-        return false;
-    }
-
-    try {
-        if (import.meta.url === pathToFileURL(entry).href) {
-            return true;
-        }
-    } catch {
-        /* pathToFileURL may throw for unusual argv[1] values — fall through */
-    }
-
-    // Fallback for edge cases (tsx loader, symlinked bin, etc).
-    return entry.endsWith("cli.ts") || entry.endsWith("cli.js") || entry.endsWith("cirrus.mjs");
-};
-
-if (isMain()) {
-    try {
-        const code = await runCli();
-
-        // eslint-disable-next-line unicorn/no-process-exit -- CLI entrypoint: propagate the resolved exit code to the shell
-        process.exit(code);
-    } catch (error: unknown) {
-        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-        // eslint-disable-next-line unicorn/no-process-exit -- CLI entrypoint: a top-level failure must exit non-zero
-        process.exit(1);
-    }
-}
 
 export type { CommandName, RunCliOptions };
 export { BOOLEAN_OPTIONS, COMMANDS, runCli, VERSION };

@@ -15,11 +15,4 @@ export default defineConfig({
         },
     },
     transformer,
-    validation: {
-        dependencies: {
-            unused: {
-                exclude: ["tsx"],
-            },
-        },
-    },
 }) as BuildConfig;

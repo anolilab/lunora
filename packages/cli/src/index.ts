@@ -5,7 +5,7 @@ export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, I
 export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand } from "./commands/data-transfer.js";
 export type { DeployCommandOptions, DeployCommandResult } from "./commands/deploy.js";
 export { runDeployCommand } from "./commands/deploy.js";
-export type { DevCommandOptions, DevCommandPlan, DevMode } from "./commands/dev.js";
+export type { DevCommandOptions, DevCommandPlan } from "./commands/dev.js";
 export { planDevCommand, runDevCommand } from "./commands/dev.js";
 export type { InitCommandOptions, InitCommandResult, Template } from "./commands/init.js";
 export { runInitCommand } from "./commands/init.js";

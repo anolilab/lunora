@@ -1,269 +1,231 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync } from "node:fs";
 
-import { join } from "@visulima/path";
-
+import type { CodegenWatcherHandle } from "../util/codegen-watch.js";
+import { startCodegenWatch } from "../util/codegen-watch.js";
+import type { DashboardServerHandle } from "../util/dashboard-server.js";
+import { startDashboardServer } from "../util/dashboard-server.js";
 import { detectPackageManager, execArgsFor } from "../util/detect-package-manager.js";
 import type { Logger } from "../util/logger.js";
-import type { SpawnDescriptor, Spawner } from "../util/spawn.js";
-import { defaultSpawner } from "../util/spawn.js";
+import type { SpawnDescriptor } from "../util/spawn.js";
+
+/** Default port the embedded dashboard server listens on (the URL you open). */
+const DEFAULT_DASHBOARD_PORT = 6173;
+/** Default port `wrangler dev` serves the worker on. */
+const DEFAULT_WORKER_PORT = 8787;
+/** Grace period after the first SIGINT before we force-kill the worker. */
+const SIGINT_GRACE_MS = 5000;
+
+/** A running worker child the orchestrator controls: send signals, await its exit. */
+interface WorkerProcess {
+    /** Resolves with the worker's exit code (1 if it failed to start). */
+    exited: Promise<number>;
+    kill: (signal: NodeJS.Signals) => void;
+}
+
+/** Spawns the worker child. Injectable so tests drive the orchestration without a real process. */
+type WorkerSpawner = (descriptor: SpawnDescriptor & { tag: string }, logger: Logger) => WorkerProcess;
 
 interface DevCommandOptions {
+    /** Disable the codegen watch loop. */
+    codegen?: boolean;
     cwd?: string;
+    /** Disable the embedded dashboard server. */
+    dashboard?: boolean;
     logger: Logger;
-    noVite?: boolean;
+    /** Dashboard server port. */
     port?: number;
-    spawner?: Spawner;
+    /** Injection seam for tests — defaults to the real codegen watcher. */
+    startCodegen?: typeof startCodegenWatch;
+    /** Injection seam for tests — defaults to the real dashboard server. */
+    startDashboard?: typeof startDashboardServer;
+    /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
+    startWorker?: WorkerSpawner;
+    /** `wrangler dev` port. */
+    workerPort?: number;
 }
-
-type DevMode = "concurrent" | "standalone" | "vite";
 
 interface DevCommandPlan {
-    descriptors: ReadonlyArray<SpawnDescriptor & { tag?: string }>;
-    mode: DevMode;
+    codegenEnabled: boolean;
+    dashboardEnabled: boolean;
+    dashboardPort: number;
+    workerOrigin: string;
+    workerPort: number;
+    /** The single child process `cirrus dev` spawns: `wrangler dev`. */
+    wrangler: SpawnDescriptor & { tag: string };
 }
 
-const findWranglerConfig = (cwd: string): boolean =>
-    existsSync(join(cwd, "wrangler.jsonc")) || existsSync(join(cwd, "wrangler.json")) || existsSync(join(cwd, "wrangler.toml"));
-
-const findViteConfig = (cwd: string): boolean =>
-    existsSync(join(cwd, "vite.config.ts")) || existsSync(join(cwd, "vite.config.js")) || existsSync(join(cwd, "vite.config.mjs"));
-
-const buildPlan = (cwd: string, options: DevCommandOptions): DevCommandPlan => {
-    const viteConfigPresent = findViteConfig(cwd);
-    const wranglerConfigPresent = findWranglerConfig(cwd);
-    const useVite = viteConfigPresent && !options.noVite;
+/**
+ * Plan `cirrus dev`: it runs the worker via `wrangler dev` and nothing else as a
+ * child process. Vite is intentionally NOT spawned — a project may not use Vite,
+ * and when it does, the `@cirrus/vite` plugin already runs the worker inside
+ * Vite, so the user runs `vite` themselves. Pure + synchronous so it's unit-testable.
+ */
+const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
+    const cwd = options.cwd ?? process.cwd();
+    const workerPort = options.workerPort ?? DEFAULT_WORKER_PORT;
     const manager = detectPackageManager(cwd);
-
-    const viteArgs: string[] = [];
-
-    if (options.port !== undefined) {
-        viteArgs.push("--port", String(options.port));
-    }
-
-    const wranglerArgs: string[] = ["dev"];
-
-    // When both vite + wrangler run concurrently we let vite own --port (it
-    // is what the browser hits) and let wrangler use its default port so
-    // the two never collide.
-    if (options.port !== undefined && !useVite) {
-        wranglerArgs.push("--port", String(options.port));
-    }
-
-    if (useVite && wranglerConfigPresent) {
-        const viteExec = execArgsFor(manager, "vite", viteArgs);
-        const wranglerExec = execArgsFor(manager, "wrangler", wranglerArgs);
-
-        return {
-            descriptors: [
-                { args: viteExec.args, command: viteExec.command, cwd, tag: "vite" },
-                { args: wranglerExec.args, command: wranglerExec.command, cwd, tag: "wrangler" },
-            ],
-            mode: "concurrent",
-        };
-    }
-
-    if (useVite) {
-        const exec = execArgsFor(manager, "vite", viteArgs);
-
-        return {
-            descriptors: [{ args: exec.args, command: exec.command, cwd, tag: "vite" }],
-            mode: "vite",
-        };
-    }
-
-    const exec = execArgsFor(manager, "wrangler", wranglerArgs);
+    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort)]);
 
     return {
-        descriptors: [{ args: exec.args, command: exec.command, cwd, tag: "wrangler" }],
-        mode: "standalone",
+        codegenEnabled: options.codegen !== false,
+        dashboardEnabled: options.dashboard !== false,
+        dashboardPort: options.port ?? DEFAULT_DASHBOARD_PORT,
+        workerOrigin: `http://localhost:${String(workerPort)}`,
+        workerPort,
+        wrangler: { args: exec.args, command: exec.command, cwd, tag: "wrangler" },
     };
 };
 
-const planDevCommand = (options: DevCommandOptions): DevCommandPlan => buildPlan(options.cwd ?? process.cwd(), options);
+/** Pipe a child's stdout/stderr through the logger, tagged by name. */
+const pipeChildOutput = (child: ChildProcess, tag: string, logger: Logger): void => {
+    const onLine = (chunk: Buffer, kind: "stderr" | "stdout"): void => {
+        const text = chunk.toString("utf8").trimEnd();
 
-/** Grace period after the first SIGINT before we force-kill children. */
-const SIGINT_GRACE_MS = 5000;
+        if (text.length === 0) {
+            return;
+        }
 
-/**
- * Spawn two children concurrently, pipe their stdout/stderr through the
- * provided logger (tagged by descriptor.tag), and resolve once both have
- * exited. SIGINT/SIGTERM in the parent is fanned out to both children;
- * a second SIGINT escalates to SIGKILL so a hung child can't trap the user.
- */
-const runConcurrent = async (descriptors: ReadonlyArray<SpawnDescriptor & { tag?: string }>, logger: Logger): Promise<{ code: number }> => {
-    const children: ChildProcess[] = [];
+        for (const line of text.split("\n")) {
+            const prefixed = `[${tag}] ${line}`;
 
-    const cleanup = (signal: NodeJS.Signals) => {
-        for (const child of children) {
-            if (!child.killed) {
-                try {
-                    child.kill(signal);
-                } catch {
-                    /* ignore — process may already be gone */
-                }
+            if (kind === "stderr") {
+                logger.warn(prefixed);
+            } else {
+                logger.info(prefixed);
             }
         }
     };
+
+    child.stdout?.on("data", (chunk: Buffer) => { onLine(chunk, "stdout"); });
+    child.stderr?.on("data", (chunk: Buffer) => { onLine(chunk, "stderr"); });
+};
+
+/** Real worker spawner: runs the descriptor as a child and pipes its output through the logger. */
+const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
+    const child = nodeSpawn(descriptor.command, [...descriptor.args], { cwd: descriptor.cwd ?? process.cwd(), env: process.env, stdio: ["inherit", "pipe", "pipe"] });
+
+    pipeChildOutput(child, descriptor.tag, logger);
+
+    return {
+        exited: new Promise<number>((resolve) => {
+            child.on("error", (error) => {
+                logger.error(`[${descriptor.tag}] failed to start: ${error.message}`);
+                resolve(1);
+            });
+            child.on("exit", (code) => { resolve(code ?? 0); });
+        }),
+        kill: (signal) => {
+            try {
+                child.kill(signal);
+            } catch {
+                /* already gone */
+            }
+        },
+    };
+};
+
+/** Print the Convex-style startup banner once the dashboard + worker URLs are known. */
+const printBanner = (logger: Logger, plan: DevCommandPlan, dashboardUrl: string | undefined): void => {
+    logger.info("");
+    logger.success("Cirrus dev");
+    logger.info(`  ➜  Worker:     ${plan.workerOrigin}`);
+
+    if (dashboardUrl !== undefined) {
+        logger.info(`  ➜  Dashboard:  ${dashboardUrl}`);
+    }
+
+    if (plan.codegenEnabled) {
+        logger.info("  ➜  Codegen:    watching cirrus/");
+    }
+
+    logger.info("");
+};
+
+interface Teardown {
+    codegen?: CodegenWatcherHandle;
+    dashboard?: DashboardServerHandle;
+}
+
+/** Best-effort shutdown of the dashboard server + codegen watcher. */
+const teardown = async (handles: Teardown): Promise<void> => {
+    handles.codegen?.close();
+    await handles.dashboard?.close().catch(() => undefined);
+};
+
+/**
+ * Start codegen watch + the dashboard server, spawn `wrangler dev`, print the
+ * banner, and resolve when the worker exits or the user interrupts — tearing
+ * down the sibling servers either way. The three side-effecting pieces (worker,
+ * dashboard, codegen) are injectable so this is testable without real I/O.
+ */
+const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
+    const plan = planDevCommand(options);
+    const { logger } = options;
+    const cwd = plan.wrangler.cwd ?? process.cwd();
+    const handles: Teardown = {};
+
+    logger.info("starting wrangler dev + dashboard");
+
+    if (plan.codegenEnabled) {
+        handles.codegen = (options.startCodegen ?? startCodegenWatch)({ logger, projectRoot: cwd });
+    }
+
+    let dashboardUrl: string | undefined;
+
+    if (plan.dashboardEnabled) {
+        try {
+            handles.dashboard = await (options.startDashboard ?? startDashboardServer)({
+                cwd,
+                logger: { warnOnce: (message) => { logger.warn(message); } },
+                port: plan.dashboardPort,
+                workerOrigin: plan.workerOrigin,
+            });
+            dashboardUrl = handles.dashboard.url;
+        } catch (error: unknown) {
+            logger.warn(`dashboard server failed to start (${error instanceof Error ? error.message : String(error)}) — continuing without it`);
+        }
+    }
+
+    const worker = (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
+
+    printBanner(logger, plan, dashboardUrl);
 
     let sigintCount = 0;
     let escalationTimer: NodeJS.Timeout | undefined;
-    let tearingDown = false;
 
-    const onSigint = () => {
+    const onSigint = (): void => {
         sigintCount += 1;
 
         if (sigintCount === 1) {
-            logger.info("received SIGINT — forwarding SIGTERM (press Ctrl-C again to force-kill)");
-            cleanup("SIGTERM");
-            escalationTimer = setTimeout(() => {
-                logger.warn(`children did not exit within ${String(SIGINT_GRACE_MS)}ms — sending SIGKILL`);
-                cleanup("SIGKILL");
-            }, SIGINT_GRACE_MS);
+            logger.info("received SIGINT — shutting down (press Ctrl-C again to force-kill)");
+            worker.kill("SIGTERM");
+            escalationTimer = setTimeout(() => { worker.kill("SIGKILL"); }, SIGINT_GRACE_MS);
             escalationTimer.unref();
         } else {
-            logger.warn("received second SIGINT — sending SIGKILL");
-
-            if (escalationTimer) {
-                clearTimeout(escalationTimer);
-                escalationTimer = undefined;
-            }
-
-            cleanup("SIGKILL");
+            worker.kill("SIGKILL");
         }
     };
-    const onSigterm = () => {
-        cleanup("SIGTERM");
+    const onSigterm = (): void => {
+        worker.kill("SIGTERM");
     };
 
     process.on("SIGINT", onSigint);
     process.on("SIGTERM", onSigterm);
 
-    const promises = descriptors.map(
-        async (descriptor) =>
-            new Promise<number>((resolve) => {
-                const tag = descriptor.tag ?? "child";
-                const child = nodeSpawn(descriptor.command, [...descriptor.args], {
-                    cwd: descriptor.cwd ?? process.cwd(),
-                    env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
-                    stdio: ["inherit", "pipe", "pipe"],
-                });
+    const code = await worker.exited;
 
-                children.push(child);
-
-                const onLine = (chunk: Buffer | string, kind: "stdout" | "stderr") => {
-                    const text = (typeof chunk === "string" ? chunk : chunk.toString("utf8")).trimEnd();
-
-                    if (text.length === 0) {
-                        return;
-                    }
-
-                    for (const line of text.split("\n")) {
-                        const prefixed = `[${tag}] ${line}`;
-
-                        if (kind === "stderr") {
-                            logger.warn(prefixed);
-                        } else {
-                            logger.info(prefixed);
-                        }
-                    }
-                };
-
-                child.stdout.on("data", (chunk: Buffer) => {
-                    onLine(chunk, "stdout");
-                });
-                child.stderr.on("data", (chunk: Buffer) => {
-                    onLine(chunk, "stderr");
-                });
-
-                const onFirstExit = () => {
-                    // The first child to exit tears down its sibling(s) so
-                    // Promise.all can resolve instead of hanging on a child
-                    // that outlives a crashed peer.
-                    if (!tearingDown) {
-                        tearingDown = true;
-                        logger.info(`[${tag}] exited — shutting down remaining dev processes`);
-                        cleanup("SIGTERM");
-                    }
-                };
-
-                child.on("error", (error) => {
-                    logger.error(`[${tag}] failed to start: ${error.message}`);
-                    onFirstExit();
-                    resolve(1);
-                });
-
-                child.on("exit", (code) => {
-                    onFirstExit();
-                    resolve(code ?? 0);
-                });
-            }),
-    );
-
-    try {
-        const codes = await Promise.all(promises);
-
-        let worst = 0;
-
-        for (const code of codes) {
-            if (code !== 0) {
-                worst = code;
-            }
-        }
-
-        return { code: worst };
-    } finally {
-        if (escalationTimer) {
-            clearTimeout(escalationTimer);
-        }
-
-        process.off("SIGINT", onSigint);
-        process.off("SIGTERM", onSigterm);
+    if (escalationTimer) {
+        clearTimeout(escalationTimer);
     }
+
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+
+    await teardown(handles);
+
+    return { code, plan };
 };
 
-const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
-    const plan = planDevCommand(options);
-    const spawner = options.spawner ?? defaultSpawner;
-
-    if (plan.mode === "concurrent") {
-        options.logger.info("starting Vite + wrangler dev (concurrent)");
-
-        // For test injection paths (recording spawner) fall back to
-        // sequential spawn so tests stay deterministic. The recording
-        // spawner just captures descriptors and returns 0.
-        if (spawner !== defaultSpawner) {
-            let lastCode = 0;
-
-            for (const descriptor of plan.descriptors) {
-                // eslint-disable-next-line no-await-in-loop
-                const result = await spawner(descriptor);
-
-                lastCode = result.code;
-            }
-
-            return { code: lastCode, plan };
-        }
-
-        const result = await runConcurrent(plan.descriptors, options.logger);
-
-        return { code: result.code, plan };
-    }
-
-    options.logger.info(plan.mode === "vite" ? "starting Vite + Worker dev server" : "starting wrangler dev (standalone)");
-
-    let lastCode = 0;
-
-    for (const descriptor of plan.descriptors) {
-        // eslint-disable-next-line no-await-in-loop
-        const result = await spawner(descriptor);
-
-        lastCode = result.code;
-    }
-
-    return { code: lastCode, plan };
-};
-
-export type { DevCommandOptions, DevCommandPlan, DevMode };
-export { planDevCommand, runConcurrent, runDevCommand };
+export type { DevCommandOptions, DevCommandPlan, WorkerProcess, WorkerSpawner };
+export { planDevCommand, runDevCommand };
