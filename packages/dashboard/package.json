@@ -3,27 +3,33 @@
     "version": "0.0.0",
     "files": [
         "dist",
+        "src/theme.css",
         "README.md",
         "LICENSE.md"
     ],
     "type": "module",
     "sideEffects": false,
-    "module": "./dist/index.mjs",
+    "module": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.mjs"
+            "import": "./dist/index.js"
         },
         "./mount": {
             "types": "./dist/mount.d.ts",
-            "import": "./dist/mount.mjs"
+            "import": "./dist/mount.js"
         },
+        "./styles.css": "./dist/styles.css",
+        "./standalone/dashboard.js": "./dist/standalone/dashboard.js",
+        "./theme.css": "./src/theme.css",
         "./package.json": "./package.json"
     },
     "scripts": {
-        "build": "pnpm exec packem build",
-        "build:prod": "pnpm exec packem build",
+        "build": "pnpm exec packem build --development && pnpm run build:css && pnpm run build:standalone",
+        "build:css": "pnpm exec tailwindcss --input ./src/styles.css --output ./dist/styles.css --minify",
+        "build:standalone": "node ./scripts/build-standalone.mjs",
+        "build:prod": "pnpm exec packem build --production && pnpm run build:css && pnpm run build:standalone",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check .",
@@ -32,10 +38,19 @@
         "test": "vitest run"
     },
     "dependencies": {
+        "@base-ui/react": "catalog:ui",
         "@cirrus/client": "workspace:*",
         "@cirrus/react": "workspace:*",
+        "@hugeicons/core-free-icons": "catalog:ui",
+        "@hugeicons/react": "catalog:ui",
+        "@lingui/core": "catalog:i18n",
+        "@lingui/message-utils": "catalog:i18n",
+        "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-table": "catalog:frontend",
-        "@tanstack/react-virtual": "catalog:frontend"
+        "@tanstack/react-virtual": "catalog:frontend",
+        "class-variance-authority": "catalog:ui",
+        "clsx": "catalog:ui",
+        "tailwind-merge": "catalog:ui"
     },
     "devDependencies": {
         "@testing-library/dom": "catalog:frontend",
@@ -43,11 +58,15 @@
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
+        "@tailwindcss/cli": "catalog:vite",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
+        "shadcn": "catalog:ui",
+        "tailwindcss": "catalog:vite",
+        "tw-animate-css": "catalog:vite",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

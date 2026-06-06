@@ -24,8 +24,8 @@
         "./package.json": "./package.json"
     },
     "scripts": {
-        "build": "packem build",
-        "build:prod": "packem build",
+        "build": "packem build --development",
+        "build:prod": "packem build --production",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check .",

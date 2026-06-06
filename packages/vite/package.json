@@ -18,8 +18,8 @@
         "./package.json": "./package.json"
     },
     "scripts": {
-        "build": "pnpm exec packem build",
-        "build:prod": "pnpm exec packem build",
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check .",
@@ -35,6 +35,7 @@
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@cirrus/dashboard-host": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@visulima/vite-overlay": "catalog:vite",

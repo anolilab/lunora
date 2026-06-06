@@ -2,12 +2,10 @@
     "name": "@cirrus/cli",
     "version": "0.0.0",
     "bin": {
-        "cirrus": "./bin/cirrus.mjs"
+        "cirrus": "./dist/bin.mjs"
     },
     "files": [
-        "bin",
         "dist",
-        "src",
         "README.md",
         "LICENSE.md"
     ],
@@ -23,8 +21,8 @@
         "./package.json": "./package.json"
     },
     "scripts": {
-        "build": "pnpm exec packem build",
-        "build:prod": "pnpm exec packem build",
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check .",
@@ -36,7 +34,8 @@
     "dependencies": {
         "@cirrus/codegen": "workspace:*",
         "@cirrus/config": "workspace:*",
-        "@cirrus/vite": "workspace:*",
+        "@cirrus/d1": "workspace:*",
+        "@cirrus/dashboard": "workspace:*",
         "@visulima/boxen": "2.0.10",
         "@visulima/cerebro": "2.1.5",
         "@visulima/colorize": "1.4.29",
@@ -45,10 +44,10 @@
         "@visulima/path": "2.0.5",
         "giget": "3.2.0",
         "jsonc-parser": "catalog:vite",
-        "ts-morph": "catalog:tooling",
-        "tsx": "catalog:dev"
+        "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@cirrus/dashboard-host": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",

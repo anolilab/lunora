@@ -9,6 +9,8 @@ cirrus/_generated/
 .wrangler/
 .dev.vars
 .dev.vars.*
+# …but keep the committed template that documents the required secrets.
+!.dev.vars.example
 
 # Node
 node_modules/

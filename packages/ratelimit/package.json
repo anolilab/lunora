@@ -21,8 +21,8 @@
         "./package.json": "./package.json"
     },
     "scripts": {
-        "build": "pnpm exec packem build",
-        "build:prod": "pnpm exec packem build",
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "pnpm exec eslint .",
         "lint:eslint:fix": "pnpm exec eslint . --fix",
         "lint:prettier": "pnpm exec prettier --check .",

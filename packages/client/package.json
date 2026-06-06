@@ -21,8 +21,8 @@
     },
     "scripts": {
         "bench": "vitest bench --run",
-        "build": "pnpm exec packem build",
-        "build:prod": "pnpm exec packem build",
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check .",

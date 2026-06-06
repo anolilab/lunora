@@ -23,8 +23,8 @@
     },
     "scripts": {
         "bench": "vitest bench --run",
-        "build": "pnpm exec packem build",
-        "build:prod": "pnpm exec packem build",
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
         "lint:doctor": "react-doctor",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
@@ -51,7 +51,7 @@
         "esbuild": "catalog:build",
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
-        "react-doctor": "0.2.16",
+        "react-doctor": "0.4.0",
         "react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
