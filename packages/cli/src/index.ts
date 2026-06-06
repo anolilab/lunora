@@ -1,7 +1,5 @@
 export type { CommandName, RunCliOptions } from "./cli.js";
 export { COMMANDS, runCli, VERSION } from "./cli.js";
-export type { AddCommandOptions, AddCommandResult, RegistryBinding, RegistryFile, RegistryManifest } from "./commands/add.js";
-export { parseManifest, runAddCommand } from "./commands/add.js";
 export { runCodegenCommand } from "./commands/codegen.js";
 export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, ImportCommandResult, StreamingFetchLike } from "./commands/data-transfer.js";
 export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand } from "./commands/data-transfer.js";
@@ -13,6 +11,8 @@ export type { InitCommandOptions, InitCommandResult, Template } from "./commands
 export { runInitCommand } from "./commands/init.js";
 export type { MigrateGenerateCommandOptions, MigrateGenerateCommandResult } from "./commands/migrate.js";
 export { runMigrateGenerateCommand } from "./commands/migrate.js";
+export type { AddCommandOptions, AddCommandResult, RegistryBinding, RegistryFile, RegistryManifest } from "./commands/registry/index.js";
+export { buildRegistryIndex, parseManifest, runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "./commands/registry/index.js";
 export type { ResetCommandOptions, ResetCommandResult } from "./commands/reset.js";
 export { runResetCommand } from "./commands/reset.js";
 export type { FetchLike, RunCommandOptions, RunCommandResult } from "./commands/run.js";

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { parseManifest, runAddCommand } from "../../src/commands/add.js";
+import { parseManifest, runAddCommand } from "../../src/commands/registry/index.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const makeLogger = (): { lines: string[]; logger: Logger } => {

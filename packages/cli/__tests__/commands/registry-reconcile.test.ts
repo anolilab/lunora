@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runAddCommand } from "../../src/commands/add.js";
+import { runAddCommand } from "../../src/commands/registry/index.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => {

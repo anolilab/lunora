@@ -90,6 +90,13 @@
               "if": "github.event_name == 'pull_request'"
               "run": "pnpm run lint:affected:types"
 
+            # The affected typecheck above never covers registry/ (it isn't a vis
+            # project), so gate the shipped registry items explicitly on PRs. The
+            # push path covers them via `lint:types`, which chains this script.
+            - "name": "Typecheck registry items on PRs"
+              "if": "github.event_name == 'pull_request'"
+              "run": "pnpm run lint:types:registry"
+
             - "name": "Typecheck (all) on push / dispatch"
               "if": "github.event_name != 'pull_request'"
               "run": "pnpm run lint:types"

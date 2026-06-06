@@ -269,7 +269,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             const source = toStringOrUndefined(parsed.source);
             const out = toStringOrUndefined(parsed.out);
 
-            const { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } = await import("./commands/add.js");
+            const { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } = await import("./commands/registry/index.js");
 
             if (subcommand === "add") {
                 const result = await runAddCommand({
