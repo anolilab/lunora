@@ -429,4 +429,272 @@ describe("discoverSchema", () => {
 
         expect(dataModel).toContain('export type VectorIndexName = "docs-body" | "docs-title";');
     });
+
+    it("merges an inline .extend(defineSchemaExtension(...)) table with its key prefix and indexes intact", () => {
+        expect.assertions(3);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(
+                defineSchemaExtension("ext", {
+                    tables: {
+                        buckets: defineTable({
+                            key: v.string(),
+                            count: v.number(),
+                        }).index("by_key", ["key"], { unique: true }),
+                    },
+                }),
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const buckets = schema.tables.find((table) => table.name === "ext_buckets");
+
+        expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ext_buckets", "todos"]);
+        expect(buckets).toBeDefined();
+        expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key", unique: true }]);
+    });
+
+    it("rewrites an intra-extension relation to the prefixed table, leaving base references untouched", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                users: defineTable({ email: v.string() }),
+            }).extend(
+                defineSchemaExtension("ext", {
+                    tables: {
+                        buckets: defineTable({ ownerId: v.id("users"), windowId: v.id("windows") }).relations((r) => ({
+                            window: r.one("windows", { field: "windowId" }),
+                            owner: r.one("users", { field: "ownerId" }),
+                        })),
+                        windows: defineTable({ at: v.number() }),
+                    },
+                }),
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const buckets = schema.tables.find((table) => table.name === "ext_buckets");
+
+        // Intra-extension reference -> prefixed; base/app reference -> untouched.
+        expect(buckets?.relations.find((relation) => relation.name === "window")?.table).toBe("ext_windows");
+        expect(buckets?.relations.find((relation) => relation.name === "owner")?.table).toBe("users");
+    });
+
+    it("rewrites an inline vector index `table` to the owning prefixed table and prefixes its name", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { embed } from "../app/embed";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(
+                defineSchemaExtension("ext", {
+                    tables: {
+                        docs: defineTable({ body: v.string() })
+                            .vectorize("body", { index: "docs-body", dimensions: 1024, metric: "cosine", embed }),
+                    },
+                }),
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const docs = schema.tables.find((table) => table.name === "ext_docs");
+
+        expect(docs?.vectorIndexes[0]?.table).toBe("ext_docs");
+        // Inline (Shape A) vector indexes keep their declared `index` name; only
+        // the `table` reference is rewritten to the prefixed owner.
+        expect(schema.vectorIndexes).toContainEqual(expect.objectContaining({ name: "docs-body", table: "ext_docs" }));
+    });
+
+    it("prefixes a standalone extension vectorIndex map key and its table reference", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, defineVectorIndex, v } from "@cirrus/server";
+            import { embed } from "../app/embed";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(
+                defineSchemaExtension("ext", {
+                    tables: {
+                        docs: defineTable({ body: v.string() }),
+                    },
+                    vectorIndexes: {
+                        "docs-body": defineVectorIndex({
+                            source: { table: "docs", select: (row) => row.body },
+                            dimensions: 768,
+                            metric: "euclidean",
+                            embed,
+                        }),
+                    },
+                }),
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.vectorIndexes).toContainEqual({
+            dimensions: 768,
+            metric: "euclidean",
+            name: "ext_docs-body",
+            table: "ext_docs",
+        });
+    });
+
+    it("resolves a same-project identifier extension via .extend(myExt)", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+
+            const myExt = defineSchemaExtension("ext", {
+                tables: {
+                    buckets: defineTable({ key: v.string() }),
+                },
+            });
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(myExt);
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ext_buckets", "todos"]);
+    });
+
+    it("resolves a same-project property-access extension via .extend(plugin.extension)", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+
+            const plugin = {
+                key: "ext",
+                extension: defineSchemaExtension("ext", {
+                    tables: {
+                        buckets: defineTable({ key: v.string() }),
+                    },
+                }),
+            };
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(plugin.extension);
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ext_buckets", "todos"]);
+    });
+
+    it("merges multiple chained .extend() calls", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            })
+                .extend(defineSchemaExtension("a", { tables: { items: defineTable({ x: v.string() }) } }))
+                .extend(defineSchemaExtension("b", { tables: { items: defineTable({ y: v.string() }) } }));
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["a_items", "b_items", "todos"]);
+    });
+
+    it("does not collide when an app table and an extension table share a bare name", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                buckets: defineTable({ appField: v.string() }),
+            }).extend(
+                defineSchemaExtension("ext", {
+                    tables: { buckets: defineTable({ extField: v.string() }) },
+                }),
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        // App `buckets` and extension `ext_buckets` live in separate namespaces.
+        expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["buckets", "ext_buckets"]);
+    });
+
+    it("throws when two same-key extensions produce the same prefixed table", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            })
+                .extend(defineSchemaExtension("dup", { tables: { items: defineTable({ x: v.string() }) } }))
+                .extend(defineSchemaExtension("dup", { tables: { items: defineTable({ y: v.string() }) } }));
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/table "dup_items" already exists/u);
+    });
+
+    it("skips a cross-package (.d.ts-only) extension with a warning instead of crashing", () => {
+        expect.assertions(2);
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
+
+        // A node_modules declaration file is the only thing reachable for `vendorExt`.
+        project.createSourceFile(
+            "/virtual/node_modules/@vendor/plugin/index.d.ts",
+            `import type { SchemaExtension } from "@cirrus/server";
+             export declare const vendorExt: SchemaExtension;`,
+        );
+
+        const schemaPath = "/virtual/cirrus/schema.ts";
+
+        project.createSourceFile(
+            schemaPath,
+            `import { defineSchema, defineTable, v } from "@cirrus/server";
+             import { vendorExt } from "@vendor/plugin";
+
+             export const schema = defineSchema({
+                 todos: defineTable({ title: v.string() }),
+             }).extend(vendorExt);`,
+        );
+
+        const warnings: string[] = [];
+        // eslint-disable-next-line no-console -- capture the codegen skip warning under test.
+        const originalWarn = console.warn;
+
+        // eslint-disable-next-line no-console -- temporarily intercept warnings emitted during discovery.
+        console.warn = (message: string): void => {
+            warnings.push(message);
+        };
+
+        try {
+            const schema = discoverSchema(project, schemaPath);
+
+            expect(schema.tables.map((table) => table.name)).toEqual(["todos"]);
+        } finally {
+            // eslint-disable-next-line no-console -- restore the original implementation.
+            console.warn = originalWarn;
+        }
+
+        expect(warnings.some((message) => message.includes("could not be resolved from local sources"))).toBe(true);
+    });
 });

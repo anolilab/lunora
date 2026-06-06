@@ -1,4 +1,4 @@
-import type { Expression, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { IndexIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir.js";
@@ -392,6 +392,374 @@ const parseStandaloneVectorIndexes = (object: ObjectLiteralExpression): VectorIn
 };
 
 /**
+ * Apply the extension `key` prefix to a bare table name. Mirrors the runtime
+ * `prefixTableName` in `@cirrus/server`'s `plugin.ts` so generated names match.
+ */
+const prefixTableName = (key: string, bareName: string): string => `${key}_${bareName}`;
+
+/**
+ * Rewrite a single intra-extension table reference to its prefixed name. A
+ * reference is "intra-extension" only when its target is one of the extension's
+ * own bare table names; references to base/app tables are returned untouched.
+ * Mirrors the runtime `rewriteReference`.
+ */
+const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<string>): string =>
+    bareNames.has(target) ? prefixTableName(key, target) : target;
+
+/**
+ * Apply the runtime namespacing transform to one parsed extension table:
+ * prefix the table's own name, rewrite relation targets, and rewrite inline
+ * vector-index `table` references. The inline-vectorize parser stamps the
+ * owning (bare) table name onto each `vectorIndexes[].table`, which is always
+ * an intra-extension reference, so it always resolves to the prefixed owner.
+ *
+ * Aggregate / rank indexes are not represented in the codegen IR (the table
+ * builder walk doesn't capture them), so there is nothing extra to rewrite
+ * here — unlike the runtime, which additionally rewrites their `on` fields.
+ */
+const namespaceExtensionTable = (table: TableIR, key: string, bareNames: ReadonlySet<string>): TableIR => {
+    const ownPrefixed = prefixTableName(key, table.name);
+
+    return {
+        ...table,
+        name: ownPrefixed,
+        relations: table.relations.map((relation) => {
+            return { ...relation, table: rewriteReference(relation.table, key, bareNames) };
+        }),
+        // Inline `.vectorize()` stamps `table` with the bare owner name, so it
+        // is always one of `bareNames` and resolves to `ownPrefixed`.
+        vectorIndexes: table.vectorIndexes.map((index) => {
+            return { ...index, table: rewriteReference(index.table, key, bareNames) };
+        }),
+    };
+};
+
+/** The initializer expression a resolved declaration carries, or `undefined` for a declaration we don't follow. */
+const declarationInitializer = (declaration: TsNode): Expression | undefined => {
+    if (Node.isVariableDeclaration(declaration) || Node.isPropertyAssignment(declaration)) {
+        return declaration.getInitializer();
+    }
+
+    if (Node.isShorthandPropertyAssignment(declaration)) {
+        return declaration.getNameNode();
+    }
+
+    return undefined;
+};
+
+/** Read the named property's initializer off an object literal, or `undefined` when absent / not a plain property assignment. */
+const objectPropertyInitializer = (objectLiteral: ObjectLiteralExpression, name: string): Expression | undefined => {
+    const property = objectLiteral.getProperty(name);
+
+    if (property && Node.isPropertyAssignment(property)) {
+        return property.getInitializer();
+    }
+
+    return undefined;
+};
+
+/** True when `argument` is a direct inline `defineSchemaExtension("k", {...})` call. */
+const isInlineExtensionCall = (argument: TsNode): argument is CallExpression => {
+    if (!Node.isCallExpression(argument)) {
+        return false;
+    }
+
+    const callee = argument.getExpression();
+
+    return Node.isIdentifier(callee) && callee.getText() === "defineSchemaExtension";
+};
+
+/** The identifier to resolve for an identifier / property-access `.extend(...)` argument, or `undefined`. */
+const extensionTargetIdentifier = (argument: TsNode): TsNode | undefined => {
+    if (Node.isIdentifier(argument)) {
+        return argument;
+    }
+
+    if (Node.isPropertyAccessExpression(argument)) {
+        return argument.getNameNode();
+    }
+
+    return undefined;
+};
+
+/**
+ * Resolve a `.extend(...)` argument expression to the `defineSchemaExtension`
+ * call it ultimately denotes. Handles the inline call, a same-project
+ * identifier (`.extend(myExt)`), and a property access (`.extend(plugin.extension)`)
+ * by following symbols to their declarations. Returns `undefined` when the
+ * argument resolves into another package (only a `.d.ts` / `node_modules`
+ * declaration is reachable) or cannot be resolved locally.
+ */
+
+/**
+ * Given a declaration the `.extend(...)` argument's symbol points at, return the
+ * next expression to keep resolving toward the `defineSchemaExtension(...)` call:
+ * the object's named property for `.extend(plugin.extension)`, or the
+ * declaration's own initializer for `.extend(myExt)`. Returns `undefined` when
+ * the declaration carries nothing further to follow.
+ */
+const nextExpressionFromDeclaration = (declaration: TsNode, argument: TsNode): Expression | undefined => {
+    // `const myExt = defineSchemaExtension(...)` or
+    // `const plugin = { extension: defineSchemaExtension(...) }`.
+    const initializer = declarationInitializer(declaration);
+
+    if (!initializer) {
+        return undefined;
+    }
+
+    // For `.extend(plugin.extension)`, dig into the object's named property.
+    if (Node.isPropertyAccessExpression(argument) && Node.isObjectLiteralExpression(initializer)) {
+        return objectPropertyInitializer(initializer, argument.getName());
+    }
+
+    return initializer;
+};
+
+const resolveSchemaExtensionCall = (argument: TsNode): CallExpression | undefined => {
+    let current: TsNode | undefined = argument;
+    // Bound the symbol-follow loop so a pathological `const a = b; const b = a;`
+    // cycle can't spin forever.
+    let hops = 0;
+
+    while (current && hops < 32) {
+        hops += 1;
+
+        // Inline: `.extend(defineSchemaExtension("k", {...}))`.
+        if (isInlineExtensionCall(current)) {
+            return current;
+        }
+
+        const target = extensionTargetIdentifier(current);
+        const symbol = target && Node.isIdentifier(target) ? target.getSymbol() : undefined;
+        const declarations = symbol?.getAliasedSymbol()?.getDeclarations() ?? symbol?.getDeclarations() ?? [];
+        const first = declarations[0];
+
+        if (!first) {
+            return undefined;
+        }
+
+        const declarationFile = first.getSourceFile();
+
+        // Cross-package: only a `.d.ts` or a `node_modules` source is reachable.
+        // We cannot read the real `defineSchemaExtension(...)` literal, so defer.
+        if (declarationFile.isInNodeModules() || declarationFile.isDeclarationFile()) {
+            return undefined;
+        }
+
+        current = nextExpressionFromDeclaration(first, current);
+    }
+
+    return undefined;
+};
+
+/** Read the `{ tables: {...}, vectorIndexes?: {...} }` options object off a `defineSchemaExtension(key, options)` call. */
+const extensionPartsOf = (call: CallExpression): { key: string; options: ObjectLiteralExpression } | undefined => {
+    const [keyArgument, optionsArgument] = call.getArguments();
+
+    if (!keyArgument || !Node.isStringLiteral(keyArgument)) {
+        return undefined;
+    }
+
+    if (!optionsArgument || !Node.isObjectLiteralExpression(optionsArgument)) {
+        return undefined;
+    }
+
+    return { key: keyArgument.getLiteralText(), options: optionsArgument };
+};
+
+/** Parse the `tables: {...}` property of a `defineSchemaExtension` options object into bare-named {@link TableIR}s. */
+const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
+    const tablesProperty = options.getProperty("tables");
+
+    if (!tablesProperty || !Node.isPropertyAssignment(tablesProperty)) {
+        return [];
+    }
+
+    const tablesObject = tablesProperty.getInitializer();
+
+    if (!tablesObject || !Node.isObjectLiteralExpression(tablesObject)) {
+        return [];
+    }
+
+    const tables: TableIR[] = [];
+
+    for (const property of tablesObject.getProperties()) {
+        if (!Node.isPropertyAssignment(property)) {
+            continue;
+        }
+
+        const initializer = property.getInitializer();
+
+        if (!initializer) {
+            continue;
+        }
+
+        tables.push(parseTableBuilder(initializer, property.getName()));
+    }
+
+    return tables;
+};
+
+/** Parse the optional `vectorIndexes: {...}` property of a `defineSchemaExtension` options object (Shape B map). */
+const parseExtensionVectorIndexes = (options: ObjectLiteralExpression): VectorIndexIR[] => {
+    const property = options.getProperty("vectorIndexes");
+
+    if (!property || !Node.isPropertyAssignment(property)) {
+        return [];
+    }
+
+    const object = property.getInitializer();
+
+    if (!object || !Node.isObjectLiteralExpression(object)) {
+        return [];
+    }
+
+    return parseStandaloneVectorIndexes(object);
+};
+
+/** Result of merging one `.extend(...)` extension: prefixed tables + prefixed standalone vector indexes. */
+interface MergedExtension {
+    tables: TableIR[];
+    vectorIndexes: VectorIndexIR[];
+}
+
+/** Apply runtime namespacing (table prefixing + intra-extension reference rewrite) to one resolved extension. */
+const mergeExtension = (key: string, options: ObjectLiteralExpression): MergedExtension => {
+    const bareTables = parseExtensionTables(options);
+    const bareNames = new Set(bareTables.map((table) => table.name));
+    const tables = bareTables.map((table) => namespaceExtensionTable(table, key, bareNames));
+
+    // Standalone vector indexes carry their own bare map key plus a `table`
+    // reference; prefix both, matching the runtime merge.
+    const vectorIndexes = parseExtensionVectorIndexes(options).map((index) => {
+        return { ...index, name: prefixTableName(key, index.name), table: rewriteReference(index.table, key, bareNames) };
+    });
+
+    return { tables, vectorIndexes };
+};
+
+/**
+ * Resolve + merge one `.extend(...)` call into a {@link MergedExtension}, or
+ * `undefined` (with a `console.warn`) when the extension can't be resolved from
+ * local sources or is malformed. Mirrors how codegen elsewhere warns rather
+ * than crashing on inputs it can't statically resolve.
+ */
+const mergeExtendCall = (extendCall: CallExpression): MergedExtension | undefined => {
+    const extendArgument = extendCall.getArguments()[0];
+
+    if (!extendArgument) {
+        return undefined;
+    }
+
+    const resolved = resolveSchemaExtensionCall(extendArgument);
+
+    if (!resolved) {
+        // eslint-disable-next-line no-console -- codegen surfaces a clear, actionable warning when an extension cannot be resolved locally.
+        console.warn(
+            `@cirrus/codegen: skipping \`.extend(${extendArgument.getText()})\` — its \`defineSchemaExtension(...)\` definition could not be resolved from local sources (cross-package node_modules/.d.ts resolution is a deferred phase). Extension tables will be absent from the generated types.`,
+        );
+
+        return undefined;
+    }
+
+    const parts = extensionPartsOf(resolved);
+
+    if (!parts) {
+        // eslint-disable-next-line no-console -- malformed extension call; warn rather than crash.
+        console.warn(`@cirrus/codegen: skipping \`.extend(...)\` — \`defineSchemaExtension\` requires a string \`key\` and an options object literal.`);
+
+        return undefined;
+    }
+
+    return mergeExtension(parts.key, parts.options);
+};
+
+/**
+ * Walk the chained `.extend(arg)` calls wrapping a `defineSchema(...)` call
+ * (innermost → outermost) and return the {@link CallExpression}s, in source
+ * order. `defineSchema({...}).extend(a).extend(b)` yields `[a-call, b-call]`.
+ */
+const extendCallsOf = (defineSchemaCall: CallExpression): CallExpression[] => {
+    const calls: CallExpression[] = [];
+    let current: TsNode = defineSchemaCall;
+
+    // Each `.extend(...)` is `CallExpression(PropertyAccessExpression(current, "extend"))`.
+    for (;;) {
+        const parent = current.getParent();
+
+        if (!parent || !Node.isPropertyAccessExpression(parent) || parent.getName() !== "extend") {
+            break;
+        }
+
+        const callParent = parent.getParent();
+
+        if (!callParent || !Node.isCallExpression(callParent)) {
+            break;
+        }
+
+        calls.push(callParent);
+        current = callParent;
+    }
+
+    return calls;
+};
+
+/** Parse the base `defineSchema({ table: defineTable(...) })` object literal into {@link TableIR}s. */
+const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
+    const tables: TableIR[] = [];
+
+    for (const property of object.getProperties()) {
+        if (!Node.isPropertyAssignment(property)) {
+            continue;
+        }
+
+        const initializer = property.getInitializer();
+
+        if (initializer) {
+            tables.push(parseTableBuilder(initializer, property.getName()));
+        }
+    }
+
+    return tables;
+};
+
+/**
+ * Merge every chained `.extend(...)` extension into `tables` (mutated in place)
+ * and return the extension-contributed standalone vector indexes. Extension
+ * tables are auto-prefixed with the extension key and intra-extension
+ * references rewritten, mirroring the runtime `mergeSchemaExtension`.
+ * Cross-package extensions (only reachable as a `.d.ts`) are skipped with a
+ * warning — a deferred phase. Throws on a real post-prefix table collision.
+ */
+const applyExtensions = (defineSchemaCall: CallExpression, tables: TableIR[]): VectorIndexIR[] => {
+    const existingTableNames = new Set(tables.map((table) => table.name));
+    const vectorIndexes: VectorIndexIR[] = [];
+
+    for (const extendCall of extendCallsOf(defineSchemaCall)) {
+        const merged = mergeExtendCall(extendCall);
+
+        if (!merged) {
+            continue;
+        }
+
+        for (const table of merged.tables) {
+            if (existingTableNames.has(table.name)) {
+                throw new Error(
+                    `@cirrus/codegen: defineSchema(...).extend(...): table "${table.name}" already exists — another extension with the same key already contributed it.`,
+                );
+            }
+
+            existingTableNames.add(table.name);
+            tables.push(table);
+        }
+
+        vectorIndexes.push(...merged.vectorIndexes);
+    }
+
+    return vectorIndexes;
+};
+
+/**
  * Load `&lt;projectRoot>/cirrus/schema.ts`, find `defineSchema({...})`, and
  * return a structural IR. Throws if the file or call cannot be found.
  */
@@ -414,29 +782,24 @@ const discoverSchema = (project: Project, schemaPath: string): SchemaIR => {
         throw new Error("defineSchema() expects an object literal");
     }
 
-    const tables: TableIR[] = [];
-
-    for (const property of argument.getProperties()) {
-        if (!Node.isPropertyAssignment(property)) {
-            continue;
-        }
-
-        const initializer = property.getInitializer();
-
-        if (!initializer) {
-            continue;
-        }
-
-        tables.push(parseTableBuilder(initializer, property.getName()));
-    }
+    const tables: TableIR[] = parseBaseTables(argument);
 
     // Standalone vector indexes live in the optional second argument (Shape B).
     const standaloneArgument = defineSchemaCall.getArguments()[1];
     const standaloneVectorIndexes =
         standaloneArgument && Node.isObjectLiteralExpression(standaloneArgument) ? parseStandaloneVectorIndexes(standaloneArgument) : [];
 
-    // Flatten inline Shape A indexes (hoisted with their owning table) plus Shape B.
-    const vectorIndexes: VectorIndexIR[] = [...tables.flatMap((table) => table.vectorIndexes), ...standaloneVectorIndexes];
+    // Merge chained `.extend(...)` extensions, mutating `tables` and collecting
+    // their standalone vector indexes.
+    const extensionStandaloneVectorIndexes = applyExtensions(defineSchemaCall, tables);
+
+    // Flatten inline Shape A indexes (hoisted with their owning table) plus Shape B
+    // plus extension-contributed standalone vector indexes.
+    const vectorIndexes: VectorIndexIR[] = [
+        ...tables.flatMap((table) => table.vectorIndexes),
+        ...standaloneVectorIndexes,
+        ...extensionStandaloneVectorIndexes,
+    ];
 
     return { tables, vectorIndexes };
 };
