@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do.js";
-import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "../src/shard-do.js";
+import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "../src/shard-do.js";
 import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "../src/types.js";
 
 /**
@@ -846,5 +846,196 @@ describe("shardDO subscription re-execution", () => {
 
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
         expect(ws.sent.length).toBeGreaterThan(sentBefore);
+    });
+});
+
+describe("subscriptionListDeltas", () => {
+    const row = (id: string, rest: Record<string, unknown> = {}): Record<string, unknown> => {return { _creationTime: 1, _id: id, ...rest }};
+
+    it("emits an insert delta for a row present only in the new result", () => {
+        expect.assertions(1);
+
+        const prev = JSON.stringify([row("a")]);
+        const next = [row("a"), row("b", { text: "hi" })];
+
+        expect(subscriptionListDeltas(prev, next, "messages")).toEqual([
+            { key: "b", op: "insert", row: { _creationTime: 1, _id: "b", text: "hi" }, table: "messages" },
+        ]);
+    });
+
+    it("emits an update delta for a surviving row whose body changed", () => {
+        expect.assertions(1);
+
+        const prev = JSON.stringify([row("a", { text: "old" })]);
+        const next = [row("a", { text: "new" })];
+
+        expect(subscriptionListDeltas(prev, next, "messages")).toEqual([
+            { key: "a", op: "update", row: { _creationTime: 1, _id: "a", text: "new" }, table: "messages" },
+        ]);
+    });
+
+    it("emits a delete delta (no row) for a row dropped from the new result", () => {
+        expect.assertions(1);
+
+        const prev = JSON.stringify([row("a"), row("b")]);
+        const next = [row("a")];
+
+        expect(subscriptionListDeltas(prev, next, "messages")).toEqual([{ key: "b", op: "delete", table: "messages" }]);
+    });
+
+    it("emits nothing for an unchanged list (no row bodies differ)", () => {
+        expect.assertions(1);
+
+        const prev = JSON.stringify([row("a"), row("b")]);
+        const next = [row("a"), row("b")];
+
+        expect(subscriptionListDeltas(prev, next, "messages")).toEqual([]);
+    });
+
+    it("returns the snapshot sentinel when the new result is not an array", () => {
+        expect.assertions(1);
+
+        expect(subscriptionListDeltas(JSON.stringify([row("a")]), { count: 1 }, "messages")).toBeUndefined();
+    });
+
+    it("returns the snapshot sentinel when the previous snapshot is not an array", () => {
+        expect.assertions(1);
+
+        expect(subscriptionListDeltas(JSON.stringify({ count: 0 }), [row("a")], "messages")).toBeUndefined();
+    });
+
+    it("returns the snapshot sentinel when any row lacks a string _id", () => {
+        expect.assertions(2);
+
+        expect(subscriptionListDeltas(JSON.stringify([{ x: 1 }]), [{ x: 2 }], "messages")).toBeUndefined();
+        expect(subscriptionListDeltas(JSON.stringify([row("a")]), [row("a"), { x: 2 }], "messages")).toBeUndefined();
+    });
+
+    it("returns the snapshot sentinel when surviving rows were reordered (client can't reorder in place)", () => {
+        expect.assertions(1);
+
+        const prev = JSON.stringify([row("a"), row("b")]);
+        const next = [row("b"), row("a")];
+
+        expect(subscriptionListDeltas(prev, next, "messages")).toBeUndefined();
+    });
+
+    it("returns the snapshot sentinel on a near-total change where deltas would exceed the new length", () => {
+        expect.assertions(1);
+
+        // 2 deletes + 1 insert = 3 deltas for a new array of length 1 → snapshot.
+        const prev = JSON.stringify([row("a"), row("b")]);
+        const next = [row("c")];
+
+        expect(subscriptionListDeltas(prev, next, "messages")).toBeUndefined();
+    });
+
+    it("falls back to a non-empty table name when the read-table set is empty", () => {
+        expect.assertions(1);
+
+        const prev = JSON.stringify([row("a")]);
+        const next = [row("a"), row("b")];
+        const deltas = subscriptionListDeltas(prev, next, "");
+
+        expect(deltas?.[0]?.table).not.toBe("");
+    });
+});
+
+describe("shardDO subscription delta push", () => {
+    let state: ReturnType<typeof createFakeState>;
+
+    beforeEach(() => {
+        state = createFakeState();
+    });
+
+    const idRow = (id: string, rest: Record<string, unknown> = {}): Record<string, unknown> => {return { _creationTime: 1, _id: id, ...rest }};
+
+    const subscribeMessages = (shard: ReexecShard, ws: FakeWebSocket): Promise<void> =>
+        shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "messages:list" }, type: "subscribe" });
+
+    it("first push is a data snapshot; an additive change pushes a delta frame", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [idRow("a")], tables: new Set(["messages"]) });
+
+        await subscribeMessages(shard, ws);
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [idRow("a")], id: "sub-1", type: "data" });
+
+        shard.outcomes.set("messages:list", { result: [idRow("a"), idRow("b", { text: "hi" })], tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const last = JSON.parse(ws.sent.at(-1)!);
+
+        expect(last).toMatchObject({ id: "sub-1", type: "delta" });
+        expect(last.delta).toEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: "messages" });
+    });
+
+    it("a non-list result still pushes a data snapshot on a subsequent change", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: { count: 1 }, tables: new Set(["messages"]) });
+
+        await subscribeMessages(shard, ws);
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: { count: 1 }, id: "sub-1", type: "data" });
+
+        shard.outcomes.set("messages:list", { result: { count: 2 }, tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: { count: 2 }, id: "sub-1", type: "data" });
+    });
+
+    it("applying the pushed delta frames to the prior snapshot yields the new result", async () => {
+        expect.assertions(1);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [idRow("a"), idRow("b"), idRow("c")], tables: new Set(["messages"]) });
+
+        await subscribeMessages(shard, ws);
+
+        const baseline = (JSON.parse(ws.sent.at(-1)!) as { data: Record<string, unknown>[] }).data;
+        const sentBefore = ws.sent.length;
+
+        // Delete c, update a, insert d — 3 deltas for a length-3 result (under the cap).
+        const nextResult = [idRow("a", { text: "edited" }), idRow("b"), idRow("d")];
+
+        shard.outcomes.set("messages:list", { result: nextResult, tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const deltas = ws.sent
+            .slice(sentBefore)
+            .map((line) => JSON.parse(line) as { delta: MutationDelta; type: string })
+            .filter((frame) => frame.type === "delta")
+            .map((frame) => frame.delta);
+
+        // Apply each delta the same way the client's applyDelta does.
+        let merged = baseline;
+
+        for (const delta of deltas) {
+            if (delta.op === "delete") {
+                merged = merged.filter((entry) => entry["_id"] !== delta.key);
+            } else {
+                const index = merged.findIndex((entry) => entry["_id"] === delta.key);
+
+                merged = index === -1 ? [...merged, delta.row!] : merged.map((entry, position) => (position === index ? delta.row! : entry));
+            }
+        }
+
+        expect(merged).toEqual(nextResult);
     });
 });

@@ -184,6 +184,144 @@ interface SubscriptionMemo {
     tables: Set<string>;
 }
 
+/** Identity field every Cirrus document row carries. */
+const ROW_ID_FIELD = "_id";
+
+/**
+ * Fallback table name stamped on a delta when the subscription's read-table
+ * set is empty. The client only uses `table` for its structural guard
+ * ({@link MutationDelta} recognition) — `key`/`row`/`op` drive the actual
+ * merge — so any non-empty string is safe.
+ */
+const DELTA_FALLBACK_TABLE = "__cirrus__";
+
+/** Read a row's `_id` as a string; `undefined` when the row isn't a plain object with a string `_id`. */
+const readRowId = (row: unknown): string | undefined => {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+        return undefined;
+    }
+
+    const id = (row as Record<string, unknown>)[ROW_ID_FIELD];
+
+    return typeof id === "string" ? id : undefined;
+};
+
+/**
+ * Index an array of rows by `_id`, preserving insertion order. Returns
+ * `undefined` the moment any element lacks a string `_id` (the diff can't key
+ * such a list) — the caller then falls back to a full snapshot.
+ */
+const indexRowsById = (rows: unknown[]): undefined | { byId: Map<string, Record<string, unknown>>; order: string[] } => {
+    const byId = new Map<string, Record<string, unknown>>();
+    const order: string[] = [];
+
+    for (const row of rows) {
+        const id = readRowId(row);
+
+        if (id === undefined) {
+            return undefined;
+        }
+
+        byId.set(id, row as Record<string, unknown>);
+        order.push(id);
+    }
+
+    return { byId, order };
+};
+
+/**
+ * True when the rows present in BOTH lists keep the same relative order. The
+ * client merges updates in place and never reorders, so a survivor that moved
+ * can't be expressed as deltas.
+ */
+const survivorsKeepOrder = (
+    previous: { byId: Map<string, Record<string, unknown>>; order: string[] },
+    next: { byId: Map<string, Record<string, unknown>>; order: string[] },
+): boolean => {
+    const survivingPrevious = previous.order.filter((id) => next.byId.has(id));
+    const survivingNext = next.order.filter((id) => previous.byId.has(id));
+
+    if (survivingPrevious.length !== survivingNext.length) {
+        return false;
+    }
+
+    return survivingPrevious.every((id, index) => survivingNext[index] === id);
+};
+
+/**
+ * Diff the previously-sent list snapshot (`previousJson`, the memo's
+ * `lastJson`) against the new query result and produce per-row
+ * {@link MutationDelta}s the client can merge in place via `applyDelta` —
+ * Convex-parity live-pagination deltas (server half of gap #20).
+ *
+ * Returns `undefined` (caller falls back to a full `{type:"data"}` snapshot)
+ * unless ALL of these hold:
+ *
+ * 1. `previousJson` parses to an array (there IS a previous list to diff against).
+ * 2. `nextResult` is also an array.
+ * 3. Every row in both arrays is a plain object carrying a string `_id`.
+ * 4. Order preservation — rows present in BOTH arrays appear in the same relative order.
+ * 5. Chattiness cap — the number of deltas does not exceed the new array length (a near-total change is cheaper as a snapshot).
+ *
+ * Diff is keyed by `_id`: rows only in prev → `delete`; rows only in next →
+ * `insert`; rows in both whose JSON differs → `update`. Insert/update carry the
+ * full new `row`; delete omits it (matching the wire contract `@cirrus/client`
+ * parses). Deltas are ordered deletes-then-inserts/updates so the client never
+ * sees a transient over-length page.
+ */
+const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table: string): MutationDelta[] | undefined => {
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(previousJson);
+    } catch {
+        return undefined;
+    }
+
+    // (1) + (2): both sides must be arrays. (3): both must be id-keyable.
+    if (!Array.isArray(parsed) || !Array.isArray(nextResult)) {
+        return undefined;
+    }
+
+    const previous = indexRowsById(parsed);
+    const next = indexRowsById(nextResult);
+
+    if (previous === undefined || next === undefined) {
+        return undefined;
+    }
+
+    // (4): survivors keep their relative order.
+    if (!survivorsKeepOrder(previous, next)) {
+        return undefined;
+    }
+
+    const deltaTable = table === "" ? DELTA_FALLBACK_TABLE : table;
+    const deletes: MutationDelta[] = [];
+    const upserts: MutationDelta[] = [];
+
+    for (const id of previous.order) {
+        if (!next.byId.has(id)) {
+            deletes.push({ key: id, op: "delete", table: deltaTable });
+        }
+    }
+
+    for (const id of next.order) {
+        const nextRow = next.byId.get(id) as Record<string, unknown>;
+        const previousRow = previous.byId.get(id);
+
+        if (previousRow === undefined) {
+            upserts.push({ key: id, op: "insert", row: nextRow, table: deltaTable });
+        } else if (JSON.stringify(previousRow) !== JSON.stringify(nextRow)) {
+            upserts.push({ key: id, op: "update", row: nextRow, table: deltaTable });
+        }
+    }
+
+    const deltas = [...deletes, ...upserts];
+
+    // (5): a near-total change is better sent as a single snapshot.
+    return deltas.length > next.order.length ? undefined : deltas;
+};
+
 /**
  * Threshold at which a `__root__` DO triggers the size warning. 1 GiB —
  * exactly 10% of the 10 GiB per-DO SQLite ceiling, leaving plenty of runway
@@ -2217,6 +2355,13 @@ abstract class ShardDO {
      * Memoise `outcome` for `(ws, subId)` and push it to the socket, unless an
      * identical result was already sent. Always refreshes the memo's table set
      * so dependency tracking stays current even when the value is unchanged.
+     *
+     * When the result is a diffable list (Convex-parity live-pagination, gap
+     * #20), emit one `{type:"delta"}` frame per changed row instead of a full
+     * `{type:"data"}` snapshot — see {@link subscriptionListDeltas} for the
+     * five conditions under which deltas are safe. The first send (and any
+     * non-list / large-change result) falls back to the snapshot. The memo is
+     * always advanced to the new `lastJson`/`tables` regardless of path.
      */
     private pushSubscriptionData(ws: WebSocket, subId: string, outcome: SubscriptionOutcome): void {
         let memos = this.subMemos.get(ws);
@@ -2236,7 +2381,26 @@ abstract class ShardDO {
             return;
         }
 
+        // Try an incremental delta push when there's a prior list to diff
+        // against. `undefined` => not diffable, fall back to the snapshot below.
+        const deltas =
+            existing === undefined ? undefined : subscriptionListDeltas(existing.lastJson, outcome.result, outcome.tables.values().next().value ?? "");
+
         memos.set(subId, { lastJson: json, tables: outcome.tables });
+
+        if (deltas !== undefined) {
+            const idJson = JSON.stringify(subId);
+
+            for (const delta of deltas) {
+                try {
+                    ws.send(`{"type":"delta","id":${idJson},"delta":${JSON.stringify(delta)}}`);
+                } catch {
+                    /* socket may have been closed mid-flush */
+                }
+            }
+
+            return;
+        }
 
         try {
             ws.send(`{"type":"data","id":${JSON.stringify(subId)},"data":${json}}`);
@@ -2369,7 +2533,7 @@ abstract class ShardDO {
     }
 }
 
-export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
+export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas };
 export type {
     HibernatableWebSocket,
     RunShardApplyCdcArgs,

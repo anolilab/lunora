@@ -134,7 +134,7 @@ export type {
     ShardDOState,
     SubscriptionOutcome,
 } from "./shard-do.js";
-export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "./shard-do.js";
+export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do.js";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do.js";
 export type {
     ScheduledFunctionDoc,
