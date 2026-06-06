@@ -1,0 +1,13 @@
+{
+    "name": "ratelimit",
+    "description": "Durable, ORM-backed rate limiting (token-bucket / fixed-window / sliding-window) wired into your Cirrus schema and procedures.",
+    "requires": [],
+    "deps": {
+        "@cirrus/ratelimit": "workspace:*",
+        "@cirrus/server": "workspace:*"
+    },
+    "files": [
+        { "from": "schema.ts", "to": "cirrus/ratelimit/schema.ts", "merge": "schema-extension" },
+        { "from": "ratelimit.ts", "to": "cirrus/ratelimit/index.ts", "merge": "create-or-skip" }
+    ]
+}
