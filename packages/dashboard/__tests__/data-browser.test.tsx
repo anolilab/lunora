@@ -87,6 +87,28 @@ describe("dataBrowser", () => {
         expect(screen.getByTestId<HTMLButtonElement>("db-next").disabled).toBe(false);
     });
 
+    it("opens (and closes) the row-detail drawer from a row's Details button", async () => {
+        expect.assertions(2);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 2 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        const firstRow = screen.getAllByTestId("db-row")[0] as HTMLElement;
+
+        fireEvent.click(within(firstRow).getByText("Details"));
+
+        // The drawer opens with the row's fields.
+        await expect(screen.findByTestId("rd-fields")).resolves.toBeDefined();
+
+        fireEvent.click(screen.getByTestId("rd-close"));
+
+        expect(screen.queryByTestId("rd-panel")).toBeNull();
+    });
+
     it("pages forward and back through a table", async () => {
         expect.assertions(3);
 

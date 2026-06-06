@@ -19,12 +19,14 @@ describe("dashboardApp", () => {
         expect(screen.getByTestId("dash-app-token")).toBeDefined();
     });
 
-    it("renders the dashboard shell under the provider", () => {
+    it("renders the dashboard shell under the provider", async () => {
         expect.assertions(1);
 
         render(<DashboardApp baseUrl="https://app.example" />);
 
-        expect(screen.getByTestId("cirrus-dashboard")).toBeDefined();
+        // The shell renders inside the router's root route, which resolves its
+        // first match a tick after mount — await it rather than querying sync.
+        expect(await screen.findByTestId("cirrus-dashboard")).toBeDefined();
     });
 
     it("shows the connection badge (idle without a live socket)", () => {

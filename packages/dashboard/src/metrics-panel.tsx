@@ -1,9 +1,13 @@
 import { useCirrus } from "@cirrus/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ShardMetrics } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
+import { Button } from "./components/ui/button.js";
+import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card.js";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
+import { useT } from "./i18n-context.js";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import type { ShardMetricsResult } from "./metrics-aggregate.js";
@@ -77,6 +81,21 @@ const hitRate = (hits: number, misses: number): string => {
     return total === 0 ? "—" : `${((hits / total) * 100).toFixed(1)}%`;
 };
 
+/** A single labelled metric rendered as a compact stat Card. */
+const StatCard = ({ label, testId, value, valueSize = "lg" }: { label: string; testId?: string; value: ReactNode; valueSize?: "lg" | "xl" }): ReactElement => (
+    <Card className="rounded-md">
+        <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-normal text-muted-foreground">{label}</CardTitle>
+        </CardHeader>
+        <CardContent
+            className={valueSize === "xl" ? "text-2xl font-semibold tabular-nums text-foreground" : "text-lg font-semibold tabular-nums text-foreground"}
+            data-testid={testId}
+        >
+            {value}
+        </CardContent>
+    </Card>
+);
+
 /**
  * Health snapshot for a single shard: request / error counts (since the DO last
  * woke), its live SQLite size, and reactive-cache hit/miss stats when a cache is
@@ -94,6 +113,7 @@ const hitRate = (hits: number, misses: number): string => {
  */
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useCirrus();
+    const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     // The shard a successful one-shot last targeted. The live channel keys on
@@ -260,30 +280,31 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     }, []);
 
     return (
-        <div data-testid="cirrus-metrics">
-            <div>
+        <div className="space-y-4" data-testid="cirrus-metrics">
+            <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mt-shard-input" value={shardKey} />
-                <button data-testid="mt-refresh" onClick={refreshCurrent} type="button">
-                    Refresh
-                </button>
+                <Button data-testid="mt-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
+                    {t("Refresh")}
+                </Button>
                 <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="mt" />
-                <button data-testid="mt-aggregate" disabled={aggregating} onClick={runAggregate} type="button">
-                    {aggregating ? "Aggregating…" : "All shards"}
-                </button>
+                <Button data-testid="mt-aggregate" disabled={aggregating} onClick={runAggregate} size="sm" type="button" variant="secondary">
+                    {aggregating ? t("Aggregating…") : t("All shards")}
+                </Button>
                 {shardResults !== null && (
-                    <button data-testid="mt-aggregate-clear" onClick={clearAggregate} type="button">
-                        Hide
-                    </button>
+                    <Button data-testid="mt-aggregate-clear" onClick={clearAggregate} size="sm" type="button" variant="ghost">
+                        {t("Hide")}
+                    </Button>
                 )}
             </div>
 
-            <div data-testid="mt-trend">
-                <span>Requests / interval</span>
-                {history.length < 2 && <span data-testid="mt-sparkline-empty">collecting samples…</span>}
+            <div className="flex items-center gap-3 text-sm text-muted-foreground" data-testid="mt-trend">
+                <span>{t("Requests / interval")}</span>
+                {history.length < 2 && <span data-testid="mt-sparkline-empty">{t("collecting samples…")}</span>}
                 {history.length >= 2 && (
                     <>
                         <svg
-                            aria-label="Requests per interval over time"
+                            aria-label={t("Requests per interval over time")}
+                            className="text-primary"
                             data-testid="mt-sparkline"
                             height={SPARK_HEIGHT}
                             preserveAspectRatio="none"
@@ -293,93 +314,97 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                         >
                             <polyline fill="none" points={sparkline} stroke="currentColor" strokeWidth={1} />
                         </svg>
-                        <span data-testid="mt-sparkline-value">{currentDelta}</span>
+                        <span className="font-medium tabular-nums text-foreground" data-testid="mt-sparkline-value">
+                            {currentDelta}
+                        </span>
                     </>
                 )}
             </div>
 
             {error !== null && (
-                <p data-testid="mt-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="mt-error" role="alert">
                     {error}
                 </p>
             )}
 
             {metrics !== null && (
-                <dl data-testid="mt-stats">
-                    <dt>Shard</dt>
-                    <dd data-testid="mt-shard">{metrics.shard}</dd>
-
-                    <dt>Requests</dt>
-                    <dd data-testid="mt-requests">{metrics.requests}</dd>
-
-                    <dt>Errors</dt>
-                    <dd data-testid="mt-errors">
-                        {metrics.errors} ({errorRate})
-                    </dd>
-
-                    <dt>Uptime</dt>
-                    <dd data-testid="mt-uptime">{formatDuration(metrics.uptimeMs)}</dd>
-
-                    <dt>Database size</dt>
-                    <dd data-testid="mt-db-size">{formatBytes(metrics.databaseSize)}</dd>
-
-                    <dt>Cache hit rate</dt>
-                    <dd data-testid="mt-cache">
-                        {metrics.cache === null
-                            ? "no cache configured"
-                            : `${hitRate(metrics.cache.hits, metrics.cache.misses)} (${metrics.cache.entries.toString()} entries)`}
-                    </dd>
+                <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="mt-stats">
+                    <StatCard label={t("Shard")} testId="mt-shard" value={metrics.shard} />
+                    <StatCard label={t("Requests")} testId="mt-requests" value={metrics.requests} valueSize="xl" />
+                    <StatCard
+                        label={t("Errors")}
+                        testId="mt-errors"
+                        value={
+                            <>
+                                {metrics.errors} ({errorRate})
+                            </>
+                        }
+                        valueSize="xl"
+                    />
+                    <StatCard label={t("Uptime")} testId="mt-uptime" value={formatDuration(metrics.uptimeMs)} />
+                    <StatCard label={t("Database size")} testId="mt-db-size" value={formatBytes(metrics.databaseSize)} />
+                    <StatCard
+                        label={t("Cache hit rate")}
+                        testId="mt-cache"
+                        value={
+                            metrics.cache === null
+                                ? t("no cache configured")
+                                : t("{rate} ({count} entries)", { count: metrics.cache.entries, rate: hitRate(metrics.cache.hits, metrics.cache.misses) })
+                        }
+                    />
                 </dl>
             )}
 
             {aggregate !== null && shardResults !== null && (
-                <div data-testid="mt-aggregate-view">
-                    <dl data-testid="mt-aggregate-stats">
-                        <dt>Shards</dt>
-                        <dd data-testid="mt-agg-shards">
-                            {aggregate.reachable} reachable
-                            {aggregate.failed > 0 ? `, ${aggregate.failed.toString()} unreachable` : ""}
-                        </dd>
-
-                        <dt>Total requests</dt>
-                        <dd data-testid="mt-agg-requests">{aggregate.totalRequests}</dd>
-
-                        <dt>Total errors</dt>
-                        <dd data-testid="mt-agg-errors">{aggregate.totalErrors}</dd>
-
-                        <dt>Total database size</dt>
-                        <dd data-testid="mt-agg-db-size">{formatBytes(aggregate.totalDatabaseSize)}</dd>
-
-                        <dt>Combined cache hit rate</dt>
-                        <dd data-testid="mt-agg-cache">{aggregate.hitRate === null ? "no cache configured" : `${(aggregate.hitRate * 100).toFixed(1)}%`}</dd>
+                <div className="space-y-4" data-testid="mt-aggregate-view">
+                    <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="mt-aggregate-stats">
+                        <StatCard
+                            label={t("Shards")}
+                            testId="mt-agg-shards"
+                            value={
+                                aggregate.failed > 0
+                                    ? t("{reachable} reachable, {failed} unreachable", { failed: aggregate.failed, reachable: aggregate.reachable })
+                                    : t("{reachable} reachable", { reachable: aggregate.reachable })
+                            }
+                        />
+                        <StatCard label={t("Total requests")} testId="mt-agg-requests" value={aggregate.totalRequests} valueSize="xl" />
+                        <StatCard label={t("Total errors")} testId="mt-agg-errors" value={aggregate.totalErrors} valueSize="xl" />
+                        <StatCard label={t("Total database size")} testId="mt-agg-db-size" value={formatBytes(aggregate.totalDatabaseSize)} />
+                        <StatCard
+                            label={t("Combined cache hit rate")}
+                            testId="mt-agg-cache"
+                            value={aggregate.hitRate === null ? t("no cache configured") : `${(aggregate.hitRate * 100).toFixed(1)}%`}
+                        />
                     </dl>
 
-                    <table data-testid="mt-agg-table">
-                        <thead>
-                            <tr>
-                                <th>shard</th>
-                                <th>requests</th>
-                                <th>errors</th>
-                                <th>db size</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+                    <Table data-testid="mt-agg-table">
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>{t("shard")}</TableHead>
+                                <TableHead>{t("requests")}</TableHead>
+                                <TableHead>{t("errors")}</TableHead>
+                                <TableHead>{t("db size")}</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
                             {shardResults.map((result) => (
-                                <tr data-testid={`mt-agg-row-${result.shard}`} key={result.shard}>
-                                    <td>{result.shard}</td>
+                                <TableRow data-testid={`mt-agg-row-${result.shard}`} key={result.shard}>
+                                    <TableCell>{result.shard}</TableCell>
                                     {result.metrics === null ? (
-                                        <td colSpan={3}>{result.error ?? "unreachable"}</td>
+                                        <TableCell className="text-destructive" colSpan={3}>
+                                            {result.error ?? t("unreachable")}
+                                        </TableCell>
                                     ) : (
                                         <>
-                                            <td>{result.metrics.requests}</td>
-                                            <td>{result.metrics.errors}</td>
-                                            <td>{formatBytes(result.metrics.databaseSize)}</td>
+                                            <TableCell className="tabular-nums">{result.metrics.requests}</TableCell>
+                                            <TableCell className="tabular-nums">{result.metrics.errors}</TableCell>
+                                            <TableCell className="tabular-nums">{formatBytes(result.metrics.databaseSize)}</TableCell>
                                         </>
                                     )}
-                                </tr>
+                                </TableRow>
                             ))}
-                        </tbody>
-                    </table>
+                        </TableBody>
+                    </Table>
                 </div>
             )}
         </div>

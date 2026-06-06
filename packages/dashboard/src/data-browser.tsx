@@ -10,8 +10,10 @@ import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
 import { adminRef, callOptions, fireAndForget, formatCell } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
+import { RowDetailDrawer } from "./row-detail.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
+import { StorageTierHeader } from "./storage-tier.js";
 import useDebounced from "./use-debounced.js";
 import useLiveAdmin from "./use-live-admin.js";
 import { useLiveToggle } from "./use-live-toggle.js";
@@ -311,6 +313,7 @@ const DataBrowserTableView = ({
     editable,
     onDelete,
     onEdit,
+    onInspect,
     scrollRef,
     table,
     tableRows,
@@ -320,6 +323,7 @@ const DataBrowserTableView = ({
     editable: boolean;
     onDelete: (id: null | string) => void;
     onEdit: (id: null | string, original: TableRow) => void;
+    onInspect: (original: TableRow) => void;
     scrollRef: React.RefObject<HTMLDivElement | null>;
     table: Table<TableRow>;
     tableRows: Row<TableRow>[];
@@ -345,32 +349,44 @@ const DataBrowserTableView = ({
                 {tableRow.getVisibleCells().map((cell) => (
                     <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
                 ))}
-                {editable && (
-                    <td>
-                        <button
-                            data-testid={`db-edit-${key}`}
-                            disabled={id === null}
-                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the original row; admin dev-tool render path
-                            onClick={() => {
-                                onEdit(id, original);
-                            }}
-                            type="button"
-                        >
-                            Edit
-                        </button>
-                        <ConfirmButton
-                            confirmLabel="Delete?"
-                            disabled={id === null}
-                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the row id; admin dev-tool render path
-                            onConfirm={() => {
-                                onDelete(id);
-                            }}
-                            testId={`db-delete-${key}`}
-                        >
-                            Delete
-                        </ConfirmButton>
-                    </td>
-                )}
+                <td>
+                    <button
+                        data-testid={`db-inspect-${key}`}
+                        // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the original row; admin dev-tool render path
+                        onClick={() => {
+                            onInspect(original);
+                        }}
+                        type="button"
+                    >
+                        Details
+                    </button>
+                    {editable && (
+                        <>
+                            <button
+                                data-testid={`db-edit-${key}`}
+                                disabled={id === null}
+                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the original row; admin dev-tool render path
+                                onClick={() => {
+                                    onEdit(id, original);
+                                }}
+                                type="button"
+                            >
+                                Edit
+                            </button>
+                            <ConfirmButton
+                                confirmLabel="Delete?"
+                                disabled={id === null}
+                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the row id; admin dev-tool render path
+                                onConfirm={() => {
+                                    onDelete(id);
+                                }}
+                                testId={`db-delete-${key}`}
+                            >
+                                Delete
+                            </ConfirmButton>
+                        </>
+                    )}
+                </td>
             </tr>
         );
     };
@@ -388,7 +404,7 @@ const DataBrowserTableView = ({
                                 </button>
                             </th>
                         ))}
-                        {editable && <th aria-label="Row actions" />}
+                        <th aria-label="Row actions" />
                     </tr>
                 </thead>
                 <tbody style={tbodyStyle}>{virtualRows.map((virtualRow) => renderRow(virtualRow))}</tbody>
@@ -534,6 +550,7 @@ interface DataBrowserModel {
     live: boolean;
     liveError: string | undefined;
     loadTables: () => void;
+    navigateToRef: (target: string, id: string) => void;
     onEditorDocumentChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     onRowDelete: (id: null | string) => void;
@@ -856,6 +873,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         live,
         liveError,
         loadTables,
+        navigateToRef,
         onEditorDocumentChange,
         onFilterChange,
         onRowDelete,
@@ -912,6 +930,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         live,
         liveError,
         loadTables,
+        navigateToRef,
         onEditorDocumentChange,
         onFilterChange,
         onRowDelete,
@@ -937,8 +956,17 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         writeError,
     } = useDataBrowser({ initialShardKey, pageSize });
 
+    // The row whose full document the detail drawer is showing, if any. Pure
+    // view state — kept out of the data hook since it touches no fetch logic.
+    const [inspecting, setInspecting] = useState<TableRow | null>(null);
+    const closeInspect = useCallback((): void => {
+        setInspecting(null);
+    }, []);
+
     return (
         <div data-testid="cirrus-data-browser">
+            <StorageTierHeader tier="shard" />
+
             <DataBrowserToolbar onLoadTables={loadTables} onShardChange={setShardKey} shardKey={shardKey} />
 
             {tablesError !== null && (
@@ -986,6 +1014,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                             editable={editable}
                             onDelete={onRowDelete}
                             onEdit={onRowEdit}
+                            onInspect={setInspecting}
                             scrollRef={table.scrollRef}
                             table={table.table}
                             tableRows={table.tableRows}
@@ -1006,6 +1035,10 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                         total={total}
                     />
                 </div>
+            )}
+
+            {inspecting !== null && page !== null && (
+                <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={navigateToRef} refs={page.refs} row={inspecting} />
             )}
         </div>
     );

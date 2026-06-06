@@ -1,10 +1,13 @@
 import type { ReactElement } from "react";
 import { useCallback, useState } from "react";
 
+import { Button } from "./components/ui/button.js";
+import { useT } from "./i18n-context.js";
+
 export interface ConfirmButtonProps {
     /** Label for the initial trigger (e.g. `Delete`). */
     readonly children: string;
-    /** Label for the confirm step; defaults to `Confirm`. */
+    /** Label for the confirm step; defaults to a localised `Confirm`. */
     readonly confirmLabel?: string;
     /** Disable the trigger (e.g. while a write is in flight). */
     readonly disabled?: boolean;
@@ -21,7 +24,8 @@ export interface ConfirmButtonProps {
  * trigger keeps its `testId` (so existing tests that click it still reach the
  * first step); the actual action only runs on the `${testId}-confirm` click.
  */
-export const ConfirmButton = ({ children, confirmLabel = "Confirm", disabled = false, onConfirm, testId }: ConfirmButtonProps): ReactElement => {
+export const ConfirmButton = ({ children, confirmLabel, disabled = false, onConfirm, testId }: ConfirmButtonProps): ReactElement => {
+    const t = useT();
     const [confirming, setConfirming] = useState(false);
 
     const startConfirm = useCallback((): void => {
@@ -39,20 +43,20 @@ export const ConfirmButton = ({ children, confirmLabel = "Confirm", disabled = f
 
     if (!confirming) {
         return (
-            <button data-testid={testId} disabled={disabled} onClick={startConfirm} type="button">
+            <Button data-testid={testId} disabled={disabled} onClick={startConfirm} size="sm" type="button" variant="outline">
                 {children}
-            </button>
+            </Button>
         );
     }
 
     return (
-        <span data-testid={`${testId}-prompt`} role="group">
-            <button data-testid={`${testId}-confirm`} disabled={disabled} onClick={acceptConfirm} type="button">
-                {confirmLabel}
-            </button>
-            <button data-testid={`${testId}-cancel`} onClick={cancelConfirm} type="button">
-                Cancel
-            </button>
+        <span className="inline-flex items-center gap-1" data-testid={`${testId}-prompt`} role="group">
+            <Button data-testid={`${testId}-confirm`} disabled={disabled} onClick={acceptConfirm} size="sm" type="button" variant="destructive">
+                {confirmLabel ?? t("Confirm")}
+            </Button>
+            <Button data-testid={`${testId}-cancel`} onClick={cancelConfirm} size="sm" type="button" variant="ghost">
+                {t("Cancel")}
+            </Button>
         </span>
     );
 };

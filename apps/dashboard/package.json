@@ -15,13 +15,18 @@
     },
     "dependencies": {
         "@cirrus/dashboard": "workspace:*",
+        "@fontsource-variable/geist": "catalog:ui",
         "react": "catalog:frontend",
-        "react-dom": "catalog:frontend"
+        "react-dom": "catalog:frontend",
+        "shadcn": "catalog:ui"
     },
     "devDependencies": {
+        "@tailwindcss/vite": "catalog:vite",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
+        "tailwindcss": "catalog:vite",
+        "tw-animate-css": "catalog:vite",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
         "vitest": "catalog:test"

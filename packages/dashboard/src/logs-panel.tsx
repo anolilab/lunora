@@ -6,6 +6,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { LogEntry, LogLevel, LogsResult } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
+import { Badge } from "./components/ui/badge.js";
+import { Button } from "./components/ui/button.js";
+import { Input } from "./components/ui/input.js";
+import { useT } from "./i18n-context.js";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
@@ -24,8 +28,6 @@ const SCROLL_STYLE: CSSProperties = { height: SCROLL_HEIGHT, overflow: "auto" };
 
 /** Static base style for an absolutely-positioned virtualized row. */
 const ROW_BASE_STYLE: CSSProperties = {
-    display: "flex",
-    gap: 12,
     left: 0,
     position: "absolute",
     top: 0,
@@ -44,6 +46,16 @@ const observeViewportRect = (instance: Virtualizer<HTMLDivElement, Element>, cal
     observeElementRect(instance, (rect) => {
         callback(rect.height > 0 ? rect : { height: SCROLL_HEIGHT, width: rect.width });
     });
+
+type BadgeVariant = "default" | "destructive" | "outline" | "secondary";
+
+/** Maps a log level to a shadcn Badge variant for Supabase-style severity chips. */
+const LEVEL_VARIANT: Record<LogLevel, BadgeVariant> = {
+    debug: "secondary",
+    error: "destructive",
+    info: "outline",
+    warn: "secondary",
+};
 
 interface LogRowProps {
     readonly entry: LogEntry;
@@ -66,11 +78,26 @@ const LogRow = ({ entry, index, measureRef, start }: LogRowProps): ReactElement 
     }, [start]);
 
     return (
-        <div data-index={index} data-testid="lg-row" ref={measureRef} role="row" style={style}>
-            <span role="gridcell">{new Date(entry.timestamp).toLocaleString()}</span>
-            <span role="gridcell">{entry.level}</span>
-            <span role="gridcell">{entry.functionPath ?? "—"}</span>
-            <span role="gridcell">{entry.message}</span>
+        <div
+            className="flex items-center border-b border-border px-3 py-1.5 font-mono text-xs hover:bg-muted/50"
+            data-index={index}
+            data-testid="lg-row"
+            ref={measureRef}
+            role="row"
+            style={style}
+        >
+            <span className="w-44 shrink-0 tabular-nums text-muted-foreground" role="gridcell">
+                {new Date(entry.timestamp).toLocaleString()}
+            </span>
+            <span className="w-20 shrink-0" role="gridcell">
+                <Badge variant={LEVEL_VARIANT[entry.level]}>{entry.level}</Badge>
+            </span>
+            <span className="w-48 shrink-0 truncate text-muted-foreground" role="gridcell">
+                {entry.functionPath ?? "—"}
+            </span>
+            <span className="flex-1 truncate" role="gridcell">
+                {entry.message}
+            </span>
         </div>
     );
 };
@@ -94,6 +121,7 @@ const GET_LOGS = adminRef(ADMIN_FUNCTIONS.getLogs);
  */
 export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => {
     const client = useCirrus();
+    const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     // The shard a successful one-shot last targeted. The live channel keys on
@@ -208,16 +236,29 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     }, []);
 
     return (
-        <div data-testid="cirrus-logs">
-            <div>
+        <div className="flex flex-col gap-3" data-testid="cirrus-logs">
+            <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="lg-shard-input" value={shardKey} />
-                <button data-testid="lg-refresh" onClick={refreshCurrent} type="button">
-                    Refresh
-                </button>
+                <Button data-testid="lg-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
+                    {t("Refresh")}
+                </Button>
                 <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="lg" />
-                <input aria-label="Search messages" data-testid="lg-search" onChange={onSearchChange} placeholder="search message" value={search} />
-                <select aria-label="Level filter" data-testid="lg-level-filter" onChange={onLevelChange} value={levelFilter}>
-                    <option value="all">all</option>
+                <Input
+                    aria-label={t("Search messages")}
+                    className="h-8 w-48"
+                    data-testid="lg-search"
+                    onChange={onSearchChange}
+                    placeholder={t("search message")}
+                    value={search}
+                />
+                <select
+                    aria-label={t("Level filter")}
+                    className="h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                    data-testid="lg-level-filter"
+                    onChange={onLevelChange}
+                    value={levelFilter}
+                >
+                    <option value="all">{t("all")}</option>
                     {levels.map((level) => (
                         <option key={level} value={level}>
                             {level}
@@ -227,16 +268,20 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
             </div>
 
             {error !== null && (
-                <p data-testid="lg-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="lg-error" role="alert">
                     {error}
                 </p>
             )}
 
-            {error === null && filtered.length === 0 && <p data-testid="lg-empty">No logs.</p>}
+            {error === null && filtered.length === 0 && (
+                <p className="text-sm text-muted-foreground" data-testid="lg-empty">
+                    {t("No logs.")}
+                </p>
+            )}
 
             {filtered.length > 0 && (
-                <div data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
-                    <div aria-label="Recent logs" data-testid="lg-table" role="grid" style={gridStyle}>
+                <div className="rounded-md border border-border" data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
+                    <div aria-label={t("Recent logs")} data-testid="lg-table" role="grid" style={gridStyle}>
                         {virtualRows.map((virtualRow) => (
                             <LogRow
                                 entry={filtered[virtualRow.index] as LogEntry}

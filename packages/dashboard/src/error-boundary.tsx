@@ -3,8 +3,17 @@ import { Component } from "react";
 
 interface ErrorBoundaryProps {
     readonly children: ReactNode;
+
+    /**
+     * Localised fallback heading. When omitted, falls back to `${label} failed`
+     * (or `Something went wrong` with no label). A class component can't use the
+     * `useT` hook, so localised text is passed in by its parents.
+     */
+    readonly fallbackTitle?: string;
     /** Optional label naming the boundary's region, shown in the fallback. */
     readonly label?: string;
+    /** Localised label for the retry button; defaults to `Try again`. */
+    readonly retryLabel?: string;
 }
 
 interface ErrorBoundaryState {
@@ -38,21 +47,23 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     };
 
     public override render(): ReactNode {
-        const { children, label } = this.props;
+        const { children, fallbackTitle, label, retryLabel } = this.props;
         const { error } = this.state;
 
         if (error === null) {
             return <>{children}</>;
         }
 
+        const title = fallbackTitle ?? (label === undefined ? "Something went wrong" : `${label} failed`);
+
         return (
             <div data-testid="dash-error-boundary" role="alert" style={CONTAINER_STYLE}>
-                <strong>{label === undefined ? "Something went wrong" : `${label} failed`}</strong>
+                <strong>{title}</strong>
                 <pre data-testid="dash-error-message" style={MESSAGE_STYLE}>
                     {error.message}
                 </pre>
                 <button data-testid="dash-error-retry" onClick={this.reset} type="button">
-                    Try again
+                    {retryLabel ?? "Try again"}
                 </button>
             </div>
         );

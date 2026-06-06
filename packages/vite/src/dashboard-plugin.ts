@@ -1,36 +1,29 @@
+import type { ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
+// Shared dashboard-hosting helpers, inlined at build time (devDependency, so
+// packem bundles rather than externalizes them). `@cirrus/cli`'s `cirrus dev`
+// inlines the same module, so the Vite route and the CLI server render an
+// identical dashboard.
+import type { DashboardAssets } from "@cirrus/dashboard-host";
+import { loadDashboardAssets, renderDashboardHtml, resolveAdminToken } from "@cirrus/dashboard-host";
 import type { Plugin, ViteDevServer } from "vite";
 
 /** Dev-server path the dashboard SPA is served from. */
 const DASHBOARD_PATH = "/__cirrus";
+/** Static asset routes the dashboard document references. */
+const DASHBOARD_SCRIPT_PATH: string = `${DASHBOARD_PATH}/dashboard.js`;
+const DASHBOARD_STYLE_PATH: string = `${DASHBOARD_PATH}/styles.css`;
 
 const LEADING_SLASH = /^\//;
 const TRAILING_SLASH = /\/$/;
 
-/**
- * The single-page document served at {@link DASHBOARD_PATH}. The inline module
- * script imports `@cirrus/dashboard/mount` so Vite resolves + transforms it like
- * any project module (HMR, deps pre-bundling). `transformIndexHtml` rewrites the
- * bare specifier before this reaches the browser.
- */
-const DASHBOARD_HTML = `<!doctype html>
-<html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Cirrus Dashboard</title>
-    </head>
-    <body>
-        <div id="root"></div>
-        <script type="module">
-            import { mountDashboard } from "@cirrus/dashboard/mount";
-
-            mountDashboard();
-        </script>
-    </body>
-</html>
-`;
+/** Write a 200 response with the given body and content type. */
+const sendOk = (response: ServerResponse, body: Buffer | string, contentType: string): void => {
+    response.statusCode = 200;
+    response.setHeader("Content-Type", contentType);
+    response.end(body);
+};
 
 /**
  * Build the user-facing dashboard URL from the dev server's resolved address.
@@ -60,21 +53,98 @@ const buildDashboardUrl = (input: { address?: AddressInfo | string; base?: strin
 };
 
 /**
+ * Parse the request pathname, tolerating a query string and a trailing slash so
+ * `/__cirrus`, `/__cirrus?x`, `/__cirrus/`, and `/__cirrus/?x` all match.
+ */
+const pathnameOf = (url: string): string => {
+    try {
+        return new URL(url, "http://localhost").pathname.replace(TRAILING_SLASH, "");
+    } catch {
+        return url;
+    }
+};
+
+/**
+ * Connect middleware that serves the static dashboard. Extracted from
+ * `configureServer` so each function stays small. Memoises the asset bytes on
+ * first use; restart the dev server to pick up a dashboard rebuild.
+ */
+const createDashboardHandler = (
+    server: ViteDevServer,
+    isNonLoopbackBind: boolean,
+): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
+    let assets: DashboardAssets | undefined;
+    let html: string | undefined;
+
+    return (request: { url?: string }, response: ServerResponse, next: () => void): void => {
+        const pathname = pathnameOf(request.url ?? "");
+
+        // Own the mount and everything under it (`/__cirrus`, `/__cirrus/`,
+        // `/__cirrus/globals`, …); anything else passes through.
+        if (pathname !== DASHBOARD_PATH && !pathname.startsWith(`${DASHBOARD_PATH}/`)) {
+            next();
+
+            return;
+        }
+
+        // The dashboard ships admin tooling that assumes the developer is the
+        // only consumer — never expose it on a non-loopback bind (`--host`).
+        if (isNonLoopbackBind) {
+            response.statusCode = 403;
+            response.setHeader("Content-Type", "text/plain");
+            response.end("Cirrus dashboard is only available on loopback hosts in dev.");
+
+            return;
+        }
+
+        // Static assets are exact paths; every other route under the mount is an
+        // SPA route and gets the history fallback (the document) below, so a hard
+        // load of a deep link like `/__cirrus/globals` boots the router there.
+        if (pathname === DASHBOARD_SCRIPT_PATH || pathname === DASHBOARD_STYLE_PATH) {
+            assets ??= loadDashboardAssets(server.config.logger);
+
+            if (assets === undefined) {
+                response.statusCode = 501;
+                response.setHeader("Content-Type", "text/plain");
+                response.end("Cirrus dashboard assets not found — install and build @cirrus/dashboard.");
+
+                return;
+            }
+
+            const isScript = pathname === DASHBOARD_SCRIPT_PATH;
+
+            sendOk(response, isScript ? assets.script : assets.styles, isScript ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8");
+
+            return;
+        }
+
+        // Built once per dev session: the basepath is fixed, and the admin token
+        // is read from `.dev.vars` at startup. `config.root` is absent on mocked
+        // test servers — fall back to cwd.
+        html ??= renderDashboardHtml({
+            adminToken: resolveAdminToken(server.config.root ?? process.cwd()),
+            basePath: DASHBOARD_PATH,
+            scriptSrc: DASHBOARD_SCRIPT_PATH,
+            styleHref: DASHBOARD_STYLE_PATH,
+        });
+
+        sendOk(response, html, "text/html; charset=utf-8");
+    };
+};
+
+/**
  * Vite plugin that serves the composed Cirrus dashboard at
  * {@link DASHBOARD_PATH} during dev and prints its URL once the server is
  * listening. Dev-only (`apply: "serve"`); it adds nothing to production builds.
  *
  * Because `cirrus dev` spawns Vite, this makes the dashboard available on
- * `cirrus dev` and on a plain `vite` with no per-project files.
+ * `cirrus dev` and on a plain `vite` with no per-project files. The dashboard
+ * is served as a prebuilt static bundle, independent of the host app.
  */
 const dashboardPlugin = (): Plugin => {
     return {
         apply: "serve",
         configureServer(server: ViteDevServer) {
-            // Refuse to serve the dashboard route when Vite is bound to a
-            // non-loopback host (e.g. `--host`, or `server.host` set to an
-            // external interface). The dashboard ships admin tooling that
-            // assumes the developer is the only consumer.
             // `config.server` is typed required, but partial/mocked dev-server objects omit it.
             // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive against partial ViteDevServer objects
             const configuredHost = server.config.server?.host;
@@ -85,53 +155,10 @@ const dashboardPlugin = (): Plugin => {
                 configuredHost !== "127.0.0.1" &&
                 configuredHost !== "::1";
 
-            server.middlewares.use((request, response, next) => {
-                const url = request.url ?? "";
+            server.middlewares.use(createDashboardHandler(server, isNonLoopbackBind));
 
-                // Parse the pathname so query strings and an optional trailing
-                // slash don't change the match (`/__cirrus`, `/__cirrus?x`,
-                // `/__cirrus/`, and `/__cirrus/?x` all serve the dashboard).
-                let pathname: string;
-
-                try {
-                    pathname = new URL(url, "http://localhost").pathname.replace(TRAILING_SLASH, "");
-                } catch {
-                    pathname = url;
-                }
-
-                if (pathname !== DASHBOARD_PATH) {
-                    next();
-
-                    return;
-                }
-
-                if (isNonLoopbackBind) {
-                    response.statusCode = 403;
-                    response.setHeader("Content-Type", "text/plain");
-                    response.end("Cirrus dashboard is only available on loopback hosts in dev.");
-
-                    return;
-                }
-
-                server
-                    .transformIndexHtml(url, DASHBOARD_HTML)
-                    .then((html) => {
-                        response.statusCode = 200;
-                        response.setHeader("Content-Type", "text/html");
-                        response.end(html);
-
-                        return undefined;
-                    })
-                    .catch((error: unknown) => {
-                        // Surface transform failures rather than hanging the request.
-                        response.statusCode = 500;
-                        response.end(error instanceof Error ? error.message : String(error));
-                    });
-            });
-
-            // Print the dashboard URL once the server is actually listening, so
-            // the address/port are known. Returned hook runs after internal
-            // middlewares are installed.
+            // Surface the dashboard URL at startup. Returned hook runs after
+            // internal middlewares are installed.
             return () => {
                 const announce = (): void => {
                     const url = buildDashboardUrl({
@@ -140,10 +167,23 @@ const dashboardPlugin = (): Plugin => {
                         resolvedLocal: server.resolvedUrls?.local[0],
                     });
 
-                    server.config.logger.info(`  [36m➜[0m  [1mCirrus dashboard[0m: [36m${url}[0m`);
+                    // Match Vite's banner format so the line slots in beneath the
+                    // Local/Network URLs (`Cirrus:` padded to align the colons).
+                    server.config.logger.info(`  [32m➜[39m  [1mCirrus[22m:  [36m${url}[39m`);
                 };
 
-                if (server.httpServer?.listening === true) {
+                // Preferred: splice the line into Vite's startup banner by
+                // wrapping `printUrls`, so it prints right under Local/Network
+                // (and reprints when the user hits `u`). Fall back to announcing
+                // on `listening` when `printUrls` is unavailable (mocked server).
+                if (typeof server.printUrls === "function") {
+                    const printUrls = server.printUrls.bind(server);
+
+                    server.printUrls = (): void => {
+                        printUrls();
+                        announce();
+                    };
+                } else if (server.httpServer?.listening === true) {
                     announce();
                 } else {
                     server.httpServer?.once("listening", announce);
@@ -154,4 +194,4 @@ const dashboardPlugin = (): Plugin => {
     };
 };
 
-export { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin };
+export { buildDashboardUrl, DASHBOARD_PATH, DASHBOARD_SCRIPT_PATH, DASHBOARD_STYLE_PATH, dashboardPlugin };

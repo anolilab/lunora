@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
 import { errorMessage, fireAndForget, formatCell } from "./internal.js";
+import { StorageTierHeader } from "./storage-tier.js";
 
 interface GlobalDataBrowserProps {
     /** Rows requested per page. Clamped server-side to `[1, 500]`. */
@@ -111,6 +112,8 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
 
     return (
         <div data-testid="cirrus-global-data-browser">
+            <StorageTierHeader tier="global" />
+
             <button data-testid="gdb-load-tables" onClick={reloadTables} type="button">
                 Reload tables
             </button>

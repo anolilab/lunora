@@ -29,13 +29,16 @@ const renderDashboard = (mock: MockClientHooks) => (
 );
 
 describe("dashboard", () => {
-    it("shows every tab by default", () => {
+    it("shows every tab by default", async () => {
         expect.assertions(11);
 
         render(renderDashboard(createClient()));
 
+        // The sidebar renders inside the router's root route (resolved a tick
+        // after mount), so await each tab rather than querying synchronously.
         for (const tab of ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics", "logs"]) {
-            expect(screen.getByTestId(`dash-tab-${tab}`)).toBeDefined();
+            // eslint-disable-next-line no-await-in-loop -- after the first resolves the rest are already present; awaiting each keeps the assertion shape simple.
+            expect(await screen.findByTestId(`dash-tab-${tab}`)).toBeDefined();
         }
     });
 
@@ -44,7 +47,7 @@ describe("dashboard", () => {
 
         render(renderDashboard(createClient()));
 
-        fireEvent.click(screen.getByTestId("dash-tab-schedule"));
+        fireEvent.click(await screen.findByTestId("dash-tab-schedule"));
 
         const scheduledJobs = await screen.findByTestId("cirrus-scheduled-jobs");
 
@@ -56,7 +59,7 @@ describe("dashboard", () => {
 
         render(renderDashboard(createClient()));
 
-        fireEvent.click(screen.getByTestId("dash-tab-migrations"));
+        fireEvent.click(await screen.findByTestId("dash-tab-migrations"));
 
         await screen.findByTestId("cirrus-migrations");
 

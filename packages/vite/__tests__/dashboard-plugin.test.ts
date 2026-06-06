@@ -57,8 +57,8 @@ describe("dashboardPlugin", () => {
         expectTypeOf(plugin.configureServer).not.toBeUndefined();
     });
 
-    it("serves the dashboard HTML at /__cirrus and passes other paths through", async () => {
-        expect.assertions(8);
+    it("serves static dashboard HTML at /__cirrus and passes other paths through", () => {
+        expect.assertions(7);
 
         const plugin = dashboardPlugin();
         let middleware: ((request: { url?: string }, response: ServerResponse, next: () => void) => void) | undefined;
@@ -78,7 +78,6 @@ describe("dashboardPlugin", () => {
                 },
             },
             resolvedUrls: { local: ["http://localhost:5173/"], network: [] },
-            transformIndexHtml: vi.fn<(url: string, html: string) => Promise<string>>(async (_url: string, html: string) => html),
         } as unknown as ViteDevServer;
 
         // configureServer returns a post-hook; invoking it prints the URL.
@@ -99,20 +98,17 @@ describe("dashboardPlugin", () => {
         expect(next).toHaveBeenCalledTimes(1);
         expect((passthroughResponse as unknown as { end: ReturnType<typeof vi.fn> }).end).not.toHaveBeenCalled();
 
-        // The dashboard path serves transformed HTML.
+        // The dashboard path serves the static HTML verbatim — no transform, and
+        // it points at the prebuilt static bundle, not a source module.
         const end = vi.fn<(chunk?: string) => void>();
         const dashResponse = { end, setHeader: vi.fn<(name: string, value: string) => void>(), statusCode: 0 } as unknown as ServerResponse;
         const dashNext = vi.fn<() => void>();
 
         middleware?.({ url: DASHBOARD_PATH }, dashResponse, dashNext);
-        await Promise.resolve();
-        await Promise.resolve();
 
         expect(dashNext).not.toHaveBeenCalled();
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server; no `this` binding to lose
-        expect(server.transformIndexHtml).toHaveBeenCalledWith(DASHBOARD_PATH, expect.stringContaining("@cirrus/dashboard/mount"));
         expect(end).toHaveBeenCalledTimes(1);
-        expect((end.mock.calls[0] as [string])[0]).toContain("@cirrus/dashboard/mount");
+        expect((end.mock.calls[0] as [string])[0]).toContain(`${DASHBOARD_PATH}/dashboard.js`);
 
         // The post-hook announces the dashboard URL.
         post();
@@ -121,12 +117,33 @@ describe("dashboardPlugin", () => {
         expect(server.config.logger.info).toHaveBeenCalledWith(expect.stringContaining("/__cirrus"));
     });
 
+    it("handles the static asset routes rather than passing them through", () => {
+        expect.assertions(5);
+
+        const middleware = installMiddleware("localhost");
+        const next = vi.fn<() => void>();
+
+        // Both the script and stylesheet routes are owned by the plugin. They
+        // resolve to 200 when @cirrus/dashboard is built, or 501 when it isn't —
+        // either way the request must not fall through to the next middleware.
+        for (const url of [`${DASHBOARD_PATH}/dashboard.js`, `${DASHBOARD_PATH}/styles.css`]) {
+            const { end, response } = makeResponse();
+
+            middleware({ url }, response, next);
+
+            expect([200, 501]).toContain(response.statusCode);
+            expect(end).toHaveBeenCalledTimes(1);
+        }
+
+        expect(next).not.toHaveBeenCalled();
+    });
+
     const installMiddleware = (configuredHost: unknown): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
         const plugin = dashboardPlugin();
         let middleware: ((request: { url?: string }, response: ServerResponse, next: () => void) => void) | undefined;
 
         const server = {
-            config: { base: "/", logger: { info: vi.fn<(message: string) => void>() }, server: { host: configuredHost } },
+            config: { base: "/", logger: { info: vi.fn<(message: string) => void>(), warnOnce: vi.fn<(message: string) => void>() }, server: { host: configuredHost } },
             httpServer: { listening: false, once: vi.fn<() => void>() },
             middlewares: {
                 use: (function_: typeof middleware) => {
@@ -195,4 +212,24 @@ describe("dashboardPlugin", () => {
         expect(next).not.toHaveBeenCalled();
         expect(response.statusCode).toBe(200);
     });
+
+    it.each([`${DASHBOARD_PATH}/globals`, `${DASHBOARD_PATH}/data`, `${DASHBOARD_PATH}/logs/123`])(
+        "serves the SPA history fallback for deep-link sub-route %s (no 404)",
+        (url) => {
+            expect.assertions(3);
+
+            // A hard load of a router sub-route must serve the document so the
+            // client router can boot there — not pass through to a 404.
+            const middleware = installMiddleware("localhost");
+            const { end, response } = makeResponse();
+            const next = vi.fn<() => void>();
+
+            middleware({ url }, response, next);
+
+            expect(next).not.toHaveBeenCalled();
+            expect(response.statusCode).toBe(200);
+            // It's the dashboard document, not an asset.
+            expect((end.mock.calls[0] as [string])[0]).toContain(`${DASHBOARD_PATH}/dashboard.js`);
+        },
+    );
 });

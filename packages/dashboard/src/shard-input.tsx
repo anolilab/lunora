@@ -1,6 +1,8 @@
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useId, useState } from "react";
 
+import { Input } from "./components/ui/input.js";
+import { useT } from "./i18n-context.js";
 import { loadRecentShards } from "./shard-history.js";
 
 export interface ShardInputProps {
@@ -19,6 +21,7 @@ export interface ShardInputProps {
  * as used (via `recordShard`) when they actually query it.
  */
 export const ShardInput = ({ onChange, testId, value }: ShardInputProps): ReactElement => {
+    const t = useT();
     const listId = useId();
     // Snapshot once on mount; the menu only needs to be fresh on (re)mount.
     const [recents] = useState<ReadonlyArray<string>>(() => loadRecentShards());
@@ -32,12 +35,13 @@ export const ShardInput = ({ onChange, testId, value }: ShardInputProps): ReactE
 
     return (
         <>
-            <input
-                aria-label="Shard key"
+            <Input
+                aria-label={t("Shard key")}
+                className="h-8 w-48"
                 data-testid={testId}
                 list={recents.length > 0 ? listId : undefined}
                 onChange={onInputChange}
-                placeholder="shard key (optional)"
+                placeholder={t("shard key (optional)")}
                 value={value}
             />
             {recents.length > 0 && (

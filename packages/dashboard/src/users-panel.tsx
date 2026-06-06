@@ -3,6 +3,10 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
+import { Badge } from "./components/ui/badge.js";
+import { Button } from "./components/ui/button.js";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
+import { useT } from "./i18n-context.js";
 import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
 import { useAutoRefresh } from "./use-auto-refresh.js";
 
@@ -22,6 +26,7 @@ const DEFAULT_PAGE_SIZE = 50;
  */
 export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {}): ReactElement => {
     const client = useCirrus();
+    const t = useT();
 
     const [users, setUsers] = useState<AuthUser[] | null>(null);
     const [usersError, setUsersError] = useState<null | string>(null);
@@ -85,97 +90,116 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
     }, auto);
 
     return (
-        <div data-testid="cirrus-users">
-            <button data-testid="us-refresh" onClick={reloadUsers} type="button">
-                Reload users
-            </button>
-            <button aria-pressed={auto} data-testid="us-auto" onClick={toggleAuto} type="button">
-                {auto ? "Auto: on" : "Auto: off"}
-            </button>
+        <div className="flex flex-col gap-4" data-testid="cirrus-users">
+            <div className="flex flex-wrap items-center gap-2">
+                <Button data-testid="us-refresh" onClick={reloadUsers} size="sm" type="button" variant="outline">
+                    {t("Reload users")}
+                </Button>
+                <Button aria-pressed={auto} data-testid="us-auto" onClick={toggleAuto} size="sm" type="button" variant={auto ? "default" : "outline"}>
+                    {auto ? t("Auto: on") : t("Auto: off")}
+                </Button>
+            </div>
 
             {usersError !== null && (
-                <p data-testid="us-users-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="us-users-error" role="alert">
                     {usersError}
                 </p>
             )}
 
-            {users !== null && users.length === 0 && <p data-testid="us-empty">No users.</p>}
+            {users !== null && users.length === 0 && (
+                <p className="text-sm text-muted-foreground" data-testid="us-empty">
+                    {t("No users.")}
+                </p>
+            )}
 
             {users !== null && users.length > 0 && (
-                <table data-testid="us-table">
-                    <thead>
-                        <tr>
-                            <th>id</th>
-                            <th>email</th>
-                            <th>name</th>
-                            <th>verified</th>
-                            <th>created</th>
-                            <th aria-label="Actions" />
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {users.map((user) => (
-                            <tr data-testid={`us-row-${user.id}`} key={user.id}>
-                                <td>{user.id}</td>
-                                <td>{user.email ?? ""}</td>
-                                <td>{user.name ?? ""}</td>
-                                <td>{user.emailVerified === true ? "yes" : "no"}</td>
-                                <td>{formatTimestamp(user.createdAt)}</td>
-                                <td>
-                                    <button
-                                        aria-pressed={selectedUser === user.id}
-                                        data-testid={`us-sessions-${user.id}`}
-                                        // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over user.id; this is an admin dev-tool render path
-                                        onClick={() => {
-                                            fireAndForget(fetchSessions(user.id));
-                                        }}
-                                        type="button"
-                                    >
-                                        Sessions
-                                    </button>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                <div className="rounded-md border border-border">
+                    <Table data-testid="us-table">
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>{t("id")}</TableHead>
+                                <TableHead>{t("email")}</TableHead>
+                                <TableHead>{t("name")}</TableHead>
+                                <TableHead>{t("verified")}</TableHead>
+                                <TableHead>{t("created")}</TableHead>
+                                <TableHead aria-label={t("Actions")} />
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {users.map((user) => (
+                                <TableRow data-testid={`us-row-${user.id}`} key={user.id}>
+                                    <TableCell className="font-mono text-xs">{user.id}</TableCell>
+                                    <TableCell>{user.email ?? ""}</TableCell>
+                                    <TableCell>{user.name ?? ""}</TableCell>
+                                    <TableCell>
+                                        {user.emailVerified === true ? (
+                                            <Badge variant="secondary">{t("yes")}</Badge>
+                                        ) : (
+                                            <Badge variant="outline">{t("no")}</Badge>
+                                        )}
+                                    </TableCell>
+                                    <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(user.createdAt)}</TableCell>
+                                    <TableCell>
+                                        <Button
+                                            aria-pressed={selectedUser === user.id}
+                                            data-testid={`us-sessions-${user.id}`}
+                                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over user.id; this is an admin dev-tool render path
+                                            onClick={() => {
+                                                fireAndForget(fetchSessions(user.id));
+                                            }}
+                                            size="xs"
+                                            type="button"
+                                            variant="ghost"
+                                        >
+                                            {t("Sessions")}
+                                        </Button>
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
             )}
 
             {sessionsError !== null && (
-                <p data-testid="us-sessions-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="us-sessions-error" role="alert">
                     {sessionsError}
                 </p>
             )}
 
             {sessions !== null && (
-                <div data-testid="us-sessions">
-                    <h3>
-                        Sessions for
-                        {selectedUser}
-                    </h3>
+                <div className="flex flex-col gap-2" data-testid="us-sessions">
+                    <h3 className="text-sm font-medium">{t("Sessions for {userId}", { userId: selectedUser })}</h3>
 
-                    {sessions.length === 0 && <p data-testid="us-sessions-empty">No active sessions.</p>}
+                    {sessions.length === 0 && (
+                        <p className="text-sm text-muted-foreground" data-testid="us-sessions-empty">
+                            {t("No active sessions.")}
+                        </p>
+                    )}
 
                     {sessions.length > 0 && (
-                        <table data-testid="us-sessions-table">
-                            <thead>
-                                <tr>
-                                    <th>id</th>
-                                    <th>expires</th>
-                                    <th>ip</th>
-                                    <th>user agent</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {sessions.map((session) => (
-                                    <tr data-testid={`us-session-${session.id}`} key={session.id}>
-                                        <td>{session.id}</td>
-                                        <td>{formatTimestamp(session.expiresAt)}</td>
-                                        <td>{session.ipAddress ?? ""}</td>
-                                        <td>{session.userAgent ?? ""}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                        <div className="rounded-md border border-border">
+                            <Table data-testid="us-sessions-table">
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>{t("id")}</TableHead>
+                                        <TableHead>{t("expires")}</TableHead>
+                                        <TableHead>{t("ip")}</TableHead>
+                                        <TableHead>{t("user agent")}</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {sessions.map((session) => (
+                                        <TableRow data-testid={`us-session-${session.id}`} key={session.id}>
+                                            <TableCell className="font-mono text-xs">{session.id}</TableCell>
+                                            <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(session.expiresAt)}</TableCell>
+                                            <TableCell>{session.ipAddress ?? ""}</TableCell>
+                                            <TableCell>{session.userAgent ?? ""}</TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </div>
                     )}
                 </div>
             )}

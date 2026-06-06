@@ -3,6 +3,10 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
+import { Button } from "./components/ui/button.js";
+import { Input } from "./components/ui/input.js";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
+import { useT } from "./i18n-context.js";
 import { errorMessage, fireAndForget, formatBytes } from "./internal.js";
 
 interface FileBrowserProps {
@@ -24,6 +28,7 @@ const DEFAULT_PAGE_SIZE = 100;
  * scope; the host's own storage API owns mutations.
  */
 export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: FileBrowserProps): ReactElement => {
+    const t = useT();
     const client = useCirrus();
 
     const [prefix, setPrefix] = useState<string>(initialPrefix ?? "");
@@ -73,47 +78,62 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     }, [list, prefix, nextCursor]);
 
     return (
-        <div data-testid="cirrus-file-browser">
-            <div>
-                <input aria-label="Key prefix" data-testid="fb-prefix-input" onChange={onPrefixChange} placeholder="key prefix (optional)" value={prefix} />
-                <button data-testid="fb-list" disabled={busy} onClick={listFirst} type="button">
-                    List
-                </button>
+        <div className="flex flex-col gap-3" data-testid="cirrus-file-browser">
+            <div className="flex flex-wrap items-center gap-2">
+                <Input
+                    aria-label={t("Key prefix")}
+                    className="h-8 w-64 max-w-full"
+                    data-testid="fb-prefix-input"
+                    onChange={onPrefixChange}
+                    placeholder={t("key prefix (optional)")}
+                    value={prefix}
+                />
+                <Button data-testid="fb-list" disabled={busy} onClick={listFirst} size="sm" type="button">
+                    {t("List")}
+                </Button>
             </div>
 
             {error !== null && (
-                <p data-testid="fb-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="fb-error" role="alert">
                     {error}
                 </p>
             )}
 
-            {objects !== null && objects.length === 0 && <p data-testid="fb-empty">No objects.</p>}
+            {objects !== null && objects.length === 0 && (
+                <p className="text-sm text-muted-foreground" data-testid="fb-empty">
+                    {t("No objects.")}
+                </p>
+            )}
 
             {objects !== null && objects.length > 0 && (
-                <table data-testid="fb-table">
-                    <thead>
-                        <tr>
-                            <th>key</th>
-                            <th>size</th>
-                            <th>content-type</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {objects.map((object) => (
-                            <tr data-testid="fb-row" key={object.key}>
-                                <td>{object.key}</td>
-                                <td>{formatBytes(object.size)}</td>
-                                <td>{object.httpMetadata?.contentType ?? ""}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                <div className="rounded-md border border-border">
+                    <Table data-testid="fb-table">
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>{t("key")}</TableHead>
+                                <TableHead>{t("size")}</TableHead>
+                                <TableHead>{t("content-type")}</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {objects.map((object) => (
+                                <TableRow data-testid="fb-row" key={object.key}>
+                                    <TableCell className="font-mono text-xs">{object.key}</TableCell>
+                                    <TableCell className="tabular-nums text-muted-foreground">{formatBytes(object.size)}</TableCell>
+                                    <TableCell>{object.httpMetadata?.contentType ?? ""}</TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
             )}
 
             {nextCursor !== undefined && (
-                <button data-testid="fb-next" disabled={busy} onClick={loadMore} type="button">
-                    Load more
-                </button>
+                <div>
+                    <Button data-testid="fb-next" disabled={busy} onClick={loadMore} size="sm" type="button" variant="outline">
+                        {t("Load more")}
+                    </Button>
+                </div>
             )}
         </div>
     );

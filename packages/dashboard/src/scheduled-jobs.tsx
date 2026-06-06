@@ -3,7 +3,11 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { Badge } from "./components/ui/badge.js";
+import { Button } from "./components/ui/button.js";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
 import { ConfirmButton } from "./confirm-button.js";
+import { useT } from "./i18n-context.js";
 import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
 import { useAutoRefresh } from "./use-auto-refresh.js";
 
@@ -40,6 +44,7 @@ const formatScheduledFor = (value: number): string => (Number.isFinite(value) ? 
  */
 export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}): ReactElement => {
     const client = useCirrus();
+    const t = useT();
 
     const [jobs, setJobs] = useState<ScheduleRecord[] | null>(null);
     const [error, setError] = useState<null | string>(null);
@@ -134,61 +139,72 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
         setAuto((on) => !on);
     }, []);
 
-    const autoLabel = `${livePush ? "Live" : "Auto"}: ${auto ? "on" : "off"}`;
+    const autoLabel = t("{mode}: {state}", {
+        mode: livePush ? t("Live") : t("Auto"),
+        state: auto ? t("on") : t("off"),
+    });
 
     return (
-        <div data-testid="cirrus-scheduled-jobs">
-            <button data-testid="sj-refresh" disabled={busy} onClick={runRefresh} type="button">
-                Refresh
-            </button>
-            <button aria-pressed={auto} data-testid="sj-auto" onClick={toggleAuto} type="button">
-                {autoLabel}
-            </button>
+        <div className="flex flex-col gap-3" data-testid="cirrus-scheduled-jobs">
+            <div className="flex flex-wrap items-center gap-2">
+                <Button data-testid="sj-refresh" disabled={busy} onClick={runRefresh} size="sm" type="button" variant="outline">
+                    {t("Refresh")}
+                </Button>
+                <Button aria-pressed={auto} data-testid="sj-auto" onClick={toggleAuto} size="sm" type="button" variant="ghost">
+                    <Badge variant={auto ? "default" : "outline"}>{autoLabel}</Badge>
+                </Button>
+            </div>
 
             {error !== null && (
-                <p data-testid="sj-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="sj-error" role="alert">
                     {error}
                 </p>
             )}
 
-            {jobs !== null && jobs.length === 0 && <p data-testid="sj-empty">No scheduled jobs.</p>}
+            {jobs !== null && jobs.length === 0 && (
+                <p className="text-sm text-muted-foreground" data-testid="sj-empty">
+                    {t("No scheduled jobs.")}
+                </p>
+            )}
 
             {jobs !== null && jobs.length > 0 && (
-                <table data-testid="sj-table">
-                    <thead>
-                        <tr>
-                            <th>function</th>
-                            <th>scheduled for</th>
-                            <th>shard</th>
-                            <th>id</th>
-                            {cancelImpl !== undefined && <th aria-label="Actions" />}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {jobs.map((job) => (
-                            <tr data-testid={`sj-row-${job.id}`} key={job.id}>
-                                <td>{job.functionPath}</td>
-                                <td>{formatScheduledFor(job.scheduledFor)}</td>
-                                <td>{job.shardKey ?? ""}</td>
-                                <td>{job.id}</td>
-                                {cancelImpl !== undefined && (
-                                    <td>
-                                        <ConfirmButton
-                                            confirmLabel="Cancel job?"
-                                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over job.id; admin dev-tool render path
-                                            onConfirm={() => {
-                                                fireAndForget(cancel(job.id));
-                                            }}
-                                            testId={`sj-cancel-${job.id}`}
-                                        >
-                                            Cancel
-                                        </ConfirmButton>
-                                    </td>
-                                )}
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                <div className="rounded-md border border-border">
+                    <Table data-testid="sj-table">
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>{t("function")}</TableHead>
+                                <TableHead>{t("scheduled for")}</TableHead>
+                                <TableHead>{t("shard")}</TableHead>
+                                <TableHead>{t("id")}</TableHead>
+                                {cancelImpl !== undefined && <TableHead aria-label={t("Actions")} />}
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {jobs.map((job) => (
+                                <TableRow data-testid={`sj-row-${job.id}`} key={job.id}>
+                                    <TableCell className="font-mono text-xs">{job.functionPath}</TableCell>
+                                    <TableCell className="text-muted-foreground tabular-nums">{formatScheduledFor(job.scheduledFor)}</TableCell>
+                                    <TableCell>{job.shardKey ?? ""}</TableCell>
+                                    <TableCell className="font-mono text-xs">{job.id}</TableCell>
+                                    {cancelImpl !== undefined && (
+                                        <TableCell className="text-right">
+                                            <ConfirmButton
+                                                confirmLabel={t("Cancel job?")}
+                                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over job.id; admin dev-tool render path
+                                                onConfirm={() => {
+                                                    fireAndForget(cancel(job.id));
+                                                }}
+                                                testId={`sj-cancel-${job.id}`}
+                                            >
+                                                {t("Cancel")}
+                                            </ConfirmButton>
+                                        </TableCell>
+                                    )}
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </div>
             )}
         </div>
     );

@@ -1,5 +1,8 @@
 import type { ReactElement } from "react";
 
+import { Button } from "./components/ui/button.js";
+import { useT } from "./i18n-context.js";
+
 export interface LiveToggleProps {
     readonly live: boolean;
     readonly liveError: string | undefined;
@@ -14,15 +17,19 @@ export interface LiveToggleProps {
  * Rendered identically across panels; only the test-id `prefix` differs. State
  * lives in `useLiveToggle`.
  */
-export const LiveToggle = ({ live, liveError, onToggle, prefix }: LiveToggleProps): ReactElement => (
-    <>
-        <button aria-pressed={live} data-testid={`${prefix}-live`} onClick={onToggle} type="button">
-            {live ? "Live: on" : "Live: off"}
-        </button>
-        {live && liveError !== undefined && (
-            <span data-testid={`${prefix}-live-error`} role="status">
-                Live unavailable: {liveError}
-            </span>
-        )}
-    </>
-);
+export const LiveToggle = ({ live, liveError, onToggle, prefix }: LiveToggleProps): ReactElement => {
+    const t = useT();
+
+    return (
+        <>
+            <Button aria-pressed={live} data-testid={`${prefix}-live`} onClick={onToggle} size="sm" type="button" variant={live ? "secondary" : "outline"}>
+                {live ? t("Live: on") : t("Live: off")}
+            </Button>
+            {live && liveError !== undefined && (
+                <span className="text-xs text-destructive" data-testid={`${prefix}-live-error`} role="status">
+                    {t("Live unavailable: {liveError}", { liveError })}
+                </span>
+            )}
+        </>
+    );
+};

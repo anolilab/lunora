@@ -4,7 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
+import { Badge } from "./components/ui/badge.js";
+import { Button } from "./components/ui/button.js";
+import { Input } from "./components/ui/input.js";
+import { Label } from "./components/ui/label.js";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
 import { ConfirmButton } from "./confirm-button.js";
+import { useT } from "./i18n-context.js";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
 import { LiveToggle } from "./live-toggle.js";
 import { recordShard } from "./shard-history.js";
@@ -32,6 +38,7 @@ const RUN_MIGRATION = adminRef(ADMIN_FUNCTIONS.runMigration);
  */
 export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): ReactElement => {
     const client = useCirrus();
+    const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     // The shard a successful one-shot last targeted. The live channel keys on
@@ -91,7 +98,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
         const id = migrationId.trim();
 
         if (id === "") {
-            setRunError("Enter a migration id");
+            setRunError(t("Enter a migration id"));
             setRunResult(null);
 
             return;
@@ -111,7 +118,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
         } finally {
             setRunning(false);
         }
-    }, [client, direction, dryRun, migrationId, refresh, shardKey]);
+    }, [client, direction, dryRun, migrationId, refresh, shardKey, t]);
 
     const refreshCurrent = useCallback((): void => {
         fireAndForget(refresh(shardKey));
@@ -134,86 +141,115 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     }, []);
 
     return (
-        <div data-testid="cirrus-migrations">
-            <div>
+        <div className="flex flex-col gap-3" data-testid="cirrus-migrations">
+            <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mg-shard-input" value={shardKey} />
-                <button data-testid="mg-refresh" onClick={refreshCurrent} type="button">
-                    Refresh
-                </button>
+                <Button data-testid="mg-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
+                    {t("Refresh")}
+                </Button>
                 <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="mg" />
             </div>
 
             {statusError !== null && (
-                <p data-testid="mg-status-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="mg-status-error" role="alert">
                     {statusError}
                 </p>
             )}
 
-            {rows !== null && rows.length === 0 && <p data-testid="mg-empty">No migrations have run on this shard.</p>}
-
-            {rows !== null && rows.length > 0 && (
-                <table data-testid="mg-table">
-                    <thead>
-                        <tr>
-                            <th>id</th>
-                            <th>direction</th>
-                            <th>status</th>
-                            <th>processed</th>
-                            <th>changed</th>
-                            <th>updated</th>
-                            <th>error</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows.map((row) => (
-                            <tr data-testid={`mg-row-${row.id}`} key={row.id}>
-                                <td>{row.id}</td>
-                                <td>{row.direction}</td>
-                                <td>{row.status}</td>
-                                <td>{row.processed}</td>
-                                <td>{row.changed}</td>
-                                <td>{formatTimestamp(row.updatedAt)}</td>
-                                <td>{row.error ?? ""}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+            {rows !== null && rows.length === 0 && (
+                <p className="text-sm text-muted-foreground" data-testid="mg-empty">
+                    {t("No migrations have run on this shard.")}
+                </p>
             )}
 
-            <fieldset>
-                <legend>Run migration</legend>
-                <input aria-label="Migration id" data-testid="mg-id-input" onChange={onIdChange} placeholder="migration id" value={migrationId} />
-                <select aria-label="Direction" data-testid="mg-direction" onChange={onDirectionChange} value={direction}>
-                    <option value="up">up</option>
-                    <option value="down">down</option>
-                </select>
-                <label htmlFor="mg-dry-run">
-                    <input checked={dryRun} data-testid="mg-dry-run" id="mg-dry-run" onChange={onDryRunChange} type="checkbox" />
-                    Dry run
-                </label>
-                {dryRun ? (
-                    <button data-testid="mg-run" disabled={running} onClick={runMigration} type="button">
-                        {running ? "Running…" : "Run"}
-                    </button>
-                ) : (
-                    // A real (non-dry-run) migration mutates rows — guard it.
-                    <ConfirmButton confirmLabel={running ? "Running…" : "Run migration?"} disabled={running} onConfirm={runMigration} testId="mg-run">
-                        Run
-                    </ConfirmButton>
-                )}
-            </fieldset>
+            {rows !== null && rows.length > 0 && (
+                <Table data-testid="mg-table">
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>{t("id")}</TableHead>
+                            <TableHead>{t("direction")}</TableHead>
+                            <TableHead>{t("status")}</TableHead>
+                            <TableHead>{t("processed")}</TableHead>
+                            <TableHead>{t("changed")}</TableHead>
+                            <TableHead>{t("updated")}</TableHead>
+                            <TableHead>{t("error")}</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {rows.map((row) => (
+                            <TableRow data-testid={`mg-row-${row.id}`} key={row.id}>
+                                <TableCell>{row.id}</TableCell>
+                                <TableCell>{row.direction}</TableCell>
+                                <TableCell>
+                                    <Badge variant="secondary">{row.status}</Badge>
+                                </TableCell>
+                                <TableCell>{row.processed}</TableCell>
+                                <TableCell>{row.changed}</TableCell>
+                                <TableCell>{formatTimestamp(row.updatedAt)}</TableCell>
+                                <TableCell>{row.error ?? ""}</TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            )}
+
+            <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+                <Label>{t("Run migration")}</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                        aria-label={t("Migration id")}
+                        className="w-auto"
+                        data-testid="mg-id-input"
+                        onChange={onIdChange}
+                        placeholder={t("migration id")}
+                        value={migrationId}
+                    />
+                    <select
+                        aria-label={t("Direction")}
+                        className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        data-testid="mg-direction"
+                        onChange={onDirectionChange}
+                        value={direction}
+                    >
+                        <option value="up">{t("up")}</option>
+                        <option value="down">{t("down")}</option>
+                    </select>
+                    <Label className="flex items-center gap-1.5" htmlFor="mg-dry-run">
+                        <input
+                            checked={dryRun}
+                            className="size-4 accent-primary"
+                            data-testid="mg-dry-run"
+                            id="mg-dry-run"
+                            onChange={onDryRunChange}
+                            type="checkbox"
+                        />
+                        {t("Dry run")}
+                    </Label>
+                    {dryRun ? (
+                        <Button data-testid="mg-run" disabled={running} onClick={runMigration} size="sm" type="button">
+                            {running ? t("Running…") : t("Run")}
+                        </Button>
+                    ) : (
+                        // A real (non-dry-run) migration mutates rows — guard it.
+                        <ConfirmButton confirmLabel={running ? t("Running…") : t("Run migration?")} disabled={running} onConfirm={runMigration} testId="mg-run">
+                            {t("Run")}
+                        </ConfirmButton>
+                    )}
+                </div>
+            </div>
 
             {runError !== null && (
-                <pre data-testid="mg-run-error" role="alert">
+                <pre className="text-sm text-destructive whitespace-pre-wrap" data-testid="mg-run-error" role="alert">
                     {runError}
                 </pre>
             )}
 
             {runResult !== null && (
-                <p data-testid="mg-run-result">
-                    {runResult.dryRun ? "Dry run: " : ""}
-                    {runResult.status} — processed
-                    {runResult.processed}, changed
+                <p className="text-sm text-muted-foreground" data-testid="mg-run-result">
+                    {runResult.dryRun ? t("Dry run: ") : ""}
+                    {t("{status} — processed", { status: runResult.status })}
+                    {runResult.processed}
+                    {t(", changed")}
                     {runResult.changed}
                 </p>
             )}

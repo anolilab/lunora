@@ -3,6 +3,11 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { Badge } from "./components/ui/badge.js";
+import { Button } from "./components/ui/button.js";
+import { Label } from "./components/ui/label.js";
+import { Textarea } from "./components/ui/textarea.js";
+import { useT } from "./i18n-context.js";
 import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
@@ -55,6 +60,7 @@ const formatResult = (value: unknown): string => {
  * must be named).
  */
 export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps = {}): ReactElement => {
+    const t = useT();
     const client = useCirrus();
 
     const [discovered, setDiscovered] = useState<FunctionDescriptor[] | null>(null);
@@ -121,7 +127,7 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
         } catch (parseError) {
             setStatus("error");
             setResult(undefined);
-            setError(`Invalid JSON args: ${(parseError as Error).message}`);
+            setError(t("Invalid JSON args: {message}", { message: (parseError as Error).message }));
 
             return;
         }
@@ -178,7 +184,7 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
             setStatus("error");
             record("error");
         }
-    }, [argsText, client, selected, shardKey]);
+    }, [argsText, client, selected, shardKey, t]);
 
     // Reload a recorded run's path + inputs into the form so it can be re-run.
     const loadRun = useCallback((entry: RunHistoryEntry): void => {
@@ -200,56 +206,101 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
     }, [run]);
 
     return (
-        <div data-testid="cirrus-function-runner">
+        <div className="flex flex-col gap-4" data-testid="cirrus-function-runner">
             {discoverError !== null && (
-                <p data-testid="function-discover-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="function-discover-error" role="alert">
                     {discoverError}
                 </p>
             )}
 
-            <select aria-label="Function" data-testid="function-select" onChange={onSelectChange} value={effectivePath}>
-                {functions.map((descriptor) => (
-                    <option key={descriptor.path} value={descriptor.path}>
-                        {descriptor.path} ({descriptor.kind})
-                    </option>
-                ))}
-            </select>
+            <div className="flex flex-col gap-3 rounded-md border border-border p-3">
+                <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="function-select">{t("Function")}</Label>
+                    <select
+                        aria-label={t("Function")}
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                        data-testid="function-select"
+                        id="function-select"
+                        onChange={onSelectChange}
+                        value={effectivePath}
+                    >
+                        {functions.map((descriptor) => (
+                            <option key={descriptor.path} value={descriptor.path}>
+                                {descriptor.path} ({descriptor.kind})
+                            </option>
+                        ))}
+                    </select>
+                </div>
 
-            <textarea aria-label="Arguments" data-testid="args-input" onChange={onArgsChange} value={argsText} />
+                <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="args-input">{t("Arguments")}</Label>
+                    <Textarea
+                        aria-label={t("Arguments")}
+                        className="font-mono text-xs"
+                        data-testid="args-input"
+                        id="args-input"
+                        onChange={onArgsChange}
+                        value={argsText}
+                    />
+                </div>
 
-            <ShardInput onChange={setShardKey} testId="shard-input" value={shardKey} />
+                <ShardInput onChange={setShardKey} testId="shard-input" value={shardKey} />
 
-            <button data-testid="run-button" disabled={status === "running" || selected === undefined} onClick={runOnce} type="button">
-                Run
-            </button>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Button data-testid="run-button" disabled={status === "running" || selected === undefined} onClick={runOnce} type="button">
+                        {t("Run")}
+                    </Button>
+                    {selected !== undefined && <Badge variant="outline">{selected.kind}</Badge>}
+                </div>
+            </div>
 
             {status === "error" && error !== null && (
-                <pre data-testid="error" role="alert">
+                <pre
+                    className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-destructive"
+                    data-testid="error"
+                    role="alert"
+                >
                     {error}
                 </pre>
             )}
 
-            {status === "success" && <pre data-testid="result">{formatResult(result)}</pre>}
+            {status === "success" && (
+                <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="result">
+                    {formatResult(result)}
+                </pre>
+            )}
 
             {runs.length > 0 && (
-                <ul data-testid="fn-history">
+                <ul className="flex flex-col rounded-md border border-border" data-testid="fn-history">
                     {runs.map((entry, index) => (
-                        <li data-testid="fn-history-row" key={entry.id}>
-                            <span data-testid={`fn-history-status-${index.toString()}`}>{entry.status === "success" ? "✓" : "✗"}</span>{" "}
-                            <span>
+                        <li
+                            className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0"
+                            data-testid="fn-history-row"
+                            key={entry.id}
+                        >
+                            <span
+                                className={entry.status === "success" ? "text-primary" : "text-destructive"}
+                                data-testid={`fn-history-status-${index.toString()}`}
+                            >
+                                {entry.status === "success" ? "✓" : "✗"}
+                            </span>{" "}
+                            <span className="font-mono text-xs">
                                 {entry.path} ({entry.kind})
                             </span>{" "}
-                            <time>{formatTimestamp(entry.at)}</time>{" "}
-                            <button
+                            <time className="text-xs text-muted-foreground">{formatTimestamp(entry.at)}</time>{" "}
+                            <Button
+                                className="ml-auto"
                                 data-testid={`fn-history-load-${index.toString()}`}
                                 // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the history entry; admin dev-tool render path
                                 onClick={() => {
                                     loadRun(entry);
                                 }}
+                                size="xs"
                                 type="button"
+                                variant="ghost"
                             >
-                                Load
-                            </button>
+                                {t("Load")}
+                            </Button>
                         </li>
                     ))}
                 </ul>

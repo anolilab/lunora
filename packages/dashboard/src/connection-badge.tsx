@@ -1,19 +1,16 @@
 import { useConnectionStatus } from "@cirrus/react";
-import type { ReactElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 import { useMemo } from "react";
 
-/** Human-readable label + dot colour per connection status. */
-const LABELS = {
-    connected: { color: "#1a7f37", text: "Connected" },
-    connecting: { color: "#9a6700", text: "Connecting…" },
-    idle: { color: "#6e7781", text: "Idle" },
-    offline: { color: "#cf222e", text: "Offline" },
-} as const;
+import { useT } from "./i18n-context.js";
 
-/** Static wrapper styles, hoisted so they keep a stable reference across renders. */
-const WRAPPER_STYLE = { alignItems: "center", display: "inline-flex", gap: 6 } as const;
-/** Dot styles minus the status-dependent colour, hoisted; colour is merged in via `useMemo`. */
-const DOT_BASE_STYLE = { borderRadius: "50%", display: "inline-block", height: 8, width: 8 } as const;
+/** Dot colour per connection status; the label is localised in the component. */
+const STATUS_COLORS = {
+    connected: "#3ecf8e",
+    connecting: "#f5c451",
+    idle: "#8b949e",
+    offline: "#f25c5c",
+} as const;
 
 /**
  * Live-socket status indicator. Reflects the client's aggregate WebSocket health
@@ -22,15 +19,55 @@ const DOT_BASE_STYLE = { borderRadius: "50%", display: "inline-block", height: 8
  * identical to one that's simply idle).
  */
 const ConnectionBadge = (): ReactElement => {
+    const t = useT();
     const status = useConnectionStatus();
-    const { color, text } = LABELS[status];
-    const dotStyle = useMemo(() => {
-        return { ...DOT_BASE_STYLE, backgroundColor: color };
+    const color = STATUS_COLORS[status];
+
+    // Only the active status is translated — no throwaway map of the other three.
+    let text: string;
+
+    switch (status) {
+        case "connected": {
+            text = t("Connected");
+
+            break;
+        }
+        case "connecting": {
+            text = t("Connecting…");
+
+            break;
+        }
+        case "idle": {
+            text = t("Idle");
+
+            break;
+        }
+        case "offline": {
+            text = t("Offline");
+
+            break;
+        }
+        default: {
+            // Exhaustive: every ConnectionStatus is handled above, so adding a new
+            // member surfaces here as a compile error instead of silently rendering
+            // a wrong label.
+            text = status satisfies never;
+        }
+    }
+
+    const dotStyle = useMemo<CSSProperties>(() => {
+        return { backgroundColor: color };
     }, [color]);
 
     return (
-        <span aria-live="polite" data-status={status} data-testid="dash-connection" role="status" style={WRAPPER_STYLE}>
-            <span aria-hidden="true" style={dotStyle} />
+        <span
+            aria-live="polite"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
+            data-status={status}
+            data-testid="dash-connection"
+            role="status"
+        >
+            <span aria-hidden="true" className="size-2 rounded-full" style={dotStyle} />
             {text}
         </span>
     );

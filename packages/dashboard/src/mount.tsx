@@ -30,7 +30,15 @@ export const mountDashboard = (options: MountDashboardOptions = {}): Root => {
 
     const root = createRoot(element);
 
-    root.render(<DashboardApp adminToken={appProps.adminToken} baseUrl={appProps.baseUrl} dashboard={appProps.dashboard} />);
+    root.render(
+        <DashboardApp
+            adminToken={appProps.adminToken}
+            basePath={appProps.basePath}
+            baseUrl={appProps.baseUrl}
+            dashboard={appProps.dashboard}
+            locale={appProps.locale}
+        />,
+    );
 
     return root;
 };

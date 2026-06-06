@@ -4,7 +4,11 @@ import { useCallback, useState } from "react";
 
 import type { ExportRow, ImportShardResult } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
+import { Button } from "./components/ui/button.js";
+import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card.js";
+import { Textarea } from "./components/ui/textarea.js";
 import { ConfirmButton } from "./confirm-button.js";
+import { useT } from "./i18n-context.js";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
 import { recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
@@ -69,6 +73,7 @@ const parseNdjson = (text: string): ExportRow[] => {
  */
 export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): ReactElement => {
     const client = useCirrus();
+    const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [ndjson, setNdjson] = useState<string>("");
@@ -106,7 +111,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         try {
             rows = parseNdjson(ndjson);
         } catch (error_) {
-            setError(`Invalid NDJSON: ${errorMessage(error_)}`);
+            setError(t("Invalid NDJSON: {message}", { message: errorMessage(error_) }));
             setBusy(false);
 
             return;
@@ -122,7 +127,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
         } finally {
             setBusy(false);
         }
-    }, [client, ndjson, shardKey]);
+    }, [client, ndjson, shardKey, t]);
 
     const insertedTotal = importResult === null ? 0 : Object.values(importResult.inserted).reduce((sum, count) => sum + count, 0);
 
@@ -139,42 +144,83 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
     }, []);
 
     return (
-        <div data-testid="cirrus-export-import">
-            <div>
-                <ShardInput onChange={setShardKey} testId="ei-shard-input" value={shardKey} />
-                <button data-testid="ei-export" disabled={busy} onClick={runExport} type="button">
-                    Export
-                </button>
-                <ConfirmButton confirmLabel="Import (writes rows)?" disabled={busy || ndjson.trim() === ""} onConfirm={runImport} testId="ei-import">
-                    Import
-                </ConfirmButton>
-            </div>
+        <div className="flex flex-col gap-4" data-testid="cirrus-export-import">
+            <Card className="rounded-md">
+                <CardHeader>
+                    <CardTitle>{t("Export")}</CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <ShardInput onChange={setShardKey} testId="ei-shard-input" value={shardKey} />
+                        <Button data-testid="ei-export" disabled={busy} onClick={runExport} type="button">
+                            {t("Export")}
+                        </Button>
+                    </div>
 
-            <textarea aria-label="NDJSON" data-testid="ei-ndjson" onChange={onNdjsonChange} placeholder='{"table":"messages","doc":{…}}' value={ndjson} />
+                    {exportCount !== null && (
+                        <p className="text-sm text-muted-foreground" data-testid="ei-export-result">
+                            {t("Exported {count} rows.", { count: exportCount })}
+                        </p>
+                    )}
+                </CardContent>
+            </Card>
+
+            <Card className="rounded-md">
+                <CardHeader>
+                    <CardTitle>{t("Import")}</CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                    <Textarea
+                        aria-label="NDJSON"
+                        className="font-mono text-xs min-h-40 rounded-md"
+                        data-testid="ei-ndjson"
+                        onChange={onNdjsonChange}
+                        placeholder='{"table":"messages","doc":{…}}'
+                        value={ndjson}
+                    />
+
+                    <div className="flex flex-wrap items-center gap-2">
+                        <ConfirmButton
+                            confirmLabel={t("Import (writes rows)?")}
+                            disabled={busy || ndjson.trim() === ""}
+                            onConfirm={runImport}
+                            testId="ei-import"
+                        >
+                            {t("Import")}
+                        </ConfirmButton>
+                    </div>
+
+                    {importResult !== null && (
+                        <div className="flex flex-col gap-2" data-testid="ei-import-result">
+                            <p className="text-sm text-muted-foreground">
+                                {t("Inserted {inserted}, {conflicts} conflicts, {errors} errors.", {
+                                    conflicts: importResult.conflicts,
+                                    errors: importResult.errors.length,
+                                    inserted: insertedTotal,
+                                })}
+                            </p>
+                            {importResult.errors.length > 0 && (
+                                <ul className="flex flex-col gap-1" data-testid="ei-import-errors">
+                                    {importResult.errors.map((rowError) => (
+                                        <li className="text-xs text-destructive" key={`${rowError.table}-${rowError.line.toString()}`}>
+                                            {t("line {line} ({table}): {message}", {
+                                                line: rowError.line,
+                                                message: rowError.message,
+                                                table: rowError.table,
+                                            })}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
 
             {error !== null && (
-                <pre data-testid="ei-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="ei-error" role="alert">
                     {error}
-                </pre>
-            )}
-
-            {exportCount !== null && <p data-testid="ei-export-result">Exported {exportCount} rows.</p>}
-
-            {importResult !== null && (
-                <div data-testid="ei-import-result">
-                    <p>
-                        Inserted {insertedTotal}, {importResult.conflicts} conflicts, {importResult.errors.length} errors.
-                    </p>
-                    {importResult.errors.length > 0 && (
-                        <ul data-testid="ei-import-errors">
-                            {importResult.errors.map((rowError) => (
-                                <li key={`${rowError.table}-${rowError.line.toString()}`}>
-                                    line {rowError.line} ({rowError.table}): {rowError.message}
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
+                </p>
             )}
         </div>
     );

@@ -1,5 +1,7 @@
 import { mountDashboard } from "@cirrus/dashboard/mount";
 
+import "./index.css";
+
 // The dashboard talks to a remote Cirrus worker. Point it at one via
 // `VITE_CIRRUS_URL` (e.g. `https://my-app.workers.dev`); when unset it falls
 // back to the current origin, which is right when this app is reverse-proxied
