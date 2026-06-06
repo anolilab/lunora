@@ -1,11 +1,18 @@
-import type { User } from "@cirrus/client";
+import type { OptimisticUpdate, User } from "@cirrus/client";
 
 export interface UseQueryOptions {
     shardKey?: string;
 }
 
-export interface UseMutationCallOptions<TCurrent = unknown, TValue = unknown> {
+export interface UseMutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
     optimistic?: (current: TCurrent | undefined) => TValue;
+
+    /**
+     * Convex-parity multi-query optimistic update forwarded to
+     * `client.mutation`. Patches many subscribed queries at once via an
+     * `OptimisticLocalStore`, rolled back atomically on failure.
+     */
+    optimisticUpdate?: OptimisticUpdate<TArgs>;
     shardKey?: string;
 }
 
@@ -80,4 +87,13 @@ export interface UseAuthResult {
     user: User | null;
 }
 
-export { type ArgsOf, type CirrusClient, type FunctionReference, type Preloaded, type ReturnOf, type User } from "@cirrus/client";
+export {
+    type ArgsOf,
+    type CirrusClient,
+    type FunctionReference,
+    type OptimisticLocalStore,
+    type OptimisticUpdate,
+    type Preloaded,
+    type ReturnOf,
+    type User,
+} from "@cirrus/client";

@@ -1,6 +1,8 @@
 export { default as createInMemoryBookmarkStorage } from "./bookmark.js";
 export type { ConnectionStatus } from "./cirrus-client.js";
 export { CirrusClient } from "./cirrus-client.js";
+export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store.js";
+export { createLocalStore } from "./local-store.js";
 export type { QueuedMutation } from "./offline-queue.js";
 export { OfflineQueue } from "./offline-queue.js";
 export type { IndexedDbPersistenceOptions } from "./persistence.js";

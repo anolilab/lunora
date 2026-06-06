@@ -1,4 +1,6 @@
 import createInMemoryBookmarkStorage from "./bookmark.js";
+import type { OptimisticUpdate } from "./local-store.js";
+import { createLocalStore } from "./local-store.js";
 import type { QueuedMutation } from "./offline-queue.js";
 import { OfflineQueue } from "./offline-queue.js";
 import type { ReconnectCalculator } from "./reconnect.js";
@@ -62,8 +64,16 @@ type WSState = "idle" | "connecting" | "open" | "closed";
  */
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
 
-interface MutationCallOptions<TCurrent, TValue> {
+interface MutationCallOptions<TCurrent, TValue, TArgs> {
     optimistic?: (current: TCurrent | undefined) => TValue;
+
+    /**
+     * Convex-parity multi-query optimistic update. Receives an
+     * `OptimisticLocalStore` over the live subscription cache plus the
+     * mutation's args, so one mutation can patch many subscribed queries at
+     * once; every write is rolled back atomically if the mutation fails.
+     */
+    optimisticUpdate?: OptimisticUpdate<TArgs>;
     shardKey?: string;
 }
 
@@ -137,23 +147,21 @@ const joinUrl = (base: string, path: string): string => {
 const connectionKey = (shardKey: string | undefined): string => shardKey ?? "";
 
 /**
- * Apply one optimistic update to a single subscription state and return its
- * rollback closure (or `undefined` if the optimistic callback threw, in which
- * case the state is left untouched). The rollback binds `state`/`previous`/
- * `version` into locals so its version check and restore run synchronously,
- * with no `await` between read and write that could let a server delta sneak
- * in unobserved.
+ * Write an already-computed optimistic value `next` onto a single subscription
+ * state and return its rollback closure. The shared write+rollback primitive
+ * behind both the legacy per-call `optimistic` transform and `createLocalStore`'s
+ * `setQuery`: it mutates `state.lastValue` in place (so live subscribers see the
+ * value immediately) and binds `state`/`previous`/`version`/`next` into locals so
+ * the rollback's version check and restore run synchronously, with no `await`
+ * between read and write that could let a server delta sneak in unobserved.
+ *
+ * The rollback only restores when (a) no server delta has bumped `serverVersion`
+ * past the apply point (the server is now closer to truth) and (b) our `next` is
+ * still the live value (a later stacked optimistic write hasn't superseded it).
  */
-const applyOptimisticToState = (state: SubscriptionState, optimistic: (current: unknown) => unknown): (() => void) | undefined => {
+const writeOptimisticToState = (state: SubscriptionState, next: unknown): (() => void) => {
     const previous = state.lastValue;
     const versionAtApply = state.serverVersion;
-    let next: unknown;
-
-    try {
-        next = optimistic(previous);
-    } catch {
-        return undefined;
-    }
 
     // Intentionally mutate the shared subscription state in place so live
     // subscribers observe the optimistic value immediately.
@@ -195,6 +203,24 @@ const applyOptimisticToState = (state: SubscriptionState, optimistic: (current: 
             }
         }
     };
+};
+
+/**
+ * Apply one optimistic transform to a single subscription state and return its
+ * rollback closure (or `undefined` if the optimistic callback threw, in which
+ * case the state is left untouched). Computes the next value, then delegates the
+ * value-write and rollback to {@link writeOptimisticToState}.
+ */
+const applyOptimisticToState = (state: SubscriptionState, optimistic: (current: unknown) => unknown): (() => void) | undefined => {
+    let next: unknown;
+
+    try {
+        next = optimistic(state.lastValue);
+    } catch {
+        return undefined;
+    }
+
+    return writeOptimisticToState(state, next);
 };
 
 /**
@@ -467,7 +493,7 @@ class CirrusClient {
     public async mutation<F extends FunctionReference>(
         function_: F,
         args: ArgsOf<F>,
-        options: MutationCallOptions<unknown, unknown> = {},
+        options: MutationCallOptions<unknown, unknown, ArgsOf<F>> = {},
     ): Promise<ReturnOf<F>> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
@@ -475,8 +501,16 @@ class CirrusClient {
 
         const argsRecord = args as Record<string, unknown>;
 
-        // Apply optimistic updates to any subscriber listening on this fn.
+        // Apply optimistic updates to any subscriber listening on this fn. The
+        // legacy per-call `optimistic` transform patches the matching (fn, args,
+        // shard) subscriptions; the Convex-parity `optimisticUpdate` callback can
+        // patch many subscribed queries at once via a localStore. Both funnel into
+        // the same LIFO rollback list (unwound on settle/error).
         const optimisticRollbacks = this.applyOptimisticUpdates(function_.__cirrusRef, argsRecord, options.shardKey, options.optimistic);
+
+        if (options.optimisticUpdate) {
+            this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks);
+        }
 
         // Queue while offline (only mutations — queries fail fast). We also
         // queue when we're mid-reconnect (wsState === "connecting") provided
@@ -1104,6 +1138,38 @@ class CirrusClient {
         }
 
         return optimisticRollbacks;
+    }
+
+    /**
+     * Run a Convex-parity `optimisticUpdate` callback against a localStore bound
+     * to the live subscription registry, appending each `setQuery` write's
+     * rollback to `optimisticRollbacks` (the same LIFO list the legacy path uses,
+     * unwound on settle/error). A throwing callback unwinds its own partial
+     * writes — LIFO over just the rollbacks it produced — and is swallowed, so a
+     * buggy optimistic update can never fail the mutation or leave a partial
+     * patch live, mirroring the legacy transform's throw handling.
+     */
+    private applyOptimisticUpdate<F extends FunctionReference>(
+        optimisticUpdate: OptimisticUpdate<ArgsOf<F>>,
+        args: ArgsOf<F>,
+        shardKey: string | undefined,
+        optimisticRollbacks: (() => void)[],
+    ): void {
+        const { rollbacks, store } = createLocalStore(this.subscriptions, shardKey, writeOptimisticToState, stableStringify);
+
+        try {
+            optimisticUpdate(store, args);
+        } catch {
+            // Unwind only this callback's own writes, most-recent first, so a
+            // throwing localStore update leaves the cache as it found it.
+            for (let index = rollbacks.length - 1; index >= 0; index -= 1) {
+                rollbacks[index]?.();
+            }
+
+            return;
+        }
+
+        optimisticRollbacks.push(...rollbacks);
     }
 
     private getConnection(shardKey: string | undefined): ShardConnection | undefined {

@@ -115,4 +115,79 @@ describe("useMutation", () => {
             expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "counter:inc" }), {}, { optimistic });
         });
     });
+
+    it("withOptimisticUpdate forwards the bound callback as optimisticUpdate", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient();
+
+        mock.mutation.mockResolvedValue({ ok: true });
+
+        const optimisticUpdate = vi.fn<() => void>();
+        const Probe = (): ReactElement => {
+            const bound = useMutation(makeRef("counter:inc")).withOptimisticUpdate(optimisticUpdate);
+
+            return (
+                <button
+                    aria-label="increment"
+                    data-testid="btn"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-only click handler; stable identity is irrelevant for a single fireEvent.
+                    onClick={() => {
+                        bound.mutate({}).catch(() => {});
+                    }}
+                    type="button"
+                />
+            );
+        };
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <Probe />
+            </CirrusProvider>,
+        );
+
+        fireEvent.click(screen.getByTestId("btn"));
+
+        await waitFor(() => {
+            expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "counter:inc" }), {}, { optimisticUpdate });
+        });
+    });
+
+    it("a per-call optimisticUpdate overrides the bound one", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient();
+
+        mock.mutation.mockResolvedValue({ ok: true });
+
+        const bound = vi.fn<() => void>();
+        const perCall = vi.fn<() => void>();
+        const Probe = (): ReactElement => {
+            const hook = useMutation(makeRef("counter:inc")).withOptimisticUpdate(bound);
+
+            return (
+                <button
+                    aria-label="increment"
+                    data-testid="btn"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-only click handler; stable identity is irrelevant for a single fireEvent.
+                    onClick={() => {
+                        hook.mutate({}, { optimisticUpdate: perCall }).catch(() => {});
+                    }}
+                    type="button"
+                />
+            );
+        };
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <Probe />
+            </CirrusProvider>,
+        );
+
+        fireEvent.click(screen.getByTestId("btn"));
+
+        await waitFor(() => {
+            expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "counter:inc" }), {}, { optimisticUpdate: perCall });
+        });
+    });
 });

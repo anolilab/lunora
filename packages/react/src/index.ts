@@ -17,6 +17,8 @@ export type {
     ArgsOf,
     CirrusClient,
     FunctionReference,
+    OptimisticLocalStore,
+    OptimisticUpdate,
     PaginationResult,
     PaginationStatus,
     Preloaded,

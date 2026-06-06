@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CirrusClient } from "../src/cirrus-client.js";
+import type { OptimisticUpdate } from "../src/local-store.js";
 import { createInMemoryPersistence } from "../src/persistence.js";
 import type { FunctionReference } from "../src/types.js";
 
@@ -724,6 +725,158 @@ describe("cirrusClient", () => {
             // The fixed rollback only restores when its own value is still live;
             // B's value (2) survived A's failure.
             expect(received).toEqual([0, 1, 2]);
+        });
+
+        it("optimisticUpdate patches two different subscribed queries and rolls both back on error", async () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }, { status: 500 }));
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const aReceived: unknown[] = [];
+            const bReceived: unknown[] = [];
+
+            client.subscribe(fnRef("q:a"), {}, (d) => aReceived.push(d));
+            client.subscribe(fnRef("q:b"), {}, (d) => bReceived.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+
+            const aId = JSON.parse(socket.sent[0]!).id as string;
+            const bId = JSON.parse(socket.sent[1]!).id as string;
+
+            socket.receive({ delta: 1, id: aId, type: "delta" });
+            socket.receive({ delta: 10, id: bId, type: "delta" });
+
+            await expect(
+                client.mutation(
+                    fnRef("m:both"),
+                    {},
+                    {
+                        optimisticUpdate: (store) => {
+                            store.setQuery(fnRef("q:a"), {}, 2);
+                            store.setQuery(fnRef("q:b"), {}, 20);
+                        },
+                    },
+                ),
+            ).rejects.toMatchObject({ message: "fail" });
+
+            // Both queries patched optimistically, then both rolled back on error.
+            expect(aReceived).toEqual([1, 2, 1]);
+            expect(bReceived).toEqual([10, 20, 10]);
+        });
+
+        it("optimisticUpdate value is preserved on success", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, (d) => received.push(d));
+            latestSocket().open();
+            const subId = JSON.parse(latestSocket().sent[0]!).id as string;
+
+            latestSocket().receive({ delta: 0, id: subId, type: "delta" });
+
+            await client.mutation(
+                fnRef("m:set"),
+                {},
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("q:list"), {}, 42);
+                    },
+                },
+            );
+
+            expect(received).toEqual([0, 42]);
+        });
+
+        it("stacked optimisticUpdate mutations compose without clobbering each other", async () => {
+            expect.assertions(2);
+
+            const deferreds: { reject: (error: unknown) => void; resolve: (value: Response) => void }[] = [];
+            const fetchMock = vi.fn<typeof fetch>(
+                async () =>
+                    new Promise<Response>((resolve, reject) => {
+                        deferreds.push({ reject, resolve });
+                    }),
+            );
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("q:n"), {}, (d) => received.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+            const subId = JSON.parse(socket.sent[0]!).id as string;
+
+            socket.receive({ delta: 0, id: subId, type: "delta" });
+
+            // A: 0 -> 1, then B: 1 -> 2, both via optimisticUpdate, both in-flight.
+            const inc: OptimisticUpdate<unknown> = (store) => {
+                store.setQuery(fnRef("q:n"), {}, ((store.getQuery(fnRef("q:n"), {}) as number) ?? 0) + 1);
+            };
+            const promiseA = client.mutation(fnRef("m:inc"), {}, { optimisticUpdate: inc });
+            const promiseB = client.mutation(fnRef("m:inc"), {}, { optimisticUpdate: inc });
+
+            expect(received).toEqual([0, 1, 2]);
+
+            // A fails first; its rollback must leave B's pending value (2) intact.
+            deferreds[0]!.reject(new Error("A failed"));
+            await promiseA.catch(() => undefined);
+
+            deferreds[1]!.resolve(jsonResponse({ result: { ok: true } }));
+            await promiseB;
+
+            expect(received).toEqual([0, 1, 2]);
+        });
+
+        it("setQuery on an unsubscribed query is a no-op", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("q:watched"), {}, (d) => received.push(d));
+            latestSocket().open();
+            const subId = JSON.parse(latestSocket().sent[0]!).id as string;
+
+            latestSocket().receive({ delta: 0, id: subId, type: "delta" });
+
+            // Patching an unsubscribed query writes nothing and produces no rollback.
+            const result = await client.mutation(
+                fnRef("m:noop"),
+                {},
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("q:unwatched"), {}, 99);
+                    },
+                },
+            );
+
+            expect(received).toEqual([0]);
+            expect(result).toEqual({ ok: true });
         });
     });
 
