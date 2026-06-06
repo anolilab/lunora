@@ -4,7 +4,7 @@
 
 **Type-safe real-time backend on your own Cloudflare account. Vite-first.**
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](./LICENSE.md)
+[![License: FSL-1.1-Apache-2.0](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg)](./LICENSE.md)
 [![Status: alpha](https://img.shields.io/badge/status-v0.1--alpha-blueviolet.svg)](#status)
 [![Node](https://img.shields.io/badge/node-%5E22.14%20%7C%7C%20%3E%3D24.10-brightgreen.svg)](./.nvmrc)
 [![pnpm](https://img.shields.io/badge/pnpm-10.32.1-f69220.svg)](./package.json)
@@ -173,4 +173,4 @@ For security reports, see [`SECURITY.md`](./SECURITY.md). For community guidelin
 
 ## License
 
-[MIT](./LICENSE.md) © 2026 Daniel Bannert and contributors.
+[FSL-1.1-Apache-2.0](./LICENSE.md) © 2026 anolilab and contributors. Source-available; each release converts to Apache-2.0 two years after it ships.

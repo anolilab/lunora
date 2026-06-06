@@ -1,6 +1,7 @@
 {
     "name": "@cirrus/docs",
     "version": "0.0.0",
+    "license": "FSL-1.1-Apache-2.0",
     "private": true,
     "type": "module",
     "sideEffects": false,

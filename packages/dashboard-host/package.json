@@ -1,6 +1,7 @@
 {
     "name": "@cirrus/dashboard-host",
     "version": "0.0.0",
+    "license": "FSL-1.1-Apache-2.0",
     "description": "Internal shared dashboard dev-server helpers (HTML render, admin-token resolution, prebuilt asset loading) for @cirrus/vite and @cirrus/cli",
     "type": "module",
     "sideEffects": false,

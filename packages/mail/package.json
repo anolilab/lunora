@@ -1,6 +1,7 @@
 {
     "name": "@cirrus/mail",
     "version": "0.0.0",
+    "license": "FSL-1.1-Apache-2.0",
     "files": [
         "dist",
         "README.md",
