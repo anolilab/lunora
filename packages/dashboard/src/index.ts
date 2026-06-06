@@ -30,6 +30,8 @@ export type { DashboardProps, DashboardTab } from "./dashboard.js";
 export { Dashboard } from "./dashboard.js";
 export type { DataBrowserProps } from "./data-browser.js";
 export { DataBrowser } from "./data-browser.js";
+export type { Insight, InsightKind, InsightSeverity, InsightThresholds } from "./derive-insights.js";
+export { DEFAULT_INSIGHT_THRESHOLDS, deriveInsights } from "./derive-insights.js";
 export type { ErrorBoundaryProps } from "./error-boundary.js";
 export { ErrorBoundary } from "./error-boundary.js";
 export type { ExportImportPanelProps } from "./export-import.js";
@@ -48,6 +50,8 @@ export type { DashboardCatalogs, MessageId, TFunction } from "./i18n-context.js"
 export { createDashboardI18n, dashboardI18n, DEFAULT_LOCALE, useT } from "./i18n-context.js";
 export type { DashboardI18nProviderProps } from "./i18n-provider.js";
 export { DashboardI18nProvider } from "./i18n-provider.js";
+export type { InsightsPanelProps } from "./insights-panel.js";
+export { InsightsPanel } from "./insights-panel.js";
 export type { LogsPanelProps } from "./logs-panel.js";
 export { LogsPanel } from "./logs-panel.js";
 export type { AggregateMetrics, ShardMetricsResult } from "./metrics-aggregate.js";

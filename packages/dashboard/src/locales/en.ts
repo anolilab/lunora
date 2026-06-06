@@ -210,6 +210,18 @@ const MESSAGE_IDS = [
     "No functions have run on this shard yet.",
     "Recent",
     "Slowest",
+    // Insights panel.
+    "Insights",
+    "Surface slow functions, error spikes, and cache problems.",
+    "No issues detected.",
+    "Low cache hit rate",
+    "High cache eviction rate",
+    "Slow function",
+    "High error rate",
+    "{rate} hit rate over recent traffic.",
+    "{count} entries evicted recently.",
+    "Slowest call took {duration}.",
+    "{rate} of calls failed.",
 ] as const;
 
 /** A known dashboard message id — one of the entries in {@link MESSAGE_IDS}. */

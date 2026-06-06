@@ -24,6 +24,7 @@ import { GlobalDataBrowser } from "./global-data-browser.js";
 import { HealthPanel } from "./health-panel.js";
 import { useT } from "./i18n-context.js";
 import { DashboardI18nProvider } from "./i18n-provider.js";
+import { InsightsPanel } from "./insights-panel.js";
 import { fireAndForget } from "./internal.js";
 import { LogsPanel } from "./logs-panel.js";
 import { MetricsPanel } from "./metrics-panel.js";
@@ -35,7 +36,7 @@ import type { FunctionDescriptor } from "./types.js";
 import { UsersPanel } from "./users-panel.js";
 
 /** Identifier for each built-in dashboard tab. */
-type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "health" | "logs" | "metrics" | "migrations" | "schedule" | "schema" | "users";
+type DashboardTab = "data" | "export" | "files" | "functions" | "globals" | "health" | "insights" | "logs" | "metrics" | "migrations" | "schedule" | "schema" | "users";
 
 interface DashboardProps {
     /**
@@ -102,6 +103,7 @@ const TAB_ICONS: Record<DashboardTab, ReactNode> = {
     functions: <path d="m9 8-4 4 4 4m6-8 4 4-4 4" />,
     globals: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0 0c2.5-2 3.8-5.3 3.8-9S14.5 5 12 3M12 21c-2.5-2-3.8-5.3-3.8-9S9.5 5 12 3M3.5 9h17M3.5 15h17" />,
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
+    insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
     metrics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
@@ -118,7 +120,7 @@ const NAV_GROUPS: ReadonlyArray<{ readonly key: NavGroupKey; readonly tabs: Read
     { key: "logic", tabs: ["functions", "migrations", "schedule"] },
     { key: "storage", tabs: ["files", "export"] },
     { key: "auth", tabs: ["users"] },
-    { key: "observability", tabs: ["health", "metrics", "logs"] },
+    { key: "observability", tabs: ["health", "insights", "metrics", "logs"] },
 ];
 
 const TabIcon = ({ tab }: { readonly tab: DashboardTab }): ReactElement => (
@@ -137,7 +139,7 @@ const TabIcon = ({ tab }: { readonly tab: DashboardTab }): ReactElement => (
 );
 
 /** Flat list of every tab, in sidebar order; drives the route table. */
-const TABS = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "health", "metrics", "logs"] as const;
+const TABS = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "health", "insights", "metrics", "logs"] as const;
 
 /** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `data`. */
 const tabFromPathname = (pathname: string): DashboardTab => {
@@ -170,6 +172,7 @@ const DashboardLayout = (): ReactElement => {
             functions: t("Functions"),
             globals: t("Global Tables"),
             health: t("Health"),
+            insights: t("Insights"),
             logs: t("Logs"),
             metrics: t("Metrics"),
             migrations: t("Migrations"),
@@ -198,6 +201,7 @@ const DashboardLayout = (): ReactElement => {
             functions: t("Run registered queries, mutations, and actions."),
             globals: t("Read-only view of your global D1 tables."),
             health: t("At-a-glance connection, error, and shard signals."),
+            insights: t("Surface slow functions, error spikes, and cache problems."),
             logs: t("A live stream of recent function logs."),
             metrics: t("Per-shard health and aggregate metrics."),
             migrations: t("Review migration status and run them."),
@@ -328,6 +332,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         ),
         globals: <GlobalDataBrowser />,
         health: <HealthPanel initialShardKey={initialShardKey} />,
+        insights: <InsightsPanel initialShardKey={initialShardKey} />,
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
