@@ -1,0 +1,91 @@
+/**
+ * Cirrus design tokens — the canonical visual language.
+ *
+ * One source of truth for the brand: colours, type, spacing, radii, motion.
+ * Consumed by the marketing/landing page and the docs site; the dashboard
+ * mirrors the same values under a `--c-*` namespace in its scoped stylesheet
+ * (packages/dashboard/src/theme.tsx) because it must not leak globals.
+ *
+ * System: Supabase-Studio neutral grays + the Cirrus brand YELLOW accent. The
+ * yellow (#FCC419) is the SINGLE brand hook — one per surface. Green is freed up
+ * for success/connected states; red for destructive. Never tint the mark orange.
+ *
+ * Default `:root` is the dark theme (the brand's primary mood). Add
+ * `data-theme="light"` on a root element for paper mode.
+ */
+
+:root {
+    /* ── Brand anchors ─────────────────────────────────────────────── */
+    --cirrus-ink: #121212; /* near-black base, neutral (no blue tint) */
+    --cirrus-paper: #ffffff;
+    --cirrus-yellow: #fcc419; /* the brand accent */
+    --cirrus-mute: #a0a0a0;
+
+    /* ── Surfaces (dark, primary) — Supabase Studio neutrals ───────── */
+    --cirrus-bg: #121212; /* app / content background */
+    --cirrus-surface: #1c1c1c; /* chrome, panels, cards */
+    --cirrus-surface-2: #232323; /* raised / table header / hover */
+    --cirrus-surface-3: #2a2a2a; /* active */
+    --cirrus-border: #2e2e2e;
+    --cirrus-border-strong: #3e3e3e;
+
+    /* ── Foreground ────────────────────────────────────────────────── */
+    --cirrus-fg: #ededed;
+    --cirrus-fg-muted: #a0a0a0;
+    --cirrus-fg-subtle: #707070;
+
+    /* ── Accent (brand yellow) ─────────────────────────────────────── */
+    --cirrus-accent: #fcc419;
+    --cirrus-accent-hover: #ffd43b;
+    --cirrus-accent-press: #f0b400;
+    --cirrus-accent-text: #ffd43b; /* legible link/label on dark */
+    --cirrus-accent-fg: #1a1500; /* near-black text on a yellow fill */
+    --cirrus-accent-soft: rgba(252, 196, 25, 0.13);
+    --cirrus-accent-line: rgba(252, 196, 25, 0.4);
+    --cirrus-glow: rgba(252, 196, 25, 0.4);
+
+    /* ── Semantic ──────────────────────────────────────────────────── */
+    --cirrus-success: #3ecf8e; /* the green is now a state, not the brand */
+    --cirrus-warning: #fcc419;
+    --cirrus-danger: #f25c5c;
+
+    /* ── Type ──────────────────────────────────────────────────────── */
+    --cirrus-font-display: "Inter Tight", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --cirrus-font-body: "Inter Tight", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --cirrus-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    /* Display headings ride tight; mono carries eyebrows + technical labels. */
+    --cirrus-tracking-display: -0.035em;
+    --cirrus-tracking-eyebrow: 0.22em;
+
+    /* ── Shape & motion ────────────────────────────────────────────── */
+    --cirrus-radius-sm: 4px;
+    --cirrus-radius: 6px;
+    --cirrus-radius-lg: 9px;
+    --cirrus-radius-xl: 16px;
+    --cirrus-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.4);
+    --cirrus-shadow-glow: 0 0 0 1px var(--cirrus-accent-line), 0 8px 40px var(--cirrus-glow);
+    --cirrus-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root[data-theme="light"] {
+    --cirrus-bg: #fbfbfb;
+    --cirrus-surface: #ffffff;
+    --cirrus-surface-2: #f4f4f5;
+    --cirrus-surface-3: #ededed;
+    --cirrus-border: #e6e6e6;
+    --cirrus-border-strong: #d4d4d4;
+
+    --cirrus-fg: #171717;
+    --cirrus-fg-muted: #5d5d5d;
+    --cirrus-fg-subtle: #8f8f8f;
+
+    --cirrus-accent-text: #8a6100; /* dark gold clears contrast on paper */
+    --cirrus-accent-soft: rgba(252, 196, 25, 0.18);
+    --cirrus-glow: rgba(252, 196, 25, 0.3);
+
+    --cirrus-success: #1a9d6a;
+    --cirrus-danger: #d92d20;
+
+    --cirrus-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 12px 32px rgba(0, 0, 0, 0.08);
+}
