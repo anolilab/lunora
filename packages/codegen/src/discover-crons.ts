@@ -10,10 +10,19 @@ import sanitizeNamespace from "./paths.js";
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);
 
 /**
- * Decide whether a callee identifier refers to `@cirrus/scheduler`'s
- * `cronJobs`. Mirrors `isDefineMigration`: trust the import declaration when the
- * checker has a symbol (so aliasing survives), and fall back to the surface text
- * when no symbol is available (no tsconfig wired up).
+ * Modules `cronJobs` may legitimately be imported from: `@cirrus/scheduler`
+ * (its home) or `@cirrus/server` (the main API surface, which re-exports it —
+ * see `packages/server/src/index.ts`). Both must be recognized, otherwise a
+ * user (or registry item) importing `cronJobs` from `@cirrus/server` has every
+ * cron silently dropped.
+ */
+const CRON_JOBS_SOURCES = new Set<string>(["@cirrus/scheduler", "@cirrus/server"]);
+
+/**
+ * Decide whether a callee identifier refers to the framework's `cronJobs`.
+ * Mirrors `isDefineMigration`: trust the import declaration when the checker has
+ * a symbol (so aliasing survives), and fall back to the surface text when no
+ * symbol is available (no tsconfig wired up).
  */
 const isCronJobsFactory = (identifier: Identifier): boolean => {
     const symbol = identifier.getSymbol();
@@ -27,7 +36,7 @@ const isCronJobsFactory = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@cirrus/scheduler") {
+        if (!CRON_JOBS_SOURCES.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
             return false;
         }
 

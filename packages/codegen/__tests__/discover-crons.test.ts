@@ -54,6 +54,28 @@ describe("discover-crons", () => {
         ]);
     });
 
+    it("discovers cronJobs imported from the @cirrus/server re-export", () => {
+        expect.assertions(1);
+
+        // @cirrus/server re-exports cronJobs from @cirrus/scheduler; codegen must
+        // recognize it (importing framework API from @cirrus/server is the
+        // convention used by registry items + the presence/backup docs).
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@cirrus/server";
+            import { internal } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.interval("heartbeat", { hours: 1 }, internal.jobs.run, {});
+            export default crons;
+        `,
+        );
+
+        const result = discoverCrons(newProject(), workdir);
+
+        expect(result).toEqual([{ args: {}, cron: "0 */1 * * *", functionPath: "jobs:run", name: "heartbeat" }]);
+    });
+
     it("resolves an aliased cronJobs import", () => {
         expect.assertions(1);
 
