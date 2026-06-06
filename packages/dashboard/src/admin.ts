@@ -19,6 +19,7 @@ export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
  */
 export const ADMIN_FUNCTIONS = {
     exportShard: "__cirrus_admin__:exportShard",
+    getFunctionStats: "__cirrus_admin__:getFunctionStats",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
     importShard: "__cirrus_admin__:importShard",
@@ -66,6 +67,29 @@ export interface ShardMetrics {
     shard: string;
     sinceMs: number;
     uptimeMs: number;
+}
+
+/**
+ * Per-function execution counters returned by `__cirrus_admin__:getFunctionStats`
+ * for one shard. Mirrors `@cirrus/do`'s `FunctionCallStat`. Counters are
+ * per-DO-instance and reset on hibernation/restart — a "since this instance
+ * woke" readout. Durations are handler wall-clock milliseconds.
+ */
+export interface FunctionCallStat {
+    calls: number;
+    errors: number;
+    lastCalledAt: number;
+    lastErrorAt: null | number;
+    lastErrorMessage: null | string;
+    maxDurationMs: number;
+    path: string;
+    totalDurationMs: number;
+}
+
+/** Payload of a `__cirrus_admin__:getFunctionStats` call, mirroring `@cirrus/do`'s `FunctionStatsResult`. */
+export interface FunctionStatsResult {
+    functions: FunctionCallStat[];
+    sinceMs: number;
 }
 
 /** Severity of a buffered log entry, mirroring `@cirrus/do`'s `LogLevel`. */

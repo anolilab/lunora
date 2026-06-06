@@ -1,6 +1,8 @@
 export type {
     CacheStats,
     ExportRow,
+    FunctionCallStat,
+    FunctionStatsResult,
     ImportError,
     ImportShardResult,
     LogEntry,
@@ -36,6 +38,8 @@ export type { FileBrowserProps } from "./file-browser.js";
 export { FileBrowser } from "./file-browser.js";
 export type { FunctionRunnerProps } from "./function-runner.js";
 export { FunctionRunner } from "./function-runner.js";
+export type { FunctionStatsPanelProps } from "./function-stats.js";
+export { FunctionStatsPanel } from "./function-stats.js";
 export type { GlobalDataBrowserProps } from "./global-data-browser.js";
 export { GlobalDataBrowser } from "./global-data-browser.js";
 export type { HealthPanelProps } from "./health-panel.js";

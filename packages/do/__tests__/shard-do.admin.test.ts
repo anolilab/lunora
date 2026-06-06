@@ -370,6 +370,34 @@ describe("shardDO admin data migrations", () => {
         expect(body.result.entries).toHaveLength(1);
         expect(body.result.entries[0]).toMatchObject({ functionPath: "boom:explode", level: "error", message: "boom" });
     });
+
+    it("getFunctionStats reports per-function call and error counts", async () => {
+        expect.assertions(6);
+
+        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Two successes for one path, one failure for another — so the two paths
+        // accumulate independently and the error path advances its error counter.
+        await shard.fetch(userRequest("messages:list"));
+        await shard.fetch(userRequest("messages:list"));
+        await shard.fetch(userRequest("boom:explode"));
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getFunctionStats, {}));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{
+            result: { functions: { calls: number; errors: number; lastErrorMessage: null | string; path: string }[]; sinceMs: number };
+        }>();
+
+        const byPath = new Map(body.result.functions.map((stat) => [stat.path, stat]));
+
+        expect(body.result.functions).toHaveLength(2);
+        expect(byPath.get("messages:list")).toMatchObject({ calls: 2, errors: 0, lastErrorMessage: null });
+        expect(byPath.get("boom:explode")).toMatchObject({ calls: 1, errors: 1, lastErrorMessage: "boom" });
+        expect(byPath.get("messages:list")?.lastErrorMessage).toBeNull();
+        expect(body.result.sinceMs).toBeTypeOf("number");
+    });
 });
 
 /**

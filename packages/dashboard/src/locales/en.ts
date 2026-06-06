@@ -199,6 +199,17 @@ const MESSAGE_IDS = [
     "Shard tables",
     "Shared across every tenant, stored once in D1. Includes auth tables.",
     "Partitioned per shard key into separate Durable Objects — scoped to the shard above.",
+    // Function stats panel.
+    "avg",
+    "calls",
+    "kind",
+    "last error",
+    "last run",
+    "max",
+    "Most called",
+    "No functions have run on this shard yet.",
+    "Recent",
+    "Slowest",
 ] as const;
 
 /** A known dashboard message id — one of the entries in {@link MESSAGE_IDS}. */

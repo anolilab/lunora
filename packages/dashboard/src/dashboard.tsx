@@ -19,6 +19,7 @@ import { ErrorBoundary } from "./error-boundary.js";
 import { ExportImportPanel } from "./export-import.js";
 import { FileBrowser } from "./file-browser.js";
 import { FunctionRunner } from "./function-runner.js";
+import { FunctionStatsPanel } from "./function-stats.js";
 import { GlobalDataBrowser } from "./global-data-browser.js";
 import { HealthPanel } from "./health-panel.js";
 import { useT } from "./i18n-context.js";
@@ -319,7 +320,12 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         data: <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,
-        functions: <FunctionRunner functions={functions} />,
+        functions: (
+            <div className="space-y-8">
+                <FunctionStatsPanel functions={functions} initialShardKey={initialShardKey} />
+                <FunctionRunner functions={functions} />
+            </div>
+        ),
         globals: <GlobalDataBrowser />,
         health: <HealthPanel initialShardKey={initialShardKey} />,
         logs: <LogsPanel initialShardKey={initialShardKey} />,

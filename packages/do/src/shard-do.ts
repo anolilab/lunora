@@ -10,6 +10,7 @@ import type { MigrationDirection, MigrationRunResult } from "./data-migration.js
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
 import { createDependencyTracker } from "./dependency-tracker.js";
+import type { FunctionCallStat, FunctionStatsResult } from "./introspect.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 import { LogBuffer } from "./log-buffer.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
@@ -660,6 +661,17 @@ abstract class ShardDO {
     private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now() };
 
     /**
+     * Per-function execution counters surfaced by the
+     * `__cirrus_admin__:getFunctionStats` RPC, keyed by `&lt;file>:&lt;function>`
+     * path. Shares the `metrics` lifecycle: in-memory, reset on
+     * hibernation/restart. The map is naturally bounded by the app's registered
+     * function count (a finite set), so no eviction is needed. Maintained by
+     * `recordFunctionCall` at the one dispatch site that also bumps the
+     * aggregate `metrics` counters.
+     */
+    private readonly functionStats = new Map<string, FunctionCallStat>();
+
+    /**
      * Recent RPC errors on this shard instance, surfaced by the
      * `__cirrus_admin__:getLogs` RPC. In-memory only and bounded — like
      * `metrics`, it resets on hibernation/restart. We only capture RPC
@@ -726,9 +738,14 @@ abstract class ShardDO {
             this.currentRequestSystem = request.headers.get("x-cirrus-system") === "1";
 
             this.metrics.requests += 1;
+            const dispatchStartedAt = Date.now();
 
             try {
                 const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
+
+                // Record the handler's own latency (before the subscription
+                // write-flush below) against the per-function counters.
+                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt);
 
                 // Inspect the post-write size before responding. SQLite-in-DO
                 // exposes `databaseSize` as a real getter; reading it is a
@@ -744,10 +761,13 @@ abstract class ShardDO {
                 return response;
             } catch (error: unknown) {
                 this.metrics.errors += 1;
+                const message = error instanceof Error ? error.message : String(error);
+
+                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt, message);
                 this.logs.push({
                     functionPath: payload.functionPath,
                     level: "error",
-                    message: error instanceof Error ? error.message : String(error),
+                    message,
                     timestamp: Date.now(),
                 });
 
@@ -1512,6 +1532,56 @@ abstract class ShardDO {
         };
     }
 
+    /**
+     * Fold one dispatch into the per-function counters keyed by `functionPath`,
+     * creating the entry on first sight. `errorMessage` is supplied only when
+     * the handler threw, in which case the failure counters advance too. Cheap
+     * in-memory bookkeeping — the sole writer of {@link functionStats}, called
+     * once per `/rpc` dispatch alongside the aggregate `metrics` update.
+     */
+    private recordFunctionCall(functionPath: string, durationMs: number, errorMessage?: string): void {
+        const now = Date.now();
+        const existing = this.functionStats.get(functionPath);
+        const stat: FunctionCallStat = existing ?? {
+            calls: 0,
+            errors: 0,
+            lastCalledAt: now,
+            // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
+            lastErrorAt: null,
+            // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
+            lastErrorMessage: null,
+            maxDurationMs: 0,
+            path: functionPath,
+            totalDurationMs: 0,
+        };
+
+        stat.calls += 1;
+        stat.totalDurationMs += durationMs;
+        stat.maxDurationMs = Math.max(stat.maxDurationMs, durationMs);
+        stat.lastCalledAt = now;
+
+        if (errorMessage !== undefined) {
+            stat.errors += 1;
+            stat.lastErrorAt = now;
+            stat.lastErrorMessage = errorMessage;
+        }
+
+        if (existing === undefined) {
+            this.functionStats.set(functionPath, stat);
+        }
+    }
+
+    /**
+     * Assemble the per-function readout served by
+     * `__cirrus_admin__:getFunctionStats`, sorted most-recently-called first so
+     * the busiest functions surface at the top of the dashboard table.
+     */
+    private collectFunctionStats(): FunctionStatsResult {
+        const functions = [...this.functionStats.values()].toSorted((a, b) => b.lastCalledAt - a.lastCalledAt);
+
+        return { functions, sinceMs: this.metrics.sinceMs };
+    }
+
     private maybeWarnRootSize(): void {
         if (ShardDO.rootSizeWarned) {
             return;
@@ -1701,6 +1771,10 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
             return { result: this.collectMetrics(), tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getFunctionStats) {
+            return { result: this.collectFunctionStats(), tables: new Set([ADMIN_WILDCARD]) };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getLogs) {

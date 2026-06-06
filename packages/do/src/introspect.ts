@@ -18,6 +18,7 @@ const ADMIN_FUNCTIONS = {
     applyCdc: "__cirrus_admin__:applyCdc",
     cdcSync: "__cirrus_admin__:cdcSync",
     exportShard: "__cirrus_admin__:exportShard",
+    getFunctionStats: "__cirrus_admin__:getFunctionStats",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
     importShard: "__cirrus_admin__:importShard",
@@ -33,6 +34,42 @@ const ADMIN_FUNCTIONS = {
 interface TableInfo {
     name: string;
     rowCount: number;
+}
+
+/**
+ * Per-function execution counters served by `__cirrus_admin__:getFunctionStats`,
+ * one entry per `&lt;file>:&lt;function>` path dispatched since this DO instance woke.
+ * Like `getMetrics`'s counters these are in-memory and reset on
+ * hibernation/restart — a "since this instance woke" readout, not a durable
+ * time series. Durations are wall-clock milliseconds of the handler call itself
+ * (before the subscription write-flush), so `totalDurationMs / calls` is the
+ * mean and `maxDurationMs` the slowest single call.
+ */
+interface FunctionCallStat {
+    /** Total dispatches, successful or failed. */
+    calls: number;
+    /** Subset of `calls` that threw. */
+    errors: number;
+    /** Epoch-ms of the most recent dispatch. */
+    lastCalledAt: number;
+    /** Epoch-ms of the most recent failure, or `null` if none has thrown. */
+    lastErrorAt: null | number;
+    /** Message of the most recent failure, or `null` if none has thrown. */
+    lastErrorMessage: null | string;
+    /** Slowest single dispatch, in milliseconds. */
+    maxDurationMs: number;
+    /** The `&lt;file>:&lt;function>` identifier, e.g. `messages:list`. */
+    path: string;
+    /** Summed handler wall-clock across every dispatch; divide by `calls` for the mean. */
+    totalDurationMs: number;
+}
+
+/** Payload of a `__cirrus_admin__:getFunctionStats` call. */
+interface FunctionStatsResult {
+    /** One entry per dispatched function path, newest-called first. */
+    functions: FunctionCallStat[];
+    /** Epoch-ms this instance began collecting (shared with `getMetrics`). */
+    sinceMs: number;
 }
 
 /** A window of rows from one table, plus the column list and total size. */
@@ -254,4 +291,4 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
 };
 
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage };
-export type { ReadTablePageOptions, TableInfo, TablePage };
+export type { FunctionCallStat, FunctionStatsResult, ReadTablePageOptions, TableInfo, TablePage };
