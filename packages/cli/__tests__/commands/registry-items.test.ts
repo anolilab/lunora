@@ -1,0 +1,126 @@
+/**
+ * Coverage for the *real* shipped registry items under the repo's `registry/`
+ * (ratelimit, presence, …) — distinct from `add.test.ts`, which exercises the
+ * `add` command mechanics against minimal hermetic fixtures.
+ *
+ * Data-driven: every subdirectory of `registry/` that carries a `registry.json`
+ * is discovered and run through the full `cirrus add` flow into a throwaway
+ * project. New registry items get this coverage automatically — no edit here.
+ */
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { parseManifest, runAddCommand } from "../../src/commands/add.js";
+import type { Logger } from "../../src/util/logger.js";
+
+const silentLogger = (): Logger => {
+    const noop = (): void => {};
+
+    return { error: noop, info: noop, success: noop, warn: noop };
+};
+
+const testDirectory = dirname(fileURLToPath(import.meta.url));
+// __tests__/commands → packages/cli → packages → repo root → registry
+const registryRoot = resolve(testDirectory, "..", "..", "..", "..", "registry");
+
+const BASE_SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+
+export const schema = defineSchema({
+    messages: defineTable({ text: v.string() }),
+});
+`;
+
+/** Every item directory under `registry/` that ships a manifest. */
+const itemNames = readdirSync(registryRoot).filter((entry) => {
+    const full = join(registryRoot, entry);
+
+    return statSync(full).isDirectory() && existsSync(join(full, "registry.json"));
+});
+
+let workdir: string;
+
+const seedProject = (): void => {
+    const cirrusDirectory = join(workdir, "cirrus");
+
+    mkdirSync(cirrusDirectory, { recursive: true });
+    writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: {}, name: "demo" }, undefined, 4), "utf8");
+    writeFileSync(join(workdir, "wrangler.jsonc"), '{\n    // demo\n    "name": "demo"\n}\n', "utf8");
+    writeFileSync(join(cirrusDirectory, "schema.ts"), BASE_SCHEMA, "utf8");
+};
+
+describe("shipped registry items", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "cirrus-registry-"));
+        seedProject();
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("discovers at least the ratelimit and presence items", () => {
+        expect.assertions(2);
+
+        expect(itemNames).toContain("ratelimit");
+        expect(itemNames).toContain("presence");
+    });
+
+    describe.each(itemNames)("%s", (name) => {
+        const manifestRaw = JSON.parse(readFileSync(join(registryRoot, name, "registry.json"), "utf8")) as unknown;
+        const manifest = parseManifest(manifestRaw, name);
+
+        it("manifest name matches its directory", () => {
+            expect.assertions(1);
+
+            expect(manifest.name).toBe(name);
+        });
+
+        it("every declared source file exists in the item directory", () => {
+            // eslint-disable-next-line vitest/prefer-expect-assertions -- count is one-per-file plus the non-empty guard; data-driven, so not a literal
+            expect.assertions(manifest.files.length + 1);
+
+            // An item with no files would be degenerate — guard so the assertion count holds.
+            expect(manifest.files.length).toBeGreaterThan(0);
+
+            for (const file of manifest.files) {
+                expect(existsSync(join(registryRoot, name, file.from))).toBe(true);
+            }
+        });
+
+        it("add writes every destination file and merges any schema extension", async () => {
+            // eslint-disable-next-line vitest/prefer-expect-assertions -- count is exit-code + schema-merge + one-per-file; data-driven, so not a literal
+            expect.assertions(2 + manifest.files.length);
+
+            const result = await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: [name], yes: true });
+
+            expect(result.code).toBe(0);
+
+            const schema = readFileSync(join(workdir, "cirrus", "schema.ts"), "utf8");
+            // Items shipping a schema-extension file must have wired themselves into schema.ts.
+            const hasExtension = manifest.files.some((file) => file.merge === "schema-extension");
+
+            expect(hasExtension ? schema.includes(`.extend(${name}.extension)`) : true).toBe(true);
+
+            for (const file of manifest.files) {
+                expect(existsSync(join(workdir, file.to))).toBe(true);
+            }
+        });
+
+        it("is idempotent — a second add skips without duplicating the schema extension", async () => {
+            expect.assertions(1);
+
+            await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: [name], yes: true });
+            await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: [name], yes: true });
+
+            const schema = readFileSync(join(workdir, "cirrus", "schema.ts"), "utf8");
+            const extendCount = schema.split(`.extend(${name}.extension)`).length - 1;
+
+            // 0 for items with no schema extension, exactly 1 for those that have one — never duplicated.
+            expect(extendCount).toBeLessThanOrEqual(1);
+        });
+    });
+});
