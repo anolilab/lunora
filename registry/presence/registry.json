@@ -1,0 +1,12 @@
+{
+    "name": "presence",
+    "description": "Collaborative-awareness presence (who's here + cursors) — a TTL'd room/session table wired into your Cirrus schema, with reactive listPresent and a heartbeat upsert.",
+    "requires": [],
+    "deps": {
+        "@cirrus/server": "workspace:*"
+    },
+    "files": [
+        { "from": "schema.ts", "to": "cirrus/presence/schema.ts", "merge": "schema-extension" },
+        { "from": "presence.ts", "to": "cirrus/presence/index.ts", "merge": "create-or-skip" }
+    ]
+}
