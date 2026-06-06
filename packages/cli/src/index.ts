@@ -1,5 +1,7 @@
 export type { CommandName, RunCliOptions } from "./cli.js";
 export { COMMANDS, runCli, VERSION } from "./cli.js";
+export type { AddCommandOptions, AddCommandResult, RegistryBinding, RegistryFile, RegistryManifest } from "./commands/add.js";
+export { parseManifest, runAddCommand } from "./commands/add.js";
 export { runCodegenCommand } from "./commands/codegen.js";
 export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, ImportCommandResult, StreamingFetchLike } from "./commands/data-transfer.js";
 export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand } from "./commands/data-transfer.js";
@@ -16,6 +18,8 @@ export { runResetCommand } from "./commands/reset.js";
 export type { FetchLike, RunCommandOptions, RunCommandResult } from "./commands/run.js";
 export { runRpcCommand } from "./commands/run.js";
 export { default as parseArgs } from "./util/args.js";
+export type { InsertSchemaExtensionResult } from "./util/insert-schema-extension.js";
+export { insertSchemaExtension } from "./util/insert-schema-extension.js";
 export type { Logger } from "./util/logger.js";
 export { createLogger, pail } from "./util/logger.js";
 export type { ColumnSnapshot, DiffEntry, IndexSnapshot, SchemaDiff, SchemaSnapshot, TableSnapshot, UnsupportedEntry } from "./util/migration-diff.js";

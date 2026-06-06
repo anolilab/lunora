@@ -1,0 +1,18 @@
+{
+    "name": "ratelimit",
+    "description": "Token-bucket / fixed-window rate limiting",
+    "requires": [],
+    "deps": {
+        "@cirrus/ratelimit": "workspace:*"
+    },
+    "bindings": [
+        {
+            "path": ["vars", "RATELIMIT_ENABLED"],
+            "value": "true"
+        }
+    ],
+    "files": [
+        { "from": "schema.ts", "to": "cirrus/ratelimit/schema.ts", "merge": "schema-extension" },
+        { "from": "ratelimit.ts", "to": "cirrus/ratelimit/index.ts", "merge": "create-or-skip" }
+    ]
+}

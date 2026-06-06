@@ -15,6 +15,8 @@ import { createLogger } from "./util/logger.js";
 
 const COMMANDS = [
     "init",
+    "add",
+    "list",
     "dev",
     "codegen",
     "deploy",
@@ -88,7 +90,18 @@ interface BuildCliResult {
  * options to the front of argv. We need to know which options take a value
  * so we can keep "option value" pairs together during the reorder.)
  */
-const BOOLEAN_OPTIONS: Set<string> = new Set<string>(["all", "allow-unsafe-source", "dry-run", "json", "no-codegen", "no-dashboard", "prod", "remote", "yes"]);
+const BOOLEAN_OPTIONS: Set<string> = new Set<string>([
+    "all",
+    "allow-unsafe-source",
+    "dry-run",
+    "json",
+    "list",
+    "no-codegen",
+    "no-dashboard",
+    "prod",
+    "remote",
+    "yes",
+]);
 
 const LEADING_DASHES = /^-+/u;
 
@@ -241,6 +254,68 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 name: "allow-unsafe-source",
                 type: Boolean,
             },
+        ],
+    });
+
+    cli.addCommand({
+        argument: { description: "Registry item name(s)", name: "name", type: String },
+        description: "Add a component-registry item into cirrus/ (scaffold + schema merge)",
+        execute: async ({ argument, options: parsed }) => {
+            const from = typeof parsed.from === "string" && parsed.from.length > 0 ? parsed.from : undefined;
+            const source = typeof parsed.source === "string" && parsed.source.length > 0 ? parsed.source : undefined;
+
+            const { runAddCommand } = await import("./commands/add.js");
+            const result = await runAddCommand({
+                allowUnsafeSource: parsed.allowUnsafeSource === true,
+                cwd,
+                dryRun: parsed.dryRun === true,
+                from,
+                json: parsed.json === true,
+                list: parsed.list === true,
+                logger,
+                names: argument,
+                source,
+                yes: parsed.yes === true,
+            });
+
+            exitCode.value = result.code;
+        },
+        name: "add",
+        options: [
+            { description: "Print the plan and stop without writing", name: "dry-run", type: Boolean },
+            { description: "List available items instead of adding", name: "list", type: Boolean },
+            { description: "Local registry root (offline; expects <name>/ subdirs)", name: "from", type: String },
+            { description: "Override the remote registry source base (e.g. gh:owner/repo/registry)", name: "source", type: String },
+            { description: "Permit --source values outside gh:/github:/https://", name: "allow-unsafe-source", type: Boolean },
+            { description: "Skip the package.json mutation confirmation prompt", name: "yes", type: Boolean },
+            { description: "Emit a JSON snapshot of the plan", name: "json", type: Boolean },
+        ],
+    });
+
+    cli.addCommand({
+        description: "List available component-registry items",
+        execute: async ({ options: parsed }) => {
+            const from = typeof parsed.from === "string" && parsed.from.length > 0 ? parsed.from : undefined;
+            const source = typeof parsed.source === "string" && parsed.source.length > 0 ? parsed.source : undefined;
+
+            const { runAddCommand } = await import("./commands/add.js");
+            const result = await runAddCommand({
+                cwd,
+                from,
+                json: parsed.json === true,
+                list: true,
+                logger,
+                names: [],
+                source,
+            });
+
+            exitCode.value = result.code;
+        },
+        name: "list",
+        options: [
+            { description: "Local registry root (offline; expects <name>/ subdirs)", name: "from", type: String },
+            { description: "Override the remote registry source base", name: "source", type: String },
+            { description: "Emit a JSON list", name: "json", type: Boolean },
         ],
     });
 
@@ -711,6 +786,9 @@ Usage: cirrus <command> [options]
 Commands:
   init [name] [-t <template>]   Scaffold a new Cirrus project (templates: vite, standalone, tanstack-start, next)
        [--from <path>] [--source <src>]  Use a local templates dir or override the remote source
+  add <name> [...names]         Add component-registry item(s) into cirrus/ (scaffold + schema merge)
+       [--dry-run] [--from <dir>] [--source <src>] [--yes] [--json]
+  list [--from <dir>]           List available component-registry items
   dev  [--port <n>] [--worker-port <n>]  Run the dev stack: wrangler worker + dashboard + codegen watch
        [--no-dashboard] [--no-codegen]
   codegen                       Run codegen for cirrus/ functions and schema
