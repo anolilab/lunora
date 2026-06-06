@@ -7,6 +7,7 @@ export type {
     BackupManifest,
     BackupStore,
     CronHandler,
+    CronJobDispatch,
     ExecutionContextLike,
     FunctionDescriptor,
     FunctionRegistryEntry,

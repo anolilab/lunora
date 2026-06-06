@@ -4,6 +4,7 @@ import { join, resolve, sep } from "node:path";
 import { runCodegen } from "@cirrus/codegen";
 import type { Plugin, ViteDevServer } from "vite";
 
+import { reconcileWranglerCrons } from "./cron-sync.js";
 import type { ResolvedCirrusPluginOptions } from "./types.js";
 
 const DEBOUNCE_MS = 100;
@@ -15,7 +16,7 @@ const DEBOUNCE_MS = 100;
  */
 const runCodegenSafely = (
     options: Pick<ResolvedCirrusPluginOptions, "projectRoot" | "schemaDir">,
-    logger: { error: (message: string) => void; warn: (message: string) => void },
+    logger: { error: (message: string) => void; info?: (message: string) => void; warn: (message: string) => void },
 ): string | undefined => {
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
@@ -27,6 +28,21 @@ const runCodegenSafely = (
 
     try {
         const result = runCodegen({ cirrusDirectory: options.schemaDir, projectRoot: options.projectRoot });
+
+        // Reconcile code-first cron definitions into wrangler.jsonc so the user
+        // never hand-edits `triggers.crons`. Best-effort: a wrangler problem
+        // must not abort codegen (the wrangler validator plugin reports those).
+        try {
+            const reconciled = reconcileWranglerCrons(options.projectRoot, result.cronTriggers);
+
+            if (reconciled.changed) {
+                logger.info?.(`[cirrus] synced ${result.cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+            }
+        } catch (cronError: unknown) {
+            const message = cronError instanceof Error ? cronError.message : String(cronError);
+
+            logger.warn(`[cirrus] cron trigger sync skipped: ${message}`);
+        }
 
         return resolve(result.outputDirectory);
     } catch (error: unknown) {
@@ -61,6 +77,10 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                     // eslint-disable-next-line no-console
                     console.error(message);
                 },
+                info: (message: string): void => {
+                    // eslint-disable-next-line no-console
+                    console.info(message);
+                },
                 warn: (message: string): void => {
                     // eslint-disable-next-line no-console
                     console.warn(message);
@@ -82,6 +102,9 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
             const serverLogger = {
                 error: (message: string): void => {
                     server.config.logger.error(message);
+                },
+                info: (message: string): void => {
+                    server.config.logger.info(message);
                 },
                 warn: (message: string): void => {
                     server.config.logger.warn(message);

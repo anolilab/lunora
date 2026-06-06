@@ -260,6 +260,21 @@ interface ScheduledControllerLike {
 type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
 
 /**
+ * A single code-defined cron job, shaped like an entry of the generated
+ * `CIRRUS_CRONS` map. `functionPath` is the `"namespace:fn"` to run, `args` its
+ * bound arguments, and `name` the human label from the `cronJobs()` builder.
+ * Pass the whole `CIRRUS_CRONS` map as {@link WorkerOptions.cronJobs}; the worker
+ * dispatches each job on its firing trigger via the same authorized shard path
+ * as the scheduler.
+ */
+interface CronJobDispatch {
+    args?: Record<string, unknown>;
+    functionPath: string;
+    name: string;
+    shardKey?: string;
+}
+
+/**
  * R2-like sink for scheduled backups. Structurally a subset of `@cirrus/storage`'s
  * `R2BucketLike` (and of the raw R2 binding), so passing `env.BACKUPS` straight
  * through satisfies it. `put` writes the NDJSON snapshot and its manifest
@@ -403,6 +418,15 @@ interface WorkerOptions {
      * (shard-local + `.global()`). Mirrors the export endpoint's `tables`.
      */
     backupTables?: ReadonlyArray<string>;
+
+    /**
+     * Code-defined cron jobs keyed by cron expression — pass the generated
+     * `CIRRUS_CRONS` map directly. On a firing trigger the worker runs every job
+     * listed under the matching expression by dispatching its `functionPath`/`args`
+     * to the shard, server-side, through the same authorization as the scheduler.
+     * Runs alongside any {@link WorkerOptions.crons} handler and the backup.
+     */
+    cronJobs?: Record<string, ReadonlyArray<CronJobDispatch>>;
 
     /**
      * Cron-trigger handlers keyed by their exact cron expression. The worker's
@@ -1382,6 +1406,60 @@ const createWorker = (
     };
 
     /**
+     * Forward a server-initiated function call (a scheduler dispatch or a firing
+     * cron job) to its shard. Re-applies per-shard authorization with a `null`
+     * (system) identity so a server job can't reach a shard a same-shard end-user
+     * RPC would be denied, then POSTs `{ functionPath, args }` to the shard's RPC.
+     */
+    const dispatchToShard = async (functionPath: string, args: Record<string, unknown>, shardKey: string): Promise<Response> => {
+        if (options.authorizeShard) {
+            // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`; system dispatch has no end-user identity
+            const allowed = await options.authorizeShard(null, shardKey);
+
+            if (!allowed) {
+                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+            }
+        }
+
+        const forwarded = new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+
+        return forwardToShard(options.shardDO, shardKey, forwarded);
+    };
+
+    /**
+     * Dispatch every code-defined cron job declared under the firing expression,
+     * collecting per-job failures into `errors` so one failing job neither aborts
+     * the others nor is swallowed. A non-2xx shard response is itself a failure.
+     */
+    const runCronJobs = async (cron: string, errors: Error[], toError: (error: unknown) => Error): Promise<void> => {
+        const cronJobs = options.cronJobs?.[cron];
+
+        if (!cronJobs) {
+            return;
+        }
+
+        for (const job of cronJobs) {
+            try {
+                // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression dispatch sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
+                const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard);
+
+                if (!response.ok) {
+                    throw new CirrusError(`cron job "${job.name}" (${job.functionPath}) failed with status ${String(response.status)}`, {
+                        code: "CRON_JOB_FAILED",
+                        status: response.status,
+                    });
+                }
+            } catch (error: unknown) {
+                errors.push(toError(error));
+            }
+        }
+    };
+
+    /**
      * Receiver for the `SchedulerDO`'s scheduled-job dispatch. The scheduler DO
      * POSTs `{ functionPath, args, shardKey, scheduledFor, id }` as raw JSON,
      * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
@@ -1442,27 +1520,10 @@ const createWorker = (
         const args = (candidate.args ?? {}) as Record<string, unknown>;
         const shardKey = typeof candidate.shardKey === "string" && candidate.shardKey.length > 0 ? candidate.shardKey : defaultShard;
 
-        // Re-apply per-shard authorization so a scheduled job cannot reach a
-        // shard a direct RPC for the same shard would be denied. The scheduler
-        // runs jobs server-side with no end-user identity, so authorize with a
-        // `null` identity — the host's callback decides whether system-initiated
-        // dispatch is permitted for the shard.
-        if (options.authorizeShard) {
-            // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`; system dispatch has no end-user identity
-            const allowed = await options.authorizeShard(null, shardKey);
-
-            if (!allowed) {
-                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
-            }
-        }
-
-        const forwarded = new Request("https://shard.internal/rpc", {
-            body: JSON.stringify({ args, functionPath: candidate.functionPath }),
-            headers: { "content-type": "application/json" },
-            method: "POST",
-        });
-
-        return forwardToShard(options.shardDO, shardKey, forwarded);
+        // Re-apply per-shard authorization (inside `dispatchToShard`) so a
+        // scheduled job cannot reach a shard a direct RPC for the same shard
+        // would be denied — the scheduler runs jobs with no end-user identity.
+        return dispatchToShard(candidate.functionPath, args, shardKey);
     };
 
     type ExportRow = { doc: Record<string, unknown>; table: string };
@@ -2364,6 +2425,10 @@ const createWorker = (
             }
         }
 
+        // Code-defined crons: run every job declared under the firing expression.
+        // Failures join `errors` for the combined rethrow below.
+        await runCronJobs(controller.cron, errors, toError);
+
         if (options.backupStore && options.backupCron !== undefined && options.backupCron === controller.cron) {
             try {
                 await runScheduledBackup(controller);
@@ -2486,6 +2551,7 @@ export type {
     BackupManifest,
     BackupStore,
     CronHandler,
+    CronJobDispatch,
     ExecutionContextLike,
     FunctionDescriptor,
     FunctionRegistryEntry,

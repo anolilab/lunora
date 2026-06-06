@@ -2,10 +2,20 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import codegenPlugin from "../src/codegen-plugin.js";
 import type { ResolvedCirrusPluginOptions } from "../src/types.js";
+
+const CRONS_SOURCE = `import { cronJobs } from "@cirrus/scheduler";
+import { internal } from "./_generated/api.js";
+
+const crons = cronJobs();
+crons.interval("clear presence", { minutes: 30 }, internal.messages.send, {});
+crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.messages.send, {});
+export default crons;
+`;
 
 const SCHEMA_SOURCE = `import { defineSchema, defineTable, v } from "@cirrus/server";
 
@@ -135,6 +145,30 @@ describe("codegen-plugin", () => {
                 // eslint-disable-next-line no-console
                 console.error = originalError;
             }
+        });
+
+        it("buildStart reconciles code-first crons into wrangler.jsonc", () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+            writeFileSync(join(workdir, "cirrus", "crons.ts"), CRONS_SOURCE, "utf8");
+            writeFileSync(join(workdir, "wrangler.jsonc"), '{\n    // app config\n    "name": "app"\n}\n', "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.buildStart as (this: unknown) => void).call(undefined);
+
+            // The generated dispatcher map lists both jobs.
+            const crons = readFileSync(join(workdir, "cirrus", "_generated", "crons.ts"), "utf8");
+
+            expect(crons).toContain('name: "clear presence"');
+
+            // wrangler.jsonc gains triggers.crons (deduped expressions), comment preserved.
+            const wranglerText = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+            const wrangler = parseJsonc(wranglerText) as { triggers: { crons: string[] } };
+
+            expect(wrangler.triggers.crons).toEqual(expect.arrayContaining(["*/30 * * * *", "0 9 * * *"]));
+            expect(wranglerText).toContain("// app config");
         });
 
         it("plugin exposes the expected name and configureServer hook", () => {

@@ -102,6 +102,8 @@ const cirrus = async (options?: CirrusPluginOptions): Promise<ReadonlyArray<Plug
 const VERSION = "0.0.0";
 
 export { default as codegenPlugin } from "./codegen-plugin.js";
+export type { ReconcileResult } from "./cron-sync.js";
+export { reconcileWranglerCrons } from "./cron-sync.js";
 export { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin } from "./dashboard-plugin.js";
 export { default as overlayPlugin } from "./overlay-plugin.js";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
