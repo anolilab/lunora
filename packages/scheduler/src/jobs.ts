@@ -187,13 +187,10 @@ interface CronJobsBuilder {
     weekly: (name: string, schedule: WeeklySchedule, function_: FunctionReference, args?: Record<string, unknown>) => CronJobsBuilder;
 }
 
-/** Marker so codegen/runtime can recognise a `cronJobs()` default export. */
-const CRON_JOBS_BRAND = "__cirrusCronJobs" as const;
-
 /**
- * Create a code-first cron registry. The returned builder is chainable and
- * carries a `__cirrusCronJobs` brand so the discovery/runtime layers can detect
- * a `cirrus/crons.ts` default export.
+ * Create a code-first cron registry. The returned builder is chainable;
+ * codegen discovers a `cirrus/crons.ts` default export by AST, not a runtime
+ * brand.
  */
 const cronJobs = (): CronJobsBuilder => {
     const jobs: CronJob[] = [];
@@ -248,8 +245,8 @@ const cronJobs = (): CronJobsBuilder => {
         },
     };
 
-    return Object.assign(builder, { [CRON_JOBS_BRAND]: true as const });
+    return builder;
 };
 
-export { compileCronSchedule, CRON_JOBS_BRAND, cronJobs };
+export { compileCronSchedule, cronJobs };
 export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule };

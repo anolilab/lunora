@@ -2,9 +2,10 @@
  * Static mirror of `@cirrus/scheduler`'s `compileCronSchedule`. Codegen runs
  * before the user's project is built and cannot execute the `cronJobs()`
  * builder, so it re-derives the cron expression from the AST-lifted schedule
- * object. This MUST stay byte-for-byte in lockstep with
- * `packages/scheduler/src/cron-jobs.ts` — the two are exercised against the
- * same expectations in their respective test suites.
+ * object. This MUST stay byte-for-byte in lockstep with `compileCronSchedule`
+ * in `packages/scheduler/src/jobs.ts`. Both are pinned to the shared
+ * expectation matrix in `cron-compile-parity` so a drift in either copy fails
+ * CI rather than shipping silently.
  *
  * It is kept here (rather than importing `@cirrus/scheduler`) so codegen — a
  * foundational, dependency-light package — does not gain a runtime dependency

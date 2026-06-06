@@ -1,7 +1,18 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
-import { CRON_JOBS_BRAND, cronJobs } from "../src/jobs.js";
+import type { CronScheduleKind } from "../src/jobs.js";
+import { compileCronSchedule, cronJobs } from "../src/jobs.js";
 import type { FunctionReference } from "../src/types.js";
+
+interface ParityCase {
+    expected: string;
+    kind: string;
+    schedule: Record<string, unknown>;
+}
+
+const parityCases: ParityCase[] = (JSON.parse(readFileSync(new URL("cron-parity.json", import.meta.url), "utf8")) as { cases: ParityCase[] }).cases;
 
 const fnRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };
@@ -88,13 +99,23 @@ describe("cronJobs", () => {
         expect(() => crons.interval("nofn", { minutes: 1 }, undefined)).toThrow(/requires a function reference/u);
     });
 
-    it("is chainable and carries the cronJobs brand", () => {
-        expect.assertions(2);
+    it("is chainable across builder methods", () => {
+        expect.assertions(1);
 
         const crons = cronJobs();
         const result = crons.interval("a", { minutes: 1 }, fnRef("a.b")).daily("b", { hourUTC: 1, minuteUTC: 0 }, fnRef("c.d"));
 
         expect(result.jobs()).toHaveLength(2);
-        expect((crons as unknown as Record<string, unknown>)[CRON_JOBS_BRAND]).toBe(true);
+    });
+});
+
+// cron-compile-parity: the scheduler compiler and codegen's static mirror
+// (@cirrus/codegen src/cron-compile.ts) are both asserted against this one
+// shared matrix so a drift in either copy fails CI.
+describe("cron-compile-parity", () => {
+    it.each(parityCases)("compiles $kind $schedule to $expected", ({ expected, kind, schedule }) => {
+        expect.assertions(1);
+
+        expect(compileCronSchedule(kind as CronScheduleKind, schedule as never)).toBe(expected);
     });
 });
