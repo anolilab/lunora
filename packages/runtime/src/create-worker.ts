@@ -1422,8 +1422,12 @@ const createWorker = (
         }
 
         const forwarded = new Request("https://shard.internal/rpc", {
+            // `x-cirrus-system` marks this as a trusted server-initiated dispatch
+            // so the shard may run `internal` functions (scheduled/cron jobs are
+            // typically internal). Authorization was already enforced above; this
+            // header is set only here, never on the client RPC path.
             body: JSON.stringify({ args, functionPath }),
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", "x-cirrus-system": "1" },
             method: "POST",
         });
 
@@ -1448,9 +1452,12 @@ const createWorker = (
                 const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard);
 
                 if (!response.ok) {
-                    throw new CirrusError(`cron job "${job.name}" (${job.functionPath}) failed with status ${String(response.status)}`, {
+                    // A failed background job is operationally a 500-class "didn't
+                    // run", not a client error — keep the shard's transport status
+                    // in the message rather than overloading the error `status`.
+                    throw new CirrusError(`cron job "${job.name}" (${job.functionPath}) failed with shard status ${String(response.status)}`, {
                         code: "CRON_JOB_FAILED",
-                        status: response.status,
+                        status: 500,
                     });
                 }
             } catch (error: unknown) {

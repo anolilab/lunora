@@ -617,6 +617,15 @@ abstract class ShardDO {
     private currentRequestIdentity: Record<string, unknown> | undefined;
 
     /**
+     * Whether the in-flight `/rpc` call is a trusted server-initiated dispatch
+     * (scheduler/cron), signalled by the `x-cirrus-system` header that only the
+     * worker's authorized dispatch path sets. When true, `handleRpc` may invoke
+     * `internal` functions; client RPCs never carry it, so internals stay
+     * unreachable across the external boundary. Cleared in `fetch`'s `finally`.
+     */
+    private currentRequestSystem = false;
+
+    /**
      * Tables written during the in-flight RPC, accumulated by
      * `recordChangedTable`. Drained after `handleRpc` returns to drive
      * `refreshSubscriptions`. `null` when no write has happened yet so
@@ -714,6 +723,7 @@ abstract class ShardDO {
             this.currentResponseBookmark = undefined;
             this.currentRequestUserId = request.headers.get("x-cirrus-userid") ?? undefined;
             this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-cirrus-identity"));
+            this.currentRequestSystem = request.headers.get("x-cirrus-system") === "1";
 
             this.metrics.requests += 1;
 
@@ -747,6 +757,7 @@ abstract class ShardDO {
                 this.currentResponseBookmark = undefined;
                 this.currentRequestUserId = undefined;
                 this.currentRequestIdentity = undefined;
+                this.currentRequestSystem = false;
             }
         }
 
@@ -1072,6 +1083,16 @@ abstract class ShardDO {
      */
     protected getCurrentIdentity(): Record<string, unknown> | undefined {
         return this.currentRequestIdentity;
+    }
+
+    /**
+     * Whether the in-flight `/rpc` call is a trusted server-initiated dispatch
+     * (scheduler/cron). A concrete `handleRpc` consults this to decide whether
+     * `internal` functions may run — they may for system dispatch, never for a
+     * client RPC (which never carries the `x-cirrus-system` header).
+     */
+    protected isSystemDispatch(): boolean {
+        return this.currentRequestSystem;
     }
 
     /**

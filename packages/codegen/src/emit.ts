@@ -1306,7 +1306,14 @@ const storageStub = {
     },
 };
 ${globalDatabaseStub}${vectorsStub}${bindTableHelper}
-const dispatchRun = (expected: FunctionKind, functionPath: string, args: Record<string, unknown>, ctx: unknown): Promise<unknown> | unknown => {
+// Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
+// referencing call fails loudly with a clear error instead of overflowing the
+// stack. Tracked across the awaited handler chain (one DO invocation is
+// single-threaded), so the counter reflects true nesting depth.
+const MAX_RUN_DEPTH = 32;
+let runDepth = 0;
+
+const dispatchRun = async (expected: FunctionKind, functionPath: string, args: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
     const registered = CIRRUS_FUNCTIONS[functionPath];
 
     if (!registered) {
@@ -1317,7 +1324,21 @@ const dispatchRun = (expected: FunctionKind, functionPath: string, args: Record<
         throw new Error(\`ctx.run\${expected[0]!.toUpperCase()}\${expected.slice(1)}: "\${functionPath}" is registered as a \${registered.kind}, not a \${expected}\`);
     }
 
-    return registered.handler(ctx, args);
+    if (runDepth >= MAX_RUN_DEPTH) {
+        throw Object.assign(new Error(\`ctx.run*: composition depth limit (\${MAX_RUN_DEPTH}) exceeded — likely a cyclic runQuery/runMutation\`), {
+            name: "CirrusError",
+            code: "RUN_DEPTH_EXCEEDED",
+            status: 500,
+        });
+    }
+
+    runDepth += 1;
+
+    try {
+        return await registered.handler(ctx, args);
+    } finally {
+        runDepth -= 1;
+    }
 };
 
 /**
@@ -1331,10 +1352,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
             const registered = CIRRUS_FUNCTIONS[functionPath];
 
-            // Internal functions are reachable only server-side (\`ctx.run*\`),
-            // never from a client. Report them as not-found so their existence
-            // never leaks across the external RPC boundary.
-            if (!registered || registered.visibility === "internal") {
+            // Internal functions are reachable server-side only: via \`ctx.run*\`
+            // composition, or a trusted system dispatch (scheduler/cron, marked by
+            // \`isSystemDispatch()\`). A client RPC never carries that flag, so its
+            // internals stay not-found and never leak across the external boundary.
+            if (!registered || (registered.visibility === "internal" && !this.isSystemDispatch())) {
                 throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
                     name: "CirrusError",
                     code: "FUNCTION_NOT_FOUND",
