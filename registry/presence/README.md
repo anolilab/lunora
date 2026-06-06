@@ -26,9 +26,9 @@ The functions surface in the generated `api` as `presence/heartbeat`, `presence/
 
 ## How it works
 
-- **heartbeat** (mutation) upserts the caller's row for `(roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats *patch* the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
+- **heartbeat** (mutation) upserts the caller's row for `(roomId, sessionId)` and stamps `lastSeen = now`. Re-heartbeats _patch_ the existing row, so subscribers receive a single-row delta rather than an insert/delete churn.
 - **listPresent** (query) returns the non-expired members of a room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
-- **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's *internal* (server-only) so clients can't trigger bulk deletes; wire it to a cron or `runAfter` if your tables grow.
+- **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; wire it to a cron or `runAfter` if your tables grow.
 
 Tune the time-to-live by editing `PRESENCE_TTL_MS` in `cirrus/presence/schema.ts` (default 30s). Keep your client heartbeat cadence well under it.
 

@@ -1,6 +1,9 @@
 {
+    "$schema": "../schema/registry-item.schema.json",
     "name": "ratelimit",
+    "title": "Rate limit",
     "description": "Durable, ORM-backed rate limiting (token-bucket / fixed-window / sliding-window) wired into your Cirrus schema and procedures.",
+    "docs": "Attach the middleware with c.mutation.use(ratelimit.middleware), or call api.ratelimit.consume directly. Configure named limits in cirrus/ratelimit/schema.ts.",
     "requires": [],
     "deps": {
         "@cirrus/ratelimit": "workspace:*",

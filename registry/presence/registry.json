@@ -1,6 +1,9 @@
 {
+    "$schema": "../schema/registry-item.schema.json",
     "name": "presence",
+    "title": "Presence",
     "description": "Collaborative-awareness presence (who's here + cursors) — a TTL'd room/session table wired into your Cirrus schema, with reactive listPresent and a heartbeat upsert.",
+    "docs": "Re-export the functions from cirrus/presence/index.ts so codegen emits api.presence.*, then drive them from React with usePresence (see the README). Tune PRESENCE_TTL_MS in cirrus/presence/schema.ts.",
     "requires": [],
     "deps": {
         "@cirrus/server": "workspace:*"

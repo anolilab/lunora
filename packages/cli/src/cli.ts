@@ -33,6 +33,7 @@ const COMMANDS = [
     "analyze",
     "view",
     "docs",
+    "registry",
 ] as const;
 
 type CommandName = (typeof COMMANDS)[number];
@@ -93,11 +94,14 @@ interface BuildCliResult {
 const BOOLEAN_OPTIONS: Set<string> = new Set<string>([
     "all",
     "allow-unsafe-source",
+    "check",
+    "diff",
     "dry-run",
     "json",
     "list",
     "no-codegen",
     "no-dashboard",
+    "overwrite",
     "prod",
     "remote",
     "yes",
@@ -268,12 +272,14 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             const result = await runAddCommand({
                 allowUnsafeSource: parsed.allowUnsafeSource === true,
                 cwd,
+                diff: parsed.diff === true,
                 dryRun: parsed.dryRun === true,
                 from,
                 json: parsed.json === true,
                 list: parsed.list === true,
                 logger,
                 names: argument,
+                overwrite: parsed.overwrite === true,
                 source,
                 yes: parsed.yes === true,
             });
@@ -283,6 +289,8 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         name: "add",
         options: [
             { description: "Print the plan and stop without writing", name: "dry-run", type: Boolean },
+            { description: "Preview the file changes (content diff) and write nothing", name: "diff", type: Boolean },
+            { description: "Force-overwrite existing files (take the incoming copy)", name: "overwrite", type: Boolean },
             { description: "List available items instead of adding", name: "list", type: Boolean },
             { description: "Local registry root (offline; expects <name>/ subdirs)", name: "from", type: String },
             { description: "Override the remote registry source base (e.g. gh:owner/repo/registry)", name: "source", type: String },
@@ -316,6 +324,53 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             { description: "Local registry root (offline; expects <name>/ subdirs)", name: "from", type: String },
             { description: "Override the remote registry source base", name: "source", type: String },
             { description: "Emit a JSON list", name: "json", type: Boolean },
+        ],
+    });
+
+    cli.addCommand({
+        argument: { description: "Subcommand: `build` (regen index.json) or `view <name>` (inspect an item)", name: "args", type: String },
+        description: "Registry tools: `registry view <name>` inspects an item; `registry build` (re)generates index.json",
+        execute: async ({ argument, options: parsed }) => {
+            const subcommand = argument[0];
+            const from = typeof parsed.from === "string" && parsed.from.length > 0 ? parsed.from : undefined;
+            const source = typeof parsed.source === "string" && parsed.source.length > 0 ? parsed.source : undefined;
+            const out = typeof parsed.out === "string" && parsed.out.length > 0 ? parsed.out : undefined;
+
+            if (subcommand === "build") {
+                const { runBuildIndexCommand } = await import("./commands/add.js");
+                const result = await runBuildIndexCommand({ check: parsed.check === true, cwd, from, logger, names: [], out });
+
+                exitCode.value = result.code;
+
+                return;
+            }
+
+            if (subcommand === "view") {
+                const { runRegistryViewCommand } = await import("./commands/add.js");
+                const result = await runRegistryViewCommand({
+                    allowUnsafeSource: parsed.allowUnsafeSource === true,
+                    cwd,
+                    from,
+                    logger,
+                    names: argument.slice(1),
+                    source,
+                });
+
+                exitCode.value = result.code;
+
+                return;
+            }
+
+            logger.error("registry: unknown subcommand. Usage: cirrus registry build | cirrus registry view <name>");
+            exitCode.value = 1;
+        },
+        name: "registry",
+        options: [
+            { description: "Registry root to scan / inspect from (expects <name>/ subdirs)", name: "from", type: String },
+            { description: "Override the remote registry source base", name: "source", type: String },
+            { description: "Permit --source values outside gh:/github:/https://", name: "allow-unsafe-source", type: Boolean },
+            { description: "build: output path for the catalog (default <root>/index.json)", name: "out", type: String },
+            { description: "build: verify the index is current instead of rewriting it", name: "check", type: Boolean },
         ],
     });
 

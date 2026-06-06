@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { parseManifest, runAddCommand } from "../../src/commands/add.js";
+import { parseManifest, runAddCommand, runBuildIndexCommand } from "../../src/commands/add.js";
 import type { Logger } from "../../src/util/logger.js";
 
 const silentLogger = (): Logger => {
@@ -76,6 +76,14 @@ describe("shipped registry items", () => {
         const indexed = index.items.map((entry) => entry.name).toSorted((a, b) => a.localeCompare(b));
 
         expect(indexed).toStrictEqual(itemNames.toSorted((a, b) => a.localeCompare(b)));
+    });
+
+    it("the committed index.json is current (registry build --check passes)", async () => {
+        expect.assertions(1);
+
+        const result = await runBuildIndexCommand({ check: true, from: registryRoot, logger: silentLogger(), names: [] });
+
+        expect(result.code).toBe(0);
     });
 
     it("`list` reads the catalog and reports every item", async () => {

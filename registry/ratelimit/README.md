@@ -64,15 +64,13 @@ import { ratelimit } from "./ratelimit/index.js";
 
 const c = initCirrus.dataModel<DataModel>().create();
 
-export const sendMessage = c.mutation
-    .use(ratelimit.middleware)
-    .handler(async (ctx, args) => {
-        const status = await ctx.api.ratelimit.limit("default", { key: ctx.userId });
-        if (!status.ok) {
-            throw new Error("slow down");
-        }
-        // ...
-    });
+export const sendMessage = c.mutation.use(ratelimit.middleware).handler(async (ctx, args) => {
+    const status = await ctx.api.ratelimit.limit("default", { key: ctx.userId });
+    if (!status.ok) {
+        throw new Error("slow down");
+    }
+    // ...
+});
 ```
 
 ## What you own

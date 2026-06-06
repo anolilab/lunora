@@ -1,13 +1,15 @@
 {
-    "$comment": "Catalog of available `cirrus add` items. Fetched by `cirrus list` from the remote registry. Kept in sync with the registry/<name>/ directories by the cli's registry-items test, which fails if an item's directory and this index disagree.",
+    "$schema": "./schema/registry.schema.json",
     "items": [
         {
+            "description": "Collaborative-awareness presence (who's here + cursors) — a TTL'd room/session table wired into your Cirrus schema, with reactive listPresent and a heartbeat upsert.",
             "name": "presence",
-            "description": "Collaborative-awareness presence (who's here + cursors) — a TTL'd room/session table wired into your Cirrus schema, with reactive listPresent and a heartbeat upsert."
+            "title": "Presence"
         },
         {
+            "description": "Durable, ORM-backed rate limiting (token-bucket / fixed-window / sliding-window) wired into your Cirrus schema and procedures.",
             "name": "ratelimit",
-            "description": "Durable, ORM-backed rate limiting (token-bucket / fixed-window / sliding-window) wired into your Cirrus schema and procedures."
+            "title": "Rate limit"
         }
     ]
 }

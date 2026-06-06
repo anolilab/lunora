@@ -1,0 +1,97 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://raw.githubusercontent.com/anolilab/cirrus/alpha/registry/schema/registry-item.schema.json",
+    "title": "Cirrus registry item",
+    "description": "Manifest (registry.json) for one `cirrus add` item: the files it scaffolds plus the deps, bindings, env vars, and post-install guidance it needs.",
+    "type": "object",
+    "required": ["name", "files"],
+    "additionalProperties": false,
+    "properties": {
+        "$schema": {
+            "type": "string",
+            "description": "Path/URL to this schema for editor validation."
+        },
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unique item identifier; must match the directory name."
+        },
+        "title": {
+            "type": "string",
+            "description": "Short human-readable label, distinct from the longer description."
+        },
+        "description": {
+            "type": "string",
+            "description": "Longer explanation of what the item provides."
+        },
+        "requires": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Other registry items this one depends on (resolved transitively, deps first)."
+        },
+        "deps": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "npm dependencies to add to the project package.json (name → version range)."
+        },
+        "devDependencies": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "npm devDependencies to add to the project package.json."
+        },
+        "bindings": {
+            "type": "array",
+            "description": "wrangler.jsonc additions, applied as structural edits.",
+            "items": {
+                "type": "object",
+                "required": ["path", "value"],
+                "additionalProperties": false,
+                "properties": {
+                    "path": { "type": "array", "items": { "type": "string" } },
+                    "value": {}
+                }
+            }
+        },
+        "envVars": {
+            "type": "array",
+            "description": "Environment variables the item needs; scaffolded into .dev.vars on add.",
+            "items": {
+                "type": "object",
+                "required": ["name"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string" },
+                    "description": { "type": "string" },
+                    "value": { "type": "string", "description": "Default/example value for a non-secret var." },
+                    "secret": {
+                        "type": "boolean",
+                        "description": "Secret: write only a placeholder and remind about `wrangler secret put`. Defaults true when no value is given."
+                    }
+                }
+            }
+        },
+        "docs": {
+            "type": "string",
+            "description": "Post-install guidance printed after the item is added."
+        },
+        "files": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Files the item scaffolds into the project.",
+            "items": {
+                "type": "object",
+                "required": ["from", "to", "merge"],
+                "additionalProperties": false,
+                "properties": {
+                    "from": { "type": "string", "description": "Source path inside the item directory." },
+                    "to": { "type": "string", "description": "Destination relative to the project root (no `..`)." },
+                    "merge": {
+                        "type": "string",
+                        "enum": ["create-or-skip", "schema-extension"],
+                        "description": "`create-or-skip` writes whole files (lock-aware upgrades); `schema-extension` AST-merges into cirrus/schema.ts."
+                    }
+                }
+            }
+        }
+    }
+}
