@@ -235,6 +235,81 @@ interface RegisteredStream<A extends ArgsValidator, R> {
 
 // --- Context types -----------------------------------------------------------
 
+/** The system tables `ctx.db.system` can read. */
+type SystemTableName = "_scheduled_functions" | "_storage";
+
+/**
+ * A pending scheduled invocation as surfaced by the `_scheduled_functions`
+ * system table. Mirrors {@link ScheduledJob} (the `ctx.scheduler` view); the
+ * separate name keeps the system-table read surface self-describing.
+ */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
+interface ScheduledFunctionDoc {
+    /** Function arguments the job will be dispatched with. */
+    args: Record<string, unknown>;
+    /** Number of dispatch attempts already made (absent until the first retry). */
+    attempts?: number;
+    /** When the job was enqueued (epoch ms). */
+    enqueuedAt: number;
+    /** Fully-qualified path of the function to invoke. */
+    functionPath: string;
+    /** The job's id (the `_scheduled_functions` row id). */
+    id: string;
+    /** When the job is scheduled to fire (epoch ms). */
+    scheduledFor: number;
+    /** Routing hint forwarded so dispatch lands on the right shard. */
+    shardKey?: string;
+}
+
+/** Maps each system table name to the document shape its reads return. */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- internal map for the public SystemDoc/SystemDatabaseReader names; mirrors Convex's `Doc` naming
+interface SystemDocMap {
+    _scheduled_functions: ScheduledFunctionDoc;
+    _storage: StorageMetadata;
+}
+
+/** Document type for a given system table name. */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
+type SystemDoc<T extends SystemTableName> = SystemDocMap[T];
+
+/** Terminal returned by {@link SystemDatabaseReader.query}; only `.collect()` is supported. */
+interface SystemQuery<T extends SystemTableName> {
+    /** Resolve the full list of rows in the backing source. */
+    collect: () => Promise<SystemDoc<T>[]>;
+}
+
+/**
+ * Read-only reader over Cirrus's system tables (`_scheduled_functions`,
+ * `_storage`), exposed as `ctx.db.system`. Mirrors Convex's `ctx.db.system`.
+ *
+ * **Best-effort and eventually consistent.** Unlike `ctx.db.&lt;table>` — which
+ * reads the shard's transactional SQLite snapshot — the data behind these tables
+ * lives OUTSIDE the shard (scheduled functions in the `SchedulerDO`, storage
+ * objects in R2). Every `collect()` / `get()` reaches across to that source.
+ *
+ * It is **not part of the mutation transaction snapshot** (no OCC guard, no
+ * subscription dependency recorded — reading it inside a mutation does not pin
+ * it), and results are **eventually consistent** with writes a mutation just
+ * made (e.g. a freshly scheduled job may not appear yet).
+ *
+ * Read-only by design: mutate scheduled jobs via `ctx.scheduler`, storage
+ * objects via `ctx.storage`.
+ */
+interface SystemDatabaseReader {
+    /**
+     * Resolve a single system-table row by id, or `null` when absent.
+     * (`_scheduled_functions` → job id; `_storage` → object key.)
+     */
+    get: <T extends SystemTableName>(table: T, id: string) => Promise<SystemDoc<T> | null>;
+
+    /**
+     * Begin a read over a system table; call `.collect()` to resolve the full
+     * list. No filtering, indexing, or pagination — the backing source is remote
+     * and the surface stays deliberately minimal.
+     */
+    query: <T extends SystemTableName>(table: T) => SystemQuery<T>;
+}
+
 /**
  * Read-only handle bound to a table. Used by `query`/`mutation`/`action`. The
  * actual SQL implementation lives in `@cirrus/do`; these are signatures only.
@@ -251,6 +326,13 @@ interface DatabaseReader {
      */
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
+
+    /**
+     * Best-effort, read-only reader over Cirrus's system tables
+     * (`_scheduled_functions`, `_storage`). Eventually consistent and **not**
+     * part of the transaction snapshot — see {@link SystemDatabaseReader}.
+     */
+    readonly system: SystemDatabaseReader;
 }
 
 /** Options for {@link TableReader.paginate} — Convex-compatible page request. */
@@ -825,6 +907,7 @@ export type {
     RegisteredQuery,
     RegisteredStream,
     RelationDefinition,
+    ScheduledFunctionDoc,
     ScheduledJob,
     Scheduler,
     Schema,
@@ -833,6 +916,10 @@ export type {
     ShardMode,
     Storage,
     StorageMetadata,
+    SystemDatabaseReader,
+    SystemDoc,
+    SystemQuery,
+    SystemTableName,
     TableDefinition,
     TableReader,
     TableVectorIndex,

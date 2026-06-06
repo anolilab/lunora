@@ -2,7 +2,7 @@
  * Compile-time only: this file is included by `tsc --noEmit` to exercise the
  * type surface. It is also imported by a no-op test so vitest counts it.
  */
-import type { ActionCtx, CirrusRouteHandler, EmptyArgs, Id, Infer, RegisteredQuery } from "../src/index.js";
+import type { ActionCtx, CirrusRouteHandler, EmptyArgs, Id, Infer, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index.js";
 import { defineSchema, defineTable, httpRoute, initCirrus, mutation, query, v } from "../src/index.js";
 
 type Assert<T extends true> = T;
@@ -122,4 +122,35 @@ const ranBadArgs = actionCtx.runQuery(list, { limit: "nope" });
 
 type Check16 = Assert<Equal<Awaited<typeof ranBadArgs>, number>>;
 
-export type { Check1, Check2, Check3, Check4, Check5, Check6, Check7, Check8, Check9, Check10, Check11, Check11b, Check12, Check13, Check14, Check15, Check16 };
+// `ctx.db.system` — read-only system tables. The overloaded `query`/`get`
+// resolve the per-table doc type (`_scheduled_functions` → ScheduledFunctionDoc,
+// `_storage` → StorageMetadata), so these awaited results are exactly typed.
+declare const queryCtx: QueryCtx;
+
+const systemScheduled = queryCtx.db.system.query("_scheduled_functions").collect();
+const systemStorageGet = queryCtx.db.system.get("_storage", "logo.png");
+
+type Check17 = Assert<Equal<Awaited<typeof systemScheduled>, ScheduledFunctionDoc[]>>;
+type Check18 = Assert<Equal<Awaited<typeof systemStorageGet>, StorageMetadata | null>>;
+
+export type {
+    Check1,
+    Check2,
+    Check3,
+    Check4,
+    Check5,
+    Check6,
+    Check7,
+    Check8,
+    Check9,
+    Check10,
+    Check11,
+    Check11b,
+    Check12,
+    Check13,
+    Check14,
+    Check15,
+    Check16,
+    Check17,
+    Check18,
+};

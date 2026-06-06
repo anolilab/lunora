@@ -82,7 +82,17 @@ export type {
 export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration.js";
 export type { DependencyTracker } from "./dependency-tracker.js";
 export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker.js";
-export type { AuditEntry, AuditLogResult, FunctionCallStat, FunctionStatsResult, ReadTablePageOptions, TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "./introspect.js";
+export type {
+    AuditEntry,
+    AuditLogResult,
+    FunctionCallStat,
+    FunctionStatsResult,
+    ReadTablePageOptions,
+    TableIndexesResult,
+    TableIndexInfo,
+    TableInfo,
+    TablePage,
+} from "./introspect.js";
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 export type { LogEntry, LogLevel } from "./log-buffer.js";
 export { LogBuffer } from "./log-buffer.js";
@@ -114,6 +124,17 @@ export type {
 } from "./shard-do.js";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO } from "./shard-do.js";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do.js";
+export type {
+    ScheduledFunctionDoc,
+    SystemDatabaseReader,
+    SystemDoc,
+    SystemQuery,
+    SystemReaderOptions,
+    SystemReaderSchedulerLike,
+    SystemReaderStorageLike,
+    SystemTableName,
+} from "./system-reader.js";
+export { createSystemReader } from "./system-reader.js";
 export type { TransactionSqlLike } from "./transaction.js";
 export { ConflictError } from "./transaction.js";
 export type {

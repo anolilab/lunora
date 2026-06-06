@@ -1099,6 +1099,7 @@ const emitShard = (schema: SchemaIR): string => {
         "SchemaLike",
         "ShardDOState",
         "SqlExec",
+        "SystemReaderStorageLike",
         "WhereInput",
         ...(hasVectors ? ["WriteHook"] : []),
     ];
@@ -1227,6 +1228,7 @@ const vectorsStub: VectorSearchLike = {
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
+                storage,
             }`
         : `{
                 broadcast: (delta) => {
@@ -1237,6 +1239,7 @@ const vectorsStub: VectorSearchLike = {
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
+                storage,
             }`;
 
     const vectorsContextField = hasVectors ? `\n                vectors,` : "";
@@ -1621,6 +1624,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const identity = this.getCurrentIdentity();
 ${vectorsBuild}
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            // Build the storage adapter once and share it between \`ctx.storage\`
+            // and \`ctx.db.system._storage\` so both read the same R2 binding. The
+            // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally
+            // (its \`list\`/\`getMetadata\` throw the "no storage configured" error).
+            const storage = (config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
             const db: DatabaseWriterLike = createShardCtxDb(${databaseOptions});${globalDatabaseLine}
 ${facadeBlock}
             const ctx: Record<string, unknown> = {
@@ -1631,7 +1639,7 @@ ${facadeBlock}
                 db,
                 fetch: globalThis.fetch.bind(globalThis),${ormContextField}
                 scheduler,
-                storage: config.storage?.(env) ?? storageStub,${vectorsContextField}
+                storage,${vectorsContextField}
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__cirrusRef, fnArgs, ctx);

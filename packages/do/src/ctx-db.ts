@@ -44,6 +44,8 @@ import type { RelationDefinitionLike } from "./relations.js";
 import { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
 import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text.js";
 import serializeSqlValue from "./serialize-sql.js";
+import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader.js";
+import { createSystemReader } from "./system-reader.js";
 import { ConflictError } from "./transaction.js";
 import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
 import { runTriggers } from "./triggers.js";
@@ -218,6 +220,16 @@ interface CtxDbOptions {
     scheduler?: SchedulerLike;
     schema: SchemaLike;
     sql: SqlExec;
+
+    /**
+     * Optional read-only storage surface backing `ctx.db.system._storage`.
+     * When supplied, `db.system.query("_storage")` / `db.system.get("_storage", …)`
+     * read through it; without it those reads throw a clear "no storage
+     * configured" error (the `_scheduled_functions` half is independent and
+     * stays usable). Internal callers that don't pass it keep working — only
+     * `_storage` reads are unavailable. See {@link SystemDatabaseReader}.
+     */
+    storage?: SystemReaderStorageLike;
 }
 
 /** Upper bound on nested trigger re-entry (a handler's `ctx.db` write refires triggers). */
@@ -393,6 +405,21 @@ interface DatabaseWriterLike {
      */
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
     replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * Best-effort, read-only reader over Cirrus's system tables
+     * (`_scheduled_functions`, `_storage`). Eventually consistent and **not**
+     * part of the shard's transaction snapshot — see {@link SystemDatabaseReader}.
+     * Reaches across to the `SchedulerDO` / R2 on every call rather than the
+     * local SQLite.
+     *
+     * Optional on this structural interface: the DO writer ({@link createShardCtxDb})
+     * always sets it, and it's what backs `ctx.db.system` (which the public
+     * `@cirrus/server` `DatabaseReader.system` types as required). The D1 twin
+     * (`@cirrus/d1`), used only for `.global()` table routing and never assigned
+     * to `ctx.db`, omits it — same pattern as the optional `rankBefore` above.
+     */
+    system?: SystemDatabaseReader;
 }
 
 const DOC_COLUMN = "__doc__";
@@ -803,12 +830,7 @@ const paginateOrderKeys = (stage: QueryStage): OrderKey[] => {
  * inclusive upper bound so the page selects exactly `(cursor, endCursor]` —
  * the fixed range a reactive page subscribes to.
  */
-const paginateWhere = (
-    stage: QueryStage,
-    orderKeys: OrderKey[],
-    cursor: null | string | undefined,
-    endCursor?: null | string,
-): undefined | WhereInput => {
+const paginateWhere = (stage: QueryStage, orderKeys: OrderKey[], cursor: null | string | undefined, endCursor?: null | string): undefined | WhereInput => {
     const clauses: WhereInput[] = stage.sqlConditions.map((condition) => {
         return {
             [condition.field]: { [COMPARATOR_TO_OPERATOR[condition.comparator] ?? "eq"]: condition.value },
@@ -1527,6 +1549,21 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { globalDb } = options;
     const cdcEnabled = options.cdc ?? false;
 
+    // `ctx.db.system` reads scheduled functions / storage objects from sources
+    // OUTSIDE this DO's SQLite (the SchedulerDO and R2). The trigger-context
+    // `scheduler` only structurally needs `runAfter`/`runAt`; the real injected
+    // scheduler (and the generated schedulerStub) also carry the read half
+    // (`list`/`get`), so pass it through when present and let createSystemReader
+    // throw a clear "not configured" error if a backing read method is missing.
+    const systemScheduler = scheduler as Partial<SystemReaderSchedulerLike> & SchedulerLike;
+    const system = createSystemReader({
+        scheduler:
+            typeof systemScheduler.list === "function" && typeof systemScheduler.get === "function"
+                ? (systemScheduler as SystemReaderSchedulerLike)
+                : undefined,
+        storage: options.storage,
+    });
+
     /** Append a post-image to the changelog when CDC is enabled; a no-op otherwise. */
     const recordCdc = (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): void => {
         if (cdcEnabled) {
@@ -1582,7 +1619,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
     }
 
-    const hasMatchingTrigger = (tableName: string, timing: TriggerTimingLike, op: TriggerOpLike): boolean => triggerMatchers.has(`${tableName} ${timing} ${op}`);
+    const hasMatchingTrigger = (tableName: string, timing: TriggerTimingLike, op: TriggerOpLike): boolean =>
+        triggerMatchers.has(`${tableName} ${timing} ${op}`);
 
     /** Fire matching triggers with a depth guard against runaway self-triggering. */
     const fireTriggers = async (timing: TriggerTimingLike, op: TriggerOpLike, event: TriggerEventLike): Promise<void> => {
@@ -2081,6 +2119,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     const writer: DatabaseWriterLike = {
+        // `ctx.db.system` — best-effort read-only system tables. Assigned here so
+        // it rides along on the same `DatabaseWriterLike` the generated ctx hands
+        // to query/mutation/action handlers. See {@link SystemDatabaseReader}.
+        system,
         async aggregate(tableName, aggOptions) {
             const definition = schema.tables[tableName];
 
