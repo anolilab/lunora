@@ -1,7 +1,7 @@
 import type { GlobalTableInfo } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import type { CSSProperties, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
@@ -18,6 +18,15 @@ import { StorageTierBadge, StorageTierHint } from "./storage-tier.js";
 interface SchemaViewerProps {
     /** Shard key the viewer targets. Defaults to the root shard. */
     readonly initialShardKey?: string;
+
+    /**
+     * Table to auto-expand once the shard's tables load. Set by the Insights
+     * "add the index" deep-link (`/schema?table=&lt;name>`) so the operator lands
+     * directly on the scanned table's index list instead of hunting for it.
+     * Re-applied whenever the value changes, so following the link a second time
+     * (same tab already open) re-expands the target.
+     */
+    readonly initialTable?: string;
 }
 
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
@@ -63,7 +72,7 @@ const SECTION_TITLE_STYLE: CSSProperties = { fontSize: 14, fontWeight: 600, marg
  * configured the global section simply reports it, and the shard section still
  * works.
  */
-export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactElement => {
+export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProps): ReactElement => {
     const client = useCirrus();
     const t = useT();
 
@@ -200,6 +209,23 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
         fireAndForget(refresh(shardKey));
         fireAndForget(refreshGlobal());
     }, [refresh, refreshGlobal, shardKey]);
+
+    // Auto-expand the deep-linked table (Insights "add the index" jump) once the
+    // shard's tables have loaded and the target actually exists. `appliedTable`
+    // guards against re-firing every render — we expand a given `initialTable`
+    // at most once per value, so the operator can still collapse it by hand.
+    const appliedTable = useRef<string | undefined>(undefined);
+
+    useEffect(() => {
+        if (initialTable === undefined || tables === null || appliedTable.current === initialTable) {
+            return;
+        }
+
+        if (tables.some((table) => table.name === initialTable)) {
+            appliedTable.current = initialTable;
+            fireAndForget(toggle(initialTable));
+        }
+    }, [initialTable, tables, toggle]);
 
     // Probe each shard table's `refs` (one row apiece) and collect the foreign-key
     // edges for the graph. A single table's probe failing must not blank the

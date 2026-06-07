@@ -28,6 +28,27 @@ const SLOW_STATS: FunctionStatsResult = {
             lastErrorMessage: null,
             maxDurationMs: 4200,
             path: "reports:build",
+            scannedTables: [],
+            scans: 0,
+            totalDurationMs: 9000,
+        },
+    ],
+    sinceMs: 1_700_000_000_000,
+};
+
+/** A slow function whose latency is *explained* by a full scan of `posts` — drives the causal missing-index insight. */
+const SCAN_STATS: FunctionStatsResult = {
+    functions: [
+        {
+            calls: 3,
+            errors: 0,
+            lastCalledAt: 1000,
+            lastErrorAt: null,
+            lastErrorMessage: null,
+            maxDurationMs: 4200,
+            path: "feed:list",
+            scannedTables: [{ scans: 9, table: "posts" }],
+            scans: 9,
             totalDurationMs: 9000,
         },
     ],
@@ -67,6 +88,22 @@ describe("insightsPanel", () => {
 
         expect(list.textContent).toContain("Slow function");
         expect(list.textContent).toContain("reports:build");
+    });
+
+    it("renders the causal missing-index chain naming the scanned table, with an add-index jump", async () => {
+        expect.assertions(4);
+
+        render(renderPanel(createClient(HEALTHY, SCAN_STATS)));
+
+        const list = await screen.findByTestId("in-list");
+
+        // Causal headline + the function and the table it full-scanned.
+        expect(list.textContent).toContain("Missing index");
+        expect(list.textContent).toContain("feed:list");
+        expect(list.textContent).toContain("full-scanned posts");
+
+        // The "add the index" deep-link to the Schema/Indexes tab is present.
+        expect(await screen.findByTestId("in-add-index-posts")).toBeTruthy();
     });
 
     it("shows the empty state when nothing is wrong", async () => {
