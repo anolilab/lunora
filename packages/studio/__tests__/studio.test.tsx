@@ -29,24 +29,32 @@ const renderStudio = (mock: MockClientHooks) => (
 );
 
 describe("studio", () => {
-    it("shows every tab by default", async () => {
-        expect.assertions(12);
+    it("shows a rail entry per area and the active area's tabs", async () => {
+        expect.assertions(9);
 
         render(renderStudio(createClient()));
 
-        // The sidebar renders inside the router's root route (resolved a tick
-        // after mount), so await each tab rather than querying synchronously.
-        for (const tab of ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics", "logs", "settings"]) {
-            // eslint-disable-next-line no-await-in-loop -- after the first resolves the rest are already present; awaiting each keeps the assertion shape simple.
-            expect(await screen.findByTestId(`dash-tab-${tab}`)).toBeDefined();
+        // The two-zone shell renders inside the router's root route (resolved a
+        // tick after mount), so await the rail before the synchronous queries.
+        for (const group of ["database", "logic", "storage", "auth", "observability", "deployment"]) {
+            // eslint-disable-next-line no-await-in-loop -- after the first resolves the rest are already present.
+            expect(await screen.findByTestId(`dash-rail-${group}`)).toBeDefined();
         }
+
+        // The default area (database) lists its tabs in the secondary nav; tabs
+        // in other areas aren't rendered until that rail entry is selected.
+        expect(screen.getByTestId("dash-tab-data")).toBeDefined();
+        expect(screen.getByTestId("dash-tab-schema")).toBeDefined();
+        expect(screen.queryByTestId("dash-tab-schedule")).toBeNull();
     });
 
-    it("renders the schedule panel via the client when its tab is selected", async () => {
+    it("renders the schedule panel via the client when its area + tab are selected", async () => {
         expect.assertions(1);
 
         render(renderStudio(createClient()));
 
+        // schedule lives in the "logic" area — open the rail entry, then the tab.
+        fireEvent.click(await screen.findByTestId("dash-rail-logic"));
         fireEvent.click(await screen.findByTestId("dash-tab-schedule"));
 
         const scheduledJobs = await screen.findByTestId("cirrus-scheduled-jobs");
@@ -59,6 +67,7 @@ describe("studio", () => {
 
         render(renderStudio(createClient()));
 
+        fireEvent.click(await screen.findByTestId("dash-rail-logic"));
         fireEvent.click(await screen.findByTestId("dash-tab-migrations"));
 
         await screen.findByTestId("cirrus-migrations");

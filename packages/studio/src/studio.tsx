@@ -276,44 +276,85 @@ const StudioLayout = (): ReactElement => {
         }
     }, [current, tabLabel]);
 
+    // The active rail area is the group owning the current tab; the secondary
+    // nav lists that group's tabs. Selecting a rail icon jumps to the group's
+    // first tab. This is a two-zone console (48px icon rail + contextual nav),
+    // modelled on Supabase Studio, over the same routes — no IA change.
+    // `current` always belongs to a group, but the lookup is typed as possibly
+    // undefined; fall back to the first group (cast to the non-empty element
+    // type) so the shell always has an active area.
+    const activeGroup = NAV_GROUPS.find((group) => group.tabs.includes(current)) ?? (NAV_GROUPS[0] as (typeof NAV_GROUPS)[number]);
+
+    const selectGroup = useCallback(
+        (event: React.MouseEvent<HTMLButtonElement>): void => {
+            fireAndForget(navigate({ to: `/${event.currentTarget.dataset.tab ?? ""}` }));
+        },
+        [navigate],
+    );
+
     return (
-        <div className="grid min-h-0 flex-1 grid-cols-[13rem_minmax(0,1fr)]" data-testid="cirrus-studio">
+        <div className="grid min-h-0 flex-1 grid-cols-[3rem_13.5rem_minmax(0,1fr)]" data-testid="cirrus-studio">
+            {/* Icon rail — one entry per area, settings pinned to the bottom. */}
+            <nav
+                aria-label={t("Studio areas")}
+                className="flex flex-col items-center gap-1 border-e border-border bg-sidebar py-2"
+                data-testid="dash-rail"
+            >
+                {NAV_GROUPS.map((group) => {
+                    // Every group declares at least one tab; the rail icon routes to it.
+                    const railTab = group.tabs[0] as StudioTab;
+
+                    return (
+                        <button
+                            aria-current={activeGroup.key === group.key ? "page" : undefined}
+                            aria-label={groupLabel[group.key]}
+                            className="flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-foreground"
+                            data-tab={railTab}
+                            data-testid={`dash-rail-${group.key}`}
+                            key={group.key}
+                            onClick={selectGroup}
+                            title={groupLabel[group.key]}
+                            type="button"
+                        >
+                            <TabIcon tab={railTab} />
+                        </button>
+                    );
+                })}
+            </nav>
+
+            {/* Secondary nav — the active area's title + its tabs. */}
             <div
                 aria-label={t("Studio sections")}
-                className="flex flex-col gap-px overflow-y-auto border-e border-border bg-sidebar px-2 py-3"
+                className="flex flex-col overflow-y-auto border-e border-border bg-sidebar"
                 data-testid="dash-tabs"
                 role="tablist"
             >
-                {NAV_GROUPS.map((group) => (
-                    // role="presentation" so the tablist exposes only its tab
-                    // buttons to assistive tech, not the grouping wrappers/labels.
-                    <div className="flex flex-col gap-px pt-3 first:pt-0" key={group.key} role="presentation">
-                        <span aria-hidden="true" className="px-2 pb-1 text-[10px] font-medium tracking-wider text-muted-foreground/70 uppercase">
-                            {groupLabel[group.key]}
-                        </span>
-                        {group.tabs.map((tab) => (
-                            <button
-                                aria-selected={current === tab}
-                                className="relative flex w-full items-center gap-2.5 px-2 py-1.5 text-start text-[13px] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground aria-selected:bg-sidebar-accent aria-selected:font-medium aria-selected:text-sidebar-accent-foreground aria-selected:before:absolute aria-selected:before:inset-y-1 aria-selected:before:start-0 aria-selected:before:w-0.5 aria-selected:before:rounded-full aria-selected:before:bg-primary [&_svg]:opacity-70 aria-selected:[&_svg]:opacity-100"
-                                data-tab={tab}
-                                data-testid={`dash-tab-${tab}`}
-                                key={tab}
-                                onClick={selectTab}
-                                role="tab"
-                                type="button"
-                            >
-                                <TabIcon tab={tab} />
-                                {tabLabel[tab]}
-                            </button>
-                        ))}
-                    </div>
-                ))}
+                <header className="flex h-12 shrink-0 items-center px-4">
+                    <h2 className="text-sm font-semibold tracking-tight text-foreground">{groupLabel[activeGroup.key]}</h2>
+                </header>
+                <div className="flex flex-col gap-px px-2 pb-3">
+                    {activeGroup.tabs.map((tab) => (
+                        <button
+                            aria-selected={current === tab}
+                            className="relative flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-start text-[13px] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground aria-selected:bg-sidebar-accent aria-selected:font-medium aria-selected:text-sidebar-accent-foreground [&_svg]:opacity-70 aria-selected:[&_svg]:opacity-100"
+                            data-tab={tab}
+                            data-testid={`dash-tab-${tab}`}
+                            key={tab}
+                            onClick={selectTab}
+                            role="tab"
+                            type="button"
+                        >
+                            <TabIcon tab={tab} />
+                            {tabLabel[tab]}
+                        </button>
+                    ))}
+                </div>
             </div>
 
             <div className="flex min-w-0 flex-col overflow-auto bg-background" data-testid="dash-panel" role="tabpanel">
                 {/* Page header per section — a Studio-style title bar. */}
                 <header className="flex shrink-0 flex-col gap-0.5 border-b border-border px-6 py-4">
-                    <h1 className="text-base font-semibold text-foreground">{tabLabel[current]}</h1>
+                    <h1 className="text-lg font-semibold tracking-tight text-foreground">{tabLabel[current]}</h1>
                     <p className="text-sm text-muted-foreground">{tabDescription[current]}</p>
                 </header>
                 {/* Key the boundary by tab so one panel throwing doesn't blank the
