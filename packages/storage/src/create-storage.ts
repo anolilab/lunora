@@ -1,5 +1,18 @@
+import { buildPresignedUrl } from "./presigned-url.js";
 import { buildSignedUrl } from "./signed-url.js";
-import type { CirrusStorageOptions, ListOptions, ObjectMetadata, R2ObjectBodyLike, R2ObjectLike, R2RangeLike, SignedUrlOptions, Storage, UploadOptions } from "./types.js";
+import type {
+    CirrusStorageOptions,
+    ListOptions,
+    ObjectMetadata,
+    PresignedUrlOptions,
+    R2MultipartUploadLike,
+    R2ObjectBodyLike,
+    R2ObjectLike,
+    R2RangeLike,
+    SignedUrlOptions,
+    Storage,
+    UploadOptions,
+} from "./types.js";
 
 /** R2's documented key-length ceiling. */
 const MAX_KEY_LENGTH = 1024;
@@ -314,6 +327,56 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         });
     };
 
+    // Native R2 multipart upload for very large objects. Thin wrappers over the
+    // binding — validate the key and surface a clear error when the bound bucket
+    // doesn't support multipart (e.g. an older test double).
+    const createMultipartUpload = async (
+        key: string,
+        multipartOptions: { contentType?: string; customMetadata?: Record<string, string> } = {},
+    ): Promise<R2MultipartUploadLike> => {
+        validateKey(key);
+
+        if (!options.bucket.createMultipartUpload) {
+            throw new Error("@cirrus/storage: bucket binding does not support multipart uploads (createMultipartUpload)");
+        }
+
+        return options.bucket.createMultipartUpload(key, {
+            customMetadata: multipartOptions.customMetadata,
+            httpMetadata: multipartOptions.contentType ? { contentType: multipartOptions.contentType } : undefined,
+        });
+    };
+
+    const resumeMultipartUpload = (key: string, uploadId: string): R2MultipartUploadLike => {
+        validateKey(key);
+
+        if (typeof uploadId !== "string" || uploadId.length === 0) {
+            throw new Error("@cirrus/storage: resumeMultipartUpload requires a non-empty uploadId");
+        }
+
+        if (!options.bucket.resumeMultipartUpload) {
+            throw new Error("@cirrus/storage: bucket binding does not support multipart uploads (resumeMultipartUpload)");
+        }
+
+        return options.bucket.resumeMultipartUpload(key, uploadId);
+    };
+
+    // Native S3 presigned URL — hits R2 directly, bypassing the Worker. Requires
+    // R2 S3 credentials; the worker-signed path (`getSignedUrl`) needs none.
+    const getPresignedUrl = async (key: string, presignedOptions: PresignedUrlOptions = {}): Promise<string> => {
+        if (!options.s3) {
+            throw new Error("@cirrus/storage: `s3` credentials are required for getPresignedUrl() — pass { accountId, accessKeyId, secretAccessKey, bucket }");
+        }
+
+        validateKey(key);
+
+        return buildPresignedUrl({
+            credentials: options.s3,
+            expiresInSeconds: presignedOptions.expiresInSeconds,
+            key,
+            method: presignedOptions.method,
+        });
+    };
+
     // Convex-compatible aliases over the primitives above. `generateUploadUrl`
     // mints a signed PUT (optionally pinning the content-type into the signature).
     const generateUploadUrl = async (key: string, uploadUrlOptions: { contentType?: string; expiresInSeconds?: number } = {}): Promise<string> =>
@@ -325,5 +388,18 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
     const store = async (key: string, body: ReadableStream | ArrayBuffer | Blob, storeOptions: UploadOptions = {}): Promise<{ etag: string; key: string }> =>
         upload(key, body, storeOptions);
 
-    return { delete: deleteObject, download, generateUploadUrl, getMetadata, getSignedUrl, getUrl, list, store, upload };
+    return {
+        createMultipartUpload,
+        delete: deleteObject,
+        download,
+        generateUploadUrl,
+        getMetadata,
+        getPresignedUrl,
+        getSignedUrl,
+        getUrl,
+        list,
+        resumeMultipartUpload,
+        store,
+        upload,
+    };
 };

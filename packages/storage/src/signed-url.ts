@@ -11,10 +11,9 @@
  * object bytes flow through the Worker rather than straight off R2.
  *
  * Reach for native S3 presigned URLs instead when you want clients to hit R2
- * directly (large downloads, no per-request app logic) — R2 supports them via
- * the S3 API; that adapter is not wrapped here yet. Likewise R2 **multipart
- * upload** (for very large objects) is not wrapped — use the R2 binding /
- * S3 API directly for those.
+ * directly (large downloads, no per-request app logic) — see `buildPresignedUrl`
+ * / `Storage.getPresignedUrl`. For very large objects, `Storage.createMultipartUpload`
+ * wraps R2's native multipart API.
  */
 import type { SignedUrlOptions } from "./types.js";
 

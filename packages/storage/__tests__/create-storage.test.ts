@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createStorage } from "../src/create-storage.js";
-import type { R2BucketLike, R2ObjectBodyLike, R2ObjectLike } from "../src/types.js";
+import type { R2BucketLike, R2MultipartUploadLike, R2ObjectBodyLike, R2ObjectLike } from "../src/types.js";
 
 const BUCKET_RE = /bucket/;
 const PUBLIC_BASE_URL_RE = /publicBaseUrl/;
@@ -492,5 +492,118 @@ describe("createStorage", () => {
         await expect(object?.arrayBuffer()).resolves.toBeInstanceOf(ArrayBuffer);
         // The original host object was never mutated (no `sha256` own property).
         expect(Object.hasOwn(host, "sha256")).toBe(false);
+    });
+
+    describe("getPresignedUrl", () => {
+        it("throws when no s3 credentials are configured", async () => {
+            expect.assertions(1);
+
+            const storage = createStorage({ bucket: fakeBucket() });
+
+            await expect(storage.getPresignedUrl("a/b.png")).rejects.toThrow(/s3.*credentials/u);
+        });
+
+        it("mints a native S3 presigned URL when s3 credentials are configured", async () => {
+            expect.assertions(3);
+
+            const storage = createStorage({
+                bucket: fakeBucket(),
+                s3: { accessKeyId: "AKIA", accountId: "acc", bucket: "uploads", secretAccessKey: "secret" },
+            });
+
+            const url = await storage.getPresignedUrl("a/b.png", { expiresInSeconds: 600, method: "PUT" });
+
+            expect(url.startsWith("https://acc.r2.cloudflarestorage.com/uploads/a/b.png?")).toBe(true);
+            expect(url).toContain("X-Amz-Expires=600");
+            expect(url).toContain("X-Amz-Signature=");
+        });
+
+        it("rejects a traversal key before signing", async () => {
+            expect.assertions(1);
+
+            const storage = createStorage({
+                bucket: fakeBucket(),
+                s3: { accessKeyId: "AKIA", accountId: "acc", bucket: "uploads", secretAccessKey: "secret" },
+            });
+
+            await expect(storage.getPresignedUrl("../etc/passwd")).rejects.toThrow(/\.\.|path component/u);
+        });
+    });
+
+    describe("multipart upload", () => {
+        const multipartBucket = (): R2BucketLike => {
+            const base = fakeBucket();
+            const makeUpload = (key: string, uploadId: string): R2MultipartUploadLike => {
+                return {
+                    abort: vi.fn<R2MultipartUploadLike["abort"]>(async () => undefined),
+                    complete: vi.fn<R2MultipartUploadLike["complete"]>(async () => fakeObject(key, "etag-complete")),
+                    key,
+                    uploadId,
+                    uploadPart: vi.fn<R2MultipartUploadLike["uploadPart"]>(async (partNumber) => {
+                        return { etag: `etag-${String(partNumber)}`, partNumber };
+                    }),
+                };
+            };
+
+            return {
+                ...base,
+                createMultipartUpload: vi.fn<NonNullable<R2BucketLike["createMultipartUpload"]>>(async (key) => makeUpload(key, "upload-1")),
+                resumeMultipartUpload: vi.fn<NonNullable<R2BucketLike["resumeMultipartUpload"]>>((key, uploadId) => makeUpload(key, uploadId)),
+            };
+        };
+
+        it("creates an upload, uploads parts, and completes", async () => {
+            expect.assertions(4);
+
+            const storage = createStorage({ bucket: multipartBucket() });
+            const upload = await storage.createMultipartUpload("big/object.bin", { contentType: "application/octet-stream" });
+
+            expect(upload.uploadId).toBe("upload-1");
+
+            const partOne = await upload.uploadPart(1, new ArrayBuffer(8));
+            const partTwo = await upload.uploadPart(2, new ArrayBuffer(8));
+
+            expect(partOne.partNumber).toBe(1);
+            expect(partTwo.etag).toBe("etag-2");
+
+            const object = await upload.complete([partOne, partTwo]);
+
+            expect(object.etag).toBe("etag-complete");
+        });
+
+        it("resumes an upload by id", async () => {
+            expect.assertions(2);
+
+            const storage = createStorage({ bucket: multipartBucket() });
+            const upload = storage.resumeMultipartUpload("big/object.bin", "upload-xyz");
+
+            expect(upload.uploadId).toBe("upload-xyz");
+            expect(upload.key).toBe("big/object.bin");
+        });
+
+        it("rejects an empty uploadId on resume", () => {
+            expect.assertions(1);
+
+            const storage = createStorage({ bucket: multipartBucket() });
+
+            expect(() => storage.resumeMultipartUpload("big/object.bin", "")).toThrow(/uploadId/u);
+        });
+
+        it("throws when the bound bucket does not support multipart", async () => {
+            expect.assertions(1);
+
+            // The default fakeBucket() has no createMultipartUpload.
+            const storage = createStorage({ bucket: fakeBucket() });
+
+            await expect(storage.createMultipartUpload("big/object.bin")).rejects.toThrow(/multipart/u);
+        });
+
+        it("validates the key before starting an upload", async () => {
+            expect.assertions(1);
+
+            const storage = createStorage({ bucket: multipartBucket() });
+
+            await expect(storage.createMultipartUpload("../escape")).rejects.toThrow(/\.\.|path component/u);
+        });
     });
 });
