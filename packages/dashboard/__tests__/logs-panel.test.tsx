@@ -2,7 +2,7 @@ import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { LogEntry } from "../src/admin.js";
+import type { LogEntry, RequestLogEntry } from "../src/admin.js";
 import { ADMIN_FUNCTIONS } from "../src/admin.js";
 import { LogsPanel } from "../src/logs-panel.js";
 import type { MockClientHooks } from "./mock-client.js";
@@ -22,9 +22,43 @@ const MIXED_ENTRIES: LogEntry[] = [
     { functionPath: "auth:logout", level: "info", message: "ok", timestamp: 1_700_000_001_000 },
 ];
 
-const createClient = (entries: LogEntry[] = ENTRIES): MockClientHooks =>
+const REQUESTS: RequestLogEntry[] = [
+    {
+        durationMs: 4,
+        functionPath: "messages:send",
+        outcome: "error",
+        errorMessage: "boom",
+        seq: 2,
+        shardKey: "room-9",
+        subscriptionsReRun: 0,
+        tablesRead: [],
+        tablesWritten: ["messages"],
+        ts: 1_700_000_002_000,
+        userId: "u2",
+    },
+    {
+        cacheHit: true,
+        durationMs: 1,
+        functionPath: "messages:list",
+        outcome: "ok",
+        seq: 1,
+        shardKey: "room-9",
+        subscriptionsReRun: 0,
+        tablesRead: ["messages"],
+        tablesWritten: [],
+        ts: 1_700_000_001_000,
+        userId: "u1",
+    },
+];
+
+/** A mock serving both the durable request log and the in-memory error buffer. */
+const createClient = (entries: LogEntry[] = ENTRIES, requests: RequestLogEntry[] = REQUESTS): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
+            if (reference === ADMIN_FUNCTIONS.getRequestLog) {
+                return { entries: requests };
+            }
+
             if (reference === ADMIN_FUNCTIONS.getLogs) {
                 return { entries };
             }
@@ -39,29 +73,64 @@ const renderPanel = (mock: MockClientHooks) => (
     </CirrusProvider>
 );
 
-describe("logsPanel", () => {
-    it("renders a row per captured log on mount", async () => {
-        expect.assertions(3);
+/** Switch to the in-memory Errors view (the default view is the durable request log). */
+const switchToErrors = (): void => {
+    fireEvent.click(screen.getByTestId("lg-view-errors"));
+};
+
+describe("logsPanel — requests view (default)", () => {
+    it("renders one row per durable request log entry on mount", async () => {
+        expect.assertions(4);
 
         render(renderPanel(createClient()));
 
         await screen.findByTestId("lg-table");
 
-        const rows = screen.getAllByTestId("lg-row");
+        const rows = screen.getAllByTestId("lg-req-row");
 
         expect(rows).toHaveLength(2);
-        expect(rows[0]?.textContent).toContain("boom");
+        // Newest first: the error precedes the ok.
         expect(rows[0]?.textContent).toContain("messages:send");
+        expect(rows[0]?.textContent).toContain("error");
+        expect(rows[1]?.textContent).toContain("messages:list");
     });
 
-    it("shows the empty state when there are no logs", async () => {
-        expect.assertions(1);
+    it("queries getRequestLog with the correlation filters and re-reads server-side", async () => {
+        expect.assertions(2);
 
-        render(renderPanel(createClient([])));
+        const mock = createClient();
 
-        const empty = await screen.findByTestId("lg-empty");
+        render(renderPanel(mock));
 
-        expect(empty.textContent).toBe("No logs.");
+        await screen.findByTestId("lg-table");
+
+        fireEvent.change(screen.getByTestId("lg-req-path"), { target: { value: "messages:" } });
+        fireEvent.change(screen.getByTestId("lg-req-outcome"), { target: { value: "error" } });
+
+        // The Requests view re-reads server-side on each filter change, so the
+        // newest `getRequestLog` call must eventually carry the merged filters.
+        await waitFor(
+            () => {
+                const carriesFilters = mock.query.mock.calls.some(
+                    (call) =>
+                        (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.getRequestLog &&
+                        (call[1] as Record<string, unknown>).functionPathPrefix === "messages:" &&
+                        (call[1] as Record<string, unknown>).outcome === "error",
+                );
+
+                if (!carriesFilters) {
+                    throw new Error("filters not applied yet");
+                }
+            },
+            { timeout: 3000 },
+        );
+
+        const merged = mock.query.mock.calls.find(
+            (call) => (call[1] as Record<string, unknown>).functionPathPrefix === "messages:" && (call[1] as Record<string, unknown>).outcome === "error",
+        ) as [{ __cirrusRef: string }, Record<string, unknown>, unknown];
+
+        expect(merged[0].__cirrusRef).toBe(ADMIN_FUNCTIONS.getRequestLog);
+        expect(merged[1]).toEqual({ functionPathPrefix: "messages:", outcome: "error" });
     });
 
     it("forwards the shard key on refresh", async () => {
@@ -77,7 +146,9 @@ describe("logsPanel", () => {
         fireEvent.click(screen.getByTestId("lg-refresh"));
 
         await waitFor(() => {
-            if (mock.query.mock.calls.length <= 1) {
+            const last = mock.query.mock.calls.at(-1) as [unknown, unknown, { shardKey?: string }] | undefined;
+
+            if (last?.[2]?.shardKey !== "room-9") {
                 throw new Error("not refreshed yet");
             }
         });
@@ -85,6 +156,68 @@ describe("logsPanel", () => {
         const lastCall = mock.query.mock.calls.at(-1) as [unknown, unknown, { shardKey?: string }];
 
         expect(lastCall[2]).toEqual({ shardKey: "room-9" });
+    });
+
+    it("links out to Cloudflare Workers Observability for the raw firehose", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(createClient()));
+
+        const link = await screen.findByTestId("lg-cf-link");
+
+        expect(link.getAttribute("href")).toContain("observability");
+    });
+
+    it("toggling Live subscribes to getRequestLog and renders pushed entries", async () => {
+        expect.assertions(2);
+
+        const mock = createClient([], []);
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("lg-empty");
+        fireEvent.click(screen.getByTestId("lg-live"));
+
+        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+
+        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.getRequestLog);
+
+        act(() => {
+            mock.emit(ADMIN_FUNCTIONS.getRequestLog, { entries: REQUESTS });
+        });
+
+        const rows = await screen.findAllByTestId("lg-req-row");
+
+        expect(rows[0]?.textContent).toContain("messages:send");
+    });
+});
+
+describe("logsPanel — errors view", () => {
+    it("renders a row per captured log after switching to Errors", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createClient()));
+
+        await screen.findByTestId("lg-table");
+        switchToErrors();
+
+        const rows = await screen.findAllByTestId("lg-row");
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]?.textContent).toContain("boom");
+        expect(rows[0]?.textContent).toContain("messages:send");
+    });
+
+    it("shows the empty state when there are no logs", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(createClient([], [])));
+
+        switchToErrors();
+
+        const empty = await screen.findByTestId("lg-empty");
+
+        expect(empty.textContent).toBe("No logs.");
     });
 
     it("surfaces an error", async () => {
@@ -109,6 +242,8 @@ describe("logsPanel", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
+        switchToErrors();
+        await screen.findAllByTestId("lg-row");
 
         fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "BOOM" } });
 
@@ -125,6 +260,8 @@ describe("logsPanel", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
+        switchToErrors();
+        await screen.findAllByTestId("lg-row");
 
         fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "no-such-message" } });
 
@@ -139,6 +276,8 @@ describe("logsPanel", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
+        switchToErrors();
+        await screen.findAllByTestId("lg-row");
 
         fireEvent.change(screen.getByTestId("lg-level-filter"), { target: { value: "info" } });
 
@@ -154,6 +293,8 @@ describe("logsPanel", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
+        switchToErrors();
+        await screen.findAllByTestId("lg-row");
 
         fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "boom" } });
         fireEvent.change(screen.getByTestId("lg-level-filter"), { target: { value: "info" } });
@@ -183,6 +324,7 @@ describe("logsPanel", () => {
         render(renderPanel(createClient(big)));
 
         await screen.findByTestId("lg-table");
+        switchToErrors();
 
         const rows = await screen.findAllByTestId("lg-row");
 
@@ -196,11 +338,12 @@ describe("logsPanel", () => {
     it("toggling Live subscribes to getLogs and renders pushed entries", async () => {
         expect.assertions(2);
 
-        const mock = createClient([]);
+        const mock = createClient([], []);
 
         render(renderPanel(mock));
 
         await screen.findByTestId("lg-empty");
+        switchToErrors();
         fireEvent.click(screen.getByTestId("lg-live"));
 
         const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
