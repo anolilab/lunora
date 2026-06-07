@@ -30,7 +30,10 @@ export const definePolicies = <Context = unknown>(policies: ReadonlyArray<Policy
     const seenWhenByKey = new Map<string, Set<Policy<Context>["when"]>>();
 
     for (const policy of policies) {
-        const key = `${policy.table} ${policy.on}`;
+        // JSON-encoded composite so a table name can never collide with a
+        // separate `(table, on)` pair — a missed duplicate would silently
+        // double-evaluate a policy predicate, so the key is collision-proof.
+        const key = JSON.stringify([policy.table, policy.on]);
         const whens = seenWhenByKey.get(key) ?? new Set<Policy<Context>["when"]>();
 
         if (whens.has(policy.when)) {

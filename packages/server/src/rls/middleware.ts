@@ -135,13 +135,13 @@ interface TableReaderLike {
  */
 interface DatabaseWriterLike {
     /**
-     * Reduce matching rows to a scalar. Optional on this structural projection
-     * because the D1 twin / unit-test fakes may omit it; when present, the RLS
-     * wrapper AND-merges the read `baseWhere` into `options` so the reduction
-     * only sees policy-visible rows (safe: an aggregate scoped to `where` never
-     * reveals a hidden row — see `@cirrus/do`'s `RestrictableQueryOptions`).
+     * Reduce matching rows to a scalar. The RLS wrapper AND-merges the read
+     * `baseWhere` into `options` so the reduction only sees policy-visible rows
+     * (safe: an aggregate scoped to `where` never reveals a hidden row — see
+     * `@cirrus/do`'s `RestrictableQueryOptions`). Required: the only writer ever
+     * wrapped is `@cirrus/do`'s `createShardCtxDb`, which always implements it.
      */
-    aggregate?: (tableName: string, options: AggregateArgs) => Promise<null | number>;
+    aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
     delete: (id: string) => Promise<void>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
@@ -162,9 +162,9 @@ interface DatabaseWriterLike {
     /**
      * Group + reduce. Same `baseWhere` injection as `aggregate`: the per-group
      * reduction is scoped to policy-visible rows, so a group count tallies only
-     * rows the caller may read.
+     * rows the caller may read. Required for the same reason as `aggregate`.
      */
-    groupBy?: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
+    groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
@@ -172,10 +172,10 @@ interface DatabaseWriterLike {
     /**
      * Rank a row within its partition. A position is a count-of-rows-before, so
      * — exactly like `count()` — it can't be trusted in an RLS-restricted
-     * reader: the wrapper fails it closed with `COUNT_RLS_UNSUPPORTED`. Optional
-     * because the D1 twin / fakes may omit it.
+     * reader: the wrapper fails it closed with `COUNT_RLS_UNSUPPORTED`. Required
+     * for the same reason as `aggregate`.
      */
-    rank?: (tableName: string, indexName: string, options: RankArgs) => Promise<null | { position: number; total: number }>;
+    rank: (tableName: string, indexName: string, options: RankArgs) => Promise<null | { position: number; total: number }>;
 
     /** Cross-shard rank primitive — same count-of-before RLS hazard as `rank`; failed closed under a read policy. */
     rankBefore?: (tableName: string, indexName: string, options: RankBeforeArgs) => Promise<{ before: number; total: number }>;
@@ -185,8 +185,9 @@ interface DatabaseWriterLike {
      * partition + sort keys + id, so an arbitrary read `baseWhere` can't be
      * enforced against it (and re-filtering the fetched rows would break page
      * sizing). RLS therefore fails it closed rather than leak hidden rows.
+     * Required for the same reason as `aggregate`.
      */
-    rankPage?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage>;
+    rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage>;
     replace: (id: string, document: Record<string, unknown>) => Promise<void>;
 }
 
@@ -574,6 +575,102 @@ const mergeBaseWhere = (caller: undefined | WhereInput, injected: undefined | Wh
 };
 
 /**
+ * The per-table accessor the generated runtime exposes on `ctx.db` (the
+ * `ctx.db.messages.findMany(...)` form) — structurally mirrors codegen's
+ * `bindTable` (see `@cirrus/codegen`'s emit). The RLS wrapper re-binds these so
+ * they route through the wrapped writer; keep this method set in sync with
+ * `bindTable` so no accessor escapes RLS.
+ */
+interface FacadeEntry {
+    aggregate: (options: AggregateArgs) => Promise<null | number>;
+    count: (where?: CountArgs | WhereInput) => Promise<number>;
+    delete: (id: string) => Promise<void>;
+    findFirst: (args?: QueryArgs) => Promise<Record<string, unknown> | null>;
+    findFirstOrThrow: (args?: QueryArgs) => Promise<Record<string, unknown>>;
+    findMany: (args?: QueryArgs) => Promise<QueryPage>;
+    get: (id: string) => Promise<Record<string, unknown> | null>;
+    groupBy: (options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
+    insert: (document: Record<string, unknown>) => Promise<string>;
+    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    rank: (indexName: string, options: RankArgs) => Promise<null | { position: number; total: number }>;
+    rankPage: (indexName: string, options?: RankPageArgs) => Promise<QueryPage>;
+    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+    withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike;
+}
+
+/**
+ * A value glued onto `ctx.db` is a per-table facade entry when it carries the
+ * distinctive `findMany` + `withSearchIndex` accessor pair (the `system` reader
+ * and other ctx fields don't). Used to find the entries that need re-binding.
+ */
+const isFacadeEntry = (value: unknown): value is Record<string, unknown> => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+
+    return typeof candidate["findMany"] === "function" && typeof candidate["withSearchIndex"] === "function";
+};
+
+/**
+ * Re-bind one per-table facade entry so every accessor routes through the
+ * RLS-wrapped writer `wrapped` (which enforces `baseWhere` / write gates / rank
+ * guards) instead of the raw writer the generated `bindTable` closed over.
+ */
+const rlsFacadeEntry = (tableName: string, wrapped: RlsDatabase): FacadeEntry => {
+    return {
+        aggregate: (options) => wrapped.aggregate(tableName, options),
+        count: (where) => wrapped.count(tableName, where),
+        delete: (id) => wrapped.delete(id),
+        findFirst: (args) => wrapped.findFirst(tableName, args),
+        findFirstOrThrow: (args) => wrapped.findFirstOrThrow(tableName, args),
+        findMany: (args) => wrapped.findMany(tableName, args),
+        get: (id) => wrapped.get(id),
+        groupBy: (options) => wrapped.groupBy(tableName, options),
+        insert: (document) => wrapped.insert(tableName, document),
+        patch: (id, patch) => wrapped.patch(id, patch),
+        rank: (indexName, options) => wrapped.rank(tableName, indexName, options),
+        rankPage: (indexName, options) => wrapped.rankPage(tableName, indexName, options),
+        replace: (id, document) => wrapped.replace(id, document),
+        withSearchIndex: (indexName, search) => wrapped.query(tableName).withSearchIndex(indexName, search),
+    };
+};
+
+/**
+ * Re-build `ctx.orm` (codegen's `bindOrm`) so its per-table accessors and the
+ * `query` map route through the RLS-wrapped writer. `wrapped` already carries
+ * the re-bound facade entries (installed by {@link wrapDatabase}), so `query`
+ * is simply that object and the write helpers resolve their entry off it. Keep
+ * in sync with `bindOrm` in `@cirrus/codegen`'s emit.
+ */
+const rebindOrm = (wrapped: RlsDatabase): Record<string, unknown> => {
+    const resolve = (table: string): FacadeEntry => {
+        const bound = (wrapped as unknown as Record<string, FacadeEntry | undefined>)[table];
+
+        if (!bound) {
+            throw new Error(`unknown table: ${table}`);
+        }
+
+        return bound;
+    };
+
+    return {
+        delete: (table: string, id: string) => resolve(table).delete(id),
+        insert: (table: string) => {
+            return { values: (document: Record<string, unknown>) => resolve(table).insert(document) };
+        },
+        query: wrapped,
+        replace: (table: string, id: string) => {
+            return { with: (document: Record<string, unknown>) => resolve(table).replace(id, document) };
+        },
+        update: (table: string, id: string) => {
+            return { set: (values: Record<string, unknown>) => resolve(table).patch(id, values) };
+        },
+    };
+};
+
+/**
  * Build a writer that intercepts table-scoped reads/writes against the
  * underlying `DatabaseWriterLike`, applying the policy evaluator on every
  * call. The wrapper is a fresh closure per request so the evaluator sees the
@@ -739,11 +836,12 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         return baseWhere;
     };
 
-    // Captured once so the truthy check narrows the type into each wrapper
-    // closure below (a const keeps the narrowing; `base.x` would not).
-    const { aggregate: baseAggregate, groupBy: baseGroupBy, rank: baseRank, rankBefore: baseRankBefore, rankPage: baseRankPage } = base;
+    // `rankBefore` is the only analytical method that may be absent (the D1
+    // twin omits it); capture it so the truthy check narrows into the wrapper
+    // without a non-null assertion.
+    const baseRankBefore = base.rankBefore;
 
-    return {
+    const wrapped: RlsDatabase = {
         ...base,
         async count(tableName, whereOrArgs) {
             const { baseWhere, restricts } = readBase(tableName);
@@ -871,42 +969,37 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
                 },
             ),
 
-        // Analytical reads. `aggregate`/`groupBy` are scoped to `where`, so the
-        // read `baseWhere` is AND-merged in and the reduction only sees
-        // policy-visible rows. `rank`/`rankBefore`/`rankPage` are
-        // count-of-partition reads that can't be safely narrowed, so they fail
-        // closed under a read policy (see `guardRankFamily`). Each is wrapped
-        // only when the underlying writer implements it — the `...base` spread
-        // above carries through anything we don't override. The methods are
-        // captured into consts so the truthy-narrowing survives into the
-        // closures without a non-null assertion.
-        ...(baseAggregate
-            ? {
-                  aggregate: (tableName: string, options: AggregateArgs) => {
-                      const { baseWhere } = readBase(tableName);
+        // Analytical reads — plain methods (the writer always implements them;
+        // see the required signatures on `DatabaseWriterLike`). `aggregate` /
+        // `groupBy` are scoped to `where`, so the read `baseWhere` is AND-merged
+        // and the reduction only sees policy-visible rows. `rank` / `rankPage`
+        // are counts-of-partition that can't be safely narrowed, so they fail
+        // closed under a read policy (see `guardRankFamily`).
+        aggregate(tableName, options) {
+            const { baseWhere } = readBase(tableName);
 
-                      return baseAggregate(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
-                  },
-              }
-            : {}),
-        ...(baseGroupBy
-            ? {
-                  groupBy: (tableName: string, options: GroupByArgs) => {
-                      const { baseWhere } = readBase(tableName);
+            return base.aggregate(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+        },
 
-                      return baseGroupBy(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
-                  },
-              }
-            : {}),
-        ...(baseRank
-            ? {
-                  rank: (tableName: string, indexName: string, options: RankArgs) => {
-                      const baseWhere = guardRankFamily(tableName, "rank");
+        groupBy(tableName, options) {
+            const { baseWhere } = readBase(tableName);
 
-                      return baseRank(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
-                  },
-              }
-            : {}),
+            return base.groupBy(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+        },
+
+        rank(tableName, indexName, options) {
+            const baseWhere = guardRankFamily(tableName, "rank");
+
+            return base.rank(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+        },
+
+        rankPage(tableName, indexName, options) {
+            const baseWhere = guardRankFamily(tableName, "rankPage");
+
+            return base.rankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
+        },
+
+        // `rankBefore` is the one optional method (the D1 twin omits it).
         ...(baseRankBefore
             ? {
                   rankBefore: (tableName: string, indexName: string, options: RankBeforeArgs) => {
@@ -916,16 +1009,23 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
                   },
               }
             : {}),
-        ...(baseRankPage
-            ? {
-                  rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => {
-                      const baseWhere = guardRankFamily(tableName, "rankPage");
-
-                      return baseRankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
-                  },
-              }
-            : {}),
     };
+
+    // SECURITY: the generated runtime glues a per-table facade
+    // (`ctx.db.<table>.findMany(...)`, codegen's `bindTable`) onto `ctx.db`,
+    // bound to the UNWRAPPED writer. The `...base` spread above copies those
+    // raw-bound accessors verbatim, so without this loop they would read around
+    // RLS entirely (and around the `count`/rank fail-closed guards). Re-bind
+    // every facade entry to route through the wrapped writer so the per-table
+    // API is policy-enforced too. (`ctx.orm` is a sibling ctx field, not on
+    // `ctx.db` — `rls()` re-binds it separately.)
+    for (const [key, value] of Object.entries(base)) {
+        if (isFacadeEntry(value)) {
+            (wrapped as unknown as Record<string, unknown>)[key] = rlsFacadeEntry(key, wrapped);
+        }
+    }
+
+    return wrapped;
 };
 
 /**
@@ -959,12 +1059,19 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
         };
 
         const wrapped = wrapDatabase<Context>(ctx.db, perTable, policyContext);
-        // `next({ ctx: extension })` expects an extension shape — we only
-        // replace `db`, so the downstream context type is unchanged (`Ctx`
-        // in / `Ctx` out). The cast routes the wrapped db through the same
-        // middleware-extension channel without leaking RLS internals into
+        // `next({ ctx: extension })` expects an extension shape. We replace
+        // `db` (carrying the re-bound per-table facade), and — when present —
+        // `orm`: it's a sibling ctx field (codegen's `bindOrm`) bound to the
+        // unwrapped writer, so leaving it untouched would let `ctx.orm.query`
+        // and the orm write helpers bypass RLS. The cast routes them through
+        // the middleware-extension channel without leaking RLS internals into
         // the builder's typed surface.
-        const extension = { db: wrapped } as unknown as Record<string, unknown>;
+        const extension: Record<string, unknown> = { db: wrapped };
+        const { orm } = ctx as { orm?: unknown };
+
+        if (orm !== null && typeof orm === "object") {
+            extension.orm = rebindOrm(wrapped);
+        }
 
         return next({ ctx: extension });
     };
