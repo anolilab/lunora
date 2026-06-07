@@ -651,6 +651,7 @@ const readBodyTextWithLimit = async (request: Request, limit: number = MAX_BODY_
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 const MIGRATE_PATH = "/_cirrus/migrate";
+const PITR_PATH = "/_cirrus/admin/pitr";
 const SCHEDULER_DISPATCH_PATH = "/_cirrus/scheduler/dispatch";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
@@ -673,6 +674,15 @@ const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
  * hard dependency on the DO package.
  */
 const MIGRATION_ADMIN_OPS = new Set<string>(["__cirrus_admin__:migrationStatus", "__cirrus_admin__:runMigration"]);
+
+/**
+ * Per-shard admin RPCs the PITR endpoint is allowed to forward. Like
+ * {@link MIGRATION_ADMIN_OPS}, spelled out inline to keep the runtime free of a
+ * hard dependency on `@cirrus/do`. Unlike migration, PITR targets a single
+ * shard (a Durable Object's change log is per-object), so the endpoint forwards
+ * to one shard rather than fanning out.
+ */
+const PITR_ADMIN_OPS = new Set<string>(["__cirrus_admin__:getPitrBookmark", "__cirrus_admin__:pitrRestore"]);
 
 interface ForwardContext {
     /** Identity claims minus `userId`, or `null` when anonymous / no extra claims. */
@@ -955,6 +965,37 @@ const readJsonBodyWithLimit = async (request: Request): Promise<Record<string, u
     }
 };
 
+interface PitrRequest {
+    args: Record<string, unknown>;
+    functionPath: string;
+    /** Target shard; omitted means the default (root) shard. */
+    shardKey: string | undefined;
+}
+
+/**
+ * Parse and validate a `POST /_cirrus/admin/pitr` body. `functionPath` is
+ * restricted to the PITR admin ops so the endpoint can't be turned into a
+ * general per-shard RPC bypass of the user-facing authorization callbacks.
+ */
+const parsePitrRequest = async (request: Request): Promise<PitrRequest> => {
+    const body = await readJsonBodyWithLimit(request);
+    const candidate = body as { args?: unknown; functionPath?: unknown; shardKey?: unknown };
+
+    if (typeof candidate.functionPath !== "string" || !PITR_ADMIN_OPS.has(candidate.functionPath)) {
+        throw new CirrusError("PITR request `functionPath` must be a PITR admin op", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (candidate.shardKey !== undefined && typeof candidate.shardKey !== "string") {
+        throw new CirrusError("PITR `shardKey` must be a string", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return {
+        args: (candidate.args ?? {}) as Record<string, unknown>,
+        functionPath: candidate.functionPath,
+        shardKey: candidate.shardKey,
+    };
+};
+
 /**
  * Decoded shape of the connector sync endpoint's opaque cursor token. Encodes
  * the per-shard CDC cursor map plus the global (D1) cursor behind a single
@@ -1009,7 +1050,7 @@ const decodeConnectorCursor = (token: unknown): ConnectorCursorState => {
         }
 
         const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Partial<ConnectorCursorState>;
-        const shards = parsed.s && typeof parsed.s === "object" ? (parsed.s) : {};
+        const shards = parsed.s && typeof parsed.s === "object" ? parsed.s : {};
         const sanitized: Record<string, number> = {};
 
         for (const [key, value] of Object.entries(shards)) {
@@ -1514,6 +1555,39 @@ const createWorker = (
             headers: { "content-type": "application/json" },
             status: 200,
         });
+    };
+
+    /**
+     * `POST /_cirrus/admin/pitr` — drive native Durable-Object point-in-time
+     * recovery on a single shard. Admin-gated (its own bearer check), so it is
+     * NOT subject to the user-facing `authorizeShard`/`authorizeFunction`
+     * callbacks the public RPC path enforces; the forwarded `Authorization`
+     * header then satisfies the shard's own admin gate in `handleAdminRpc`.
+     * Forwards `getPitrBookmark` (read the current / for-a-time bookmark) or
+     * `pitrRestore` (`{ time | bookmark, restart? }`) to the chosen shard.
+     */
+    const handlePitr = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("PITR endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("admin PITR endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        const pitr = await parsePitrRequest(request);
+
+        // Forward the inbound admin bearer so the shard's `handleAdminRpc` gate
+        // accepts the `__cirrus_admin__:*` op.
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const forwarded = new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args: pitr.args, functionPath: pitr.functionPath }),
+            headers: forwardedHeaders,
+            method: "POST",
+        });
+
+        return forwardToShard(options.shardDO, pitr.shardKey ?? defaultShard, forwarded);
     };
 
     /**
@@ -2686,6 +2760,7 @@ const createWorker = (
         [RPC_PATH]: (request, env) => handleRpc(request, env),
         [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
         [MIGRATE_PATH]: (request, env) => handleMigrate(request, env),
+        [PITR_PATH]: (request, env) => handlePitr(request, env),
         [EXPORT_PATH]: (request, env) => handleExport(request, env),
         [IMPORT_PATH]: (request, env) => handleImport(request, env),
         [SYNC_PATH]: (request, env) => handleCdcSync(request, env),

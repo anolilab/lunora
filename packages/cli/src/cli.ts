@@ -48,7 +48,8 @@ const isTemplate = (value: unknown): value is Template => value === "vite" || va
 const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
     value === "list" || value === "get" || value === "set" || value === "unset" || value === "push";
 
-const isBackupSubcommand = (value: unknown): value is BackupSubcommand => value === "create" || value === "list" || value === "restore";
+const isBackupSubcommand = (value: unknown): value is BackupSubcommand =>
+    value === "create" || value === "list" || value === "pitr" || value === "restore";
 
 const toStringOrUndefined = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
@@ -103,6 +104,8 @@ const BOOLEAN_OPTIONS: Set<string> = new Set<string>([
     "overwrite",
     "prod",
     "remote",
+    "restart",
+    "restore",
     "yes",
 ]);
 
@@ -417,13 +420,13 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.addCommand({
-        argument: { description: "create | list | restore <id|file>", name: "subcommand", type: String },
-        description: "Managed snapshot backups: create | list | restore over the export/import endpoints",
+        argument: { description: "create | list | restore <id|file> | pitr", name: "subcommand", type: String },
+        description: "Managed snapshot backups (create | list | restore) plus native point-in-time recovery (pitr)",
         execute: async ({ argument, options: parsed }) => {
             const sub = argument[0];
 
             if (!isBackupSubcommand(sub)) {
-                logger.error(`backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore`);
+                logger.error(`backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore | pitr`);
                 exitCode.value = 1;
 
                 return;
@@ -432,15 +435,21 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             try {
                 const { runBackupCommand } = await import("./commands/backup.js");
                 const result = await runBackupCommand({
+                    at: toStringOrUndefined(parsed.at),
+                    bookmark: toStringOrUndefined(parsed.bookmark),
                     cwd,
                     dir: toStringOrUndefined(parsed.dir),
                     logger,
                     prod: parsed.prod === true,
+                    restart: parsed.restart === true,
+                    restore: parsed.restore === true,
+                    shard: toStringOrUndefined(parsed.shard),
                     subcommand: sub,
                     tables: toStringOrUndefined(parsed.tables),
                     target: argument[1],
                     token: toStringOrUndefined(parsed.token),
                     url: toStringOrUndefined(parsed.url),
+                    yes: parsed.yes === true,
                 });
 
                 exitCode.value = result.code;
@@ -453,7 +462,13 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         options: [
             { description: "Backup directory (default .cirrus-backups)", name: "dir", type: String },
             { description: "Comma-separated table allowlist (create)", name: "tables", type: String },
+            { description: "pitr: time to read/restore to (ISO or epoch-ms, ≤30 days)", name: "at", type: String },
+            { description: "pitr --restore: explicit bookmark to restore to (wins over --at)", name: "bookmark", type: String },
+            { description: "pitr: perform a restore instead of just reading the bookmark", name: "restore", type: Boolean },
+            { description: "pitr --restore: restart the shard now so recovery applies immediately", name: "restart", type: Boolean },
+            { description: "pitr: target shard key (default: root shard)", name: "shard", type: String },
             { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
+            { description: "Confirm a production pitr --restore (required with --prod)", name: "yes", type: Boolean },
             { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
             { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
         ],
@@ -822,9 +837,10 @@ Commands:
           [--tables <t1,t2,...>] [--prod] [--url <url>] [--token <t>]
   import <path> [--table <n>]   Bulk-insert NDJSON rows via the admin endpoint
           [--batch-size <n>] [--prod] [--url <url>] [--token <t>]
-  backup create|list           Managed snapshot backups (export/import based);
-         | restore <id|file>   restore --to <iso-time> replays CDC for point-in-time recovery
-         [--to <time>]         [--dir <d>] [--tables <t1,t2>] [--prod] [--url <url>] [--token <t>]
+  backup create|list           Managed snapshot backups (export/import based)
+         | restore <id|file>   [--dir <d>] [--tables <t1,t2>] [--prod] [--url <url>] [--token <t>]
+  backup pitr [--restore]      Native point-in-time recovery (≤30 days, in place)
+         [--at <t>|--bookmark]  [--shard <k>] [--restart] [--prod --yes] [--url <url>] [--token <t>]
   reset [--all] [--yes]         Clear local Miniflare state (and .cirrus-cache with --all)
   verify [--no-typecheck]       Validate wrangler.jsonc + codegen dry-run + tsc --noEmit
   info [--json]                 Print resolved project config (packages, wrangler, schema)

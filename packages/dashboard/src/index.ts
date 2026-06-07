@@ -74,6 +74,8 @@ export type { MetricsPanelProps } from "./metrics-panel.js";
 export { MetricsPanel } from "./metrics-panel.js";
 export type { MigrationsPanelProps } from "./migrations.js";
 export { MigrationsPanel } from "./migrations.js";
+export type { PitrPanelProps } from "./pitr-panel.js";
+export { PitrPanel } from "./pitr-panel.js";
 export type { ScheduledJobsProps } from "./scheduled-jobs.js";
 export { ScheduledJobs } from "./scheduled-jobs.js";
 export type { SchemaViewerProps } from "./schema-viewer.js";

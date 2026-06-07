@@ -244,6 +244,27 @@ const MESSAGE_IDS = [
     "Environment",
     "Version",
     "value",
+    // Time Travel (PITR) panel.
+    "Time Travel",
+    "Restore a shard to a point in the last 30 days.",
+    "root",
+    "In-place recovery to any moment in the last 30 days. For older or portable recovery, use the snapshot backup tier.",
+    "Current bookmark",
+    "Restore",
+    "Time (ISO or epoch-ms, last 30 days)",
+    "Preview",
+    "Bookmark for that time",
+    "Or an explicit bookmark (wins over time)",
+    "bookmark string",
+    "Restart the shard now so recovery applies immediately",
+    "Confirm restore",
+    "restarted now",
+    "on next restart",
+    "Restore armed",
+    "Restored to",
+    "Undo bookmark",
+    "Confirm undo",
+    "Undo restore",
 ] as const;
 
 /** A known dashboard message id — one of the entries in {@link MESSAGE_IDS}. */

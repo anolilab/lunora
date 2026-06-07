@@ -30,6 +30,7 @@ import { fireAndForget } from "./internal.js";
 import { LogsPanel } from "./logs-panel.js";
 import { MetricsPanel } from "./metrics-panel.js";
 import { MigrationsPanel } from "./migrations.js";
+import { PitrPanel } from "./pitr-panel.js";
 import type { ScheduledJobsProps } from "./scheduled-jobs.js";
 import { ScheduledJobs } from "./scheduled-jobs.js";
 import { SchemaViewer } from "./schema-viewer.js";
@@ -50,6 +51,7 @@ type DashboardTab =
     | "logs"
     | "metrics"
     | "migrations"
+    | "pitr"
     | "schedule"
     | "schema"
     | "settings"
@@ -125,6 +127,7 @@ const TAB_ICONS: Record<DashboardTab, ReactNode> = {
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
     metrics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
+    pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
     settings: (
@@ -142,7 +145,7 @@ const NAV_GROUPS: ReadonlyArray<{ readonly key: NavGroupKey; readonly tabs: Read
     { key: "storage", tabs: ["files", "export"] },
     { key: "auth", tabs: ["users"] },
     { key: "observability", tabs: ["health", "insights", "metrics", "logs", "audit"] },
-    { key: "deployment", tabs: ["settings"] },
+    { key: "deployment", tabs: ["settings", "pitr"] },
 ];
 
 const TabIcon = ({ tab }: { readonly tab: DashboardTab }): ReactElement => (
@@ -177,6 +180,7 @@ const TABS = [
     "logs",
     "audit",
     "settings",
+    "pitr",
 ] as const;
 
 /** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `data`. */
@@ -215,6 +219,7 @@ const DashboardLayout = (): ReactElement => {
             logs: t("Logs"),
             metrics: t("Metrics"),
             migrations: t("Migrations"),
+            pitr: t("Time Travel"),
             schedule: t("Scheduled"),
             schema: t("Schema"),
             settings: t("Settings"),
@@ -247,6 +252,7 @@ const DashboardLayout = (): ReactElement => {
             logs: t("A live stream of recent function logs."),
             metrics: t("Per-shard health and aggregate metrics."),
             migrations: t("Review migration status and run them."),
+            pitr: t("Restore a shard to a point in the last 30 days."),
             schedule: t("Inspect and cancel scheduled jobs."),
             schema: t("Inspect each table and its columns."),
             settings: t("Read-only deployment config — vars, secrets, and bindings."),
@@ -380,6 +386,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
+        pitr: <PitrPanel initialShardKey={initialShardKey} />,
         schedule: <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />,
         schema: <SchemaViewer initialShardKey={initialShardKey} />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,

@@ -24,10 +24,12 @@ export const ADMIN_FUNCTIONS = {
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
+    getPitrBookmark: "__cirrus_admin__:getPitrBookmark",
     getSettings: "__cirrus_admin__:getSettings",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
     migrationStatus: "__cirrus_admin__:migrationStatus",
+    pitrRestore: "__cirrus_admin__:pitrRestore",
     readTablePage: "__cirrus_admin__:readTablePage",
     runMigration: "__cirrus_admin__:runMigration",
     writeRow: "__cirrus_admin__:writeRow",
@@ -206,6 +208,39 @@ export interface DeployInfo {
 export interface SettingsResult {
     deploy: DeployInfo;
     settings: SettingEntry[];
+}
+
+/**
+ * Payload of a `__cirrus_admin__:getPitrBookmark` call, mirroring `@cirrus/do`'s
+ * `PitrBookmarkResult`. `current` names the shard's present point in history;
+ * `forTime` is the bookmark nearest a queried time, present only when one was
+ * asked for. Bookmarks are opaque, lexically-comparable strings.
+ */
+export interface PitrBookmarkResult {
+    current: string;
+    forTime?: string;
+}
+
+/**
+ * Arguments for the `__cirrus_admin__:pitrRestore` RPC, mirroring `@cirrus/do`'s
+ * `PitrRestoreArgs`. Provide a `bookmark` (wins) or a `time` (epoch-ms or ISO,
+ * within 30 days); `restart` also `ctx.abort()`s so recovery applies now.
+ */
+export interface PitrRestoreArgs {
+    bookmark?: string;
+    restart?: boolean;
+    time?: number | string;
+}
+
+/**
+ * Result of a `__cirrus_admin__:pitrRestore` call, mirroring `@cirrus/do`'s
+ * `PitrRestoreResult`. `undoBookmark` names the instant before recovery — keep
+ * it to reverse the restore; `restarted` is whether the shard was aborted now.
+ */
+export interface PitrRestoreResult {
+    restarted: boolean;
+    restoredTo: string;
+    undoBookmark: string;
 }
 
 /** A user table plus its current row count. */
