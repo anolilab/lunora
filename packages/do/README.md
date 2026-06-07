@@ -66,6 +66,19 @@ secondary indexes — `runShardMigrations` emits matching expression indexes
 from the schema's `defineTable(...).index(...)` declarations. Tables flagged
 with `.global()` are skipped: those live in D1 via `@cirrus/d1`.
 
+## Logging
+
+`ShardDO` keeps a small in-memory `LogBuffer` — a bounded ring of recent log
+lines that powers the dashboard's live log panel and the `getLogs` admin op. It
+is a per-instance "recent activity" readout: it resets on hibernation/restart
+and is **not** a durable log store or a shipping transport.
+
+For real, retained logs use the platform — Cirrus does not reimplement it:
+
+- **Workers Logs** — retained, queryable logs in the Cloudflare dashboard.
+- **Logpush** — stream logs to R2, a SIEM, or a third-party log service.
+- **Tail Workers** — capture logs/events programmatically from another Worker.
+
 ## Testing
 
 Unit tests stub the `DurableObjectState` shape and pattern-match the small SQL

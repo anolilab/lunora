@@ -20,10 +20,15 @@ const DEFAULT_CAPACITY = 500;
  *
  * In-memory only: like the metrics counters on `ShardDO`, the buffer is a field
  * on the live Durable Object instance and so resets whenever the DO hibernates
- * or restarts. It is a "recent activity on this instance" readout, not a
- * durable log store — durable log shipping would be a separate, heavier
- * feature. Capacity is fixed at construction; once full, the oldest entry is
- * evicted to make room (FIFO), so memory stays bounded regardless of traffic.
+ * or restarts. It is a "recent activity on this instance" readout (for the
+ * dashboard's live log panel), NOT a durable log store or a transport.
+ * Production log shipping is the platform's job, not ours: use Cloudflare
+ * **Workers Logs** (retained, queryable in the dashboard), **Logpush** (stream
+ * to R2 / a SIEM / a log service), or a **Tail Worker** for programmatic
+ * capture. Cirrus deliberately does not reimplement any of those — this buffer
+ * stays a tiny dev/ops readout. Capacity is fixed at construction; once full,
+ * the oldest entry is evicted to make room (FIFO), so memory stays bounded
+ * regardless of traffic.
  */
 class LogBuffer {
     /** Backing store, kept in insertion order (oldest first). */

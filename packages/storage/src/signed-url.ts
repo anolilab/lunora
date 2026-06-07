@@ -1,3 +1,21 @@
+/**
+ * Worker-signed object URLs (HMAC-SHA256).
+ *
+ * Why not R2's native S3 presigned URLs? A presigned URL is a self-contained
+ * bearer credential: anyone holding it reaches the object directly on R2's S3
+ * endpoint, bypassing the Worker. Cirrus signs URLs that resolve back through
+ * your own Worker (`publicBaseUrl` → `GET /storage/:key`), so the request still
+ * passes your app's gates — auth/session checks, per-object policy, rate limits,
+ * audit — before {@link verifySignedUrl} validates the signature + expiry and
+ * the Worker streams the R2 body. App-gating is the point; the trade-off is the
+ * object bytes flow through the Worker rather than straight off R2.
+ *
+ * Reach for native S3 presigned URLs instead when you want clients to hit R2
+ * directly (large downloads, no per-request app logic) — R2 supports them via
+ * the S3 API; that adapter is not wrapped here yet. Likewise R2 **multipart
+ * upload** (for very large objects) is not wrapped — use the R2 binding /
+ * S3 API directly for those.
+ */
 import type { SignedUrlOptions } from "./types.js";
 
 const textEncoder = new TextEncoder();

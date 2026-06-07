@@ -143,5 +143,23 @@ Larger / decision-gated:
 
 ---
 
+## Status
+
+- **#1 `setWebSocketAutoResponse`** — ✅ done (`ShardDO` auto-response + client heartbeat).
+- **#2 D1 replay-PITR framing** — ✅ done (`__cdc_log` reframed as CDC export; PITR is D1 Time Travel).
+- **#3 `analyticsEngineSink`** — ✅ done (implemented + exported).
+- **#4 workpool ↔ Queues** — ✅ documented (`createWorkpool` JSDoc + scheduler README); the cron
+  3-trigger limit is now documented and `cirrus codegen` **warns** when distinct cron expressions exceed
+  it. The Queues-backed workpool _variant_ remains decision-gated (not built).
+- **#5 log-buffer → Workers Logs** — ✅ documented (`LogBuffer` JSDoc + `@cirrus/do` README); it stays a
+  dev/ops readout, with Workers Logs / Logpush / Tail Workers called out for real shipping.
+- **#6 R2 signed URLs** — ✅ documented (`signed-url.ts` JSDoc + `@cirrus/storage` README): worker-signed
+  is app-gated by design; native S3 presigned URLs and R2 multipart remain unwrapped (decision-gated).
+
+Also surfaced as a paused follow-up and then shipped alongside this audit: **native PITR surfaces**
+(`cirrus backup pitr` + the dashboard Time Travel panel), Convex-parity #19's in-place tier.
+
+---
+
 _Generated from a 5-agent audit against the Cloudflare docs at `/tmp/cloudflare-docs`. Findings ranked
 by value-to-effort; "keeps" are credited so the divergences are on the record, not silently carried._

@@ -47,6 +47,18 @@ const getDO = async <T>(options: WorkpoolOptions, path: string): Promise<T> => {
  * const pool = createWorkpool({ namespace: env.SCHEDULER, originUrl, maxConcurrency: 5 });
  * await pool.enqueue(internal.stripe.sync, { invoiceId }, { retry: { maxAttempts: 3 } });
  * ```
+ *
+ * Why not Cloudflare Queues? Queues natively cover concurrency-capped, retried,
+ * dead-lettered, delayed dispatch (`max_concurrency`, `max_retries`,
+ * `retry({ delaySeconds })`, `dead_letter_queue`), and are the right tool when
+ * you just want to rate-limit fire-and-forget background work. This workpool
+ * deliberately stays on `SchedulerDO` because it offers what a queue can't: a
+ * hard concurrency cap (the DO is the single serialization point — no
+ * cross-consumer overshoot), per-job cancellation, and per-job status
+ * introspection, all keyed by a stable job id. Reach for Queues when you don't
+ * need those; reach for this when you do. Either way, do NOT grow multi-step
+ * orchestration on top of this — that's Cloudflare **Workflows** (`step.do` /
+ * `step.sleep` / `step.waitForEvent`).
  */
 const createWorkpool = (options: WorkpoolOptions): Workpool => {
     // Defensive runtime guards: required by the type, but JS callers can omit them.

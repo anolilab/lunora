@@ -16,4 +16,14 @@ await scheduler.runAt(new Date("2026-06-01T12:00:00Z"), api.cleanup.run, { older
 
 Backing: a `SchedulerDO` Durable Object that uses `state.storage.setAlarm()` to fire the next-earliest pending task. On alarm fire it dispatches the function via HTTP back to the Worker, which routes it to the right shard.
 
-For repeated tasks use Cloudflare Cron Triggers — `createCronTrigger()` produces a snippet to paste into your `wrangler.jsonc`.
+## Bounded concurrency: `createWorkpool` vs. Cloudflare Queues
+
+`createWorkpool` is a bounded-concurrency action queue on the same `SchedulerDO`. Cloudflare **Queues** already cover concurrency-capped, retried, dead-lettered, delayed dispatch natively (`max_concurrency`, `max_retries`, `retry({ delaySeconds })`, `dead_letter_queue`) — if you just want to rate-limit fire-and-forget background work, use Queues.
+
+The workpool exists for what a queue can't give you: a **hard** concurrency cap (the DO is the single serialization point, so there's no cross-consumer overshoot), per-job **cancellation**, and per-job **status** introspection, all keyed by a stable job id. Pick the workpool when you need those; pick Queues otherwise. Don't grow multi-step orchestration on either — that's Cloudflare **Workflows** (`step.do` / `step.sleep` / `step.waitForEvent`).
+
+## Repeated tasks (Cron Triggers)
+
+For repeated tasks use Cloudflare Cron Triggers — `createCronTrigger()` produces a snippet to paste into your `wrangler.jsonc`, and `@cirrus/codegen` keeps `triggers.crons` in sync from your `cronJobs()` definitions.
+
+> **Limit:** a Worker can have at most **3 Cron Triggers** (distinct cron expressions). Codegen deduplicates by expression — multiple jobs sharing one schedule count as a single trigger — and `cirrus codegen` warns if you exceed it. For finer-grained or higher-cardinality scheduling, use Durable Object alarms (via `runAfter`/`runAt` above), which have no such cap.
