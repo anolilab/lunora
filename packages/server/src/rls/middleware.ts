@@ -5,12 +5,17 @@
  * What it does, at runtime:
  *
  * 1. **Reads** — wraps `ctx.db.findMany`/`findFirst`/`findFirstOrThrow`/
- * `query`/`count`/`get`. Per table with a `read` policy, builds the effective
- * `baseWhere` (intersection of role-applicable predicates) and threads it
- * through the underlying ORM via the public `QueryArgs.baseWhere` seam (see
- * `@cirrus/do/src/query-args.ts`). Also sets `restrictsCounts: true` for the
- * same tables, so `count()` throws `COUNT_RLS_UNSUPPORTED` (kitcn's documented
- * constraint).
+ * `query`/`count`/`get` plus the analytical reads
+ * `aggregate`/`groupBy`/`rank`/`rankBefore`/`rankPage`. Per table with a `read`
+ * policy, builds the effective `baseWhere` (intersection of role-applicable
+ * predicates) and threads it through the underlying ORM via the public
+ * `QueryArgs.baseWhere` seam (see `@cirrus/do/src/query-args.ts`).
+ * `aggregate`/`groupBy` are scoped to `where`, so the `baseWhere` is AND-merged
+ * and the reduction only sees policy-visible rows. `count` and the rank family
+ * (`rank`/`rankBefore`/`rankPage`) are counts-of-partition that can't be safely
+ * narrowed, so they fail closed with `COUNT_RLS_UNSUPPORTED` (kitcn's
+ * documented constraint). Every method the wrapper doesn't override (e.g.
+ * `normalizeId`, `system`) passes through untouched.
  *
  * 2. **Writes** — wraps `insert`/`patch`/`replace`/`delete`. For an
  * `update`/`delete` it fetches the pre-write row through the *unwrapped* writer
@@ -64,6 +69,49 @@ interface CountArgs {
     where?: WhereInput;
 }
 
+/** Structural mirror of `@cirrus/do`'s `AggregateOptions` — only the fields the wrapper touches. */
+interface AggregateArgs {
+    baseWhere?: WhereInput;
+    field?: string;
+    op: string;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+}
+
+/** Structural mirror of `@cirrus/do`'s `GroupByOptions`. */
+interface GroupByArgs {
+    agg?: { field?: string; op: string };
+    baseWhere?: WhereInput;
+    by: ReadonlyArray<string>;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+}
+
+/** Structural mirror of `@cirrus/do`'s `RankOptions`. */
+interface RankArgs {
+    baseWhere?: WhereInput;
+    restrictsCounts?: boolean;
+    row: Record<string, unknown> | string;
+    where?: WhereInput;
+}
+
+/** Structural mirror of `@cirrus/do`'s `RankBeforeOptions`. */
+interface RankBeforeArgs {
+    partitionKey: string;
+    restrictsCounts?: boolean;
+    rowId: string;
+    sortValues: ReadonlyArray<unknown>;
+}
+
+/** Structural mirror of `@cirrus/do`'s `RankPageOptions`. */
+interface RankPageArgs {
+    baseWhere?: WhereInput;
+    cursor?: null | string;
+    restrictsCounts?: boolean;
+    take?: number;
+    where?: WhereInput;
+}
+
 interface QueryPage {
     continueCursor: null | string;
     isDone: boolean;
@@ -86,6 +134,14 @@ interface TableReaderLike {
  * `DatabaseWriterLike` and `@cirrus/d1`'s `DatabaseWriterLike`.
  */
 interface DatabaseWriterLike {
+    /**
+     * Reduce matching rows to a scalar. Optional on this structural projection
+     * because the D1 twin / unit-test fakes may omit it; when present, the RLS
+     * wrapper AND-merges the read `baseWhere` into `options` so the reduction
+     * only sees policy-visible rows (safe: an aggregate scoped to `where` never
+     * reveals a hidden row — see `@cirrus/do`'s `RestrictableQueryOptions`).
+     */
+    aggregate?: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
     delete: (id: string) => Promise<void>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
@@ -102,9 +158,35 @@ interface DatabaseWriterLike {
      * Writers that don't implement it fall back to the probe path.
      */
     getWithTable?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
+
+    /**
+     * Group + reduce. Same `baseWhere` injection as `aggregate`: the per-group
+     * reduction is scoped to policy-visible rows, so a group count tallies only
+     * rows the caller may read.
+     */
+    groupBy?: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
+
+    /**
+     * Rank a row within its partition. A position is a count-of-rows-before, so
+     * — exactly like `count()` — it can't be trusted in an RLS-restricted
+     * reader: the wrapper fails it closed with `COUNT_RLS_UNSUPPORTED`. Optional
+     * because the D1 twin / fakes may omit it.
+     */
+    rank?: (tableName: string, indexName: string, options: RankArgs) => Promise<null | { position: number; total: number }>;
+
+    /** Cross-shard rank primitive — same count-of-before RLS hazard as `rank`; failed closed under a read policy. */
+    rankBefore?: (tableName: string, indexName: string, options: RankBeforeArgs) => Promise<{ before: number; total: number }>;
+
+    /**
+     * Sorted pagination over a rank companion. The companion stores only the
+     * partition + sort keys + id, so an arbitrary read `baseWhere` can't be
+     * enforced against it (and re-filtering the fetched rows would break page
+     * sizing). RLS therefore fails it closed rather than leak hidden rows.
+     */
+    rankPage?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage>;
     replace: (id: string, document: Record<string, unknown>) => Promise<void>;
 }
 
@@ -639,7 +721,30 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         return perform();
     };
 
+    /**
+     * Fail a count-of-partition read (`rank`/`rankBefore`/`rankPage`) closed
+     * when the table carries an active read policy. These depend on the full
+     * partition — a position or sorted page computed over rows the policy hides
+     * would either undercount or leak, so under RLS they're unsupported (the
+     * same `COUNT_RLS_UNSUPPORTED` constraint `count()` enforces). Returns the
+     * effective read `baseWhere` for the non-restricted pass-through case.
+     */
+    const guardRankFamily = (tableName: string, method: string): undefined | WhereInput => {
+        const { baseWhere, restricts } = readBase(tableName);
+
+        if (restricts) {
+            throw new CirrusError("COUNT_RLS_UNSUPPORTED", `${method}() is not supported on "${tableName}" inside an RLS-restricted context`);
+        }
+
+        return baseWhere;
+    };
+
+    // Captured once so the truthy check narrows the type into each wrapper
+    // closure below (a const keeps the narrowing; `base.x` would not).
+    const { aggregate: baseAggregate, groupBy: baseGroupBy, rank: baseRank, rankBefore: baseRankBefore, rankPage: baseRankPage } = base;
+
     return {
+        ...base,
         async count(tableName, whereOrArgs) {
             const { baseWhere, restricts } = readBase(tableName);
             const args = intoCountArgs(whereOrArgs);
@@ -765,6 +870,61 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
                     };
                 },
             ),
+
+        // Analytical reads. `aggregate`/`groupBy` are scoped to `where`, so the
+        // read `baseWhere` is AND-merged in and the reduction only sees
+        // policy-visible rows. `rank`/`rankBefore`/`rankPage` are
+        // count-of-partition reads that can't be safely narrowed, so they fail
+        // closed under a read policy (see `guardRankFamily`). Each is wrapped
+        // only when the underlying writer implements it — the `...base` spread
+        // above carries through anything we don't override. The methods are
+        // captured into consts so the truthy-narrowing survives into the
+        // closures without a non-null assertion.
+        ...(baseAggregate
+            ? {
+                  aggregate: (tableName: string, options: AggregateArgs) => {
+                      const { baseWhere } = readBase(tableName);
+
+                      return baseAggregate(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+                  },
+              }
+            : {}),
+        ...(baseGroupBy
+            ? {
+                  groupBy: (tableName: string, options: GroupByArgs) => {
+                      const { baseWhere } = readBase(tableName);
+
+                      return baseGroupBy(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+                  },
+              }
+            : {}),
+        ...(baseRank
+            ? {
+                  rank: (tableName: string, indexName: string, options: RankArgs) => {
+                      const baseWhere = guardRankFamily(tableName, "rank");
+
+                      return baseRank(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+                  },
+              }
+            : {}),
+        ...(baseRankBefore
+            ? {
+                  rankBefore: (tableName: string, indexName: string, options: RankBeforeArgs) => {
+                      guardRankFamily(tableName, "rankBefore");
+
+                      return baseRankBefore(tableName, indexName, options);
+                  },
+              }
+            : {}),
+        ...(baseRankPage
+            ? {
+                  rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => {
+                      const baseWhere = guardRankFamily(tableName, "rankPage");
+
+                      return baseRankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
+                  },
+              }
+            : {}),
     };
 };
 
