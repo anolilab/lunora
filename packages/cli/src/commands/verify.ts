@@ -1,13 +1,14 @@
-import { runCodegen } from "@cirrus/codegen";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+
+import { runCodegen } from "@cirrus/codegen";
 
 import type { Logger } from "../util/logger.js";
 import type { Spawner } from "../util/spawn.js";
 import { defaultSpawner } from "../util/spawn.js";
 import { validateWrangler } from "../util/wrangler-validator.js";
 
-export interface VerifyCommandOptions {
+interface VerifyCommandOptions {
     cwd?: string;
     logger: Logger;
     /** Injectable subprocess runner for the tsc step; defaults to the real spawner. */
@@ -16,12 +17,58 @@ export interface VerifyCommandOptions {
     typecheck?: boolean;
 }
 
-export interface VerifyCommandResult {
+interface VerifyCommandResult {
     code: number;
     errors: ReadonlyArray<string>;
     warnings: ReadonlyArray<string>;
     wranglerPath: string | undefined;
 }
+
+/**
+ * Run `tsc --noEmit` for the project when it ships a `tsconfig.json`. Returns an
+ * `{ error }` when type-checking failed, `{ warning }` when it was skipped (no
+ * tsconfig), or an empty object on success.
+ */
+const runTypecheckStep = async (cwd: string, spawner: Spawner): Promise<{ error?: string; warning?: string }> => {
+    if (!existsSync(join(cwd, "tsconfig.json"))) {
+        return { warning: "no tsconfig.json found — skipping TypeScript type-check" };
+    }
+
+    const result = await spawner({ args: ["exec", "tsc", "--noEmit", "-p", "tsconfig.json"], command: "pnpm", cwd });
+
+    return result.code === 0 ? {} : { error: `type errors: tsc --noEmit exited ${String(result.code)}` };
+};
+
+/** Log the collected errors/warnings and build the command result. */
+const reportVerifyResult = (logger: Logger, errors: string[], warnings: string[], wranglerPath: string | undefined): VerifyCommandResult => {
+    if (errors.length === 0 && warnings.length === 0) {
+        logger.success("verify: project is valid");
+
+        return { code: 0, errors: [], warnings: [], wranglerPath };
+    }
+
+    if (warnings.length > 0) {
+        logger.warn("verify: warnings:");
+
+        for (const warning of warnings) {
+            logger.warn(`  - ${warning}`);
+        }
+    }
+
+    if (errors.length > 0) {
+        logger.error("verify: errors:");
+
+        for (const error of errors) {
+            logger.error(`  - ${error}`);
+        }
+
+        return { code: 1, errors, warnings, wranglerPath };
+    }
+
+    logger.success("verify: project is valid (with warnings)");
+
+    return { code: 0, errors: [], warnings, wranglerPath };
+};
 
 /**
  * Validate a Cirrus project without mutating any file. First the wrangler
@@ -30,7 +77,7 @@ export interface VerifyCommandResult {
  * `cirrus/_generated/`, then a TypeScript type-check (`tsc --noEmit`) when the
  * project ships a `tsconfig.json`. Exits non-zero if any step reports an error.
  */
-export const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCommandResult> => {
+const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
 
     const validation = validateWrangler({ projectRoot: cwd });
@@ -46,48 +93,19 @@ export const runVerifyCommand = async (options: VerifyCommandOptions): Promise<V
     }
 
     if (options.typecheck !== false) {
-        if (existsSync(join(cwd, "tsconfig.json"))) {
-            const spawner = options.spawner ?? defaultSpawner;
+        const typecheck = await runTypecheckStep(cwd, options.spawner ?? defaultSpawner);
 
-            const result = await spawner({
-                args: ["exec", "tsc", "--noEmit", "-p", "tsconfig.json"],
-                command: "pnpm",
-                cwd,
-            });
+        if (typecheck.error !== undefined) {
+            errors.push(typecheck.error);
+        }
 
-            if (result.code !== 0) {
-                errors.push(`type errors: tsc --noEmit exited ${String(result.code)}`);
-            }
-        } else {
-            warnings.push("no tsconfig.json found — skipping TypeScript type-check");
+        if (typecheck.warning !== undefined) {
+            warnings.push(typecheck.warning);
         }
     }
 
-    if (errors.length === 0 && warnings.length === 0) {
-        options.logger.success("verify: project is valid");
-
-        return { code: 0, errors: [], warnings: [], wranglerPath: validation.wranglerPath };
-    }
-
-    if (warnings.length > 0) {
-        options.logger.warn("verify: warnings:");
-
-        for (const warning of warnings) {
-            options.logger.warn(`  - ${warning}`);
-        }
-    }
-
-    if (errors.length > 0) {
-        options.logger.error("verify: errors:");
-
-        for (const error of errors) {
-            options.logger.error(`  - ${error}`);
-        }
-
-        return { code: 1, errors, warnings, wranglerPath: validation.wranglerPath };
-    }
-
-    options.logger.success("verify: project is valid (with warnings)");
-
-    return { code: 0, errors: [], warnings, wranglerPath: validation.wranglerPath };
+    return reportVerifyResult(options.logger, errors, warnings, validation.wranglerPath);
 };
+
+export type { VerifyCommandOptions, VerifyCommandResult };
+export { runVerifyCommand };
