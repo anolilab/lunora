@@ -148,11 +148,23 @@ The only major copy-safe lift available.
   row, and gained a "clear table" affordance. The generated `ShardDO` emits a
   `deleteRowThroughWriter` override so codegen consumers get the writer path.
 
-### 2.3 Health → app SLO + time-series
+### 2.3 Health → app SLO + time-series — ✅ shipped
 
-- Compose an app-level SLO view: error rate **per function**, auth-failure rate,
-  scheduler backlog, migration status. Add request/error sparklines (the metrics panel
-  already has the sparkline primitive) — cirrus-attributed, not CF's per-Worker charts.
+- **Shipped.** The Health tab is now an app-SLO overview: status tiles (warn/crit
+  thresholds) for app error rate (`getMetrics`), **auth-failure rate** (new
+  `getAuthMetrics` — a durable `__cirrus_auth_metrics` counter the worker stamps from
+  the `/api/auth/*` flow, since auth runs outside cirrus functions), **scheduler
+  backlog** (new `client.schedulerStatus()` over the SchedulerDO `/status` endpoint),
+  and **migration status**. Plus durable request/error sparklines (summed from
+  `__cirrus_metrics_buckets`) and an auth-failure sparkline, and a worst-first
+  per-function error-rate list. The sparkline primitive was extracted to a shared
+  `Sparkline` component. Each read is best-effort/degrades to `—`; all cirrus-attributed,
+  not CF's per-Worker charts.
+- **Follow-ups:** (1) a host must opt into auth instrumentation by passing the worker's
+  `authHandler` option (wired in the runtime + unit-tested, but `apps/playground` doesn't
+  pass it yet, so its auth tile reads `—`); (2) the per-shard signals (function stats,
+  migrations) are read from the **root shard** only — a cross-shard rollup (à la
+  `metrics-aggregate.ts`) is a later enhancement; (3) snapshot-only (no live toggle yet).
 
 ---
 
@@ -209,7 +221,7 @@ dashboard links out; it never half-reimplements them.
 
 ```
 Tier 1 (differentiators):  1.1 request log ✅ → 1.2 causal attribution ✅ → 1.3 Files (R2-Explorer)
-Tier 2 (depth):            2.1 data-browser decomposition + staged edits · 2.2 bulk ops ✅ · 2.3 SLO
+Tier 2 (depth):            2.1 data-browser decomposition + staged edits · 2.2 bulk ops ✅ · 2.3 SLO ✅
 Tier 3 (hand-off):         3.1 CF deep-links (quick) · 3.2 Settings ✅ · 3.3 Logpush emit ✅
 Tier 4:                    backups ✅ · integrations · TanStack decision
 ```
