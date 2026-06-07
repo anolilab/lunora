@@ -1014,6 +1014,10 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         const db = writer as FakeDatabase["writer"] & Record<string, unknown>;
 
         db["documents"] = bindTable("documents");
+        // A non-policy table (stands in for a `.global()` entry bound to the D1
+        // writer): the RLS rebind must leave it untouched, or it would re-route
+        // to the wrong backend.
+        db["events"] = bindTable("events");
 
         return db;
     };
@@ -1119,5 +1123,37 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         const result = await handler.handler(makeFacadeContext(database, "u1"), {});
 
         expect(result).toBeNull();
+    });
+
+    it("leaves a non-policy table's facade entry on its original binding (no backend re-route)", async () => {
+        expect.assertions(2);
+
+        // `documents` has a policy → its facade entry is re-bound through RLS;
+        // `events` has none (it stands in for a `.global()` table) → its entry
+        // must stay the exact object the runtime glued on, so it keeps routing
+        // to its own backend rather than the local wrapped writer.
+        const database = createFakeDatabase([]);
+
+        let documentsEntry: unknown;
+        let eventsEntry: unknown;
+
+        const handler = cirrus.query.use(rlsForTest<TestContext>([ownerPolicy])).query(async ({ ctx }) => {
+            const { db } = ctx as unknown as { db: Record<string, unknown> };
+
+            documentsEntry = db["documents"];
+            eventsEntry = db["events"];
+
+            return null;
+        });
+
+        const context = makeFacadeContext(database, "u1");
+        const originalEvents = (context["db"] as Record<string, unknown>)["events"];
+        const originalDocuments = (context["db"] as Record<string, unknown>)["documents"];
+
+        await handler.handler(context, {});
+
+        // events: identical reference (untouched); documents: re-bound (replaced).
+        expect(eventsEntry).toBe(originalEvents);
+        expect(documentsEntry).not.toBe(originalDocuments);
     });
 });

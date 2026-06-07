@@ -199,7 +199,7 @@ describe("run-codegen", () => {
         });
 
         it("emits the ctx.orm namespace + findFirstOrThrow on the read facade", () => {
-            expect.assertions(12);
+            expect.assertions(11);
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -217,13 +217,12 @@ describe("run-codegen", () => {
             expect(result.generated.server).toContain("readonly orm: OrmReader;");
             expect(result.generated.server).toContain("readonly orm: OrmWriter;");
 
-            // Runtime: bindTable gains findFirstOrThrow; bindOrm mirrors the facade into ctx.orm.
-            expect(result.generated.shard).toContain("findFirstOrThrow: (args?: QueryArgs) => writer.findFirstOrThrow(tableName, args)");
-            expect(result.generated.shard).toContain("const bindOrm = (facade:");
+            // Runtime: the facade binding is the shared `@cirrus/server` helper
+            // (one source of truth with the RLS middleware), and `ctx.orm` is
+            // built from it via `bindOrm`.
+            expect(result.generated.shard).toContain('import { bindOrm, bindTableFacade } from "@cirrus/server";');
+            expect(result.generated.shard).toContain("= bindTableFacade(");
             expect(result.generated.shard).toContain("orm: bindOrm(facade),");
-            // The orm lookup guards unknown tables so untyped callers get a clear
-            // error and the binding type-checks under `noUncheckedIndexedAccess`.
-            expect(result.generated.shard).toContain("throw new Error(`unknown table: ");
         });
 
         it("emits server.ts dispatch table keyed by `<namespace>:<fnName>`", () => {
@@ -507,8 +506,8 @@ describe("run-codegen", () => {
             expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;");
 
             // Backend selection by shardMode: shard table → DO writer, global table → D1 facade.
-            expect(output).toContain('facade["messages"] = bindTable(db, "messages");');
-            expect(output).toContain('facade["users"] = bindTable(globalDb, "users");');
+            expect(output).toContain('facade["messages"] = bindTableFacade(db, "messages");');
+            expect(output).toContain('facade["users"] = bindTableFacade(globalDb, "users");');
         });
 
         it("omits the D1 facade plumbing when no table is `.global()`", () => {
@@ -535,7 +534,7 @@ describe("run-codegen", () => {
             expect(output).not.toContain("globalDbStub");
             expect(output).not.toContain("config.d1");
             expect(output).not.toContain("d1?:");
-            expect(output).toContain('facade["messages"] = bindTable(db, "messages");');
+            expect(output).toContain('facade["messages"] = bindTableFacade(db, "messages");');
         });
 
         it("hoists the scheduler and threads it into createShardCtxDb for triggers", () => {

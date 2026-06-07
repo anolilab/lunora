@@ -16,6 +16,8 @@ export type {
 export { initCirrus } from "./builder/index.js";
 export type { CirrusErrorCode } from "./error.js";
 export { CirrusError } from "./error.js";
+export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade.js";
+export { bindOrm, bindTableFacade } from "./facade.js";
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions.js";
 export { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions.js";
 export type {
