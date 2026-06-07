@@ -188,3 +188,109 @@ export interface Workpool {
     /** Inspect the pool's current state — `inFlight` slots used and the configured `maxConcurrency`. */
     status: () => Promise<{ inFlight: number; maxConcurrency: number; queued: number }>;
 }
+
+// --- Cloudflare Queues-backed workpool ------------------------------------
+//
+// A second, lighter workpool that leans on Cloudflare Queues for concurrency,
+// retries, and dead-lettering (configured in `wrangler.jsonc`, not code). It
+// has NO hard concurrency cap, per-job cancel, or per-job status — reach for
+// the SchedulerDO-based {@link Workpool} when you need those. All binding types
+// are declared structurally so the package needs no `@cloudflare/workers-types`.
+
+/** Per-message options for {@link QueueLike.send} — the subset Cirrus uses. */
+export interface QueueSendOptionsLike {
+    /** Delay delivery to the consumer by this many seconds. */
+    delaySeconds?: number;
+}
+
+/** One message in a `sendBatch` call. */
+export interface QueueSendRequestLike<Body = unknown> {
+    body: Body;
+    delaySeconds?: number;
+}
+
+/** Producer side of a Cloudflare Queue binding (the `env` queue binding). */
+export interface QueueLike<Body = unknown> {
+    send: (body: Body, options?: QueueSendOptionsLike) => Promise<void>;
+    sendBatch: (messages: Iterable<QueueSendRequestLike<Body>>, options?: QueueSendOptionsLike) => Promise<void>;
+}
+
+/** One delivered Cloudflare Queue message (consumer side). */
+export interface QueueMessageLike<Body = unknown> {
+    /** Marks the message delivered (won't be retried). */
+    ack: () => void;
+    /** 1-based count of delivery attempts so far. */
+    readonly attempts: number;
+    readonly body: Body;
+    readonly id: string;
+    /** Marks the message for retry on a later batch (→ dead-letter after `max_retries`). */
+    retry: (options?: { delaySeconds?: number }) => void;
+    readonly timestamp: Date;
+}
+
+/** A batch of messages handed to a `queue()` consumer handler. */
+export interface MessageBatchLike<Body = unknown> {
+    /** Mark every message delivered. */
+    ackAll: () => void;
+    readonly messages: ReadonlyArray<QueueMessageLike<Body>>;
+    readonly queue: string;
+    /** Mark every message for retry. */
+    retryAll: (options?: { delaySeconds?: number }) => void;
+}
+
+/** The wire payload Cirrus puts on the queue: a function dispatch. */
+export interface QueueJob {
+    args?: Record<string, unknown>;
+    functionPath: string;
+    /** Routing hint forwarded to the Worker so the call lands on the right shard. */
+    shardKey?: string;
+}
+
+/** Per-enqueue options for a {@link QueueWorkpool}. */
+export interface QueueEnqueueOptions {
+    /** Delay delivery by this many seconds (Queues-native). Default: immediate. */
+    delaySeconds?: number;
+    /** Routing hint — which shard the job should run against. */
+    shardKey?: string;
+}
+
+/** Options for `createQueueWorkpool`. */
+export interface QueueWorkpoolOptions {
+    /** The Cloudflare Queue producer binding to enqueue onto. */
+    queue: QueueLike<QueueJob>;
+}
+
+/**
+ * Queues-backed producer: enqueue function dispatches onto a Cloudflare Queue.
+ * Concurrency, retries, and dead-lettering are configured on the queue consumer
+ * in `wrangler.jsonc` (`max_concurrency` / `max_retries` / `dead_letter_queue`),
+ * not here — that's the whole point of using Queues over the DO workpool.
+ */
+export interface QueueWorkpool {
+    /** Enqueue a single `fn(args)` dispatch. */
+    enqueue: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: QueueEnqueueOptions) => Promise<void>;
+    /** Enqueue many dispatches in one `sendBatch`. Each job names its function `ref`. */
+    enqueueBatch: (
+        jobs: ReadonlyArray<{ args?: Record<string, unknown>; ref: FunctionReference; shardKey?: string }>,
+        options?: QueueSendOptionsLike,
+    ) => Promise<void>;
+}
+
+/** Dispatches a single {@link QueueJob} — the consumer's per-message worker. */
+export type QueueDispatch = (job: QueueJob) => Promise<void>;
+
+/** Options for `createQueueConsumer`. */
+export interface QueueConsumerOptions {
+    /** How each job is executed; e.g. the `httpDispatcher`. */
+    dispatch: QueueDispatch;
+}
+
+/** Options for the `httpDispatcher` — the default HTTP dispatcher. */
+export interface HttpDispatcherOptions {
+    /** Admin bearer token the dispatch endpoint accepts (`CIRRUS_ADMIN_TOKEN`). */
+    adminToken: string;
+    /** Injectable fetch (tests); defaults to the global. */
+    fetchImpl?: typeof fetch;
+    /** Origin where the Worker is mounted (the `/_cirrus/scheduler/dispatch` endpoint). */
+    originUrl: string;
+}

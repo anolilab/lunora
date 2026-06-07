@@ -22,6 +22,31 @@ Backing: a `SchedulerDO` Durable Object that uses `state.storage.setAlarm()` to 
 
 The workpool exists for what a queue can't give you: a **hard** concurrency cap (the DO is the single serialization point, so there's no cross-consumer overshoot), per-job **cancellation**, and per-job **status** introspection, all keyed by a stable job id. Pick the workpool when you need those; pick Queues otherwise. Don't grow multi-step orchestration on either — that's Cloudflare **Workflows** (`step.do` / `step.sleep` / `step.waitForEvent`).
 
+### Queues-backed workpool
+
+For the "just rate-limit my background jobs" case, `createQueueWorkpool` enqueues function dispatches onto a Cloudflare Queue; concurrency, retries, backoff, and dead-lettering are configured on the consumer in `wrangler.jsonc` (`max_concurrency` / `max_retries` / `retry_delay` / `dead_letter_queue`).
+
+```ts
+// producer (anywhere in your Worker)
+import { createQueueWorkpool } from "@cirrus/scheduler";
+
+const pool = createQueueWorkpool({ queue: env.JOBS });
+await pool.enqueue(internal.stripe.sync, { invoiceId }); // optionally { delaySeconds, shardKey }
+
+// consumer (your Worker's `queue()` handler)
+import { createQueueConsumer, httpDispatcher } from "@cirrus/scheduler";
+
+const consume = createQueueConsumer({
+    dispatch: httpDispatcher({ originUrl: "https://app.acme.test", adminToken: env.CIRRUS_ADMIN_TOKEN }),
+});
+
+export default {
+    queue: (batch, env, ctx) => consume(batch),
+};
+```
+
+`httpDispatcher` POSTs each job to the Worker's `/_cirrus/scheduler/dispatch` endpoint (the same path `SchedulerDO` uses) with the admin bearer; supply your own `dispatch` callback to route differently. Failed or malformed messages are `retry()`-ed so they ride Queues' retry + dead-letter machinery rather than being dropped. There is **no** hard cap, cancel, or status here — that's the `createWorkpool` trade-off above.
+
 ## Repeated tasks (Cron Triggers)
 
 For repeated tasks use Cloudflare Cron Triggers — `createCronTrigger()` produces a snippet to paste into your `wrangler.jsonc`, and `@cirrus/codegen` keeps `triggers.crons` in sync from your `cronJobs()` definitions.

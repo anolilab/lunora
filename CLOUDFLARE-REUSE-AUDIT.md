@@ -148,13 +148,15 @@ Larger / decision-gated:
 - **#1 `setWebSocketAutoResponse`** — ✅ done (`ShardDO` auto-response + client heartbeat).
 - **#2 D1 replay-PITR framing** — ✅ done (`__cdc_log` reframed as CDC export; PITR is D1 Time Travel).
 - **#3 `analyticsEngineSink`** — ✅ done (implemented + exported).
-- **#4 workpool ↔ Queues** — ✅ documented (`createWorkpool` JSDoc + scheduler README); the cron
-  3-trigger limit is now documented and `cirrus codegen` **warns** when distinct cron expressions exceed
-  it. The Queues-backed workpool _variant_ remains decision-gated (not built).
+- **#4 workpool ↔ Queues** — ✅ documented (`createWorkpool` JSDoc + scheduler README) **and built**: the
+  cron 3-trigger limit is documented and `cirrus codegen` **warns** when distinct cron expressions exceed
+  it, and a Queues-backed variant ships — `createQueueWorkpool` (producer) + `createQueueConsumer` /
+  `httpDispatcher` (consumer), with concurrency/retries/DLQ configured on the queue in `wrangler.jsonc`.
 - **#5 log-buffer → Workers Logs** — ✅ documented (`LogBuffer` JSDoc + `@cirrus/do` README); it stays a
   dev/ops readout, with Workers Logs / Logpush / Tail Workers called out for real shipping.
-- **#6 R2 signed URLs** — ✅ documented (`signed-url.ts` JSDoc + `@cirrus/storage` README): worker-signed
-  is app-gated by design; native S3 presigned URLs and R2 multipart remain unwrapped (decision-gated).
+- **#6 R2 signed URLs** — ✅ documented **and built**: worker-signed stays the app-gated default;
+  `Storage.getPresignedUrl` adds native S3 presigned URLs (SigV4, opt-in via `s3` creds) and
+  `Storage.createMultipartUpload` / `resumeMultipartUpload` wrap R2's native multipart API.
 
 Also surfaced as a paused follow-up and then shipped alongside this audit: **native PITR surfaces**
 (`cirrus backup pitr` + the dashboard Time Travel panel), Convex-parity #19's in-place tier.
