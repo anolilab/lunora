@@ -22,18 +22,32 @@
  * can chart. Bucketing the timestamp to a fixed window keeps the row count
  * bounded (one row per function per window) while still surviving restart.
  *
- * Both tables carry the reserved `__cirrus` prefix, so the data browser hides
- * them automatically.
+ * `__cirrus_metrics_scans` holds the causal full-scan attribution
+ * (`path` × `table`): how many times the function full-scanned each table (a
+ * read with no index / point lookup, stamped via `SCAN_DEP` in `ctx-db.ts`).
+ * This is the raw signal behind the Insights "missing index" / "full scan"
+ * reads — it lets the dashboard say "`feed:list` is slow BECAUSE it
+ * full-scanned `posts`" rather than flagging the slow function as an isolated
+ * symptom. Keyed by `(path, table)` so the row count is bounded by the
+ * (functions × tables) the app actually scans. The `__cirrus_metrics` row also
+ * carries an aggregate `scans` counter so a function's total scan volume is a
+ * single-row read.
+ *
+ * All three tables carry the reserved `__cirrus` prefix, so the data browser
+ * hides them automatically.
  */
 
 import type { SqlCursor, SqlExec } from "./ctx-db.js";
-import type { FunctionCallStat } from "./introspect.js";
+import type { FunctionCallStat, FunctionScanAttribution } from "./introspect.js";
 
 /** Reserved per-function accumulator table. Auto-hidden from the data browser by the `__cirrus` prefix. */
 const FUNCTION_METRICS_TABLE = "__cirrus_metrics";
 
 /** Reserved coarse time-series table: per-function call/error counts bucketed by a fixed window. */
 const FUNCTION_METRICS_BUCKETS_TABLE = "__cirrus_metrics_buckets";
+
+/** Reserved causal full-scan attribution table: per-(function, table) full-scan counts. */
+const FUNCTION_METRICS_SCANS_TABLE = "__cirrus_metrics_scans";
 
 /**
  * Width of one history bucket, in milliseconds. 60s gives a minute-resolution
@@ -70,6 +84,15 @@ interface RecordFunctionMetricInput {
     errorMessage?: string;
     /** The `&lt;file>:&lt;function>` identifier. */
     path: string;
+
+    /**
+     * Distinct tables this dispatch full-scanned (read with no index / point
+     * lookup), collected from the `SCAN_DEP` reads. Each entry bumps the
+     * aggregate `scans` counter and the per-`(path, table)` attribution row.
+     * Omitted/empty when the dispatch didn't full-scan anything (the common
+     * indexed case), keeping the hot path to the same two upserts as before.
+     */
+    scannedTables?: ReadonlyArray<string>;
     /** Epoch-ms the dispatch completed. */
     ts: number;
 }
@@ -85,10 +108,17 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
 const bucketFloor = (ts: number): number => Math.floor(ts / FUNCTION_METRICS_BUCKET_MS) * FUNCTION_METRICS_BUCKET_MS;
 
 /**
- * Create both reserved metrics tables. Idempotent, so the read and write paths
- * can call it defensively. The accumulator table is keyed by `path` (one row
- * per function); the bucket table by `(path, bucketMs)` (one row per function
- * per window).
+ * Create the three reserved metrics tables. Idempotent, so the read and write
+ * paths can call it defensively. The accumulator table is keyed by `path` (one
+ * row per function); the bucket table by `(path, bucketMs)` (one row per
+ * function per window); the scans table by `(path, table)` (one row per
+ * function per full-scanned table).
+ *
+ * The accumulator's `scans` column is added via a guarded `ALTER TABLE` rather
+ * than baked into the `CREATE` so a shard whose `__cirrus_metrics` predates the
+ * causal-attribution feature gains the column on the next call without a
+ * migration. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the duplicate-column
+ * error from a re-run is swallowed.
  */
 const ensureFunctionMetricsTables = (sql: SqlExec): void => {
     runSql(
@@ -97,6 +127,7 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
             path TEXT PRIMARY KEY,
             calls INTEGER NOT NULL DEFAULT 0,
             errors INTEGER NOT NULL DEFAULT 0,
+            scans INTEGER NOT NULL DEFAULT 0,
             total_duration_ms REAL NOT NULL DEFAULT 0,
             min_duration_ms REAL,
             max_duration_ms REAL NOT NULL DEFAULT 0,
@@ -105,6 +136,13 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
             last_error_message TEXT
         )`,
     );
+
+    // Back-fill the `scans` column on shards created before causal attribution.
+    try {
+        runSql(sql, `ALTER TABLE "${FUNCTION_METRICS_TABLE}" ADD COLUMN scans INTEGER NOT NULL DEFAULT 0`);
+    } catch {
+        // Column already exists (fresh schema above, or a prior call) — no-op.
+    }
 
     runSql(
         sql,
@@ -116,6 +154,16 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
             PRIMARY KEY (path, bucket_ms)
         )`,
     );
+
+    runSql(
+        sql,
+        `CREATE TABLE IF NOT EXISTS "${FUNCTION_METRICS_SCANS_TABLE}" (
+            path TEXT NOT NULL,
+            table_name TEXT NOT NULL,
+            scans INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (path, table_name)
+        )`,
+    );
 };
 
 /**
@@ -124,10 +172,19 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
  * for that path. Creates the tables first so callers needn't. This is the hot
  * path — exactly two `INSERT … ON CONFLICT … DO UPDATE` statements plus a
  * bounded `DELETE`, all keyed by primary key, so it stays cheap.
+ *
+ * When the dispatch full-scanned one or more tables (`scannedTables`), the
+ * aggregate `scans` counter on the accumulator row advances by the distinct
+ * table count and one extra `(path, table)` upsert fires per scanned table.
+ * Indexed dispatches (the common case) skip all of that and pay nothing.
  */
 const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): void => {
     ensureFunctionMetricsTables(sql);
 
+    // Dedupe defensively: a handler can stamp the same table's SCAN_DEP more
+    // than once in a request, but we attribute one scan per distinct table.
+    const scannedTables = input.scannedTables ? [...new Set(input.scannedTables)] : [];
+    const scanCount = scannedTables.length;
     const errorCount = input.errored ? 1 : 0;
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet"; coalesced into the row on the first throw.
     const lastErrorAt = input.errored ? input.ts : null;
@@ -141,11 +198,12 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     runSql(
         sql,
         `INSERT INTO "${FUNCTION_METRICS_TABLE}"
-            (path, calls, errors, total_duration_ms, min_duration_ms, max_duration_ms, last_called_at, last_error_at, last_error_message)
-         VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)
+            (path, calls, errors, scans, total_duration_ms, min_duration_ms, max_duration_ms, last_called_at, last_error_at, last_error_message)
+         VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
             calls = calls + 1,
             errors = errors + excluded.errors,
+            scans = scans + excluded.scans,
             total_duration_ms = total_duration_ms + excluded.total_duration_ms,
             min_duration_ms = MIN(COALESCE(min_duration_ms, excluded.min_duration_ms), excluded.min_duration_ms),
             max_duration_ms = MAX(max_duration_ms, excluded.max_duration_ms),
@@ -154,6 +212,7 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
             last_error_message = CASE WHEN excluded.last_error_at IS NULL THEN last_error_message ELSE excluded.last_error_message END`,
         input.path,
         errorCount,
+        scanCount,
         input.durationMs,
         input.durationMs,
         input.durationMs,
@@ -190,16 +249,66 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
         FUNCTION_METRICS_BUCKET_RETENTION * FUNCTION_METRICS_BUCKET_MS,
         input.path,
     );
+
+    // Causal attribution: one PK-keyed upsert per distinct full-scanned table.
+    // Skipped entirely for the common indexed dispatch (empty `scannedTables`),
+    // so the hot path stays at the two upserts + trim above unless a scan fired.
+    for (const table of scannedTables) {
+        runSql(
+            sql,
+            `INSERT INTO "${FUNCTION_METRICS_SCANS_TABLE}" (path, table_name, scans)
+             VALUES (?, ?, 1)
+             ON CONFLICT(path, table_name) DO UPDATE SET
+                scans = scans + 1`,
+            input.path,
+            table,
+        );
+    }
+};
+
+/**
+ * Read the per-function full-scan attribution, grouped by function path. The
+ * returned map keys are `path`; each value is the function's full-scanned
+ * tables ordered by scan count (busiest scan first), so the causal "slow
+ * BECAUSE it scanned X" read can lead with the dominant table. Creates the
+ * table first so reads on a never-called shard return an empty map.
+ */
+const readFunctionMetricScans = (sql: SqlExec): Map<string, FunctionScanAttribution[]> => {
+    ensureFunctionMetricsTables(sql);
+
+    const rows = runSql<{ path: string; scans: number; table_name: string }>(
+        sql,
+        `SELECT path, table_name, scans FROM "${FUNCTION_METRICS_SCANS_TABLE}" ORDER BY path ASC, scans DESC, table_name ASC`,
+    ).toArray();
+
+    const byPath = new Map<string, FunctionScanAttribution[]>();
+
+    for (const row of rows) {
+        const list = byPath.get(row.path);
+        const entry: FunctionScanAttribution = { scans: row.scans, table: row.table_name };
+
+        if (list === undefined) {
+            byPath.set(row.path, [entry]);
+        } else {
+            list.push(entry);
+        }
+    }
+
+    return byPath;
 };
 
 /**
  * Read the persisted per-function accumulators as {@link FunctionCallStat}s,
  * newest-called first. Creates the table first so reads on a never-called shard
- * return `[]` instead of throwing. The shape is byte-compatible with the legacy
- * in-memory `getFunctionStats` rows.
+ * return `[]` instead of throwing. The shape is a superset of the legacy
+ * in-memory `getFunctionStats` rows — the additive `scans` total and
+ * `scannedTables` causal attribution are folded in here so a single read backs
+ * the Insights "missing index" / "full scan" signal.
  */
 const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
     ensureFunctionMetricsTables(sql);
+
+    const scansByPath = readFunctionMetricScans(sql);
 
     const rows = runSql<{
         calls: number;
@@ -209,6 +318,7 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
         last_error_message: null | string;
         max_duration_ms: number;
         path: string;
+        scans: number;
         total_duration_ms: number;
     }>(sql, `SELECT * FROM "${FUNCTION_METRICS_TABLE}" ORDER BY last_called_at DESC`).toArray();
 
@@ -221,6 +331,8 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
             lastErrorMessage: row.last_error_message,
             maxDurationMs: row.max_duration_ms,
             path: row.path,
+            scannedTables: scansByPath.get(row.path) ?? [],
+            scans: row.scans,
             totalDurationMs: row.total_duration_ms,
         };
     });
@@ -273,9 +385,11 @@ export {
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKET_RETENTION,
     FUNCTION_METRICS_BUCKETS_TABLE,
+    FUNCTION_METRICS_SCANS_TABLE,
     FUNCTION_METRICS_TABLE,
     readFunctionMetricBuckets,
     readFunctionMetrics,
+    readFunctionMetricScans,
     readFunctionMetricsTotals,
     recordFunctionMetric,
 };

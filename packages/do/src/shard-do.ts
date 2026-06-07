@@ -10,7 +10,7 @@ import { CDC_LOG_TABLE, readCdcChanges } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
-import { createDependencyTracker } from "./dependency-tracker.js";
+import { createDependencyTracker, SCAN_DEP } from "./dependency-tracker.js";
 import type { FunctionMetricBucket } from "./function-metrics.js";
 import { readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics.js";
 import type { AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
@@ -977,6 +977,17 @@ abstract class ShardDO {
      */
     private currentTracker: DependencyTracker | undefined;
 
+    /**
+     * Tables the in-flight dispatch full-scanned (read via `SCAN_DEP`, no index
+     * / point lookup). Allocated at the top of each `/rpc` dispatch and drained
+     * into `recordFunctionCall` once the handler returns, so the durable
+     * `__cirrus_metrics_scans` attribution can pin a slow function to the
+     * table(s) it scanned. Independent of `currentTracker` (which only exists
+     * when the reactive cache is enabled), so the causal signal is collected
+     * even on a cache-less shard. Stamped by `getCtxDbReadHook`.
+     */
+    private currentScannedTables: Set<string> | undefined;
+
     public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
@@ -1029,12 +1040,18 @@ abstract class ShardDO {
             this.metrics.requests += 1;
             const dispatchStartedAt = Date.now();
 
+            // Collect the tables this dispatch full-scans (stamped by the
+            // ctx-db read hook) so `recordFunctionCall` can persist the causal
+            // attribution. Fresh per request; drained below.
+            this.currentScannedTables = new Set<string>();
+
             try {
                 const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
 
                 // Record the handler's own latency (before the subscription
-                // write-flush below) against the per-function counters.
-                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt);
+                // write-flush below) against the per-function counters, along
+                // with any tables it full-scanned (causal attribution).
+                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables);
 
                 // Inspect the post-write size before responding. SQLite-in-DO
                 // exposes `databaseSize` as a real getter; reading it is a
@@ -1052,7 +1069,7 @@ abstract class ShardDO {
                 this.metrics.errors += 1;
                 const message = error instanceof Error ? error.message : String(error);
 
-                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt, message);
+                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt, message, this.currentScannedTables);
                 this.logs.push({
                     functionPath: payload.functionPath,
                     level: "error",
@@ -1067,6 +1084,7 @@ abstract class ShardDO {
                 this.currentRequestUserId = undefined;
                 this.currentRequestIdentity = undefined;
                 this.currentRequestSystem = false;
+                this.currentScannedTables = undefined;
             }
         }
 
@@ -1790,10 +1808,21 @@ abstract class ShardDO {
      * by `runCachedQuery`) when one exists and is a no-op otherwise — so
      * subclasses can wire this hook unconditionally without checking whether
      * the cache is enabled.
+     *
+     * It ALSO records the table into {@link currentScannedTables} whenever the
+     * read was a full-table scan (the `SCAN_DEP` sentinel). That set is drained
+     * into `recordFunctionCall` after dispatch to build the durable per-function
+     * full-scan attribution — and unlike the tracker, it's collected even when
+     * the reactive cache is off, since the causal signal is independent of
+     * caching.
      */
     protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void {
         return (table, idOrScan) => {
-            this.currentTracker?.recordRead(table, idOrScan ?? "*scan");
+            this.currentTracker?.recordRead(table, idOrScan ?? SCAN_DEP);
+
+            if (idOrScan === undefined || idOrScan === SCAN_DEP) {
+                this.currentScannedTables?.add(table);
+            }
         };
     }
 
@@ -1915,7 +1944,9 @@ abstract class ShardDO {
     /**
      * Fold one dispatch into the per-function counters keyed by `functionPath`,
      * creating the entry on first sight. `errorMessage` is supplied only when
-     * the handler threw, in which case the failure counters advance too. Called
+     * the handler threw, in which case the failure counters advance too.
+     * `scannedTables` carries the tables the dispatch full-scanned (collected by
+     * `getCtxDbReadHook`), which advance the causal scan attribution. Called
      * once per `/rpc` dispatch alongside the aggregate `metrics` update.
      *
      * Two writes happen here. The in-memory {@link functionStats} map is kept
@@ -1926,17 +1957,20 @@ abstract class ShardDO {
      * `sql` handle) must never turn a successful dispatch into a failed one,
      * so it is swallowed and the in-memory counters still advance.
      */
-    private recordFunctionCall(functionPath: string, durationMs: number, errorMessage?: string): void {
+    private recordFunctionCall(functionPath: string, durationMs: number, errorMessage?: string, scannedTables?: ReadonlySet<string>): void {
         const now = Date.now();
+        const scanned = scannedTables ? [...scannedTables] : [];
 
         // Durable upsert on the hot path: two PK-keyed INSERT…ON CONFLICT
-        // statements plus a bounded bucket trim. Survives restart/hibernation.
+        // statements plus a bounded bucket trim, plus one upsert per scanned
+        // table. Survives restart/hibernation.
         try {
             recordFunctionMetric(this.state.storage.sql as unknown as SqlExec, {
                 durationMs,
                 errored: errorMessage !== undefined,
                 errorMessage,
                 path: functionPath,
+                scannedTables: scanned,
                 ts: now,
             });
         } catch {
@@ -1954,6 +1988,8 @@ abstract class ShardDO {
             lastErrorMessage: null,
             maxDurationMs: 0,
             path: functionPath,
+            scannedTables: [],
+            scans: 0,
             totalDurationMs: 0,
         };
 
@@ -1961,6 +1997,26 @@ abstract class ShardDO {
         stat.totalDurationMs += durationMs;
         stat.maxDurationMs = Math.max(stat.maxDurationMs, durationMs);
         stat.lastCalledAt = now;
+
+        // Fold the dispatch's full-scan attribution into the in-memory stat so
+        // the warm-instance fallback (used when the durable read fails) carries
+        // the causal data too. One distinct table = one scan; per-table counts
+        // accumulate in `scannedTables`, re-sorted busiest-first.
+        if (scanned.length > 0) {
+            stat.scans += scanned.length;
+
+            for (const table of scanned) {
+                const entry = stat.scannedTables.find((attribution) => attribution.table === table);
+
+                if (entry === undefined) {
+                    stat.scannedTables.push({ scans: 1, table });
+                } else {
+                    entry.scans += 1;
+                }
+            }
+
+            stat.scannedTables.sort((a, b) => b.scans - a.scans || a.table.localeCompare(b.table));
+        }
 
         if (errorMessage !== undefined) {
             stat.errors += 1;
