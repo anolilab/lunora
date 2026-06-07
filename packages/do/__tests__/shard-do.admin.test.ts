@@ -187,6 +187,54 @@ describe("shardDO admin introspection", () => {
         expect(response.status).toBe(404);
         await expect(response.json()).resolves.toMatchObject({ error: { code: "UNKNOWN_ADMIN_OP" } });
     });
+
+    it("recordAuthEvent then getAuthMetrics round-trips the app-level auth-failure signal", async () => {
+        expect.assertions(6);
+
+        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Two successful attempts and one failure, recorded via the write op.
+        const ok1 = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordAuthEvent, { outcome: "ok" }, ADMIN_TOKEN));
+        await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordAuthEvent, { outcome: "ok" }, ADMIN_TOKEN));
+        await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordAuthEvent, { outcome: "fail" }, ADMIN_TOKEN));
+
+        expect(ok1.status).toBe(200);
+        await expect(ok1.json()).resolves.toEqual({ result: { recorded: true } });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAuthMetrics, {}, ADMIN_TOKEN));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { attempts: number; failureRate: number; failures: number; history: unknown[] } }>();
+
+        expect(body.result).toMatchObject({ attempts: 3, failures: 1 });
+        // 1 failure / 3 attempts.
+        expect(body.result.failureRate).toBeCloseTo(1 / 3, 10);
+        expect(body.result.history.length).toBeGreaterThan(0);
+    });
+
+    it("rejects (400) a recordAuthEvent with an invalid outcome", async () => {
+        expect.assertions(2);
+
+        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordAuthEvent, { outcome: "bogus" }, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+    });
+
+    it("admin-gates recordAuthEvent and getAuthMetrics (403 without the bearer)", async () => {
+        expect.assertions(2);
+
+        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const recordResponse = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordAuthEvent, { outcome: "ok" }));
+        const readResponse = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAuthMetrics, {}));
+
+        expect(recordResponse.status).toBe(403);
+        expect(readResponse.status).toBe(403);
+    });
 });
 
 const usersSchema: SchemaLike = {

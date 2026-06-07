@@ -35,6 +35,16 @@ export {
     selectIndexForCount,
     selectIndexForGroupBy,
 } from "./aggregates.js";
+export type { AuthMetrics, AuthMetricsBucket, RecordAuthEventInput } from "./auth-metrics.js";
+export {
+    AUTH_METRICS_BUCKET_MS,
+    AUTH_METRICS_BUCKET_RETENTION,
+    AUTH_METRICS_BUCKETS_TABLE,
+    AUTH_METRICS_TABLE,
+    ensureAuthMetricsTables,
+    readAuthMetrics,
+    recordAuthEvent,
+} from "./auth-metrics.js";
 export type {
     BroadcastDelta,
     CdcChange,

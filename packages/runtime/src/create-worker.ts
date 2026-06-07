@@ -349,6 +349,35 @@ interface WorkerOptions {
     applyGlobals?: GlobalCdcApplyFunction;
 
     /**
+     * Base path the auth routes are mounted under (default `/api/auth`). Used
+     * to classify which inbound paths are auth ATTEMPTS for the app-level
+     * auth-failure SLO signal (PLAN3 §2.3) — see {@link WorkerOptions.authHandler}.
+     * Only meaningful alongside `authHandler`.
+     */
+    authBasePath?: string;
+
+    /**
+     * Optional prebound `@cirrus/auth` handler (`handleAuthRequest(auth, …)`
+     * with its `auth` argument already bound) the worker dispatches BEFORE its
+     * own routing — auth runs as a top-level `/api/auth/*` route, not through
+     * cirrus functions. It returns a `Response` for an auth route and
+     * `undefined` to let the request fall through to the worker.
+     *
+     * Wiring it here (rather than in the host entry) lets the runtime instrument
+     * it for the app-level auth-failure SLO (PLAN3 §2.3): after the handler
+     * answers a genuine auth ATTEMPT route (sign-in / sign-up / callback under
+     * {@link WorkerOptions.authBasePath}), the worker fires a fire-and-forget
+     * `recordAuthEvent` against the root shard via `ctx.waitUntil` — classifying
+     * the outcome by status (`≥ 400` ⇒ `fail`). The recording never blocks or
+     * fails the auth response, and is skipped silently when no admin token or
+     * shard namespace is configured (the SLO signal is simply absent).
+     *
+     * Omit it and the host keeps calling `handleAuthRequest` itself; the SLO
+     * signal is then absent but auth behaves identically.
+     */
+    authHandler?: (request: Request) => Promise<Response | undefined>;
+
+    /**
      * Read-only introspector for the auth store's users and sessions, backing
      * the dashboard's users panel via `GET /_cirrus/admin/auth/users` and
      * `/_cirrus/admin/auth/sessions`. Omit it and those endpoints respond
@@ -683,6 +712,50 @@ const MIGRATION_ADMIN_OPS = new Set<string>(["__cirrus_admin__:migrationStatus",
  * to one shard rather than fanning out.
  */
 const PITR_ADMIN_OPS = new Set<string>(["__cirrus_admin__:getPitrBookmark", "__cirrus_admin__:pitrRestore"]);
+
+/**
+ * Default base path the `@cirrus/auth` handler mounts under, mirroring
+ * `@cirrus/auth`'s `DEFAULT_AUTH_BASE_PATH`. Inlined (not imported) so the
+ * runtime stays free of a hard dependency on `@cirrus/auth`.
+ */
+const DEFAULT_AUTH_BASE_PATH = "/api/auth";
+
+/**
+ * Reserved admin RPC the worker fires (fire-and-forget) to record one auth
+ * attempt for the app-level auth-failure SLO (PLAN3 §2.3). Spelled out inline,
+ * like the other admin-op sets, to avoid importing `@cirrus/do`.
+ */
+const RECORD_AUTH_EVENT_OP = "__cirrus_admin__:recordAuthEvent";
+
+/**
+ * Sub-paths under the auth basePath that represent a genuine auth ATTEMPT — a
+ * sign-in / sign-up / OAuth-callback exchange whose success or failure is the
+ * SLO signal. Reads (`get-session`, `list-sessions`), sign-out, and other
+ * better-auth endpoints are deliberately excluded: they aren't attempts, so
+ * counting them would skew the failure rate. Matched as a substring of the
+ * pathname suffix after the basePath (better-auth nests, e.g.
+ * `/api/auth/sign-in/email`, `/api/auth/callback/github`).
+ */
+const AUTH_ATTEMPT_SEGMENTS = ["/sign-in", "/sign-up", "/callback"] as const;
+
+/**
+ * Classify whether `pathname` (under `basePath`) is an auth ATTEMPT route worth
+ * recording for the SLO. Returns `false` for the basePath root and any non-
+ * attempt endpoint. The match is on the leading segment after the basePath so a
+ * nested route like `/api/auth/sign-in/email` counts while `/api/auth/get-session`
+ * does not.
+ */
+const isAuthAttemptPath = (pathname: string, basePath: string): boolean => {
+    const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
+
+    if (!pathname.startsWith(`${base}/`)) {
+        return false;
+    }
+
+    const suffix = pathname.slice(base.length);
+
+    return AUTH_ATTEMPT_SEGMENTS.some((segment) => suffix === segment || suffix.startsWith(`${segment}/`));
+};
 
 interface ForwardContext {
     /** Identity claims minus `userId`, or `null` when anonymous / no extra claims. */
@@ -2755,6 +2828,73 @@ const createWorker = (
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
     // the request (and, where needed, env/url) and returns the response.
     type InternalRoute = (request: Request, env: unknown, url: URL) => Promise<Response> | Response;
+
+    /**
+     * Record one app-level auth attempt for the auth-failure SLO (PLAN3 §2.3).
+     * Fire-and-forget against the ROOT shard — the same namespace + default
+     * shard key function dispatch uses — via its `/rpc` endpoint with the
+     * reserved `recordAuthEvent` admin op and the admin bearer.
+     *
+     * Best-effort end to end: resolves the admin token from
+     * `options.adminToken` / `CIRRUS_ADMIN_TOKEN`, skips silently when no token
+     * (or, implicitly, no shard namespace) is configured, and swallows any error
+     * so a recording failure NEVER surfaces. Designed to be handed to
+     * `ctx.waitUntil`, so it can't block or fail the auth response it follows.
+     */
+    const recordAuthAttempt = async (env: unknown, outcome: "fail" | "ok"): Promise<void> => {
+        try {
+            const envRecord = (env ?? {}) as Record<string, unknown>;
+            const adminBearer = options.adminToken ?? (typeof envRecord["CIRRUS_ADMIN_TOKEN"] === "string" ? envRecord["CIRRUS_ADMIN_TOKEN"] : undefined);
+
+            // No admin token ⇒ the per-shard admin gate would reject the write;
+            // skip silently so the SLO signal is simply absent.
+            if (!adminBearer || adminBearer.length === 0) {
+                return;
+            }
+
+            const recordRequest = new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: { outcome }, functionPath: RECORD_AUTH_EVENT_OP }),
+                headers: { authorization: `Bearer ${adminBearer}`, "content-type": "application/json" },
+                method: "POST",
+            });
+
+            await forwardToShard(options.shardDO, defaultShard, recordRequest);
+        } catch {
+            // Best-effort: a recording failure must be silent and must never
+            // affect the auth response that already went out.
+        }
+    };
+
+    /**
+     * Run the top-level `@cirrus/auth` handler (when configured) ahead of the
+     * worker's own routing, and instrument it for the app-level auth-failure SLO
+     * (PLAN3 §2.3). When the handler answers a genuine auth ATTEMPT route
+     * (sign-in / sign-up / callback under {@link WorkerOptions.authBasePath}),
+     * classify the outcome by status (`≥ 400` ⇒ `fail`) and record it
+     * fire-and-forget via `ctx.waitUntil`, so the recording never blocks or
+     * fails the auth response. Returns the auth `Response`, or `undefined` when
+     * no handler is configured or the path isn't an auth route (fall through).
+     */
+    const dispatchAuth = async (request: Request, env: unknown, url: URL, context: ExecutionContextLike): Promise<Response | undefined> => {
+        if (!options.authHandler) {
+            return undefined;
+        }
+
+        const authResponse = await options.authHandler(request);
+
+        if (!authResponse) {
+            return undefined;
+        }
+
+        const basePath = options.authBasePath ?? DEFAULT_AUTH_BASE_PATH;
+
+        if (isAuthAttemptPath(url.pathname, basePath)) {
+            context.waitUntil(recordAuthAttempt(env, authResponse.status >= 400 ? "fail" : "ok"));
+        }
+
+        return authResponse;
+    };
+
     const internalRoutes: Record<string, InternalRoute> = {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env) => handleRpc(request, env),
@@ -2793,6 +2933,16 @@ const createWorker = (
             if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
                 throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
             }
+        }
+
+        // Top-level `@cirrus/auth` dispatch (+ SLO instrumentation). Auth runs as
+        // a `/api/auth/*` route, ahead of the worker's own routing, so a sign-in
+        // never reaches function dispatch. Returns the auth `Response` when the
+        // handler owns the path, else `undefined` to fall through.
+        const authResponse = await dispatchAuth(request, env, url, context);
+
+        if (authResponse) {
+            return authResponse;
         }
 
         // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
