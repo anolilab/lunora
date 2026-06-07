@@ -21,6 +21,8 @@
  * It must not grow into a pipeline.
  */
 
+import { redact, standardRules } from "@visulima/redact";
+
 import type { SqlCursor, SqlExec } from "./ctx-db.js";
 
 /** Reserved append-only table backing the dashboard Logs tab. Auto-hidden from the data browser by the `__cirrus` prefix. */
@@ -84,6 +86,14 @@ interface AppendRequestLogEntry {
     userId?: string;
 }
 
+/** Knobs the dispatch site threads into a request-log write. */
+interface RequestLogWriteOptions {
+    /** When `true` (development only), skip args/identity redaction so a developer sees raw values. Defaults to `false` (production-safe). */
+    captureRaw?: boolean;
+    /** Rows to keep after the append-time trim; defaults to {@link REQUEST_LOG_RETENTION}. The operator's `CIRRUS_REQUEST_LOG_RETENTION` override. */
+    retention?: number;
+}
+
 /** Filters for {@link readRequestLog}, all AND-combined; every value is a bound SQL parameter, so nothing here injects SQL. */
 interface ReadRequestLogOptions {
     /** Functions whose path begins with this prefix (a `&lt;file>:` or `&lt;file>:&lt;fn>` correlation). */
@@ -115,60 +125,26 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
 };
 
 /**
- * Redact a value's leaf scalars by default, preserving object/array shape and
- * keys. Strings, numbers, booleans and bigints become their type tag
- * (`"&lt;string>"`, `"&lt;number>"`, …); `null`/`undefined` pass through unchanged.
+ * Redact the secrets / PII out of a value before it reaches the durable log or a
+ * Logpush event, via `@visulima/redact`'s `standardRules` — a value-pattern set
+ * covering API keys, tokens, credit cards, SSNs, emails, phone numbers,
+ * passwords and bearer/auth material. Unlike a blunt type-tag stamp this masks
+ * sensitive values by PATTERN (not just by key name) while leaving benign values
+ * readable, so the dashboard's args/identity columns stay useful. `null` /
+ * `undefined` pass through unchanged.
  *
- * Why a small local redactor rather than a dependency? `@visulima/redact` is
- * not in any pnpm catalog, and `@cirrus/do` deliberately ships a minimal
- * dependency set (only `drizzle-orm`); adding an external dep just to stamp
- * leaf values would be disproportionate. The goal is only to keep PII/secrets
- * out of the durable log while preserving enough shape for the dashboard's
- * correlation filters — a type-tag redactor does exactly that.
+ * `captureRaw` is the development escape hatch: in a dev environment the dispatch
+ * site (`isDevEnvironment`) passes `true` to skip redaction so a developer can
+ * see real arg/identity values; production always redacts. The dev decision is
+ * made at the call site from the deployment env, never inferred here — so a real
+ * deploy that omits the env var stays redacted.
  */
-const redactArgs = (value: unknown, depth = 0): unknown => {
-    // Bound the recursion so a pathological/cyclic args object can never spin
-    // the redactor on the dispatch path; deeper levels collapse to a tag.
-    if (depth > 8) {
-        return "<deep>";
-    }
-
-    if (value === null || value === undefined) {
+const redactArgs = (value: unknown, captureRaw = false): unknown => {
+    if (captureRaw || value === null || value === undefined) {
         return value;
     }
 
-    if (Array.isArray(value)) {
-        return value.map((item) => redactArgs(item, depth + 1));
-    }
-
-    if (typeof value === "object") {
-        const out: Record<string, unknown> = {};
-
-        for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-            out[key] = redactArgs(child, depth + 1);
-        }
-
-        return out;
-    }
-
-    switch (typeof value) {
-        case "bigint": {
-            return "<bigint>";
-        }
-        case "boolean": {
-            return "<boolean>";
-        }
-        case "number": {
-            return "<number>";
-        }
-        case "string": {
-            return "<string>";
-        }
-        default: {
-            // function / symbol — never expected in JSON args, tag generically.
-            return "<value>";
-        }
-    }
+    return redact(value, standardRules);
 };
 
 /**
@@ -215,12 +191,17 @@ const cacheHitColumn = (cacheHit: boolean | undefined): null | number => {
 
 /**
  * Append one dispatch to the request log, then trim the log back to the most
- * recent `REQUEST_LOG_RETENTION` rows. Creates the table first so callers
- * needn't. Args are redacted here so a raw arg value never reaches the durable
- * table — callers pass the unredacted args and rely on this.
+ * recent `retention` rows (default {@link REQUEST_LOG_RETENTION}). Creates the
+ * table first so callers needn't. Args/identity are redacted here so a raw value
+ * never reaches the durable table — callers pass the unredacted entry and rely on
+ * this, unless `captureRaw` (dev only) is set. `retention` is the operator's
+ * `CIRRUS_REQUEST_LOG_RETENTION` override, threaded in by the dispatch site.
  */
-const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry): void => {
+const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
     ensureRequestLogTable(sql);
+
+    const captureRaw = options.captureRaw ?? false;
+    const retention = options.retention ?? REQUEST_LOG_RETENTION;
 
     runSql(
         sql,
@@ -239,9 +220,9 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry): void
         // `user_id` column above stays raw; it's the non-PII correlation key the
         // `getRequestLog` filters key on.
         // eslint-disable-next-line unicorn/no-null -- anonymous request or no claims attached.
-        entry.identity === undefined ? null : JSON.stringify(redactArgs(entry.identity)),
+        entry.identity === undefined ? null : JSON.stringify(redactArgs(entry.identity, captureRaw)),
         // eslint-disable-next-line unicorn/no-null -- no args were sent on this dispatch.
-        entry.redactedArgs === undefined ? null : JSON.stringify(redactArgs(entry.redactedArgs)),
+        entry.redactedArgs === undefined ? null : JSON.stringify(redactArgs(entry.redactedArgs, captureRaw)),
         entry.outcome,
         // eslint-disable-next-line unicorn/no-null -- success path: no error message.
         entry.errorMessage ?? null,
@@ -252,9 +233,9 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry): void
         entry.subscriptionsReRun ?? 0,
     );
 
-    // Bounded retention: drop every row older than the most recent
-    // `REQUEST_LOG_RETENTION` by `seq`, mirroring `trimCdcChanges`/audit trim.
-    runSql(sql, `DELETE FROM "${REQUEST_LOG_TABLE}" WHERE seq <= (SELECT MAX(seq) - ? FROM "${REQUEST_LOG_TABLE}")`, REQUEST_LOG_RETENTION);
+    // Bounded retention: drop every row older than the most recent `retention`
+    // by `seq`, mirroring `trimCdcChanges`/audit trim.
+    runSql(sql, `DELETE FROM "${REQUEST_LOG_TABLE}" WHERE seq <= (SELECT MAX(seq) - ? FROM "${REQUEST_LOG_TABLE}")`, retention);
 };
 
 /**
@@ -269,17 +250,19 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry): void
  * An `error` outcome goes to `console.error` (surfacing at error level in the
  * trace so a SIEM can alert on it); everything else to `console.log`. The
  * `source: "cirrus"` / `type: "request"` envelope lets a consumer filter these
- * events out of the raw Workers-trace firehose. Best-effort by contract — the
- * caller wraps it so a serialization hiccup can never fail the served request.
+ * events out of the raw Workers-trace firehose. `captureRaw` (dev only) skips
+ * redaction, mirroring the durable write. Best-effort by contract — the caller
+ * wraps it so a serialization hiccup can never fail the served request.
  */
-const emitRequestLogEvent = (entry: AppendRequestLogEntry): void => {
+const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
+    const captureRaw = options.captureRaw ?? false;
     const event = {
-        args: entry.redactedArgs === undefined ? undefined : redactArgs(entry.redactedArgs),
+        args: entry.redactedArgs === undefined ? undefined : redactArgs(entry.redactedArgs, captureRaw),
         cacheHit: entry.cacheHit,
         durationMs: entry.durationMs,
         error: entry.errorMessage,
         function: entry.functionPath,
-        identity: entry.identity === undefined ? undefined : redactArgs(entry.identity),
+        identity: entry.identity === undefined ? undefined : redactArgs(entry.identity, captureRaw),
         outcome: entry.outcome,
         shard: entry.shardKey,
         source: REQUEST_LOG_EVENT_SOURCE,
@@ -429,4 +412,4 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 };
 
 export { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, redactArgs, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE };
-export type { AppendRequestLogEntry, ReadRequestLogOptions, RequestLogEntry, RequestLogResult, RequestOutcome };
+export type { AppendRequestLogEntry, ReadRequestLogOptions, RequestLogEntry, RequestLogResult, RequestLogWriteOptions, RequestOutcome };

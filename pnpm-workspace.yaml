@@ -131,6 +131,8 @@ catalogs:
     drizzle-orm: ^0.45.2
   http:
     hono: ^4.12.23
+  redact:
+    "@visulima/redact": 3.0.0-alpha.13
 
 preferWorkspacePackages: true
 
