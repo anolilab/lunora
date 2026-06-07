@@ -32,6 +32,7 @@
         "@cirrus/codegen": "workspace:*",
         "@cirrus/config": "workspace:*",
         "@cloudflare/vite-plugin": "catalog:vite",
+        "@visulima/vite-overlay": "catalog:vite",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"
     },
@@ -39,7 +40,6 @@
         "@cirrus/dashboard-host": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
-        "@visulima/vite-overlay": "catalog:vite",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
@@ -47,14 +47,10 @@
     },
     "peerDependencies": {
         "@cirrus/dashboard": "workspace:*",
-        "@visulima/vite-overlay": "catalog:vite",
         "vite": "catalog:vite"
     },
     "peerDependenciesMeta": {
         "@cirrus/dashboard": {
-            "optional": true
-        },
-        "@visulima/vite-overlay": {
             "optional": true
         }
     },

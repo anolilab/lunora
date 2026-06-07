@@ -68,7 +68,7 @@
         "eslint-plugin-testing-library": "catalog:lint",
         "eslint-plugin-validate-jsx-nesting": "catalog:lint",
         "prettier": "catalog:lint",
-        "react-doctor": "0.4.0",
+        "react-doctor": "0.4.2",
         "rimraf": "catalog:node",
         "ts-morph": "catalog:tooling",
         "typescript": "catalog:tsc",
