@@ -29,6 +29,9 @@ const REQUEST_LOG_TABLE = "__cirrus_reqlog__";
 /** Most recent entries kept; older rows are trimmed after each append so the log stays bounded. */
 const REQUEST_LOG_RETENTION = 1000;
 
+/** Stable tag on every console-emitted event so a Logpush/SIEM consumer can filter cirrus request events out of the raw Workers-trace firehose. */
+const REQUEST_LOG_EVENT_SOURCE = "cirrus";
+
 /** Outcome of one dispatch — `ok` for a returned result, `error` for a thrown handler. */
 type RequestOutcome = "error" | "ok";
 
@@ -254,6 +257,50 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry): void
     runSql(sql, `DELETE FROM "${REQUEST_LOG_TABLE}" WHERE seq <= (SELECT MAX(seq) - ? FROM "${REQUEST_LOG_TABLE}")`, REQUEST_LOG_RETENTION);
 };
 
+/**
+ * Emit one structured request event to `console` so Cloudflare's Workers Logs /
+ * Logpush pipeline carries it to external sinks (SIEMs) — PLAN3 §3.3. This does
+ * NOT reimplement a transport: it produces a richer, cirrus-attributed event and
+ * lets CF's existing trace-log pipe ship it. The event mirrors the durable
+ * `__cirrus_reqlog__` row (function path, shard, user, outcome, duration, tables
+ * read/written, cache hit), with `args` AND `identity` redacted exactly like the
+ * durable write so no raw PII/secret reaches the log pipeline.
+ *
+ * An `error` outcome goes to `console.error` (surfacing at error level in the
+ * trace so a SIEM can alert on it); everything else to `console.log`. The
+ * `source: "cirrus"` / `type: "request"` envelope lets a consumer filter these
+ * events out of the raw Workers-trace firehose. Best-effort by contract — the
+ * caller wraps it so a serialization hiccup can never fail the served request.
+ */
+const emitRequestLogEvent = (entry: AppendRequestLogEntry): void => {
+    const event = {
+        args: entry.redactedArgs === undefined ? undefined : redactArgs(entry.redactedArgs),
+        cacheHit: entry.cacheHit,
+        durationMs: entry.durationMs,
+        error: entry.errorMessage,
+        function: entry.functionPath,
+        identity: entry.identity === undefined ? undefined : redactArgs(entry.identity),
+        outcome: entry.outcome,
+        shard: entry.shardKey,
+        source: REQUEST_LOG_EVENT_SOURCE,
+        tablesRead: entry.tablesRead ?? [],
+        tablesWritten: entry.tablesWritten ?? [],
+        ts: entry.ts,
+        type: "request",
+        userId: entry.userId,
+    };
+
+    const line = JSON.stringify(event);
+
+    if (entry.outcome === "error") {
+        // eslint-disable-next-line no-console -- intentional structured event emission into CF Workers Logs / Logpush (PLAN3 §3.3); error outcome at error level.
+        console.error(line);
+    } else {
+        // eslint-disable-next-line no-console -- intentional structured event emission into CF Workers Logs / Logpush (PLAN3 §3.3).
+        console.log(line);
+    }
+};
+
 /** Escape LIKE wildcards so a literal `%`/`_`/`\` in a filter matches itself (paired with `ESCAPE '\'`). */
 const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/g, (character) => `\\${character}`);
 
@@ -381,5 +428,5 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
     });
 };
 
-export { appendRequestLogEntry, ensureRequestLogTable, readRequestLog, redactArgs, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE };
+export { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, redactArgs, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE };
 export type { AppendRequestLogEntry, ReadRequestLogOptions, RequestLogEntry, RequestLogResult, RequestOutcome };

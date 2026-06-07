@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { appendRequestLogEntry, ensureRequestLogTable, readRequestLog, redactArgs, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE } from "../src/request-log.js";
+import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, redactArgs, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE } from "../src/request-log.js";
 import createSqliteExec from "./_helpers/node-sqlite.js";
 
 /** One minimal `ok` entry, overridable per case. */
@@ -208,5 +208,55 @@ describe("request-log module", () => {
         }
 
         expect(JSON.stringify(redactArgs(deep))).toContain("<deep>");
+    });
+});
+
+describe("emitRequestLogEvent (PLAN3 §3.3 Logpush emit)", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("emits a cirrus-attributed structured event with args + identity redacted", () => {
+        expect.assertions(8);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        emitRequestLogEvent(
+            entry({
+                cacheHit: true,
+                identity: { email: "alice@example.com", roles: ["admin"] },
+                redactedArgs: { token: "s3cr3t" },
+                shardKey: "room-9",
+                tablesRead: ["messages"],
+                userId: "user-1",
+            }),
+        );
+
+        expect(log).toHaveBeenCalledTimes(1);
+
+        const event = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
+
+        expect(event).toMatchObject({ function: "messages:list", outcome: "ok", shard: "room-9", source: "cirrus", type: "request", userId: "user-1" });
+        expect(event.cacheHit).toBe(true);
+        expect(event.tablesRead).toEqual(["messages"]);
+        // Raw arg/identity PII must be type-tagged, never emitted verbatim.
+        expect(event.args).toEqual({ token: "<string>" });
+        expect(event.identity).toEqual({ email: "<string>", roles: ["<string>"] });
+        expect(JSON.stringify(event)).not.toContain("s3cr3t");
+        expect(JSON.stringify(event)).not.toContain("alice@example.com");
+    });
+
+    it("routes an error outcome to console.error and carries the message", () => {
+        expect.assertions(3);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        emitRequestLogEvent(entry({ errorMessage: "boom", outcome: "error" }));
+
+        expect(log).not.toHaveBeenCalled();
+        expect(error).toHaveBeenCalledTimes(1);
+
+        expect(JSON.parse(error.mock.calls.at(0)?.at(0) as string)).toMatchObject({ error: "boom", outcome: "error" });
     });
 });

@@ -19,8 +19,8 @@ import { LogBuffer } from "./log-buffer.js";
 import { armRestore, readBookmark } from "./pitr.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
-import type { RequestLogResult } from "./request-log.js";
-import { appendRequestLogEntry, ensureRequestLogTable, readRequestLog } from "./request-log.js";
+import type { AppendRequestLogEntry, RequestLogResult } from "./request-log.js";
+import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog } from "./request-log.js";
 import { buildSettings } from "./settings.js";
 import type { TransactionSqlLike } from "./transaction.js";
 import { ConflictError } from "./transaction.js";
@@ -2362,7 +2362,9 @@ abstract class ShardDO {
      * for a `/rpc` dispatch that just completed — the per-request readout
      * (`&lt;file>:&lt;function>`, shard key, acting user/identity, redacted args,
      * outcome, duration, tables read/written, cache hit) that Cloudflare cannot
-     * attribute (PLAN3 §1.1).
+     * attribute (PLAN3 §1.1). When `CIRRUS_REQUEST_LOG_EMIT` is set, the same
+     * entry is ALSO emitted as a structured console event for CF Workers Logs /
+     * Logpush to ship to external SIEMs (PLAN3 §3.3) — see `requestLogEmitEnabled`.
      *
      * Best-effort, exactly like `recordFunctionCall`'s durable upsert: a SQL
      * failure (e.g. a test double without a `sql` handle) must NEVER turn a
@@ -2390,24 +2392,53 @@ abstract class ShardDO {
         tablesWritten: string[],
         errorMessage?: string,
     ): void {
+        // Build the structured entry once and feed it to BOTH sinks: the durable
+        // `__cirrus_reqlog__` row (the queryable readout) and — when enabled — a
+        // console event CF's Workers Logs / Logpush pipeline ships to external
+        // SIEMs (PLAN3 §3.3). Both redact args/identity internally from this same
+        // raw entry, so the two stay byte-consistent.
+        const entry: AppendRequestLogEntry = {
+            cacheHit: this.currentRequestCacheHit,
+            durationMs,
+            errorMessage,
+            functionPath,
+            identity: this.currentRequestIdentity,
+            outcome,
+            redactedArgs: Object.keys(args).length === 0 ? undefined : args,
+            shardKey: this.state.id?.name,
+            tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
+            tablesWritten,
+            ts: Date.now(),
+            userId: this.getCurrentUserId(),
+        };
+
         try {
-            appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, {
-                cacheHit: this.currentRequestCacheHit,
-                durationMs,
-                errorMessage,
-                functionPath,
-                identity: this.currentRequestIdentity,
-                outcome,
-                redactedArgs: Object.keys(args).length === 0 ? undefined : args,
-                shardKey: this.state.id?.name,
-                tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
-                tablesWritten,
-                ts: Date.now(),
-                userId: this.getCurrentUserId(),
-            });
+            appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, entry);
         } catch {
             // Best-effort: never let request-log persistence fail the request.
         }
+
+        if (this.requestLogEmitEnabled()) {
+            try {
+                emitRequestLogEvent(entry);
+            } catch {
+                // Best-effort: never let event emission fail the request.
+            }
+        }
+    }
+
+    /**
+     * Whether to ALSO emit each request-log entry as a structured console event
+     * for CF Workers Logs / Logpush (PLAN3 §3.3). Opt-in via the
+     * `CIRRUS_REQUEST_LOG_EMIT` binding (`"1"` / `"true"`) — default off, since a
+     * line per dispatch is real log volume an operator should choose to stream.
+     * The durable readout is unaffected either way.
+     */
+    private requestLogEmitEnabled(): boolean {
+        const env = (this.env ?? {}) as { CIRRUS_REQUEST_LOG_EMIT?: string };
+        const flag = env.CIRRUS_REQUEST_LOG_EMIT;
+
+        return flag === "1" || flag === "true";
     }
 
     /**
