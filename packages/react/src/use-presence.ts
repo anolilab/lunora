@@ -75,8 +75,13 @@ interface UsePresenceResult<L extends ListPresentReference> {
 
 /** A best-effort unique id for a presence session — `crypto.randomUUID` when available, else a random fallback. */
 const makeSessionId = (): string => {
-    if (typeof globalThis.crypto.randomUUID === "function") {
-        return globalThis.crypto.randomUUID();
+    // Guard the whole `crypto` reference, not just `randomUUID`: some SSR /
+    // older runtimes leave `crypto` undefined, where reading `.randomUUID` off
+    // it throws a TypeError instead of falling through. `typeof crypto` (rather
+    // than `globalThis.crypto !== undefined`) is the form the lib's
+    // non-nullable `Crypto` typing leaves intact — mirrors `offline-queue.ts`.
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
     }
 
     // Non-security id — just needs to be unique per tab for a presence row.

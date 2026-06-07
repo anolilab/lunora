@@ -90,6 +90,38 @@ describe("usePresence", () => {
         expect(screen.getByTestId("roster").textContent).toBe(JSON.stringify(members));
     });
 
+    it("generates a fallback session id when globalThis.crypto is unavailable (no throw)", () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const originalCrypto = globalThis.crypto;
+
+        // Simulate an SSR / older runtime that leaves `crypto` undefined: reading
+        // `.randomUUID` off it would throw a TypeError if the guard only checked
+        // the method and not the `crypto` object itself.
+        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+
+        const Anon = (): ReactElement => {
+            const { sessionId } = usePresence("room-anon", { heartbeat: HEARTBEAT, intervalMs: 1000, listPresent: LIST_PRESENT });
+
+            return <div data-testid="anon">{sessionId}</div>;
+        };
+
+        try {
+            render(
+                <CirrusProvider client={mock.asClient}>
+                    <Anon />
+                </CirrusProvider>,
+            );
+
+            const id = screen.getByTestId("anon").textContent;
+
+            expect(id).toMatch(/^sess-/);
+        } finally {
+            Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+        }
+    });
+
     it("stops heart-beating after unmount and releases the subscription", async () => {
         expect.hasAssertions();
 
