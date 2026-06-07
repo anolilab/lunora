@@ -752,13 +752,23 @@ interface FilterArg {
     value: unknown;
 }
 
-/** A stateful client over a mutable `messages` table that honours structured `filters` and `writeRow` deletes. */
-const createFilterableClient = (): MockClientHooks => {
+/**
+ * A stateful client over a mutable `messages` table that honours structured
+ * `filters`, single-row `writeRow` deletes, and the writer-routed bulk ops
+ * (`deleteRows` / `clearTable`). The bulk ops mirror the server: they match the
+ * same `eq`-filter predicate `readTablePage` previews, delete in bulk, and
+ * return `{ deleted, hasMore }` — bounded by `bulkCap` so a test can drive the
+ * client's multi-call loop.
+ */
+const createFilterableClient = (bulkCap = 50): MockClientHooks => {
     let rows = [
         { __id__: "m1", status: "active", text: "hello" },
         { __id__: "m2", status: "active", text: "world" },
         { __id__: "m3", status: "archived", text: "again" },
     ];
+
+    const matchesFilters = (row: Record<string, unknown>, filters: FilterArg[]): boolean =>
+        filters.every((clause) => clause.operator !== "eq" || String(row[clause.column]) === String(clause.value));
 
     return createMockClient({
         query: (reference, args): unknown => {
@@ -776,6 +786,17 @@ const createFilterableClient = (): MockClientHooks => {
                 return { id: id ?? null, op };
             }
 
+            if (reference === ADMIN_FUNCTIONS.deleteRows || reference === ADMIN_FUNCTIONS.clearTable) {
+                const { filters = [] } = args as { filters?: FilterArg[] };
+                const matched = rows.filter((row) => matchesFilters(row as Record<string, unknown>, filters));
+                const batch = matched.slice(0, bulkCap);
+                const doomed = new Set(batch.map((row) => row["__id__"]));
+
+                rows = rows.filter((row) => !doomed.has(row["__id__"]));
+
+                return { deleted: batch.length, hasMore: matched.length > bulkCap };
+            }
+
             // readTablePage: apply each structured filter (eq only, enough here).
             const { filters = [], limit = 50, offset = 0, table } = args as { filters?: FilterArg[]; limit?: number; offset?: number; table: string };
 
@@ -783,9 +804,7 @@ const createFilterableClient = (): MockClientHooks => {
                 throw new Error(`unknown table: ${table}`);
             }
 
-            const matched = rows.filter((row) =>
-                filters.every((clause) => clause.operator !== "eq" || String((row as Record<string, unknown>)[clause.column]) === String(clause.value)),
-            );
+            const matched = rows.filter((row) => matchesFilters(row as Record<string, unknown>, filters));
 
             return { columns: ["__id__", "status", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
         },
@@ -821,7 +840,7 @@ describe("dataBrowser — structured filters and bulk delete", () => {
     });
 
     it("bulk-deletes every row matching the active filter", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const mock = createFilterableClient();
 
@@ -851,9 +870,78 @@ describe("dataBrowser — structured filters and bulk delete", () => {
             }
         });
 
-        const deletes = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
+        // One server `deleteRows` round-trip (not the old per-row N+1 loop), and
+        // never a single-row writeRow delete.
+        const bulk = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.deleteRows);
+        const perRow = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
 
-        expect(deletes).toHaveLength(2);
-        expect(deletes.every((call) => (call[1] as { op: string }).op === "delete")).toBe(true);
+        expect(bulk).toHaveLength(1);
+        expect((bulk[0]?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "active" }]);
+        expect(perRow).toHaveLength(0);
+    });
+
+    it("loops the bounded deleteRows call until the server reports no more", async () => {
+        expect.assertions(2);
+
+        // Cap each server call at one row, so draining the two active rows takes
+        // two `deleteRows` round-trips driven by `hasMore`.
+        const mock = createFilterableClient(1);
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-add-filter"));
+        fireEvent.change(screen.getByTestId("db-filter-column"), { target: { value: "status" } });
+        fireEvent.change(screen.getByTestId("db-filter-value"), { target: { value: "active" } });
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 2) {
+                throw new Error("filter not applied yet");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-bulk-delete"));
+        fireEvent.click(screen.getByTestId("db-bulk-delete-confirm"));
+
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length > 0) {
+                throw new Error("rows not deleted yet");
+            }
+        });
+
+        const bulk = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.deleteRows);
+
+        // Two bounded round-trips (cap=1, two matches), then a third that reports
+        // hasMore=false stops the loop — so at least two, capped by the loop.
+        expect(bulk.length).toBeGreaterThanOrEqual(2);
+        expect(mock.query.mock.calls.some((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
+    });
+
+    it("clears the whole table via the clearTable op when no filter is active", async () => {
+        expect.assertions(2);
+
+        const mock = createFilterableClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        // No filter/search → the "Clear table" affordance is shown.
+        fireEvent.click(screen.getByTestId("db-clear-table"));
+        fireEvent.click(screen.getByTestId("db-clear-table-confirm"));
+
+        await waitFor(() => {
+            if (screen.queryAllByTestId("db-row").length > 0) {
+                throw new Error("table not cleared yet");
+            }
+        });
+
+        const clears = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.clearTable);
+
+        expect(clears).toHaveLength(1);
+        expect((clears[0]?.[1] as { table: string }).table).toBe("messages");
     });
 });

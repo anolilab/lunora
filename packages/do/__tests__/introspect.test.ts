@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { listTables, readTablePage } from "../src/introspect.js";
+import { listTables, readTablePage, selectMatchingIds } from "../src/introspect.js";
 import createSqliteExec from "./_helpers/node-sqlite.js";
 
 describe("introspect", () => {
@@ -286,6 +286,60 @@ describe("introspect", () => {
             const page = readTablePage(database.sql, { filters: [{ column: "text", operator: "contains", value: "50%" }], table: "messages" });
 
             expect(page.rows).toEqual([{ __id__: "m9", text: "50%off", votes: 0 }]);
+        });
+    });
+
+    describe("selectMatchingIds", () => {
+        beforeEach(() => {
+            // A canonical shard-shaped table (physical `id` PK) so the selected
+            // ids line up with what the writer's `delete(id)` expects.
+            database.raw(`CREATE TABLE "posts" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(
+                `INSERT INTO "posts" VALUES ('p1', 1, '{"authorId":"u1"}'), ('p2', 2, '{"authorId":"u1"}'), ('p3', 3, '{"authorId":"u2"}'), ('p4', 4, '{"authorId":"u2"}')`,
+            );
+        });
+
+        it("returns every id with no predicate (the clearTable case)", () => {
+            expect.assertions(2);
+
+            const { hasMore, ids } = selectMatchingIds(database.sql, { table: "posts" });
+
+            expect([...ids].toSorted((a, b) => a.localeCompare(b))).toEqual(["p1", "p2", "p3", "p4"]);
+            expect(hasMore).toBe(false);
+        });
+
+        it("returns only the ids matching a doc-field filter", () => {
+            expect.assertions(2);
+
+            const { hasMore, ids } = selectMatchingIds(database.sql, { filters: [{ column: "authorId", operator: "eq", value: "u2" }], table: "posts" });
+
+            expect([...ids].toSorted((a, b) => a.localeCompare(b))).toEqual(["p3", "p4"]);
+            expect(hasMore).toBe(false);
+        });
+
+        it("is bounded: caps at `limit` and reports hasMore when more remain", () => {
+            expect.assertions(2);
+
+            const { hasMore, ids } = selectMatchingIds(database.sql, { limit: 2, table: "posts" });
+
+            expect(ids).toHaveLength(2);
+            expect(hasMore).toBe(true);
+        });
+
+        it("reports no more when the match count equals `limit` exactly", () => {
+            expect.assertions(2);
+
+            const { hasMore, ids } = selectMatchingIds(database.sql, { filters: [{ column: "authorId", operator: "eq", value: "u1" }], limit: 2, table: "posts" });
+
+            expect(ids).toHaveLength(2);
+            expect(hasMore).toBe(false);
+        });
+
+        it("throws an unknown-table CirrusError for an internal/unknown table", () => {
+            expect.assertions(2);
+
+            expect(() => selectMatchingIds(database.sql, { table: "nope" })).toThrow(/unknown table/u);
+            expect(() => selectMatchingIds(database.sql, { table: "_cf_KV" })).toThrow(/unknown table/u);
         });
     });
 });
