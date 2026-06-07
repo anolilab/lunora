@@ -47,6 +47,24 @@ export default {
 
 `httpDispatcher` POSTs each job to the Worker's `/_cirrus/scheduler/dispatch` endpoint (the same path `SchedulerDO` uses) with the admin bearer; supply your own `dispatch` callback to route differently. Failed or malformed messages are `retry()`-ed so they ride Queues' retry + dead-letter machinery rather than being dropped. There is **no** hard cap, cancel, or status here — that's the `createWorkpool` trade-off above.
 
+Declare the queue binding and consumer in `wrangler.jsonc` — this is where concurrency/retry/DLQ live:
+
+```jsonc
+{
+    "queues": {
+        "producers": [{ "binding": "JOBS", "queue": "cirrus-jobs" }],
+        "consumers": [
+            {
+                "queue": "cirrus-jobs",
+                "max_concurrency": 5,
+                "max_retries": 3,
+                "dead_letter_queue": "cirrus-jobs-dlq",
+            },
+        ],
+    },
+}
+```
+
 ## Repeated tasks (Cron Triggers)
 
 For repeated tasks use Cloudflare Cron Triggers — `createCronTrigger()` produces a snippet to paste into your `wrangler.jsonc`, and `@cirrus/codegen` keeps `triggers.crons` in sync from your `cronJobs()` definitions.
