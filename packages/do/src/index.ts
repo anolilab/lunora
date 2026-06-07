@@ -101,6 +101,7 @@ export type {
     FunctionCallStat,
     FunctionStatsResult,
     ReadTablePageOptions,
+    SelectMatchingIdsOptions,
     SettingEntry,
     SettingKind,
     SettingsResult,
@@ -109,7 +110,7 @@ export type {
     TableInfo,
     TablePage,
 } from "./introspect.js";
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
+export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage, selectMatchingIds } from "./introspect.js";
 export type { LogEntry, LogLevel } from "./log-buffer.js";
 export { LogBuffer } from "./log-buffer.js";
 export { default as NotFoundError } from "./not-found-error.js";
@@ -130,6 +131,8 @@ export type {
     HibernatableWebSocket,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
+    RunShardBulkDeleteArgs,
+    RunShardBulkDeleteResult,
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,

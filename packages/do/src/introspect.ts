@@ -17,6 +17,8 @@ const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
 const ADMIN_FUNCTIONS = {
     applyCdc: "__cirrus_admin__:applyCdc",
     cdcSync: "__cirrus_admin__:cdcSync",
+    clearTable: "__cirrus_admin__:clearTable",
+    deleteRows: "__cirrus_admin__:deleteRows",
     exportShard: "__cirrus_admin__:exportShard",
     getAuditLog: "__cirrus_admin__:getAuditLog",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
@@ -240,6 +242,20 @@ interface ReadTablePageOptions {
     table: string;
 }
 
+/**
+ * Options for {@link selectMatchingIds} — the id-collection half of the
+ * writer-routed bulk delete. Mirrors {@link ReadTablePageOptions}'s predicate
+ * args (`filters` + `search`) so "delete matching" removes exactly the rows the
+ * data browser previews; `limit` caps the ids returned per batch (clamped to
+ * `[1, 500]`) so the delete can never run unbounded.
+ */
+interface SelectMatchingIdsOptions {
+    filters?: FilterClause[];
+    limit?: number;
+    search?: string;
+    table: string;
+}
+
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 500;
 
@@ -395,6 +411,45 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { p
 };
 
 /**
+ * Compile the active substring `search` + structured `filters` into a single
+ * AND-combined SQL predicate (or `undefined` when none apply). Shared by
+ * {@link readTablePage} and {@link selectMatchingIds} so the "delete matching"
+ * server op deletes EXACTLY the rows the data browser is previewing. Column
+ * names come from PRAGMA (validated) and every value/path is a bound parameter,
+ * so the assembled `where` can never inject SQL.
+ *
+ * The search conjunct is a case-insensitive LIKE OR'd across every PHYSICAL
+ * column — for doc-stored tables `__doc__` holds every field value, so this
+ * still covers all user fields.
+ */
+const buildTablePredicate = (
+    columns: string[],
+    needle: string,
+    filters: FilterClause[] | undefined,
+): undefined | { parameters: unknown[]; where: string } => {
+    const conjuncts: string[] = [];
+    const parameters: unknown[] = [];
+
+    if (needle !== "" && columns.length > 0) {
+        const pattern = `%${escapeLike(needle)}%`;
+
+        conjuncts.push(`(${columns.map((name) => String.raw`CAST(${quoteIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\'`).join(" OR ")})`);
+        parameters.push(...columns.map(() => pattern));
+    }
+
+    for (const clause of filters ?? []) {
+        const built = buildFilterClause(clause, columns);
+
+        if (built !== undefined) {
+            conjuncts.push(`(${built.sql})`);
+            parameters.push(...built.params);
+        }
+    }
+
+    return conjuncts.length === 0 ? undefined : { parameters, where: conjuncts.join(" AND ") };
+};
+
+/**
  * Read a page of rows from one user table. The table name is validated against
  * the live `sqlite_master` allowlist (and rejected if it is internal or
  * unknown) before it is ever interpolated into SQL, so this cannot be coerced
@@ -438,46 +493,68 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
         return Object.keys(references).length > 0 ? { ...page, refs: references } : page;
     };
 
-    // Assemble the WHERE as AND-combined conjuncts: an optional substring search
-    // (OR a case-insensitive LIKE across every PHYSICAL column — for doc-stored
-    // tables `__doc__` holds every field value, so this covers all user fields)
-    // plus each structured filter. Column names come from PRAGMA (validated) and
-    // every value/path is a bound parameter, so nothing here injects SQL.
-    const conjuncts: string[] = [];
-    const parameters: unknown[] = [];
-
-    if (needle !== "" && columns.length > 0) {
-        const pattern = `%${escapeLike(needle)}%`;
-
-        conjuncts.push(`(${columns.map((name) => String.raw`CAST(${quoteIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\'`).join(" OR ")})`);
-        parameters.push(...columns.map(() => pattern));
-    }
-
-    for (const clause of options.filters ?? []) {
-        const built = buildFilterClause(clause, columns);
-
-        if (built !== undefined) {
-            conjuncts.push(`(${built.sql})`);
-            parameters.push(...built.params);
-        }
-    }
+    const predicate = buildTablePredicate(columns, needle, options.filters);
 
     // No predicates: a plain windowed read against the full row count.
-    if (conjuncts.length === 0) {
+    if (predicate === undefined) {
         const total = countRows(sql, quoted);
         const rawRows = sql.exec(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`, limit, offset).toArray();
 
         return withReferences({ ...expandDocumentRows(columns, rawRows), total });
     }
 
-    const where = conjuncts.join(" AND ");
+    const { parameters, where } = predicate;
     const total = Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted} WHERE ${where}`, ...parameters).one().c);
     const rawRows = sql.exec(`SELECT * FROM ${quoted} WHERE ${where} LIMIT ? OFFSET ?`, ...parameters, limit, offset).toArray();
 
     return withReferences({ ...expandDocumentRows(columns, rawRows), total });
 };
 
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage };
+/**
+ * Select up to `limit + 1` primary keys of the rows in `table` matching the
+ * active `search` + `filters` — the id set the writer-routed bulk-delete then
+ * removes one row at a time (so FTS / aggregate / rank shadow tables stay in
+ * sync). The same allowlist + bound-parameter discipline as {@link readTablePage}
+ * applies; the table name is validated against `sqlite_master` before any
+ * interpolation, so this can't be coerced into scanning bookkeeping tables.
+ *
+ * Returns the matched ids capped at `limit`, plus `hasMore` — `true` when a
+ * `limit + 1`-th row existed — so the caller can loop bounded server calls
+ * rather than deleting an unbounded set in one transaction. With no `search`
+ * and no `filters` this matches the whole table (the `clearTable` path).
+ */
+const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { hasMore: boolean; ids: string[] } => {
+    const { table } = options;
+
+    if (isInternalTable(table) || !tableExists(sql, table)) {
+        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
+    }
+
+    const limit = clamp(Math.trunc(options.limit ?? MAX_PAGE_SIZE), 1, MAX_PAGE_SIZE);
+    const quoted = quoteIdentifier(table);
+
+    const columns = sql
+        .exec<{ name: string }>(`PRAGMA table_info(${quoted})`)
+        .toArray()
+        .map((column) => column.name);
+
+    const needle = options.search?.trim() ?? "";
+    const predicate = buildTablePredicate(columns, needle, options.filters);
+
+    // Over-fetch by one: a returned `limit + 1`-th row means more matches remain
+    // beyond this batch, surfaced as `hasMore` (the extra id is dropped).
+    const fetched =
+        predicate === undefined
+            ? sql.exec<{ id: string }>(`SELECT id FROM ${quoted} LIMIT ?`, limit + 1).toArray()
+            : sql.exec<{ id: string }>(`SELECT id FROM ${quoted} WHERE ${predicate.where} LIMIT ?`, ...predicate.parameters, limit + 1).toArray();
+
+    const hasMore = fetched.length > limit;
+    const ids = (hasMore ? fetched.slice(0, limit) : fetched).map((row) => row.id);
+
+    return { hasMore, ids };
+};
+
+export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage, selectMatchingIds };
 export type {
     AuditEntry,
     AuditLogResult,
@@ -487,6 +564,7 @@ export type {
     FunctionCallStat,
     FunctionStatsResult,
     ReadTablePageOptions,
+    SelectMatchingIdsOptions,
     SettingEntry,
     SettingKind,
     SettingsResult,

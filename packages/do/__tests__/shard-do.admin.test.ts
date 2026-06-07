@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
 import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration.js";
@@ -873,5 +874,231 @@ describe("shardDO admin applyCdc", () => {
         const response = await shard.fetch(applyRequest([{ id: "x", op: "bogus", table: "users" }]));
 
         expect(response.status).toBe(400);
+    });
+});
+
+/** Per-project count aggregate on `todos`, so a writer-routed delete must step the counter shadow table down. */
+const todosByProject: AggregateIndexDefinitionLike = {
+    by: ["projectId"],
+    name: "byProject",
+    on: "todos",
+    op: "count",
+};
+
+/** A within-project rank on `todos`, so a writer-routed delete must also keep the rank shadow table consistent. */
+const todosRankByDone: RankIndexDefinitionLike = {
+    name: "byDone",
+    on: "todos",
+    partitionBy: ["projectId"],
+    sortBy: [{ direction: "asc", field: "_creationTime" }],
+};
+
+const todosSchema: SchemaLike = {
+    tables: {
+        todos: {
+            aggregateIndexes: [todosByProject],
+            indexes: [],
+            rankIndexes: [todosRankByDone],
+            shape: {
+                done: { kind: "boolean" },
+                projectId: { kind: "string" },
+                title: { kind: "string" },
+            },
+        },
+    },
+};
+
+/**
+ * Drives the `__cirrus_admin__:deleteRows` / `__cirrus_admin__:clearTable` ops
+ * through a real schema-aware writer, mirroring the codegen-generated subclass'
+ * `deleteRowThroughWriter` override. The base `runShardBulkDelete` owns the
+ * bounded id-collection loop; this only supplies the per-row writer delete, so
+ * the FTS / aggregate / rank shadow tables stay in sync exactly like a single
+ * `writeRow` delete.
+ */
+class BulkDeleteShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    protected override async deleteRowThroughWriter(_table: string, id: string): Promise<void> {
+        const writer = createShardContextDatabase({
+            broadcast: (delta) => {
+                this.recordChangedTable(delta.table);
+            },
+            schema: todosSchema,
+            sql: this.sql as SqlExec,
+        });
+
+        await writer.delete(id);
+    }
+}
+
+describe("shardDO admin bulk delete", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, todosSchema);
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const bulkRequest = (functionPath: string, args: Record<string, unknown>): Request => {
+        const headers = { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" };
+
+        return new Request("https://shard.internal/rpc", { body: JSON.stringify({ args, functionPath }), headers, method: "POST" });
+    };
+
+    const rowCount = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "todos"`)[0]?.["c"] ?? 0);
+
+    /** Seed `count` todos in project `projectId`, returning the writer used (its reads hit the shadow tables). */
+    const seedProject = async (writer: DatabaseWriterLike, projectId: string, count: number): Promise<void> => {
+        for (let index = 0; index < count; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes
+            await writer.insert("todos", { done: false, projectId, title: `t${index.toString()}` });
+        }
+    };
+
+    it("deletes only the rows matching a filter, leaving the rest", async () => {
+        expect.assertions(4);
+
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 3);
+        await seedProject(seed, "p2", 2);
+
+        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(
+            bulkRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "projectId", operator: "eq", value: "p1" }], table: "todos" }),
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
+
+        expect(body.result).toEqual({ deleted: 3, hasMore: false });
+        // p1's three rows are gone; p2's two survive.
+        expect(rowCount()).toBe(2);
+        await expect(seed.count("todos", { projectId: "p2" })).resolves.toBe(2);
+    });
+
+    it("keeps the aggregate and rank shadow tables consistent after a bulk delete", async () => {
+        expect.assertions(3);
+
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 4);
+        await seedProject(seed, "p2", 1);
+
+        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "projectId", operator: "eq", value: "p1" }], table: "todos" }));
+
+        // The count aggregate reads its counter shadow table — only correct if
+        // every delete went THROUGH the writer (not raw SQL).
+        await expect(seed.count("todos", { projectId: "p1" })).resolves.toBe(0);
+        await expect(seed.count("todos", { projectId: "p2" })).resolves.toBe(1);
+
+        // The rank shadow table for p1 is now empty: ranking the surviving p2
+        // row returns position 0 within its own partition, proving p1's rank
+        // rows were cleaned up rather than orphaned.
+        const survivor = database.raw(`SELECT id FROM "todos" WHERE json_extract("__doc__", '$.projectId') = 'p2' LIMIT 1`)[0]?.["id"] as string;
+        const key = rankKeyFromDoc(todosRankByDone, { _id: survivor, projectId: "p2" });
+
+        await expect(seed.rankBefore!("todos", "byDone", { partitionKey: key.partitionKey, rowId: survivor, sortValues: key.sortValues })).resolves.toEqual(
+            { before: 0, total: 1 },
+        );
+    });
+
+    it("is bounded: caps deletes at `limit` and reports hasMore", async () => {
+        expect.assertions(3);
+
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 5);
+
+        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, table: "todos" }));
+        const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
+
+        expect(body.result.deleted).toBe(2);
+        expect(body.result.hasMore).toBe(true);
+        // Only the capped batch was removed; the rest remain for the next loop.
+        expect(rowCount()).toBe(3);
+    });
+
+    it("clearTable empties the whole table through the writer", async () => {
+        expect.assertions(3);
+
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 3);
+        await seedProject(seed, "p2", 2);
+
+        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { table: "todos" }));
+        const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
+
+        expect(body.result).toEqual({ deleted: 5, hasMore: false });
+        expect(rowCount()).toBe(0);
+        // The counter shadow table dropped to zero for both projects.
+        await expect(seed.count("todos", { projectId: "p1" })).resolves.toBe(0);
+    });
+
+    it("rejects deleteRows without a table (400)", async () => {
+        expect.assertions(1);
+
+        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, {}));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("maps an unknown table to a 404", async () => {
+        expect.assertions(1);
+
+        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "nope" }));
+
+        expect(response.status).toBe(404);
+    });
+
+    it("base ShardDO rejects deleteRows as an unknown table (no override)", async () => {
+        expect.assertions(2);
+
+        class BareShard extends ShardDO {
+            // eslint-disable-next-line class-methods-use-this -- override stub; the admin bulk-delete path never dispatches an RPC
+            public override async handleRpc(): Promise<unknown> {
+                return null;
+            }
+        }
+
+        const seed = createShardContextDatabase({ schema: todosSchema, sql: database.sql });
+
+        await seedProject(seed, "p1", 1);
+
+        const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "todos" }));
+
+        // The id collection succeeds, but the base `deleteRowThroughWriter`
+        // stub rejects the first row as an unknown table.
+        expect(response.status).toBe(404);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "UNKNOWN_TABLE" } });
     });
 });
