@@ -31,9 +31,9 @@ wrangler secret put AUTH0_CLIENT_ID
 wrangler secret put AUTH0_CLIENT_SECRET
 ```
 
-## Auth0 dashboard setup
+## Auth0 studio setup
 
-1. In the Auth0 dashboard, create a **Regular Web Application** and copy its Client ID + Client Secret.
+1. In the Auth0 studio, create a **Regular Web Application** and copy its Client ID + Client Secret.
 2. Set the **Allowed Callback URL** to:
 
     ```

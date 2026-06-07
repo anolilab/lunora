@@ -2,9 +2,9 @@
  * Cirrus design tokens — the canonical visual language.
  *
  * One source of truth for the brand: colours, type, spacing, radii, motion.
- * Consumed by the marketing/landing page and the docs site; the dashboard
+ * Consumed by the marketing/landing page and the docs site; the studio
  * mirrors the same values under a `--c-*` namespace in its scoped stylesheet
- * (packages/dashboard/src/theme.tsx) because it must not leak globals.
+ * (packages/studio/src/theme.tsx) because it must not leak globals.
  *
  * System: Supabase-Studio neutral grays + the Cirrus brand YELLOW accent. The
  * yellow (#FCC419) is the SINGLE brand hook — one per surface. Green is freed up

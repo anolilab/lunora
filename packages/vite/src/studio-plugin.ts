@@ -1,0 +1,202 @@
+import type { ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+
+// Shared studio-hosting helpers, inlined at build time (devDependency, so
+// packem bundles rather than externalizes them). `@cirrus/cli`'s `cirrus dev`
+// inlines the same module, so the Vite route and the CLI server render an
+// identical studio.
+import type { StudioAssets } from "@cirrus/studio-host";
+// eslint-disable-next-line import/no-extraneous-dependencies -- devDependency on purpose: packem bundles it at build time (see the note above) rather than externalizing it
+import { loadStudioAssets, renderStudioHtml, resolveAdminToken } from "@cirrus/studio-host";
+import type { Plugin, ViteDevServer } from "vite";
+
+/** Dev-server path the studio SPA is served from. */
+const STUDIO_PATH = "/__cirrus";
+/** Static asset routes the studio document references. */
+const STUDIO_SCRIPT_PATH: string = `${STUDIO_PATH}/studio.js`;
+const STUDIO_STYLE_PATH: string = `${STUDIO_PATH}/styles.css`;
+
+const LEADING_SLASH = /^\//;
+const TRAILING_SLASH = /\/$/;
+
+/** Write a 200 response with the given body and content type. */
+const sendOk = (response: ServerResponse, body: Buffer | string, contentType: string): void => {
+    response.statusCode = 200;
+    response.setHeader("Content-Type", contentType);
+    response.end(body);
+};
+
+/**
+ * Build the user-facing studio URL from the dev server's resolved address.
+ * Pure so it can be unit-tested without a live server. Prefers Vite's own
+ * `resolvedUrls.local` (honours `host` / `base` / https); falls back to the raw
+ * socket address, bracketing IPv6 and normalising the wildcard host.
+ */
+const buildStudioUrl = (input: { address?: AddressInfo | string; base?: string; resolvedLocal?: string }): string => {
+    const path = STUDIO_PATH.replace(LEADING_SLASH, "");
+
+    if (input.resolvedLocal !== undefined && input.resolvedLocal !== "") {
+        const origin = input.resolvedLocal.endsWith("/") ? input.resolvedLocal.slice(0, -1) : input.resolvedLocal;
+
+        return `${origin}/${path}`;
+    }
+
+    const base = input.base === undefined || input.base === "/" ? "" : input.base.replace(TRAILING_SLASH, "");
+
+    if (input.address === undefined || typeof input.address === "string") {
+        return `http://localhost:5173${base}/${path}`;
+    }
+
+    const host = input.address.address === "::" || input.address.address === "0.0.0.0" ? "localhost" : input.address.address;
+    const bracketed = host.includes(":") ? `[${host}]` : host;
+
+    return `http://${bracketed}:${String(input.address.port)}${base}/${path}`;
+};
+
+/**
+ * Parse the request pathname, tolerating a query string and a trailing slash so
+ * `/__cirrus`, `/__cirrus?x`, `/__cirrus/`, and `/__cirrus/?x` all match.
+ */
+const pathnameOf = (url: string): string => {
+    try {
+        return new URL(url, "http://localhost").pathname.replace(TRAILING_SLASH, "");
+    } catch {
+        return url;
+    }
+};
+
+/**
+ * Connect middleware that serves the static studio. Extracted from
+ * `configureServer` so each function stays small. Memoises the asset bytes on
+ * first use; restart the dev server to pick up a studio rebuild.
+ */
+const createStudioHandler = (
+    server: ViteDevServer,
+    isNonLoopbackBind: boolean,
+): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
+    let assets: StudioAssets | undefined;
+    let html: string | undefined;
+
+    return (request: { url?: string }, response: ServerResponse, next: () => void): void => {
+        const pathname = pathnameOf(request.url ?? "");
+
+        // Own the mount and everything under it (`/__cirrus`, `/__cirrus/`,
+        // `/__cirrus/globals`, …); anything else passes through.
+        if (pathname !== STUDIO_PATH && !pathname.startsWith(`${STUDIO_PATH}/`)) {
+            next();
+
+            return;
+        }
+
+        // The studio ships admin tooling that assumes the developer is the
+        // only consumer — never expose it on a non-loopback bind (`--host`).
+        if (isNonLoopbackBind) {
+            response.statusCode = 403;
+            response.setHeader("Content-Type", "text/plain");
+            response.end("Cirrus studio is only available on loopback hosts in dev.");
+
+            return;
+        }
+
+        // Static assets are exact paths; every other route under the mount is an
+        // SPA route and gets the history fallback (the document) below, so a hard
+        // load of a deep link like `/__cirrus/globals` boots the router there.
+        if (pathname === STUDIO_SCRIPT_PATH || pathname === STUDIO_STYLE_PATH) {
+            assets ??= loadStudioAssets(server.config.logger);
+
+            if (assets === undefined) {
+                response.statusCode = 501;
+                response.setHeader("Content-Type", "text/plain");
+                response.end("Cirrus studio assets not found — install and build @cirrus/studio.");
+
+                return;
+            }
+
+            const isScript = pathname === STUDIO_SCRIPT_PATH;
+
+            sendOk(response, isScript ? assets.script : assets.styles, isScript ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8");
+
+            return;
+        }
+
+        // Built once per dev session: the basepath is fixed, and the admin token
+        // is read from `.dev.vars` at startup. `config.root` is absent on mocked
+        // test servers — fall back to cwd.
+        html ??= renderStudioHtml({
+            // `config.root` is typed as a required string but is absent on mocked
+            // test servers, so the cwd fallback is real despite the type.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime value can be undefined on a mocked server even though the type says string
+            adminToken: resolveAdminToken(server.config.root ?? process.cwd()),
+            basePath: STUDIO_PATH,
+            scriptSrc: STUDIO_SCRIPT_PATH,
+            styleHref: STUDIO_STYLE_PATH,
+        });
+
+        sendOk(response, html, "text/html; charset=utf-8");
+    };
+};
+
+/**
+ * Vite plugin that serves the composed Cirrus studio at
+ * {@link STUDIO_PATH} during dev and prints its URL once the server is
+ * listening. Dev-only (`apply: "serve"`); it adds nothing to production builds.
+ *
+ * Because `cirrus dev` spawns Vite, this makes the studio available on
+ * `cirrus dev` and on a plain `vite` with no per-project files. The studio
+ * is served as a prebuilt static bundle, independent of the host app.
+ */
+const studioPlugin = (): Plugin => {
+    return {
+        apply: "serve",
+        configureServer(server: ViteDevServer) {
+            // `config.server` is typed required, but partial/mocked dev-server objects omit it.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive against partial ViteDevServer objects
+            const configuredHost = server.config.server?.host;
+            const isNonLoopbackBind =
+                configuredHost !== undefined &&
+                configuredHost !== false &&
+                configuredHost !== "localhost" &&
+                configuredHost !== "127.0.0.1" &&
+                configuredHost !== "::1";
+
+            server.middlewares.use(createStudioHandler(server, isNonLoopbackBind));
+
+            // Surface the studio URL at startup. Returned hook runs after
+            // internal middlewares are installed.
+            return () => {
+                const announce = (): void => {
+                    const url = buildStudioUrl({
+                        address: server.httpServer?.address() ?? undefined,
+                        base: server.config.base,
+                        resolvedLocal: server.resolvedUrls?.local[0],
+                    });
+
+                    // Match Vite's banner format so the line slots in beneath the
+                    // Local/Network URLs (`Cirrus:` padded to align the colons).
+                    server.config.logger.info(`  [32m➜[39m  [1mCirrus[22m:  [36m${url}[39m`);
+                };
+
+                // Preferred: splice the line into Vite's startup banner by
+                // wrapping `printUrls`, so it prints right under Local/Network
+                // (and reprints when the user hits `u`). Fall back to announcing
+                // on `listening` when `printUrls` is unavailable (mocked server).
+                if (typeof server.printUrls === "function") {
+                    const printUrls = server.printUrls.bind(server);
+
+                    // eslint-disable-next-line no-param-reassign -- intentionally wrap the live dev server's printUrls so our line prints under Local/Network
+                    server.printUrls = (): void => {
+                        printUrls();
+                        announce();
+                    };
+                } else if (server.httpServer?.listening === true) {
+                    announce();
+                } else {
+                    server.httpServer?.once("listening", announce);
+                }
+            };
+        },
+        name: "cirrus:studio",
+    };
+};
+
+export { buildStudioUrl, STUDIO_PATH, STUDIO_SCRIPT_PATH, STUDIO_STYLE_PATH, studioPlugin };

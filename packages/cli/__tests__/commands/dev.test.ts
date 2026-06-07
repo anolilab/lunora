@@ -38,17 +38,17 @@ describe("cirrus dev", () => {
             expect(plan.wrangler.args.join(" ")).toContain("wrangler");
             expect(plan.wrangler.args.join(" ")).toContain("dev");
             expect(plan.wrangler.args.join(" ")).not.toContain("vite");
-            expect(plan.dashboardEnabled).toBe(true);
+            expect(plan.studioEnabled).toBe(true);
         });
 
-        it("defaults the worker to :8787 and the dashboard to :6173", () => {
+        it("defaults the worker to :8787 and the studio to :6173", () => {
             expect.assertions(3);
 
             const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
 
             expect(plan.workerPort).toBe(8787);
             expect(plan.workerOrigin).toBe("http://localhost:8787");
-            expect(plan.dashboardPort).toBe(6173);
+            expect(plan.studioPort).toBe(6173);
         });
 
         it("routes the worker port into wrangler --port and the worker origin", () => {
@@ -58,25 +58,25 @@ describe("cirrus dev", () => {
 
             expect(plan.wrangler.args).toContain("9999");
             expect(plan.workerOrigin).toBe("http://localhost:9999");
-            expect(plan.dashboardPort).toBe(7000);
+            expect(plan.studioPort).toBe(7000);
         });
 
-        it("reflects the --no-dashboard / --no-codegen toggles", () => {
+        it("reflects the --no-studio / --no-codegen toggles", () => {
             expect.assertions(2);
 
-            const plan = planDevCommand({ codegen: false, cwd: workdir, dashboard: false, logger: silentLogger() });
+            const plan = planDevCommand({ codegen: false, cwd: workdir, studio: false, logger: silentLogger() });
 
-            expect(plan.dashboardEnabled).toBe(false);
+            expect(plan.studioEnabled).toBe(false);
             expect(plan.codegenEnabled).toBe(false);
         });
     });
 
     describe("runDevCommand", () => {
-        it("spawns the wrangler worker, starts dashboard + codegen, and tears them down on exit", async () => {
+        it("spawns the wrangler worker, starts studio + codegen, and tears them down on exit", async () => {
             expect.assertions(6);
 
             let codegenClosed = false;
-            let dashboardClosed = false;
+            let studioClosed = false;
             const startWorker: NonNullable<DevCommandOptions["startWorker"]> = (descriptor) => {
                 // Assert we were handed the wrangler descriptor, then exit cleanly.
                 expect(descriptor.args.join(" ")).toContain("wrangler");
@@ -95,10 +95,10 @@ describe("cirrus dev", () => {
                         },
                     };
                 },
-                startDashboard: async () => {
+                startStudio: async () => {
                     return {
                         close: async () => {
-                            dashboardClosed = true;
+                            studioClosed = true;
                         },
                         url: "http://127.0.0.1:6173",
                     };
@@ -109,7 +109,7 @@ describe("cirrus dev", () => {
             expect(result.code).toBe(0);
             // Siblings started and were torn down when the worker exited.
             expect(codegenClosed).toBe(true);
-            expect(dashboardClosed).toBe(true);
+            expect(studioClosed).toBe(true);
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
         });
     });

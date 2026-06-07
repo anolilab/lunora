@@ -259,7 +259,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             // `.global()` tables live in D1, not this DO's SQLite — editing them
             // here would corrupt nothing but would fail confusingly, so reject up
-            // front with a clear code the dashboard can surface.
+            // front with a clear code the studio can surface.
             if (definition.shardMode?.kind === "global") {
                 throw Object.assign(new Error(`table "${args.table}" is global; edit it through D1, not the shard`), {
                     name: "CirrusError",

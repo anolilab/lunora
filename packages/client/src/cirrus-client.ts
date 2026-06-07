@@ -505,7 +505,7 @@ class CirrusClient {
      * Replace the token appended to WS upgrade URLs as `?token=…` and close
      * every open shard socket so the reconnect picks up the new value. Call
      * this whenever the user's WS credential changes (rotating the admin token
-     * in the dashboard, switching workspaces, etc.). Bearer tokens for HTTP
+     * in the studio, switching workspaces, etc.). Bearer tokens for HTTP
      * RPC are independent — see {@link setAuthToken}.
      */
     public setWsToken(token: string | undefined): void {
@@ -673,7 +673,7 @@ class CirrusClient {
      * (the worker returns them in storage order). Hits the admin-gated
      * `/_cirrus/admin/scheduled` endpoint, so the worker must be built with a
      * `schedulerDO` namespace and `adminToken`, and this client's auth token
-     * must match. Powers `@cirrus/dashboard`'s scheduled-jobs panel.
+     * must match. Powers `@cirrus/studio`'s scheduled-jobs panel.
      */
     public async listScheduledJobs(): Promise<ScheduleRecord[]> {
         if (this.closed) {
@@ -686,7 +686,7 @@ class CirrusClient {
     }
 
     /**
-     * Read the app-level workpool backlog that powers `@cirrus/dashboard`'s SLO
+     * Read the app-level workpool backlog that powers `@cirrus/studio`'s SLO
      * view: per-pool `{ name, queued, inFlight, maxConcurrency }` plus the
      * app-wide `backlog` (total queued) and `inFlight` (total held slots) sums.
      * Hits the admin-gated `GET /_cirrus/admin/scheduled/status` endpoint, so the
@@ -804,7 +804,7 @@ class CirrusClient {
      * List the registered public functions (queries / mutations / actions) with
      * their kinds. Hits the admin-gated `GET /_cirrus/admin/functions` endpoint —
      * the worker must be built with a `functions` registry and `adminToken`, and
-     * this client's auth token must match. Powers `@cirrus/dashboard`'s function
+     * this client's auth token must match. Powers `@cirrus/studio`'s function
      * runner auto-discovery.
      */
     public async listFunctions(): Promise<FunctionDescriptor[]> {
@@ -824,7 +824,7 @@ class CirrusClient {
      * pagination `cursor`. Hits the admin-gated `GET /_cirrus/admin/storage`
      * endpoint — the worker must be built with a `storageList` function and
      * `adminToken`, and this client's auth token must match. Powers
-     * `@cirrus/dashboard`'s file browser.
+     * `@cirrus/studio`'s file browser.
      */
     public async listStorageObjects(options: { cursor?: string; limit?: number; prefix?: string } = {}): Promise<StorageListPage> {
         if (this.closed) {
@@ -892,7 +892,7 @@ class CirrusClient {
     /**
      * List authenticated users, paged. Hits the admin-gated
      * `GET /_cirrus/admin/auth/users` endpoint — the worker must be built with an
-     * `authIntrospector` and `adminToken`. Powers the dashboard's users panel.
+     * `authIntrospector` and `adminToken`. Powers the studio's users panel.
      */
     public async listAuthUsers(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<AuthUser>> {
         if (this.closed) {

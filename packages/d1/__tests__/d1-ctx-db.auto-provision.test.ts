@@ -9,7 +9,7 @@ import createD1Exec from "./_helpers/node-sqlite-d1.js";
  * Auto-provisioning of `.global()` D1 tables. Mirrors how `@cirrus/do`'s
  * `runShardMigrations` self-creates shard-local tables: a fresh database must
  * serve a `.global()` table from the schema alone — no hand-applied migration —
- * so reads, writes, indexes, and the dashboard introspector all work on first
+ * so reads, writes, indexes, and the studio introspector all work on first
  * use instead of failing with `no such table`.
  *
  * Every harness here builds a bare in-memory DB and never calls `ddl()`: the
@@ -86,7 +86,7 @@ describe("d1 ctx-db auto-provisions .global() tables", () => {
     it("lets the introspector list a .global() table on a fresh database (no `no such table`)", async () => {
         expect.assertions(1);
 
-        // The dashboard's global data browser path — must auto-create then count.
+        // The studio's global data browser path — must auto-create then count.
         const tables = await listGlobalTables(harness.exec, globalSchema);
 
         expect(tables).toStrictEqual([{ name: "channels", rowCount: 0 }]);

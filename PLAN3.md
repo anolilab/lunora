@@ -1,12 +1,12 @@
-# Cirrus — Plan 3: Dashboard & Observability (Beat Cloudflare)
+# Cirrus — Plan 3: Studio & Observability (Beat Cloudflare)
 
-> Written 2026-06-06. The live roadmap for Cirrus's app-aware dashboard. Where
+> Written 2026-06-06. The live roadmap for Cirrus's app-aware studio. Where
 > [`PLAN.md`](./PLAN.md) / [`PLAN2.md`](./PLAN2.md) built the **framework** (runtime,
 > data layer, Convex/kitcn parity — now essentially complete), this plan covers the
-> **dashboard/observability layer** that differentiates Cirrus from the Cloudflare
-> dashboard. Grounded in the live source (`packages/dashboard/src/*`, the
+> **studio/observability layer** that differentiates Cirrus from the Cloudflare
+> studio. Grounded in the live source (`packages/studio/src/*`, the
 > `__cirrus_admin__:*` RPC layer in `@cirrus/do`) and two strategy docs:
-> [`DASHBOARD-VS-CLOUDFLARE.md`](./DASHBOARD-VS-CLOUDFLARE.md) (what to own / beat /
+> [`STUDIO-VS-CLOUDFLARE.md`](./STUDIO-VS-CLOUDFLARE.md) (what to own / beat /
 > hand-off) and [`ECOSYSTEM-BORROW.md`](./ECOSYSTEM-BORROW.md) (what to copy / learn).
 > Its framework-side counterpart is [`CLOUDFLARE-REUSE-AUDIT.md`](./CLOUDFLARE-REUSE-AUDIT.md)
 > (where the _runtime packages_ reuse vs. hand off CF primitives) — keep the log/metrics
@@ -23,7 +23,7 @@
 
 ## Thesis
 
-**Cloudflare's dashboard is infra-level and domain-blind. Cirrus sits in the request
+**Cloudflare's studio is infra-level and domain-blind. Cirrus sits in the request
 path and knows the domain model.** Two structural facts make this a durable advantage:
 
 1. CF has **no Durable-Object data browser** — shard data is opaque `__doc__` SQLite
@@ -37,7 +37,7 @@ structurally cannot show. We hand off only the control-plane/billing surface.
 
 ## Already shipped (baseline)
 
-The dashboard (`@cirrus/dashboard`, served over the gated `__cirrus_admin__:*` RPC layer)
+The studio (`@cirrus/studio`, served over the gated `__cirrus_admin__:*` RPC layer)
 ships these tabs today: **Data** (typed doc-expansion + `v.id` ref-navigation + filter
 builder + bulk delete), **Globals** (D1), **Schema** (viewer + graph + **indexes**),
 **Functions** (runner + **per-function metrics**), **Migrations**, **Scheduled**,
@@ -182,7 +182,7 @@ Metrics → the DO analytics page. Small, high-clarity change.
 
 A Settings tab (`settings-panel.tsx`) surfaces **read-only** deployment config — env
 vars/bindings with values masked. Resolves the deferred env-vars fork
-(`DASHBOARD-VS-CLOUDFLARE.md` #4): **view in Cirrus, edit in wrangler/CF** — no runtime
+(`STUDIO-VS-CLOUDFLARE.md` #4): **view in Cirrus, edit in wrangler/CF** — no runtime
 config store. _Possible follow-up:_ deploy URL/info + the 3.1 deep-links wired in here.
 
 ### 3.3 Emit structured events to Logpush — ✅ shipped
@@ -200,12 +200,12 @@ way as the durable write.
 
 - **Scheduled backups + PITR — ✅ shipped.** A `registry/backup` item (cron-driven
   `snapshot` → timestamped R2 NDJSON + retention `prune`), the `cirrus backup
-create|list|pitr|restore` CLI, and the **Time Travel** dashboard panel (`pitr-panel.tsx`)
+create|list|pitr|restore` CLI, and the **Time Travel** studio panel (`pitr-panel.tsx`)
   cover this. DO shard state has no native CF backup, so this is cirrus-owned; D1's own
   Time Travel is handed off (see `CLOUDFLARE-REUSE-AUDIT.md` #2).
 - **External integrations** (Sentry/Datadog/Axiom) — defer to CF Logpush + the 3.3 event
-  emission rather than building per-vendor adapters in the dashboard.
-- **TanStack Query adapter** for the dashboard's own data fetching — open decision
+  emission rather than building per-vendor adapters in the studio.
+- **TanStack Query adapter** for the studio's own data fetching — open decision
   (carried from PLAN2 #20); the bespoke admin hooks work today.
 
 ---
@@ -215,7 +215,7 @@ create|list|pitr|restore` CLI, and the **Time Travel** dashboard panel (`pitr-pa
 Deployments / versions / rollbacks / routes; secret **values** or env-var **editing**;
 billing & usage metering; account security (WAF, edge rate-limiting, DDoS); the log
 **transport at scale** (Logpush is the pipe — we emit into it). For all of these the
-dashboard links out; it never half-reimplements them.
+studio links out; it never half-reimplements them.
 
 ---
 

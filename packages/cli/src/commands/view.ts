@@ -12,7 +12,7 @@ interface ViewCommandOptions {
     logger: Logger;
     /** Inject the opener so tests don't spawn a browser. */
     opener?: OpenUrlOptions["opener"];
-    /** Open the deployed worker URL instead of the local dev dashboard. */
+    /** Open the deployed worker URL instead of the local dev studio. */
     remote?: boolean;
 }
 
@@ -22,7 +22,7 @@ interface ViewCommandResult {
 }
 
 const DEFAULT_DEV_PORT = 8787;
-const DASHBOARD_PATH = "/_cirrus/dashboard";
+const STUDIO_PATH = "/_cirrus/studio";
 
 const findWranglerFile = (projectRoot: string): string | undefined => {
     for (const candidate of ["wrangler.jsonc", "wrangler.json"]) {
@@ -82,14 +82,14 @@ const resolveRemoteUrl = (wrangler: Record<string, unknown> | undefined): string
         const first: unknown = routes[0];
 
         if (typeof first === "string") {
-            return `https://${first.split("/")[0] ?? first}${DASHBOARD_PATH}`;
+            return `https://${first.split("/")[0] ?? first}${STUDIO_PATH}`;
         }
 
         if (first !== null && typeof first === "object") {
             const { pattern } = first as Record<string, unknown>;
 
             if (typeof pattern === "string" && pattern.length > 0) {
-                return `https://${pattern.split("/")[0] ?? pattern}${DASHBOARD_PATH}`;
+                return `https://${pattern.split("/")[0] ?? pattern}${STUDIO_PATH}`;
             }
         }
     }
@@ -98,7 +98,7 @@ const resolveRemoteUrl = (wrangler: Record<string, unknown> | undefined): string
     const { name } = wrangler;
 
     if (typeof name === "string" && name.length > 0) {
-        return `https://${name}.workers.dev${DASHBOARD_PATH}`;
+        return `https://${name}.workers.dev${STUDIO_PATH}`;
     }
 
     return undefined;
@@ -120,7 +120,7 @@ const runViewCommand = async (options: ViewCommandOptions): Promise<ViewCommandR
             return { code: 1, url: undefined };
         }
     } else {
-        url = `http://localhost:${String(resolveDevPort(wrangler))}${DASHBOARD_PATH}`;
+        url = `http://localhost:${String(resolveDevPort(wrangler))}${STUDIO_PATH}`;
     }
 
     logger.info(`opening ${url}`);

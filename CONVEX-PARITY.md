@@ -7,7 +7,7 @@
 > noted, #19, #20, #21, #23 read-only, #24, plus the #5 registry) and **5 are deliberate
 > won't-do/by-design** (#1, #2, #3, #18, #22, and #23's deployment plane) — the per-row Status
 > column reflects current code. What remains is a short tail: #9's connector wrappers and (optional)
-> an external managed-PITR service beyond #19's self-managing loop — plus the `PLAN3.md` dashboard
+> an external managed-PITR service beyond #19's self-managing loop — plus the `PLAN3.md` studio
 > differentiators, which go beyond raw Convex parity.
 
 Legend: **full** = equivalent capability · **partial** = present but shallower · **missing** = no equivalent · **cirrus-only** = Cirrus exceeds Convex.
@@ -54,7 +54,7 @@ A third wave closed the remaining bounded gaps:
 - **#15 (Clerk/Auth0)** — `auth-clerk` / `auth-auth0` registry items scaffold the provider as a better-auth `genericOAuth` plugin on top of the base `auth` item (provider client-id/secret env vars).
 - **#19 (managed PITR)** — two tiers. **In-place ≤30 days:** native DO PITR — `getPitrBookmark` / `pitrRestore` admin ops drive the platform's bookmark change log (restore to any time in the last 30 days, returns an undo bookmark, audited). **Off-platform / >30 days:** the `backup` registry item's self-managing loop — scheduled `snapshot` (→ R2 NDJSON) + `prune` retention (keepDays/keepLast, never to zero) + `cirrus backup restore [--to]` (nearest snapshot + CDC replay). (An external always-on/branching managed service remains out of scope.)
 - **#24 (CLI `verify`)** — `cirrus verify` now runs a real `tsc --noEmit` over the project (injectable spawner, `--no-typecheck` opt-out, skips cleanly without a tsconfig) on top of the wrangler + codegen checks.
-- **#23 (read-only Settings)** — a `getSettings` admin RPC (`@cirrus/do`, reads the DO `env`, masks secret values server-side) + a read-only **Settings** dashboard tab (env vars / bindings as name·kind·masked-value, deploy info, CF deep-link). Deploy/rollback stays the CF hand-off (PLAN3 §3.1–3.2).
+- **#23 (read-only Settings)** — a `getSettings` admin RPC (`@cirrus/do`, reads the DO `env`, masks secret values server-side) + a read-only **Settings** studio tab (env vars / bindings as name·kind·masked-value, deploy info, CF deep-link). Deploy/rollback stays the CF hand-off (PLAN3 §3.1–3.2).
 
 ---
 
@@ -68,7 +68,7 @@ These are differentiators — do not regress them.
 - **Cross-shard rank** — `packages/do/src/rank.ts` (ranked queries spanning shards).
 - **Trigger-maintained aggregate/rank indexes** — kept in sync via table triggers.
 - **Client `useRateLimit`** — client-side token-bucket / fixed-window prediction (`packages/react/src/use-rate-limit.ts`).
-- **Shard-aware dashboard + admin RPC introspection** — `__cirrus_admin__:*` RPC layer; panels target specific shards; separate shard-local vs global data browsers.
+- **Shard-aware studio + admin RPC introspection** — `__cirrus_admin__:*` RPC layer; panels target specific shards; separate shard-local vs global data browsers.
 
 ---
 
@@ -87,11 +87,11 @@ These are differentiators — do not regress them.
 > - **Deliberate won't-do / by-design:** #1 (workerd has no Node runtime for actions), #2 & #3
 >   (cross-shard atomicity / snapshot — the price of the sharding model that is Cirrus's lead),
 >   #22 (keyset-only pagination), #18 (no runtime env store — secrets live in the wrangler/CF
->   plane; PLAN3 §3.2), and the deployment/rollback half of #23 (CF's control plane — dashboard
+>   plane; PLAN3 §3.2), and the deployment/rollback half of #23 (CF's control plane — studio
 >   deep-links, not a reimplementation).
 > - **Still genuinely open:** #9's deployable Fivetran/Airbyte connector _wrappers_ (the source
 >   endpoint exists; the wrappers are an external effort), and an external always-on/branching
->   managed-PITR _service_ beyond #19's self-managing snapshot+prune+restore loop. The dashboard
+>   managed-PITR _service_ beyond #19's self-managing snapshot+prune+restore loop. The studio
 >   differentiators (correlated request log, causal insights, app-aware Files) are tracked in
 >   `PLAN3.md`.
 
@@ -110,7 +110,7 @@ These are differentiators — do not regress them.
 | #   | Feature                                            | Status  | Gap                                                                                                                                                                                                                        |
 | --- | -------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 6   | **Presence / collaborative cursors**               | missing | No presence/awareness API (`@convex-dev/presence` equivalent). Must DIY via subscriptions + mutations.                                                                                                                     |
-| 7   | **Log streaming to external services**             | missing | Logs sit in a bounded in-memory ring buffer + dashboard. No built-in adapters to ship to Axiom / Datadog / webhook (the `ObservabilitySink` interface exists; adapters are user-supplied).                                 |
+| 7   | **Log streaming to external services**             | missing | Logs sit in a bounded in-memory ring buffer + studio. No built-in adapters to ship to Axiom / Datadog / webhook (the `ObservabilitySink` interface exists; adapters are user-supplied).                                 |
 | 8   | **Exception reporting (Sentry)**                   | missing | No bundled Sentry client/adapter — only the optional `ObservabilitySink`.                                                                                                                                                  |
 | 9   | **Streaming export connectors (Fivetran/Airbyte)** | missing | Raw material exists (CDC `/sync`, full-table `/export`), but no turn-key data-warehouse connectors.                                                                                                                        |
 | 10  | **`ctx.storage` upload in handlers**               | partial | No `generateUploadUrl`/`store` on the handler `ctx` (ActionCtx/MutationCtx/QueryCtx). Upload only via the standalone `@cirrus/storage` client; signed-URL helper also lacks a `contentType` param despite docs showing it. |
@@ -131,7 +131,7 @@ These are differentiators — do not regress them.
 | 20  | **Live-updating pagination deltas**          | partial             | Pages update live (each page is its own subscription), but client-side delta merging isn't implemented (`ServerDataMessage.delta` is an opaque blob on the wire).                                                                                                                                                                                                                                                                   |
 | 21  | **Scheduler list/inspect**                   | partial             | Implemented in `SchedulerDO` storage but not exposed on the public `Scheduler` client (requires direct DO `/list` access).                                                                                                                                                                                                                                                                                                          |
 | 22  | **Aggregate randomness / offset pagination** | missing             | No random-access operator; keyset cursors only (offset pagination is omitted by design).                                                                                                                                                                                                                                                                                                                                            |
-| 23  | **Dashboard: deployment/env management UI**  | shipped / by-design | A read-only **Settings** tab now ships (the `getSettings` admin RPC + panel: env vars / bindings as name·kind·masked-value, secrets never shown raw, deploy info, CF deep-link). Deployments / rollbacks / routes remain an **explicit non-goal** (PLAN3 §3.1–3.2) — CF's control plane, reached via deep-links, not half-reimplemented.                                                                                            |
+| 23  | **Studio: deployment/env management UI**  | shipped / by-design | A read-only **Settings** tab now ships (the `getSettings` admin RPC + panel: env vars / bindings as name·kind·masked-value, secrets never shown raw, deploy info, CF deep-link). Deployments / rollbacks / routes remain an **explicit non-goal** (PLAN3 §3.1–3.2) — CF's control plane, reached via deep-links, not half-reimplemented.                                                                                            |
 | 24  | **CLI `verify` (type check)**                | shipped             | `cirrus verify` runs `tsc --noEmit` over the project (plus wrangler + codegen checks); `--no-typecheck` opts out, skips cleanly without a tsconfig.                                                                                                                                                                                                                                                                                 |
 
 ---
@@ -143,6 +143,6 @@ The bounded, high-value gaps are essentially cleared (Phase A/B/C). What's left:
 - **Inherent trade-offs (won't-do / by-design):** #1 (no Node runtime), #2/#3 (cross-shard atomicity & snapshot), #22 (keyset-only), #18 (no runtime env store), and #23's deployment/rollback half (CF's control plane). #2 is the deliberate price of the DO-sharding model that gives Cirrus its scaling lead — not a bug; the env/deploy ones are deliberate CF hand-offs (PLAN3 §3.1–3.2): Cirrus is the app lens, CF is the infra plane.
 - **#5 registry — done & extensible:** function-namespacing, the add/list/view/build surface, and a 9-item CI-checked catalog all shipped. Growth from here is just authoring more items. See `COMPONENT-REGISTRY.md`.
 - **Remaining additive features:** the deployable Fivetran/Airbyte connector wrappers on top of #9's source endpoint, and (optionally) an external always-on/branching managed-PITR service beyond #19's self-managing snapshot+prune+restore loop.
-- **Dashboard differentiators (separate roadmap):** the correlated structured request log, causal metrics→insights attribution, and app-aware Files (schema↔R2) — the "beat Cloudflare" work in `PLAN3.md`, beyond raw Convex parity.
+- **Studio differentiators (separate roadmap):** the correlated structured request log, causal metrics→insights attribution, and app-aware Files (schema↔R2) — the "beat Cloudflare" work in `PLAN3.md`, beyond raw Convex parity.
 
 > Benchmark context: the closest Convex-on-Cloudflare competitor is `zerodeploy-dev/zeroback` — useful for tracking parity over time.

@@ -40,9 +40,9 @@ describe("cirrus docs", () => {
 
         const { openedUrls, opener } = recordingOpener();
 
-        await runDocsCommand({ logger: silentLogger(), opener, section: "addons/dashboard" });
+        await runDocsCommand({ logger: silentLogger(), opener, section: "addons/studio" });
 
-        expect(openedUrls).toEqual(["https://cirrus.anolilab.dev/docs/addons/dashboard"]);
+        expect(openedUrls).toEqual(["https://cirrus.anolilab.dev/docs/addons/studio"]);
     });
 
     it("normalises leading + trailing slashes", async () => {

@@ -19,7 +19,7 @@ import { internalMutation, v } from "@cirrus/server";
 
 /**
  * The example periodic job. Returns the wall-clock time it ran so you can see
- * it firing in the dashboard's function logs; replace the body with real work.
+ * it firing in the studio's function logs; replace the body with real work.
  */
 export const run = internalMutation({
     args: { since: v.optional(v.number()) },

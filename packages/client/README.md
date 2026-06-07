@@ -83,7 +83,7 @@ new CirrusClient({
 browser `WebSocket` has, since its constructor can't set headers. The server
 matches it against `CIRRUS_WS_BEARER` (to clear the upgrade gate) and/or
 `CIRRUS_ADMIN_TOKEN` (to authorize reserved `__cirrus_admin__:*` subscriptions,
-which is how `@cirrus/dashboard` streams admin data). It ends up in server logs
+which is how `@cirrus/studio` streams admin data). It ends up in server logs
 and history, so prefer a short-lived rotating token in production.
 
 A `subscribe()` call may pass `onError` in its options to be notified when the

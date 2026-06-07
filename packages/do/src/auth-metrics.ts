@@ -5,7 +5,7 @@
  * (`/api/auth/*`), NOT through cirrus functions — so the per-function metrics in
  * `function-metrics.ts` never see a sign-in/sign-up/callback. This module is the
  * parallel signal for auth: a durable counter of auth ATTEMPTS and FAILURES the
- * dashboard reads to chart an app-level auth-failure rate (and a sparkline of it
+ * studio reads to chart an app-level auth-failure rate (and a sparkline of it
  * over time). Recorded against the root shard so a single read gives the whole
  * app's auth health.
  *
@@ -20,7 +20,7 @@
  *
  * `__cirrus_auth_metrics_buckets` holds coarse time-bucketed counters keyed by
  * `bucketMs` (60s windows), giving the minute-resolution time series the
- * dashboard sparkline plots. Bucketing keeps the row count bounded (one row per
+ * studio sparkline plots. Bucketing keeps the row count bounded (one row per
  * window) and older rows are trimmed after each write, mirroring
  * `__cirrus_metrics_buckets`.
  *
@@ -46,7 +46,7 @@ const AUTH_METRICS_ROW_KEY = "app";
 /**
  * Width of one history bucket, in milliseconds. 60s gives a minute-resolution
  * time series — fine-grained enough to chart a burst of failed sign-ins on the
- * dashboard, coarse enough that auth emits at most one row per minute. Mirrors
+ * studio, coarse enough that auth emits at most one row per minute. Mirrors
  * `FUNCTION_METRICS_BUCKET_MS`.
  */
 const AUTH_METRICS_BUCKET_MS = 60_000;
@@ -69,7 +69,7 @@ interface AuthMetricsBucket {
 
 /**
  * Lifetime auth health for the app, served by `__cirrus_admin__:getAuthMetrics`
- * and consumed by the dashboard SLO panel. `failureRate` is the derived
+ * and consumed by the studio SLO panel. `failureRate` is the derived
  * `failures / attempts` (0 when there have been no attempts), surfaced so the
  * panel needn't recompute it; `sinceMs` is the epoch-ms the first attempt was
  * recorded (a best-effort "since" marker); `history` is the minute-bucketed
@@ -191,7 +191,7 @@ const recordAuthEvent = (sql: SqlExec, input: RecordAuthEventInput): void => {
 
 /**
  * Read the durable auth metrics as the {@link AuthMetrics} wire shape the
- * dashboard SLO panel consumes. Creates the tables first so a read on a
+ * studio SLO panel consumes. Creates the tables first so a read on a
  * never-authenticated app returns an all-zero shape (empty `history`) instead of
  * throwing. `failureRate` is derived here so the consumer needn't recompute it.
  */

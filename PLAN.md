@@ -75,7 +75,7 @@ Codegen emits `ctx.db.messages.get(id)` that resolves the shard from `id`'s embe
 
 ### Default behavior (no `.shardBy()`)
 
-Tables without `.shardBy()` or `.global()` resolve to a single fixed `__root__` Durable Object — same shape as Zeroback. This is the friendly default; an app stays here until it intentionally scales. To prevent silent footguns we surface a runtime warning (and a dashboard banner in dev) once `__root__` SQLite size crosses **1 GB** (10% of the per-DO ceiling). Migration to sharding is a schema edit + one codegen run, no data-format break.
+Tables without `.shardBy()` or `.global()` resolve to a single fixed `__root__` Durable Object — same shape as Zeroback. This is the friendly default; an app stays here until it intentionally scales. To prevent silent footguns we surface a runtime warning (and a studio banner in dev) once `__root__` SQLite size crosses **1 GB** (10% of the per-DO ceiling). Migration to sharding is a schema edit + one codegen run, no data-format break.
 
 ### Why this beats single-DO when you opt in
 

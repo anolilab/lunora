@@ -190,7 +190,7 @@ const runBackupRestore = async (options: BackupCommandOptions, directory: string
 
     // Plain snapshot import — the off-platform / portable restore. For in-place
     // time-travel to an arbitrary moment in the last 30 days, use native PITR
-    // (`cirrus backup pitr` / the dashboard) rather than replaying a snapshot.
+    // (`cirrus backup pitr` / the studio) rather than replaying a snapshot.
     return { code: result.code };
 };
 

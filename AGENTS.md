@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Repository Overview
 
-Cirrus is a pnpm monorepo for the Cirrus framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX. Packages live under `packages/<name>/`. Apps (examples, docs site, dashboard) live under `apps/<name>/`.
+Cirrus is a pnpm monorepo for the Cirrus framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX. Packages live under `packages/<name>/`. Apps (examples, docs site, studio) live under `apps/<name>/`.
 
 **Package manager**: pnpm v10.32.1 (enforced). **Monorepo orchestration**: @visulima/vis. **Node**: ^22.14.0 || >=24.10.0.
 

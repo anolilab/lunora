@@ -3,7 +3,7 @@ import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
 import codegenPlugin from "./codegen-plugin.js";
-import { dashboardPlugin } from "./dashboard-plugin.js";
+import { studioPlugin } from "./studio-plugin.js";
 import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
 import wranglerValidatorPlugin from "./wrangler-validator-plugin.js";
 
@@ -35,7 +35,7 @@ const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirru
 
     return {
         cloudflare: cloudflareOption,
-        dashboard: input.dashboard ?? true,
+        studio: input.studio ?? true,
         generatedDir: input.generatedDir ?? `${schemaDirectory}/_generated`,
         overlay: overlayOption,
         projectRoot: input.projectRoot ?? process.cwd(),
@@ -60,8 +60,8 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
     const resolved = resolveOptions(options);
     const plugins: Plugin[] = [codegenPlugin(resolved)];
 
-    if (resolved.dashboard) {
-        plugins.push(dashboardPlugin());
+    if (resolved.studio) {
+        plugins.push(studioPlugin());
     }
 
     if (resolved.validateWrangler) {
@@ -84,7 +84,7 @@ const VERSION = "0.0.0";
 export { default as codegenPlugin } from "./codegen-plugin.js";
 export type { ReconcileResult } from "./cron-sync.js";
 export { reconcileWranglerCrons } from "./cron-sync.js";
-export { buildDashboardUrl, DASHBOARD_PATH, dashboardPlugin } from "./dashboard-plugin.js";
+export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin.js";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
 export { default as wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";
 export { cirrus, VERSION };

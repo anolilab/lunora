@@ -881,7 +881,7 @@ abstract class ShardDO {
      * pins an `AbortController` + the user's async generator + any buffered
      * chunks on the WS — letting a client open hundreds of streams in
      * parallel would let it pin DO memory without ever sending a message.
-     * 8 is generous for legitimate clients (the dashboard rarely opens more
+     * 8 is generous for legitimate clients (the studio rarely opens more
      * than 2-3 simultaneously) and small enough that the worst-case memory
      * footprint stays bounded.
      */
@@ -2020,7 +2020,7 @@ abstract class ShardDO {
      * hibernation/restart; the in-memory counters are used only as a fallback
      * when the durable read throws. The response is extended additively with
      * `functions` (per-function persisted rows) and `history` (the coarse
-     * time-series buckets) so the dashboard can read durable per-function
+     * time-series buckets) so the studio can read durable per-function
      * metrics and chart history without breaking the existing fields.
      */
     private collectMetrics(): {
@@ -2146,14 +2146,14 @@ abstract class ShardDO {
     /**
      * Assemble the per-function readout served by
      * `__cirrus_admin__:getFunctionStats`, sorted most-recently-called first so
-     * the busiest functions surface at the top of the dashboard table.
+     * the busiest functions surface at the top of the studio table.
      *
      * Reads from the durable `__cirrus_metrics` table — the source of truth —
      * so the counts reflect the function's lifetime, not just calls since this
      * instance woke. Falls back to the in-memory map only if the durable read
      * throws (e.g. a test double without a usable `sql` handle), keeping the
      * warm-instance counters available even then. The wire shape is unchanged
-     * (`{ functions, sinceMs }`), so existing dashboard/runtime consumers keep
+     * (`{ functions, sinceMs }`), so existing studio/runtime consumers keep
      * working; the rows are now backed by persisted data.
      */
     private collectFunctionStats(): FunctionStatsResult {
@@ -2170,7 +2170,7 @@ abstract class ShardDO {
 
     /**
      * Per-function coarse time-series served additively by the metrics RPC, so
-     * the dashboard can chart call/error history. Reads the durable
+     * the studio can chart call/error history. Reads the durable
      * `__cirrus_metrics_buckets` table; returns `[]` when persistence is
      * unavailable so the response stays well-formed.
      */
@@ -2726,14 +2726,14 @@ abstract class ShardDO {
 
     /**
      * Resolve a `getAuthMetrics` admin read: the durable app-level auth
-     * attempt/failure counters + minute-bucketed history the dashboard SLO panel
+     * attempt/failure counters + minute-bucketed history the studio SLO panel
      * charts (PLAN3 §2.3). Auth runs as a top-level `/api/auth/*` worker route,
      * NOT through cirrus functions, so the worker records each attempt against
      * the root shard via `recordAuthEvent` and this read surfaces the rollup.
      *
      * Best-effort: a SQL failure (e.g. a test double without a real `sql`
      * handle) returns an empty all-zero {@link AuthMetrics} rather than throwing,
-     * so the SLO signal is simply absent instead of breaking the dashboard.
+     * so the SLO signal is simply absent instead of breaking the studio.
      * Carries the {@link ADMIN_WILDCARD} like the other counter reads so a live
      * subscription re-runs on every write-flush (the per-socket JSON memo still
      * suppresses byte-identical pushes).
@@ -3100,7 +3100,7 @@ abstract class ShardDO {
             const supplied = this.suppliedWsToken(request);
 
             // The admin token is accepted as an alternate credential so a
-            // dashboard can open its socket even when `CIRRUS_WS_BEARER` gates
+            // studio can open its socket even when `CIRRUS_WS_BEARER` gates
             // ordinary subscribers. The socket is flagged admin separately (see
             // `isAdminSocket`); matching the bearer alone never grants it.
             if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !this.isAdminSocket(request))) {

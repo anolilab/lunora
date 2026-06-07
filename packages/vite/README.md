@@ -77,7 +77,7 @@ The `cirrus(options)` factory composes up to four plugins in order:
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `cirrus(options?)`                  | Factory. Returns `Plugin[]` — drop it into `plugins` (Vite flattens it).                                 |
 | `codegenPlugin(resolved)`           | The codegen-on-save plugin in isolation.                                                                 |
-| `dashboardPlugin()`                 | The `/__cirrus` dashboard dev-server plugin in isolation.                                                |
+| `studioPlugin()`                 | The `/__cirrus` studio dev-server plugin in isolation.                                                |
 | `wranglerValidatorPlugin(resolved)` | The wrangler.jsonc validator plugin in isolation.                                                        |
 | `VERSION`                           | Plugin version string.                                                                                   |
 

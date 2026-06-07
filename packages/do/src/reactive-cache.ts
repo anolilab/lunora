@@ -311,7 +311,7 @@ class ReactiveCache {
 
     /**
      * Snapshot of lifetime cache counters plus the current live size. Drives the
-     * dashboard's metrics panel; cheap, allocation-light, and side-effect-free.
+     * studio's metrics panel; cheap, allocation-light, and side-effect-free.
      */
     public stats(): { bytes: number; entries: number; evictions: number; hits: number; misses: number } {
         return {

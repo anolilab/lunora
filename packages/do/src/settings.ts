@@ -3,7 +3,7 @@ import type { DeployInfo, SettingEntry, SettingsResult } from "./introspect.js";
 /**
  * Names that, by convention, hold a secret regardless of the value's shape. A
  * binding/var whose name matches (case-insensitively) is classified `secret` and
- * its value is always masked — the dashboard is admin-gated, but raw secrets
+ * its value is always masked — the studio is admin-gated, but raw secrets
  * still never cross the wire.
  */
 const SECRET_NAME_PATTERN = /key|secret|token|password|passwd|credential|private|auth|bearer|session|cookie|salt|signature|dsn|webhook/iu;
@@ -171,7 +171,7 @@ const buildSettings = (rawEnv: unknown): SettingsResult => {
                 kind: secret ? "secret" : "var",
                 name,
                 // Both vars and secrets are masked — a "var" may still hold a
-                // sensitive value, and the dashboard never needs the raw text.
+                // sensitive value, and the studio never needs the raw text.
                 value: redact(value),
             });
 

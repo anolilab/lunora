@@ -7,7 +7,7 @@ interface DocsCommandOptions {
     logger: Logger;
     /** Inject the opener so tests don't spawn a browser. */
     opener?: OpenUrlOptions["opener"];
-    /** Optional path under the docs site (e.g. "addons/dashboard"). */
+    /** Optional path under the docs site (e.g. "addons/studio"). */
     section?: string;
 }
 
