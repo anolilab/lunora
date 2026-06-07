@@ -19,6 +19,8 @@ import { LogBuffer } from "./log-buffer.js";
 import { armRestore, readBookmark } from "./pitr.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
+import type { RequestLogResult } from "./request-log.js";
+import { appendRequestLogEntry, ensureRequestLogTable, readRequestLog } from "./request-log.js";
 import { buildSettings } from "./settings.js";
 import type { TransactionSqlLike } from "./transaction.js";
 import { ConflictError } from "./transaction.js";
@@ -752,6 +754,26 @@ const parseIdentityHeader = (raw: string | null): Record<string, unknown> | unde
     return undefined;
 };
 
+/**
+ * Reduce a dependency-tracker dep set (`table:id` / `table:*scan` keys, see
+ * `dependency-tracker.ts`) to the distinct table names it touched. Used to
+ * source the request log's `tablesRead` from the per-query tracker without
+ * leaking the row-level dep encoding into the log.
+ */
+const tablesFromDeps = (deps: Set<string>): Set<string> => {
+    const tables = new Set<string>();
+
+    for (const dep of deps) {
+        const table = dep.slice(0, dep.lastIndexOf(":"));
+
+        if (table !== "") {
+            tables.add(table);
+        }
+    }
+
+    return tables;
+};
+
 const extractBearerToken = (authorization: string | null): string | undefined => {
     if (!authorization) {
         return undefined;
@@ -988,6 +1010,22 @@ abstract class ShardDO {
      */
     private currentScannedTables: Set<string> | undefined;
 
+    /**
+     * Read-tables + cache-hit captured for the current `/rpc` dispatch, so the
+     * dispatch site can fold them into the durable request log
+     * (`request-log.ts`). Populated by `runCachedQuery` — the one place that
+     * both holds the per-query dependency tracker AND learns whether the
+     * reactive cache served the result — and reset per request in `fetch`.
+     * `undefined`/empty when the reactive cache is disabled or the path is a
+     * write/action (which doesn't run through the cache), which is exactly why
+     * the request log treats those fields as "unknown" rather than asserting a
+     * read set on the hot path.
+     */
+    private currentRequestReadTables: Set<string> | undefined;
+
+    /** Whether the current dispatch's cached query was served from cache; `undefined` until `runCachedQuery` resolves one. */
+    private currentRequestCacheHit: boolean | undefined;
+
     public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
@@ -1036,6 +1074,11 @@ abstract class ShardDO {
             this.currentRequestUserId = request.headers.get("x-cirrus-userid") ?? undefined;
             this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-cirrus-identity"));
             this.currentRequestSystem = request.headers.get("x-cirrus-system") === "1";
+            // Reset the per-request read/cache capture (filled by `runCachedQuery`
+            // for cached query paths) so a previous dispatch can't leak into this
+            // entry's logged read set / cache-hit flag.
+            this.currentRequestReadTables = undefined;
+            this.currentRequestCacheHit = undefined;
 
             this.metrics.requests += 1;
             const dispatchStartedAt = Date.now();
@@ -1047,11 +1090,19 @@ abstract class ShardDO {
 
             try {
                 const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
+                const durationMs = Date.now() - dispatchStartedAt;
 
                 // Record the handler's own latency (before the subscription
                 // write-flush below) against the per-function counters, along
                 // with any tables it full-scanned (causal attribution).
-                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables);
+                this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables);
+
+                // Snapshot the written-table set BEFORE `flushChangedTables`
+                // drains it — afterwards `pendingChangedTables` is `undefined`,
+                // so the request log would record an empty write set.
+                const tablesWritten = [...(this.pendingChangedTables ?? [])];
+
+                this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten);
 
                 // Inspect the post-write size before responding. SQLite-in-DO
                 // exposes `databaseSize` as a real getter; reading it is a
@@ -1067,9 +1118,11 @@ abstract class ShardDO {
                 return response;
             } catch (error: unknown) {
                 this.metrics.errors += 1;
+                const durationMs = Date.now() - dispatchStartedAt;
                 const message = error instanceof Error ? error.message : String(error);
 
-                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt, message, this.currentScannedTables);
+                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables);
+                this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
                 this.logs.push({
                     functionPath: payload.functionPath,
                     level: "error",
@@ -1085,6 +1138,8 @@ abstract class ShardDO {
                 this.currentRequestIdentity = undefined;
                 this.currentRequestSystem = false;
                 this.currentScannedTables = undefined;
+                this.currentRequestReadTables = undefined;
+                this.currentRequestCacheHit = undefined;
             }
         }
 
@@ -1792,11 +1847,24 @@ abstract class ShardDO {
 
         this.currentTracker = tracker;
 
+        // Detect a cache hit cheaply by diffing the cache's lifetime hit
+        // counter across the `run` call — a hit means the callback (and thus
+        // the dep stamps) never ran, so the read set comes from the cached
+        // entry's own deps, not this tracker. The request log reads both fields
+        // afterwards; capturing them here keeps the dispatch site oblivious to
+        // whether the cache is even enabled.
+        const hitsBefore = this.reactiveCache.stats().hits;
+
         try {
             // Scope the cache entry to the caller's identity so a per-user /
             // RLS-filtered result is never served across users on a shared DO.
             // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator
-            return await this.reactiveCache.run(reactiveCacheKey(functionPath, args, this.getCurrentUserId() ?? null), tracker.collect(), run);
+            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, this.getCurrentUserId() ?? null), tracker.collect(), run);
+
+            this.currentRequestCacheHit = this.reactiveCache.stats().hits > hitsBefore;
+            this.currentRequestReadTables = tablesFromDeps(tracker.collect());
+
+            return result;
         } finally {
             this.currentTracker = previous;
         }
@@ -2292,6 +2360,59 @@ abstract class ShardDO {
     }
 
     /**
+     * Append one structured entry to the durable request log (`request-log.ts`)
+     * for a `/rpc` dispatch that just completed — the per-request readout
+     * (`&lt;file>:&lt;function>`, shard key, acting user/identity, redacted args,
+     * outcome, duration, tables read/written, cache hit) that Cloudflare cannot
+     * attribute (PLAN3 §1.1).
+     *
+     * Best-effort, exactly like `recordFunctionCall`'s durable upsert: a SQL
+     * failure (e.g. a test double without a `sql` handle) must NEVER turn a
+     * served request into a failed one, so it is swallowed. Args are redacted
+     * inside `appendRequestLogEntry` so a raw value never reaches the table.
+     *
+     * The correlated fields all come from data the dispatch already holds, with
+     * no extra hot-path bookkeeping. `tablesWritten` is snapshotted from
+     * `pendingChangedTables` by the caller before `flushChangedTables` drains it.
+     * `tablesRead` and `cacheHit` are captured by `runCachedQuery`, so they are
+     * present only for cached query paths — a write/action doesn't run through
+     * the cache, and an instance with the reactive cache disabled never captures
+     * them — and are left empty/`undefined` rather than recomputed here.
+     * `subscriptionsReRun` is left `0`: the write-driven subscription refresh
+     * runs off the response path via `waitUntil` (see `flushChangedTables`), so a
+     * per-request count isn't available synchronously at this site, and threading
+     * one back would add bookkeeping to the deferred fan-out for no correctness
+     * benefit — recorded as `0` with this note rather than faked.
+     */
+    private recordRequestLog(
+        functionPath: string,
+        args: Record<string, unknown>,
+        durationMs: number,
+        outcome: "error" | "ok",
+        tablesWritten: string[],
+        errorMessage?: string,
+    ): void {
+        try {
+            appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, {
+                cacheHit: this.currentRequestCacheHit,
+                durationMs,
+                errorMessage,
+                functionPath,
+                identity: this.currentRequestIdentity,
+                outcome,
+                redactedArgs: Object.keys(args).length === 0 ? undefined : args,
+                shardKey: this.state.id?.name,
+                tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
+                tablesWritten,
+                ts: Date.now(),
+                userId: this.getCurrentUserId(),
+            });
+        } catch {
+            // Best-effort: never let request-log persistence fail the request.
+        }
+    }
+
+    /**
      * Native Durable-Object PITR ops (the ≤30-day in-place tier). `getPitrBookmark`
      * reads the current/for-time bookmark; `pitrRestore` arms a restore to a
      * bookmark/time (auditing the target + undo bookmark before any restart, so the
@@ -2350,32 +2471,22 @@ abstract class ShardDO {
 
         const sql = this.state.storage.sql as unknown as SqlExec;
 
-        if (functionPath === ADMIN_FUNCTIONS.listTables) {
-            return { result: listTables(sql), tables: new Set([ADMIN_WILDCARD]) };
-        }
+        // The wildcard-bound counter/config reads aren't tied to a single table,
+        // so they share one branch and the {@link ADMIN_WILDCARD} sentinel; a
+        // live subscription on any of them re-runs on every write-flush (the
+        // per-socket JSON memo still suppresses byte-identical pushes).
+        const wildcardRead = this.readAdminWildcardOp(functionPath);
 
-        if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
-            return { result: this.collectMetrics(), tables: new Set([ADMIN_WILDCARD]) };
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.getFunctionStats) {
-            return { result: this.collectFunctionStats(), tables: new Set([ADMIN_WILDCARD]) };
+        if (wildcardRead !== undefined) {
+            return { result: wildcardRead, tables: new Set([ADMIN_WILDCARD]) };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getAuditLog) {
             return this.readAdminAuditLog(sql, args);
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.getLogs) {
-            return { result: { entries: this.logs.entries() }, tables: new Set([ADMIN_WILDCARD]) };
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.getSettings) {
-            // Read-only deployment config derived from the Worker `env` (the
-            // bindings object). String values are masked server-side, so no raw
-            // secret crosses the wire. Not bound to a table, so it carries the
-            // wildcard like the other counter/config reads.
-            return { result: buildSettings(this.env), tables: new Set([ADMIN_WILDCARD]) };
+        if (functionPath === ADMIN_FUNCTIONS.getRequestLog) {
+            return this.readAdminRequestLog(sql, args);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
@@ -2398,6 +2509,41 @@ abstract class ShardDO {
         return null;
     }
 
+    /**
+     * Resolve the read-only admin ops whose result isn't bound to a single table
+     * — the in-memory counters (`getMetrics`, `getFunctionStats`), the table list
+     * (`listTables`), the in-memory error buffer (`getLogs`) and the masked
+     * deployment config (`getSettings`). Returns the result value, or `undefined`
+     * for any path it doesn't own (so `readAdminOp` falls through). The caller
+     * wraps each in the {@link ADMIN_WILDCARD} sentinel, keeping that one fact in
+     * a single place and `readAdminOp` under its complexity budget.
+     */
+    private readAdminWildcardOp(functionPath: string): unknown {
+        if (functionPath === ADMIN_FUNCTIONS.listTables) {
+            return listTables(this.state.storage.sql as unknown as SqlExec);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
+            return this.collectMetrics();
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getFunctionStats) {
+            return this.collectFunctionStats();
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getLogs) {
+            return { entries: this.logs.entries() };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getSettings) {
+            // Read-only deployment config derived from the Worker `env`; string
+            // values are masked server-side, so no raw secret crosses the wire.
+            return buildSettings(this.env);
+        }
+
+        return undefined;
+    }
+
     /** Resolve a `getAuditLog` admin read, parsing the optional `limit`/`sinceSeq` cursor args and ensuring the reserved table first. */
     // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers and future per-instance state
     private readAdminAuditLog(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
@@ -2408,6 +2554,36 @@ abstract class ShardDO {
         const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
         const sinceSeq = typeof args["sinceSeq"] === "number" ? args["sinceSeq"] : undefined;
         const result: AuditLogResult = { entries: readAuditLog(sql, { limit, sinceSeq }) };
+
+        return { result, tables: new Set([ADMIN_WILDCARD]) };
+    }
+
+    /**
+     * Resolve a `getRequestLog` admin read, parsing the optional correlation
+     * filters (function-path prefix, exact userId/shardKey/outcome, table-touched)
+     * plus the `limit`/`sinceSeq` cursor, and ensuring the reserved table first.
+     * Carries the {@link ADMIN_WILDCARD} like the other log reads so a live Logs
+     * subscription re-runs on every write-flush (the per-socket JSON memo still
+     * suppresses byte-identical pushes).
+     */
+    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers and future per-instance state
+    private readAdminRequestLog(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        // Defensive: the table may not exist yet on a shard that has never
+        // served a logged dispatch, so ensure it before the read.
+        ensureRequestLogTable(sql);
+
+        const outcome = args["outcome"] === "ok" || args["outcome"] === "error" ? args["outcome"] : undefined;
+        const result: RequestLogResult = {
+            entries: readRequestLog(sql, {
+                functionPathPrefix: typeof args["functionPathPrefix"] === "string" ? args["functionPathPrefix"] : undefined,
+                limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+                outcome,
+                shardKey: typeof args["shardKey"] === "string" ? args["shardKey"] : undefined,
+                sinceSeq: typeof args["sinceSeq"] === "number" ? args["sinceSeq"] : undefined,
+                tableTouched: typeof args["tableTouched"] === "string" ? args["tableTouched"] : undefined,
+                userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
+            }),
+        };
 
         return { result, tables: new Set([ADMIN_WILDCARD]) };
     }
