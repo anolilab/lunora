@@ -32,6 +32,7 @@
         "bench": "vitest bench --run"
     },
     "dependencies": {
+        "@visulima/redact": "catalog:redact",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {

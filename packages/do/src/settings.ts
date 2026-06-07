@@ -119,6 +119,34 @@ const readDeployInfo = (env: Record<string, unknown>): DeployInfo => {
     return deploy;
 };
 
+/** Environment-name values that denote a development deployment (where the request log may capture raw, un-redacted args). Anchored so `production`/`staging` never match. */
+const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
+
+/**
+ * Whether the worker is running in a development environment, derived from the
+ * same `CF_ENV`/`ENVIRONMENT`/`WORKER_ENV`/`NODE_ENV` vars the Settings view
+ * surfaces. Used to decide whether the request log captures raw args/identity
+ * (dev) or redacts them (prod — PLAN3 §3.3 PII open question).
+ *
+ * Defaults to FALSE (production-safe): a real deploy that sets none of these
+ * vars is treated as production and stays redacted. Only an explicit dev-like
+ * value (`development`, `local`, `test`, …) — which the cirrus dev server sets —
+ * flips it on, so PII can never leak from a misdetected production environment.
+ */
+const isDevEnvironment = (rawEnv: unknown): boolean => {
+    const env = (rawEnv ?? {}) as Record<string, unknown>;
+
+    for (const key of ENVIRONMENT_VARS) {
+        const value = env[key];
+
+        if (typeof value === "string" && DEV_ENVIRONMENT_PATTERN.test(value)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 /**
  * Build the read-only settings view from the Worker `env`. String entries are
  * classified `secret` (masked, name- or framework-driven) or `var` (masked
@@ -173,4 +201,4 @@ const buildSettings = (rawEnv: unknown): SettingsResult => {
     return { deploy: readDeployInfo(env), settings };
 };
 
-export { bindingType, buildSettings, looksSecret, readDeployInfo, redact };
+export { bindingType, buildSettings, isDevEnvironment, looksSecret, readDeployInfo, redact };

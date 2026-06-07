@@ -48,29 +48,27 @@ describe("request-log module", () => {
         }
     });
 
-    it("redacts arg leaf values by default, preserving keys and shape", () => {
-        expect.assertions(2);
+    it("masks sensitive args (by key + pattern) while preserving benign values and shape", () => {
+        expect.assertions(4);
 
         const database = createSqliteExec();
 
         try {
             appendRequestLogEntry(
                 database.sql,
-                entry({ redactedArgs: { body: "super secret message", count: 42, flags: [true, false], nested: { token: "abc" } } }),
+                entry({ redactedArgs: { message: "hello world", password: "hunter2", nested: { token: "abc-123" } } }),
             );
 
             const [row] = readRequestLog(database.sql);
+            const args = row!.redactedArgs as Record<string, unknown>;
 
-            // Leaf scalars become their type tag; structure/keys survive so the dashboard can still correlate.
-            expect(row!.redactedArgs).toStrictEqual({
-                body: "<string>",
-                count: "<number>",
-                flags: ["<boolean>", "<boolean>"],
-                nested: { token: "<string>" },
-            });
-
-            // The raw secret string never lands in the durable column.
-            expect(JSON.stringify(row!.redactedArgs)).not.toContain("super secret");
+            // Structure/keys survive so the dashboard can still correlate.
+            expect(Object.keys(args).toSorted((a, b) => a.localeCompare(b))).toEqual(["message", "nested", "password"]);
+            // Benign values stay readable (richer than a blunt type-tag stamp).
+            expect(args.message).toBe("hello world");
+            // Sensitive keys/values are masked — the raw secrets never land in the column.
+            expect(args.password).not.toBe("hunter2");
+            expect(JSON.stringify(args)).not.toContain("abc-123");
         } finally {
             database.close();
         }
@@ -140,6 +138,26 @@ describe("request-log module", () => {
         }
     });
 
+    it("honours a retention override (CIRRUS_REQUEST_LOG_RETENTION)", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            for (let index = 0; index < 5; index += 1) {
+                appendRequestLogEntry(database.sql, entry({ functionPath: `fn:${String(index)}`, ts: 1000 + index }), { retention: 2 });
+            }
+
+            const rows = readRequestLog(database.sql, { limit: 100 });
+
+            // Trimmed to the override, newest two surviving.
+            expect(rows).toHaveLength(2);
+            expect(rows.map((row) => row.functionPath)).toEqual(["fn:4", "fn:3"]);
+        } finally {
+            database.close();
+        }
+    });
+
     it("filters by function-path prefix, userId, shardKey, outcome and table-touched", () => {
         expect.assertions(6);
 
@@ -192,22 +210,18 @@ describe("request-log module", () => {
         }
     });
 
-    it("redactArgs passes null/undefined through and bounds deep nesting", () => {
-        expect.assertions(2);
+    it("redactArgs passes null/undefined through, redacts nested secrets, and honours captureRaw", () => {
+        expect.assertions(4);
 
-        // A JSON null is a valid leaf and must pass through unredacted.
-        const jsonNull = JSON.parse("null") as unknown;
+        // A JSON null/undefined is a valid leaf and must pass through unchanged.
+        expect(redactArgs(JSON.parse("null") as unknown)).toBeNull();
+        expect(redactArgs(undefined)).toBeUndefined();
 
-        expect(redactArgs(jsonNull)).toBeNull();
+        // Nested sensitive values are masked recursively.
+        expect(JSON.stringify(redactArgs({ deep: { nested: { password: "hunter2" } } }))).not.toContain("hunter2");
 
-        // 12 levels deep collapses to the depth tag below the bound (8).
-        let deep: unknown = "leaf";
-
-        for (let index = 0; index < 12; index += 1) {
-            deep = { child: deep };
-        }
-
-        expect(JSON.stringify(redactArgs(deep))).toContain("<deep>");
+        // captureRaw (dev) returns the value untouched.
+        expect(redactArgs({ password: "hunter2" }, true)).toStrictEqual({ password: "hunter2" });
     });
 });
 
@@ -239,11 +253,24 @@ describe("emitRequestLogEvent (PLAN3 §3.3 Logpush emit)", () => {
         expect(event).toMatchObject({ function: "messages:list", outcome: "ok", shard: "room-9", source: "cirrus", type: "request", userId: "user-1" });
         expect(event.cacheHit).toBe(true);
         expect(event.tablesRead).toEqual(["messages"]);
-        // Raw arg/identity PII must be type-tagged, never emitted verbatim.
-        expect(event.args).toEqual({ token: "<string>" });
-        expect(event.identity).toEqual({ email: "<string>", roles: ["<string>"] });
+        // Sensitive arg/identity values are masked, never emitted verbatim — shape preserved.
+        expect((event.args as Record<string, unknown>).token).not.toBe("s3cr3t");
+        expect(Object.keys(event.identity as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toEqual(["email", "roles"]);
         expect(JSON.stringify(event)).not.toContain("s3cr3t");
         expect(JSON.stringify(event)).not.toContain("alice@example.com");
+    });
+
+    it("captureRaw emits un-redacted args/identity (the dev escape hatch)", () => {
+        expect.assertions(2);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        emitRequestLogEvent(entry({ identity: { email: "alice@example.com" }, redactedArgs: { token: "s3cr3t" } }), { captureRaw: true });
+
+        const event = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
+
+        expect(event.args).toEqual({ token: "s3cr3t" });
+        expect(event.identity).toEqual({ email: "alice@example.com" });
     });
 
     it("routes an error outcome to console.error and carries the message", () => {

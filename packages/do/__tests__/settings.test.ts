@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ADMIN_FUNCTIONS } from "../src/introspect.js";
-import { buildSettings } from "../src/settings.js";
+import { buildSettings, isDevEnvironment } from "../src/settings.js";
 import type { ShardDOState } from "../src/shard-do.js";
 import { ShardDO } from "../src/shard-do.js";
 import createSqliteExec from "./_helpers/node-sqlite.js";
@@ -147,5 +147,26 @@ describe("getSettings admin RPC", () => {
 
         expect(missing.status).toBe(403);
         expect(wrong.status).toBe(403);
+    });
+});
+
+describe("isDevEnvironment", () => {
+    it("is true for dev-like environment names across the recognised vars", () => {
+        expect.assertions(5);
+
+        expect(isDevEnvironment({ NODE_ENV: "development" })).toBe(true);
+        expect(isDevEnvironment({ ENVIRONMENT: "dev" })).toBe(true);
+        expect(isDevEnvironment({ WORKER_ENV: "local" })).toBe(true);
+        expect(isDevEnvironment({ CF_ENV: "test" })).toBe(true);
+        expect(isDevEnvironment({ NODE_ENV: "LOCALHOST" })).toBe(true);
+    });
+
+    it("is false for production and when no environment var is set (production-safe default)", () => {
+        expect.assertions(4);
+
+        expect(isDevEnvironment({ NODE_ENV: "production" })).toBe(false);
+        expect(isDevEnvironment({ ENVIRONMENT: "staging" })).toBe(false);
+        expect(isDevEnvironment({})).toBe(false);
+        expect(isDevEnvironment(undefined)).toBe(false);
     });
 });

@@ -19,9 +19,9 @@ import { LogBuffer } from "./log-buffer.js";
 import { armRestore, readBookmark } from "./pitr.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
-import type { AppendRequestLogEntry, RequestLogResult } from "./request-log.js";
+import type { AppendRequestLogEntry, RequestLogResult, RequestLogWriteOptions } from "./request-log.js";
 import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog } from "./request-log.js";
-import { buildSettings } from "./settings.js";
+import { buildSettings, isDevEnvironment } from "./settings.js";
 import type { TransactionSqlLike } from "./transaction.js";
 import { ConflictError } from "./transaction.js";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
@@ -766,6 +766,42 @@ const tablesFromDeps = (deps: Set<string>): Set<string> => {
     }
 
     return tables;
+};
+
+/** Parse a positive-integer env override (e.g. `CIRRUS_REQUEST_LOG_RETENTION`); `undefined` when unset/invalid so the caller keeps its default. */
+const parsePositiveInt = (raw: string | undefined): number | undefined => {
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    const value = Number.parseInt(raw, 10);
+
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+};
+
+/** Parse a 0..1 sample rate (`CIRRUS_REQUEST_LOG_SAMPLE`); clamped to `[0, 1]`, defaulting to `1` (record all) when unset/invalid. */
+const parseSampleRate = (raw: string | undefined): number => {
+    if (raw === undefined) {
+        return 1;
+    }
+
+    const value = Number.parseFloat(raw);
+
+    return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
+};
+
+/** Whether a sampled event survives at `rate` (`1` = always, `0` = never, else a uniform draw). */
+const sampleHit = (rate: number): boolean => {
+    if (rate >= 1) {
+        return true;
+    }
+
+    if (rate <= 0) {
+        return false;
+    }
+
+    // eslint-disable-next-line sonarjs/pseudo-random -- observability sampling, not a security-sensitive draw; an attacker biasing which request logs is not a threat.
+    return Math.random() < rate;
 };
 
 const extractBearerToken = (authorization: string | null): string | undefined => {
@@ -2357,7 +2393,12 @@ abstract class ShardDO {
      * outcome, duration, tables read/written, cache hit) that Cloudflare cannot
      * attribute (PLAN3 §1.1). When `CIRRUS_REQUEST_LOG_EMIT` is set, the same
      * entry is ALSO emitted as a structured console event for CF Workers Logs /
-     * Logpush to ship to external SIEMs (PLAN3 §3.3) — see `requestLogEmitEnabled`.
+     * Logpush to ship to external SIEMs (PLAN3 §3.3) — see `requestLogConfig`.
+     *
+     * Volume is bounded by two knobs (`requestLogConfig`): SUCCESSFUL dispatches
+     * are sampled at `CIRRUS_REQUEST_LOG_SAMPLE` (errors always recorded) and the
+     * durable rows are trimmed to `CIRRUS_REQUEST_LOG_RETENTION`. Args/identity
+     * are redacted by default and captured raw only in a dev environment.
      *
      * Best-effort, exactly like `recordFunctionCall`'s durable upsert: a SQL
      * failure (e.g. a test double without a `sql` handle) must NEVER turn a
@@ -2385,11 +2426,21 @@ abstract class ShardDO {
         tablesWritten: string[],
         errorMessage?: string,
     ): void {
+        const config = this.requestLogConfig();
+
+        // Sampling: ALWAYS record errors (rare, high-value); sample successful
+        // dispatches at `sampleRate` so a hot shard doesn't write+emit on literally
+        // every request. One decision governs both sinks, so a sampled-out request
+        // is simply not observed — durable row and Logpush event stay consistent.
+        if (outcome === "ok" && !sampleHit(config.sampleRate)) {
+            return;
+        }
+
         // Build the structured entry once and feed it to BOTH sinks: the durable
         // `__cirrus_reqlog__` row (the queryable readout) and — when enabled — a
         // console event CF's Workers Logs / Logpush pipeline ships to external
-        // SIEMs (PLAN3 §3.3). Both redact args/identity internally from this same
-        // raw entry, so the two stay byte-consistent.
+        // SIEMs (PLAN3 §3.3). Both redact args/identity from this same raw entry
+        // (unless `captureRaw` in dev), so the two stay byte-consistent.
         const entry: AppendRequestLogEntry = {
             cacheHit: this.currentRequestCacheHit,
             durationMs,
@@ -2405,15 +2456,17 @@ abstract class ShardDO {
             userId: this.getCurrentUserId(),
         };
 
+        const writeOptions: RequestLogWriteOptions = { captureRaw: config.captureRaw, retention: config.retention };
+
         try {
-            appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, entry);
+            appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, entry, writeOptions);
         } catch {
             // Best-effort: never let request-log persistence fail the request.
         }
 
-        if (this.requestLogEmitEnabled()) {
+        if (config.emit) {
             try {
-                emitRequestLogEvent(entry);
+                emitRequestLogEvent(entry, writeOptions);
             } catch {
                 // Best-effort: never let event emission fail the request.
             }
@@ -2421,17 +2474,30 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether to ALSO emit each request-log entry as a structured console event
-     * for CF Workers Logs / Logpush (PLAN3 §3.3). Opt-in via the
-     * `CIRRUS_REQUEST_LOG_EMIT` binding (`"1"` / `"true"`) — default off, since a
+     * Resolve the request-log knobs from the Worker `env`, all PLAN3 §3.3 decisions.
+     *
+     * `captureRaw`: raw (un-redacted) args/identity in a dev environment, redacted
+     * in production (`isDevEnvironment`) — default redacted.
+     *
+     * `emit`: also stream each entry as a console event for CF Workers Logs /
+     * Logpush (`CIRRUS_REQUEST_LOG_EMIT` = `"1"`/`"true"`) — default off, since a
      * line per dispatch is real log volume an operator should choose to stream.
-     * The durable readout is unaffected either way.
+     *
+     * `retention`: durable-row cap override (`CIRRUS_REQUEST_LOG_RETENTION`);
+     * `undefined` falls back to the module default.
+     *
+     * `sampleRate`: fraction of SUCCESSFUL dispatches recorded
+     * (`CIRRUS_REQUEST_LOG_SAMPLE`, 0..1, default 1.0 = all); errors always record.
      */
-    private requestLogEmitEnabled(): boolean {
-        const env = (this.env ?? {}) as { CIRRUS_REQUEST_LOG_EMIT?: string };
-        const flag = env.CIRRUS_REQUEST_LOG_EMIT;
+    private requestLogConfig(): { captureRaw: boolean; emit: boolean; retention: number | undefined; sampleRate: number } {
+        const env = (this.env ?? {}) as { CIRRUS_REQUEST_LOG_EMIT?: string; CIRRUS_REQUEST_LOG_RETENTION?: string; CIRRUS_REQUEST_LOG_SAMPLE?: string };
 
-        return flag === "1" || flag === "true";
+        return {
+            captureRaw: isDevEnvironment(this.env),
+            emit: env.CIRRUS_REQUEST_LOG_EMIT === "1" || env.CIRRUS_REQUEST_LOG_EMIT === "true",
+            retention: parsePositiveInt(env.CIRRUS_REQUEST_LOG_RETENTION),
+            sampleRate: parseSampleRate(env.CIRRUS_REQUEST_LOG_SAMPLE),
+        };
     }
 
     /**

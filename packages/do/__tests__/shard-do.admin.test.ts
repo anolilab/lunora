@@ -443,7 +443,7 @@ describe("shardDO admin data migrations", () => {
     });
 
     it("getRequestLog records one durable entry per dispatch with the acting user, outcome and redacted args", async () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
@@ -451,7 +451,7 @@ describe("shardDO admin data migrations", () => {
         // captures BOTH outcomes (unlike the error-only in-memory `getLogs`).
         const authedRequest = (functionPath: string): Request =>
             new Request("https://shard.internal/rpc", {
-                body: JSON.stringify({ args: { secret: "p@ssw0rd" }, functionPath }),
+                body: JSON.stringify({ args: { password: "p@ssw0rd" }, functionPath }),
                 headers: { "content-type": "application/json", "x-cirrus-userid": "u1" },
                 method: "POST",
             });
@@ -464,21 +464,60 @@ describe("shardDO admin data migrations", () => {
         expect(response.status).toBe(200);
 
         const body = await response.json<{
-            result: { entries: { functionPath: string; outcome: string; redactedArgs?: unknown; userId?: string }[] };
+            result: { entries: { functionPath: string; outcome: string; redactedArgs?: Record<string, unknown>; userId?: string }[] };
         }>();
 
         // Newest first: the boom error precedes the messages:list success.
         expect(body.result.entries).toHaveLength(2);
         expect(body.result.entries[0]).toMatchObject({ functionPath: "boom:explode", outcome: "error" });
         expect(body.result.entries[1]).toMatchObject({ functionPath: "messages:list", outcome: "ok", userId: "u1" });
-        // Args are redacted by default — the raw secret never reaches the log.
-        expect(body.result.entries[1]!.redactedArgs).toStrictEqual({ secret: "<string>" });
+        // Args are redacted by default — the raw secret never reaches the log, but the shape survives.
+        const loggedArgs = body.result.entries[1]!.redactedArgs!;
+
+        expect(Object.keys(loggedArgs)).toEqual(["password"]);
+        expect(loggedArgs.password).not.toBe("p@ssw0rd");
 
         // And the correlated filters narrow on those fields.
         const filtered = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getRequestLog, { outcome: "error" }));
         const filteredBody = await filtered.json<{ result: { entries: { functionPath: string }[] } }>();
 
         expect(filteredBody.result.entries.map((entry) => entry.functionPath)).toStrictEqual(["boom:explode"]);
+    });
+
+    it("samples out successful dispatches at rate 0 but always records errors", async () => {
+        expect.assertions(2);
+
+        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, CIRRUS_REQUEST_LOG_SAMPLE: "0" });
+
+        await shard.fetch(userRequest("messages:list")); // ok → sampled out
+        await shard.fetch(userRequest("messages:get")); // ok → sampled out
+        await shard.fetch(userRequest("boom:explode")); // error → always recorded
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getRequestLog, {}));
+        const body = await response.json<{ result: { entries: { functionPath: string; outcome: string }[] } }>();
+
+        expect(body.result.entries).toHaveLength(1);
+        expect(body.result.entries[0]).toMatchObject({ functionPath: "boom:explode", outcome: "error" });
+    });
+
+    it("captures raw args in a dev environment (CIRRUS PII dev escape hatch)", async () => {
+        expect.assertions(1);
+
+        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, ENVIRONMENT: "development" });
+
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: { password: "p@ssw0rd" }, functionPath: "messages:list" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getRequestLog, {}));
+        const body = await response.json<{ result: { entries: { redactedArgs?: Record<string, unknown> }[] } }>();
+
+        // Dev → raw capture: the value is NOT redacted.
+        expect(body.result.entries[0]!.redactedArgs).toStrictEqual({ password: "p@ssw0rd" });
     });
 });
 

@@ -200,6 +200,10 @@ catalogs:
     cz-conventional-changelog:
       specifier: ^3.3.0
       version: 3.3.0
+  redact:
+    '@visulima/redact':
+      specifier: 3.0.0-alpha.13
+      version: 3.0.0-alpha.13
   test:
     fake-indexeddb:
       specifier: 6.2.5
@@ -1108,6 +1112,9 @@ importers:
 
   packages/do:
     dependencies:
+      '@visulima/redact':
+        specifier: catalog:redact
+        version: 3.0.0-alpha.13
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260607.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)
@@ -6101,6 +6108,10 @@ packages:
     engines: {node: ^22.14.0 || >=24.10.0}
     os: [darwin, linux, win32]
 
+  '@visulima/redact@3.0.0-alpha.13':
+    resolution: {integrity: sha512-FsRv7ugMoRD2T4vyg19HSgLrObJ688oV72uLGN1QmRnaCm4w4PmCXc3kurSqKWIEmsw1llfJx/MM9X3mzmURRw==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+
   '@visulima/rollup-plugin-css@1.0.0-alpha.52':
     resolution: {integrity: sha512-bjS7V57z1oCLxQ5DiT+IH0x5rrncbkhIZqpqx/R4q7oa3p5ZBrYZzRp9HIQEmqWE/kpzCH38hMpqR56lh12VwQ==}
     engines: {node: ^22.14.0 || >= 24.10.0}
@@ -7248,6 +7259,10 @@ packages:
   compare-versions@6.1.1:
     resolution: {integrity: sha512-4hm4VPpIecmlg59CHXnRDnqGplJFrbLG4aFEl5vl6cK1u76ws3LLvX7ikFnTDl5vo39sjWD6AaDPYodJp/NNHg==}
 
+  compromise@14.15.1:
+    resolution: {integrity: sha512-9F3UkUaEU1PPz2fgStkE/TI4tk++0wHxS8xfWq9PQWL/v28dy8bEcPVVSLh3dISIRD7PEhJ8YTzHRKF8y9tnLA==}
+    engines: {node: '>=12.0.0'}
+
   compute-scroll-into-view@3.1.1:
     resolution: {integrity: sha512-VRhuHOLoKYOy4UbilLbUzbYg93XLjv2PncJC50EuTWPA3gaja1UjBsUP/D/9/juV3vQFr6XBEzn9KCAHdUvOHw==}
 
@@ -7695,6 +7710,10 @@ packages:
 
   effect@4.0.0-beta.70:
     resolution: {integrity: sha512-8AwGTRiNriirHGEYHrOS0E9fzdhIqCdZjiHP1YXmNo2UyPGS43ILsymsSHT7V0DJS+8dvlKq2RxnrDBUhDNZHg==}
+
+  efrt@2.7.0:
+    resolution: {integrity: sha512-/RInbCy1d4P6Zdfa+TMVsf/ufZVotat5hCw3QXmWtjU+3pFEOvOQ7ibo3aIxyCJw2leIeAMjmPj+1SLJiCpdrQ==}
+    engines: {node: '>=12.0.0'}
 
   electron-to-chromium@1.5.362:
     resolution: {integrity: sha512-PUY2DrLvkjkUuWqq+KPL2iWshrJsZOcIojzRQ7eXFacc9dWga7MGMJAa15VbiejSZB1PAXaRLAiKgruHP8LB1w==}
@@ -8717,6 +8736,10 @@ packages:
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
+
+  grad-school@0.0.5:
+    resolution: {integrity: sha512-rXunEHF9M9EkMydTBux7+IryYXEZinRk6g8OBOGDBzo/qWJjhTxy86i5q7lQYpCLHN8Sqv1XX3OIOc7ka2gtvQ==}
+    engines: {node: '>=8.0.0'}
 
   graphql@16.14.1:
     resolution: {integrity: sha512-cQOsSMS/IrDz82PVyRDvf/Q1F/bRbBVjJlh+xYOkI1qw2bWRvWGiWc+m2O0d6l4Bt1fyY+8kzJ8JFWGJqNeDBg==}
@@ -11311,6 +11334,9 @@ packages:
         optional: true
       babel-plugin-macros:
         optional: true
+
+  suffix-thumb@5.0.2:
+    resolution: {integrity: sha512-I5PWXAFKx3FYnI9a+dQMWNqTxoRt6vdBdb0O+BJ1sxXCWtSoQCusc13E58f+9p4MYx/qCnEMkD5jac6K2j3dgA==}
 
   super-regex@1.1.0:
     resolution: {integrity: sha512-WHkws2ZflZe41zj6AolvvmaTrWds/VuyeYr9iPVv/oQeaIoVxMKaushfFWpOGDT+GuBrM/sVqF8KUCYQlSSTdQ==}
@@ -16257,6 +16283,10 @@ snapshots:
 
   '@visulima/path@3.0.0-alpha.12': {}
 
+  '@visulima/redact@3.0.0-alpha.13':
+    dependencies:
+      compromise: 14.15.1
+
   '@visulima/rollup-plugin-css@1.0.0-alpha.52(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)(@csstools/postcss-slow-plugins@2.0.0(postcss@8.5.15))(@tailwindcss/node@4.3.0)(@tailwindcss/oxide@4.3.0)(@visulima/css-style-inject@1.0.0-alpha.17)(esbuild@0.28.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(lightningcss@1.32.0)(postcss@8.5.15)(rollup@4.60.1)(typescript@6.0.3)(yaml@2.9.0)':
     dependencies:
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.0)
@@ -17201,6 +17231,12 @@ snapshots:
 
   compare-versions@6.1.1: {}
 
+  compromise@14.15.1:
+    dependencies:
+      efrt: 2.7.0
+      grad-school: 0.0.5
+      suffix-thumb: 5.0.2
+
   compute-scroll-into-view@3.1.1: {}
 
   concat-map@0.0.1: {}
@@ -17551,6 +17587,8 @@ snapshots:
       toml: 4.1.1
       uuid: 14.0.0
       yaml: 2.9.0
+
+  efrt@2.7.0: {}
 
   electron-to-chromium@1.5.362: {}
 
@@ -18915,6 +18953,8 @@ snapshots:
   graceful-fs@4.2.10: {}
 
   graceful-fs@4.2.11: {}
+
+  grad-school@0.0.5: {}
 
   graphql@16.14.1: {}
 
@@ -22118,6 +22158,8 @@ snapshots:
       react: 19.2.7
     optionalDependencies:
       '@babel/core': 7.29.7
+
+  suffix-thumb@5.0.2: {}
 
   super-regex@1.1.0:
     dependencies:
