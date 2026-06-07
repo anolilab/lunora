@@ -127,7 +127,9 @@ describe("shardDO admin introspection", () => {
         // The codegen subclass overrides `tableIndexes` from the schema; mimic it.
         class IndexedShard extends AdminShard {
             // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-            protected override tableIndexes(table: string): { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[] {
+            protected override tableIndexes(
+                table: string,
+            ): { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[] {
                 return table === "messages" ? [{ fields: ["author"], name: "by_author", type: "index", unique: true }] : [];
             }
         }
@@ -437,6 +439,45 @@ describe("shardDO admin data migrations", () => {
         expect(byPath.get("boom:explode")).toMatchObject({ calls: 1, errors: 1, lastErrorMessage: "boom" });
         expect(byPath.get("messages:list")?.lastErrorMessage).toBeNull();
         expect(body.result.sinceMs).toBeTypeOf("number");
+    });
+
+    it("getRequestLog records one durable entry per dispatch with the acting user, outcome and redacted args", async () => {
+        expect.assertions(6);
+
+        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // A user-attributed success and a failing dispatch, so the durable log
+        // captures BOTH outcomes (unlike the error-only in-memory `getLogs`).
+        const authedRequest = (functionPath: string): Request =>
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: { secret: "p@ssw0rd" }, functionPath }),
+                headers: { "content-type": "application/json", "x-cirrus-userid": "u1" },
+                method: "POST",
+            });
+
+        await shard.fetch(authedRequest("messages:list"));
+        await shard.fetch(userRequest("boom:explode"));
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getRequestLog, {}));
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{
+            result: { entries: { functionPath: string; outcome: string; redactedArgs?: unknown; userId?: string }[] };
+        }>();
+
+        // Newest first: the boom error precedes the messages:list success.
+        expect(body.result.entries).toHaveLength(2);
+        expect(body.result.entries[0]).toMatchObject({ functionPath: "boom:explode", outcome: "error" });
+        expect(body.result.entries[1]).toMatchObject({ functionPath: "messages:list", outcome: "ok", userId: "u1" });
+        // Args are redacted by default — the raw secret never reaches the log.
+        expect(body.result.entries[1]!.redactedArgs).toStrictEqual({ secret: "<string>" });
+
+        // And the correlated filters narrow on those fields.
+        const filtered = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getRequestLog, { outcome: "error" }));
+        const filteredBody = await filtered.json<{ result: { entries: { functionPath: string }[] } }>();
+
+        expect(filteredBody.result.entries.map((entry) => entry.functionPath)).toStrictEqual(["boom:explode"]);
     });
 });
 

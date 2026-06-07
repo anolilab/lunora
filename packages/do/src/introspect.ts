@@ -24,6 +24,7 @@ const ADMIN_FUNCTIONS = {
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
     getPitrBookmark: "__cirrus_admin__:getPitrBookmark",
+    getRequestLog: "__cirrus_admin__:getRequestLog",
     getSettings: "__cirrus_admin__:getSettings",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
