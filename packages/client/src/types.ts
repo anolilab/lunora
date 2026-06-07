@@ -112,6 +112,15 @@ export interface CirrusClientOptions {
     authBasePath?: string;
     bookmarkStorage?: BookmarkStorage;
     fetch?: typeof fetch;
+
+    /**
+     * Interval (ms) between keepalive pings sent on each open subscription
+     * socket. The server answers them via the Durable Object's hibernation
+     * auto-response WITHOUT waking the DO, so an idle socket stays alive across
+     * hibernation without a billable wakeup. Defaults to 30000 (30s); set to
+     * `0` (or a negative value) to disable the heartbeat entirely.
+     */
+    heartbeatIntervalMs?: number;
     offlineQueue?: OfflineQueueOptions;
     /** Durable store for the offline mutation queue; omit to keep it in memory. */
     persistence?: PersistenceAdapter;

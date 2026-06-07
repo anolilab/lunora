@@ -25,6 +25,17 @@ import { ConflictError } from "./transaction.js";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
 
 /**
+ * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
+ * via the DO Hibernation API's auto-response — see {@link ShardDO.armWebSocketKeepalive}.
+ * The exchange never wakes the Durable Object, so an idle subscription socket
+ * stays alive across hibernation without a billable request. Clients send this
+ * payload on their heartbeat instead of an app-level ping.
+ */
+const WS_KEEPALIVE_PING = "cirrus-ping";
+/** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
+const WS_KEEPALIVE_PONG = "cirrus-pong";
+
+/**
  * Minimal projection of `DurableObjectState` that the ShardDO base requires.
  * Declared structurally so unit tests can pass in plain object doubles
  * without depending on the workers runtime.
@@ -52,6 +63,14 @@ interface ShardDOState {
     getWebSockets: (tag?: string) => WebSocket[];
     /** Optional pointer to the DO instance id so we can detect `__root__`. */
     id?: { name?: string };
+
+    /**
+     * Register a constant ping/pong auto-response so the runtime answers a
+     * known keepalive frame on a hibernated socket WITHOUT waking this DO (no
+     * billable request, no dispatch). Optional: absent in the unit harness and
+     * older runtimes, present on the real `DurableObjectState`.
+     */
+    setWebSocketAutoResponse?: (pair: WebSocketRequestResponsePair) => void;
     storage: {
         /** Native PITR (≤30 days): bookmark for a past `time`. Absent in local dev. */
         getBookmarkForTime?: (time: Date | number) => Promise<string>;
@@ -883,6 +902,8 @@ abstract class ShardDO {
         if (options.reactiveCache) {
             this.reactiveCache = new ReactiveCache(options.reactiveCache);
         }
+
+        this.armWebSocketKeepalive();
     }
 
     /** SQLite handle scoped to this Durable Object. */
@@ -2565,6 +2586,26 @@ abstract class ShardDO {
         const supplied = this.suppliedWsToken(request);
 
         return supplied !== undefined && constantTimeEqual(supplied, adminToken);
+    }
+
+    /**
+     * Register the hibernation-safe ping/pong keepalive. The runtime answers a
+     * {@link WS_KEEPALIVE_PING} text frame with {@link WS_KEEPALIVE_PONG}
+     * WITHOUT waking this Durable Object, keeping idle subscription sockets
+     * alive across hibernation with no billable wakeup and no dispatch. The
+     * auto-response is per-instance, so this re-runs on every construction
+     * (including a post-hibernation wake). Guarded: the API and the
+     * `WebSocketRequestResponsePair` global are absent in the unit harness and
+     * on older runtimes, where it degrades to a no-op.
+     */
+    private armWebSocketKeepalive(): void {
+        const setter = this.state.setWebSocketAutoResponse;
+
+        if (typeof setter !== "function" || typeof WebSocketRequestResponsePair === "undefined") {
+            return;
+        }
+
+        setter.call(this.state, new WebSocketRequestResponsePair(WS_KEEPALIVE_PING, WS_KEEPALIVE_PONG));
     }
 
     private handleWebSocketUpgrade(request: Request): Response {

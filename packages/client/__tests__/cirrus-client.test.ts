@@ -277,6 +277,68 @@ describe("cirrusClient", () => {
             expect(last).toEqual({ id: sub.id, type: "unsubscribe" });
         });
 
+        it("sends keepalive pings on an open socket and stops them on disconnect", () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const client = new CirrusClient({
+                fetch: vi.fn<typeof fetch>(),
+                heartbeatIntervalMs: 1000,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // First frame is the subscribe envelope; no ping has fired yet.
+            expect(socket.sent).toHaveLength(1);
+
+            vi.advanceTimersByTime(1000);
+
+            expect(socket.sent.at(-1)).toBe("cirrus-ping");
+
+            vi.advanceTimersByTime(1000);
+
+            expect(socket.sent.filter((f) => f === "cirrus-ping")).toHaveLength(2);
+
+            // After the socket drops, the heartbeat must stop (no leaked interval).
+            socket.triggerClose();
+            vi.advanceTimersByTime(5000);
+
+            expect(socket.sent.filter((f) => f === "cirrus-ping")).toHaveLength(2);
+
+            client.close();
+        });
+
+        it("does not send keepalive pings when the heartbeat is disabled", () => {
+            expect.assertions(1);
+
+            vi.useFakeTimers();
+
+            const client = new CirrusClient({
+                fetch: vi.fn<typeof fetch>(),
+                heartbeatIntervalMs: 0,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+            vi.advanceTimersByTime(60_000);
+
+            expect(socket.sent).not.toContain("cirrus-ping");
+
+            client.close();
+        });
+
         it("keys reactive page subscriptions by their (lower, upper] cursor range", () => {
             expect.assertions(3);
 
@@ -500,8 +562,14 @@ describe("cirrusClient", () => {
             socket.receive({ delta: { key: "a", op: "delete", table: "messages" }, id: sub.id, type: "delta" });
 
             expect(received[0]).toStrictEqual([{ _id: "a", text: "one" }]);
-            expect(received[1]).toStrictEqual([{ _id: "a", text: "one" }, { _id: "b", text: "two" }]);
-            expect(received[2]).toStrictEqual([{ _id: "a", text: "ONE" }, { _id: "b", text: "two" }]);
+            expect(received[1]).toStrictEqual([
+                { _id: "a", text: "one" },
+                { _id: "b", text: "two" },
+            ]);
+            expect(received[2]).toStrictEqual([
+                { _id: "a", text: "ONE" },
+                { _id: "b", text: "two" },
+            ]);
             expect(received[3]).toStrictEqual([{ _id: "b", text: "two" }]);
         });
 
@@ -574,6 +642,10 @@ describe("cirrusClient", () => {
             const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { id: "1" } }));
             const client = new CirrusClient({
                 fetch: fetchMock,
+                // Disable the keepalive: this test drains every pending timer
+                // with `runAllTimersAsync()`, which never terminates against a
+                // recurring heartbeat interval.
+                heartbeatIntervalMs: 0,
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -680,6 +752,9 @@ describe("cirrusClient", () => {
             const persistence = createInMemoryPersistence();
             const client = new CirrusClient({
                 fetch: fetchMock,
+                // Disable the keepalive — `runAllTimersAsync()` below never
+                // terminates against a recurring heartbeat interval.
+                heartbeatIntervalMs: 0,
                 persistence,
                 reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
                 url: "https://app.example",

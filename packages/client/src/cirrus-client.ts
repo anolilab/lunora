@@ -40,6 +40,18 @@ const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 
 /**
+ * Keepalive frame sent on the heartbeat. MUST match the request payload the
+ * server registers via `setWebSocketAutoResponse` (`@cirrus/do`'s ShardDO
+ * `WS_KEEPALIVE_PING`): the runtime answers it with `cirrus-pong` WITHOUT
+ * waking the Durable Object. The pong is a plain (non-JSON) string and is
+ * silently dropped by `handleServerMessage`'s `JSON.parse` guard.
+ */
+const WS_KEEPALIVE_PING = "cirrus-ping";
+
+/** Default heartbeat cadence (ms) — see {@link CirrusClientOptions.heartbeatIntervalMs}. */
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+
+/**
  * Maximum number of stream-start frames queued per connection while the
  * socket is (re)connecting. Past this cap, the oldest queued stream is
  * evicted (its consumer is failed with `STREAM_QUEUE_OVERFLOW`) so a stuck
@@ -124,6 +136,8 @@ const stableStringify = (value: unknown): string => {
  * are all per-connection so one shard dropping doesn't disturb the others.
  */
 interface ShardConnection {
+    /** Active keepalive interval while the socket is open; cleared on disconnect/close. */
+    heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
     pendingStreams?: ClientMessage[];
     pendingUnsubscribes: string[];
@@ -313,6 +327,9 @@ class CirrusClient {
 
     private readonly reconnectOptions: ReconnectOptions | undefined;
 
+    /** Keepalive cadence (ms); `0` disables the heartbeat. See {@link CirrusClientOptions.heartbeatIntervalMs}. */
+    private readonly heartbeatIntervalMs: number;
+
     private readonly offlineQueue: OfflineQueue;
 
     private readonly persistence: PersistenceAdapter | undefined;
@@ -370,6 +387,7 @@ class CirrusClient {
         this.WebSocketImpl = options.WebSocket ?? (typeof WebSocket === "function" ? WebSocket : undefined);
         this.bookmark = options.bookmarkStorage ?? createInMemoryBookmarkStorage();
         this.reconnectOptions = options.reconnect;
+        this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.persistence = options.persistence;
         this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence);
 
@@ -1092,6 +1110,8 @@ class CirrusClient {
                 conn.reconnectTimer = undefined;
             }
 
+            this.stopHeartbeat(conn);
+
             if (conn.socket) {
                 try {
                     conn.socket.close();
@@ -1246,6 +1266,7 @@ class CirrusClient {
 
         if (!conn) {
             conn = {
+                heartbeatTimer: undefined,
                 pendingUnsubscribes: [],
                 reconnect: createReconnect(this.reconnectOptions),
                 reconnectTimer: undefined,
@@ -1463,6 +1484,8 @@ class CirrusClient {
             }
 
             this.flushOfflineQueue(shardKey).catch(() => undefined);
+
+            this.startHeartbeat(conn);
         });
 
         socket.addEventListener("message", (event: MessageEvent): void => {
@@ -1499,6 +1522,7 @@ class CirrusClient {
         // Intentional mutation of the shared, long-lived connection record so
         // the open/close/error handlers all observe the same state machine.
         /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
+        this.stopHeartbeat(conn);
         conn.socket = undefined;
         conn.wsState = "idle";
         this.emitConnectionStatus();
@@ -1515,6 +1539,45 @@ class CirrusClient {
             this.ensureSocket(conn.shardKey);
         }, delay);
         /* eslint-enable no-param-reassign */
+    }
+
+    /**
+     * Begin the keepalive heartbeat on an open connection. Each tick sends a
+     * {@link WS_KEEPALIVE_PING} text frame the server answers from its
+     * hibernation auto-response without waking the DO. A no-op when the
+     * heartbeat is disabled (an interval of zero or less); idempotent — any
+     * existing timer is cleared first so a reconnect can't leak intervals.
+     */
+    private startHeartbeat(conn: ShardConnection): void {
+        this.stopHeartbeat(conn);
+
+        if (this.heartbeatIntervalMs <= 0) {
+            return;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- store the timer on the shared connection record so stopHeartbeat can clear it
+        conn.heartbeatTimer = setInterval(() => {
+            if (conn.wsState !== "open" || !conn.socket) {
+                return;
+            }
+
+            try {
+                conn.socket.send(WS_KEEPALIVE_PING);
+            } catch {
+                // A send race against a closing socket is harmless — the close
+                // handler will tear the heartbeat down.
+            }
+        }, this.heartbeatIntervalMs);
+    }
+
+    /** Clear a connection's keepalive timer, if any. Safe to call repeatedly. */
+    // eslint-disable-next-line class-methods-use-this -- cohesive connection helper; pairs with startHeartbeat
+    private stopHeartbeat(conn: ShardConnection): void {
+        if (conn.heartbeatTimer !== undefined) {
+            clearInterval(conn.heartbeatTimer);
+            // eslint-disable-next-line no-param-reassign -- mutate the shared connection record to release the timer
+            conn.heartbeatTimer = undefined;
+        }
     }
 
     /** Mark every subscription bound to `shardKey` as needing a fresh ack. */
