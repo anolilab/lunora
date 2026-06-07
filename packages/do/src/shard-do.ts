@@ -18,6 +18,7 @@ import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } fro
 import { LogBuffer } from "./log-buffer.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
+import { buildSettings } from "./settings.js";
 import type { TransactionSqlLike } from "./transaction.js";
 import { ConflictError } from "./transaction.js";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
@@ -1718,8 +1719,8 @@ abstract class ShardDO {
 
         // Durable totals are the source of truth; fall back to the in-memory
         // counters only if the persisted read is unavailable.
-        let {requests} = this.metrics;
-        let {errors} = this.metrics;
+        let { requests } = this.metrics;
+        let { errors } = this.metrics;
 
         try {
             const totals = readFunctionMetricsTotals(this.state.storage.sql as unknown as SqlExec);
@@ -1935,7 +1936,10 @@ abstract class ShardDO {
                 // the new values. No-op on a dryRun (nothing was written).
                 await this.flushChangedTables();
 
-                this.recordAudit("runMigration", { id: parsed.id, detail: { changed: result.changed, direction: result.direction, dryRun: result.dryRun, processed: result.processed } });
+                this.recordAudit("runMigration", {
+                    id: parsed.id,
+                    detail: { changed: result.changed, direction: result.direction, dryRun: result.dryRun, processed: result.processed },
+                });
 
                 return jsonResponse({ result }, 200);
             }
@@ -2071,6 +2075,14 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.getLogs) {
             return { result: { entries: this.logs.entries() }, tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getSettings) {
+            // Read-only deployment config derived from the Worker `env` (the
+            // bindings object). String values are masked server-side, so no raw
+            // secret crosses the wire. Not bound to a table, so it carries the
+            // wildcard like the other counter/config reads.
+            return { result: buildSettings(this.env), tables: new Set([ADMIN_WILDCARD]) };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.readTablePage) {

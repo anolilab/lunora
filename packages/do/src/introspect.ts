@@ -23,6 +23,7 @@ const ADMIN_FUNCTIONS = {
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
+    getSettings: "__cirrus_admin__:getSettings",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
     migrationStatus: "__cirrus_admin__:migrationStatus",
@@ -122,6 +123,61 @@ interface FunctionStatsResult {
     functions: FunctionCallStat[];
     /** Epoch-ms this instance began collecting (shared with `getMetrics`). */
     sinceMs: number;
+}
+
+/**
+ * How a deployment binding/var classifies, served by `__cirrus_admin__:getSettings`.
+ *
+ * - `var` — a plain-text Worker var (a non-secret-looking string from `[vars]`).
+ * - `secret` — a string whose name/contents look sensitive (token/key/password/…); its value is always masked, never returned raw.
+ * - `binding` — a non-string binding object (R2/KV/Durable Object/D1/queue/service/…); only the name and kind surface.
+ */
+type SettingKind = "binding" | "secret" | "var";
+
+/**
+ * One entry in the read-only deployment-settings view. `value` is a masked
+ * preview for `var`/`secret` strings (never the raw secret) and `null` for
+ * `binding` entries, where only the name and a coarse `bindingType` are known.
+ * The Worker `env` is the single source of truth; everything is best-effort and
+ * derived from what `env` actually exposes at runtime.
+ */
+interface SettingEntry {
+    /**
+     * For `binding` entries, a coarse runtime class derived from the object's
+     * shape (`r2`, `kv`, `durable-object`, `d1`, `queue`, `service`, `object`),
+     * so the UI can label it. Absent for `var`/`secret` string entries.
+     */
+    bindingType?: string;
+    kind: SettingKind;
+    name: string;
+    /** Masked preview for string vars/secrets; `null` for non-string bindings. */
+    value: null | string;
+}
+
+/**
+ * Best-effort deploy metadata read from well-known vars in `env`, when present.
+ * Every field is optional — Cirrus reads what the runtime happens to expose
+ * (e.g. a `CF_PAGES_URL`/`WORKER_URL` var, a `CF_VERSION_METADATA` binding) and
+ * omits what it can't reach rather than guessing. Infra config is edited in
+ * wrangler/Cloudflare, never here.
+ */
+interface DeployInfo {
+    /** Deployment id from the `CF_VERSION_METADATA` binding, when bound. */
+    deploymentId?: string;
+    /** Cloudflare environment name, from a `CF_ENV`/`ENVIRONMENT`/`WORKER_ENV` var. */
+    environment?: string;
+    /** Deployment tag from the `CF_VERSION_METADATA` binding, when bound. */
+    versionTag?: string;
+    /** Public URL of the deployment, from a `CF_PAGES_URL`/`WORKER_URL` var. */
+    workerUrl?: string;
+}
+
+/** Payload of a `__cirrus_admin__:getSettings` call: the masked deployment config. */
+interface SettingsResult {
+    /** Best-effort deploy metadata; fields absent when not reachable from `env`. */
+    deploy: DeployInfo;
+    /** Every binding/var in `env`, sorted by name, with string values masked. */
+    settings: SettingEntry[];
 }
 
 /** A window of rows from one table, plus the column list and total size. */
@@ -327,7 +383,10 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { p
     const pathParameters: unknown[] = isPhysical ? [] : [`$."${clause.column.replaceAll('"', '""')}"`];
 
     if (clause.operator === "contains") {
-        return { params: [...pathParameters, `%${escapeLike(filterValueText(clause.value))}%`], sql: String.raw`CAST(${columnExpression} AS TEXT) LIKE ? ESCAPE '\'` };
+        return {
+            params: [...pathParameters, `%${escapeLike(filterValueText(clause.value))}%`],
+            sql: String.raw`CAST(${columnExpression} AS TEXT) LIKE ? ESCAPE '\'`,
+        };
     }
 
     return { params: [...pathParameters, clause.value], sql: `${columnExpression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
@@ -420,11 +479,15 @@ export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage };
 export type {
     AuditEntry,
     AuditLogResult,
+    DeployInfo,
     FilterClause,
     FilterOperator,
     FunctionCallStat,
     FunctionStatsResult,
     ReadTablePageOptions,
+    SettingEntry,
+    SettingKind,
+    SettingsResult,
     TableIndexesResult,
     TableIndexInfo,
     TableInfo,

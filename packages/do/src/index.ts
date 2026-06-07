@@ -97,9 +97,13 @@ export {
 export type {
     AuditEntry,
     AuditLogResult,
+    DeployInfo,
     FunctionCallStat,
     FunctionStatsResult,
     ReadTablePageOptions,
+    SettingEntry,
+    SettingKind,
+    SettingsResult,
     TableIndexesResult,
     TableIndexInfo,
     TableInfo,
