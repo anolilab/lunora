@@ -1,8 +1,14 @@
 # backup
 
-Scheduled, in-deployment snapshots for Cirrus — the **automatic point-in-time-recovery building block** (Convex-parity #19). A cron fires an internal action on a schedule, which exports a configured set of tables to a timestamped NDJSON object in a dedicated R2 bucket. It's the in-deployment counterpart to the `cirrus backup` CLI: instead of an operator running an export by hand, your Worker snapshots itself on a cadence you choose.
+Scheduled, in-deployment snapshots for Cirrus — **managed point-in-time recovery** (Convex-parity #19). A cron fires an internal action that exports a configured set of tables to a timestamped NDJSON object in a dedicated R2 bucket, and a second cron prunes snapshots past your retention window — so the whole loop is self-managing. It's the in-deployment counterpart to the `cirrus backup` CLI: instead of an operator running an export by hand, your Worker snapshots (and ages out) backups on a cadence you choose.
 
-Built from primitives Cirrus already has — `ctx.db` reads plus [`@cirrus/storage`](../../packages/storage)'s `createStorage` writing to R2 — so there's no new package and no Durable-Object-level support to enable.
+Built from primitives Cirrus already has — `ctx.db` reads plus [`@cirrus/storage`](../../packages/storage)'s `createStorage` writing to (and listing/deleting from) R2 — so there's no new package and no Durable-Object-level support to enable.
+
+The complete PITR loop is three pieces:
+
+1. **`snapshot`** (internal action, cron-driven) — writes a timestamped full-table NDJSON snapshot to R2.
+2. **`prune`** (internal action, cron-driven) — deletes snapshots older than your retention window so the bucket doesn't grow unbounded.
+3. **`cirrus backup restore`** (CLI) — imports the nearest snapshot, then optionally replays the CDC changelog forward to an arbitrary `--to <ISO>` time for fine-grained recovery.
 
 ## Install
 
@@ -13,7 +19,7 @@ cirrus registry add backup
 This:
 
 1. Adds `@cirrus/server` and `@cirrus/storage` to your `package.json` (run `pnpm install` afterwards).
-2. Copies `cirrus/backup/index.ts` (the `snapshot` internal action) into your project — this is **yours** to edit.
+2. Copies `cirrus/backup/index.ts` (the `snapshot` + `prune` internal actions) into your project — this is **yours** to edit.
 3. Adds an `r2_buckets` entry to `wrangler.jsonc` binding **`BACKUP_BUCKET`** to a bucket named `cirrus-backups` (see [Bindings](#bindings)).
 
 Then create the bucket and regenerate types:
@@ -23,11 +29,12 @@ wrangler r2 bucket create cirrus-backups
 cirrus codegen
 ```
 
-The action surfaces in the generated `api` as `backup/snapshot` (i.e. `internal.backup.snapshot`). It's an **internal** action, so it never appears on the public client API — only crons and other server functions can call it.
+Both actions surface in the generated `api` as `backup/snapshot` and `backup/prune` (i.e. `internal.backup.snapshot` / `internal.backup.prune`). They're **internal** actions, so they never appear on the public client API — only crons and other server functions can call them.
 
 ## How it works
 
 - **snapshot** (internal action) reads every table listed in `TABLES` via `ctx.db.query(table).collect()` and writes a single timestamped object — `snapshots/cirrus-backup-<iso>.ndjson` — to the `BACKUP_BUCKET` R2 bucket using `@cirrus/storage`'s `createStorage(...).store(...)`.
+- **prune** (internal action) lists everything under the `snapshots/` prefix via `createStorage(...).list("snapshots/", …)` (paginating R2's cursor until `truncated` is false) and `.delete(...)`s the objects outside your retention window. See [Retention](#retention) for the semantics.
 
 The object is **NDJSON framed by per-table header lines**, the same line-delimited format the `cirrus backup` CLI and the admin export endpoint emit:
 
@@ -38,7 +45,7 @@ The object is **NDJSON framed by per-table header lines**, the same line-delimit
 {"_id":"…","name":"Ada"}
 ```
 
-It returns `{ key, bytes, rows, tables }` (per-table row counts) so a wrapping job can log or alert on the result.
+`snapshot` returns `{ key, bytes, rows, tables }` (per-table row counts) and `prune` returns `{ deleted, kept }` (the snapshot keys it removed and retained) so a wrapping job can log or alert on the result.
 
 ### You MUST list your tables
 
@@ -51,9 +58,9 @@ const TABLES: readonly string[] = ["messages", "users", "channels"];
 
 (You can also pass `{ tables: [...] }` for a one-off partial backup.) If `TABLES` is empty and no override is passed, `snapshot` throws — a deliberate guard so an unconfigured cron fails loudly instead of writing empty backups.
 
-## Schedule it
+## Schedule the cron pair
 
-This item ships **only** `cirrus/backup/index.ts` — it does **not** ship a `cirrus/crons.ts`, because crons live in a single project-owned file and an item that created its own would collide with any other cron-shipping item (and with your existing crons). Register the snapshot yourself in `cirrus/crons.ts` (create it if you don't have one):
+Managed PITR is two scheduled jobs: one that **takes** snapshots and one that **ages them out**. This item ships **only** `cirrus/backup/index.ts` — it does **not** ship a `cirrus/crons.ts`, because crons live in a single project-owned file and an item that created its own would collide with any other cron-shipping item (and with your existing crons). Register both yourself in `cirrus/crons.ts` (create it if you don't have one):
 
 ```ts
 // cirrus/crons.ts
@@ -63,15 +70,30 @@ import { internal } from "./_generated/api.js";
 
 const crons = cronJobs();
 
-// Daily at 03:00 UTC.
+// Take a snapshot daily at 03:00 UTC.
 crons.daily("backup snapshot", { hourUTC: 3, minuteUTC: 0 }, internal.backup.snapshot, {});
+
+// Prune snapshots daily at 04:00 UTC — keep 30 days, but never fewer than the 5
+// most recent (see Retention). Run it after the snapshot so the fresh one counts.
+crons.daily("backup prune", { hourUTC: 4, minuteUTC: 0 }, internal.backup.prune, { keepDays: 30, keepLast: 5 });
 
 export default crons;
 ```
 
-`@cirrus/codegen` discovers `cronJobs()` registrations statically (by AST), so the schedule and dispatcher are emitted into wrangler + `_generated` on `cirrus codegen` — you never edit `triggers.crons` by hand. Other schedule kinds are available: `crons.interval("…", { hours: 6 }, …)`, `crons.weekly`, `crons.monthly`, and the raw `crons.cron("…", "0 3 * * *", …)` escape hatch.
+`@cirrus/codegen` discovers `cronJobs()` registrations statically (by AST), so the schedules and dispatcher are emitted into wrangler + `_generated` on `cirrus codegen` — you never edit `triggers.crons` by hand. Other schedule kinds are available: `crons.interval("…", { hours: 6 }, …)`, `crons.weekly`, `crons.monthly`, and the raw `crons.cron("…", "0 3 * * *", …)` escape hatch.
 
-> Cron names must be unique across the project. If you already register crons, just add the `crons.daily("backup snapshot", …)` line to your existing builder rather than creating a second `cronJobs()`.
+> Cron names must be unique across the project. If you already register crons, just add the two `crons.daily(...)` lines to your existing builder rather than creating a second `cronJobs()`.
+
+## Retention
+
+`prune` deletes snapshots that fall outside your retention window. Pass `keepDays`, `keepLast`, or both:
+
+- **`keepDays`** — keep snapshots written within the last N days; older ones are eligible for deletion.
+- **`keepLast`** — keep the N most-recent snapshots (by upload time), regardless of age.
+
+When you pass **both**, they combine as a logical OR over _protection_: a snapshot is deleted only if it's **both** older than `keepDays` **and** not among the `keepLast` newest. So `{ keepDays: 30, keepLast: 5 }` keeps everything from the last 30 days **and** always retains your 5 latest snapshots even if all of them are older than 30 days — you can never prune your way down to zero restore points.
+
+Calling `prune` with **neither** argument throws — a deliberate guard so a misconfigured cron fails loudly rather than silently deleting (or keeping) everything. It returns `{ deleted, kept }` listing the affected keys.
 
 ## Bindings
 
@@ -85,26 +107,23 @@ export default crons;
 
 `cirrus registry add` **merges** this into any existing `r2_buckets` array (it won't drop buckets you already have), and is idempotent on re-run. Rename `bucket_name` to the R2 bucket you actually created.
 
-`cirrus/backup/index.ts` reads the bucket via `import { env } from "cloudflare:workers"` and hands `env.BACKUP_BUCKET` (cast to `R2BucketLike` and guarded) to `createStorage({ bucket })`. The `cloudflare:workers` types come from your project's `@cloudflare/workers-types` + generated `Env`.
-
-## Retention is yours to add
-
-Nothing prunes old snapshots — the bucket grows unbounded by design, so you keep full control of your retention/PITR window. Add a second cron that lists and deletes objects past your window (a `prune` `internalAction` that `storage.list("snapshots/")`s, filters by `uploaded` age, and `storage.delete(...)`s the stale keys), then schedule it with e.g. `crons.daily("backup prune", { hourUTC: 4, minuteUTC: 0 }, internal.backup.prune, { keepDays: 30 })`.
+Both `snapshot` and `prune` in `cirrus/backup/index.ts` read the bucket via `import { env } from "cloudflare:workers"` and hand `env.BACKUP_BUCKET` (cast to `R2BucketLike` and guarded) to `createStorage({ bucket })`. The `cloudflare:workers` types come from your project's `@cloudflare/workers-types` + generated `Env`.
 
 ## Restore
 
-Snapshots are plain NDJSON, so recovery goes through the existing CLI restore path. Download the object you want from the bucket and feed it to:
+Snapshots are plain NDJSON, so recovery goes through the existing CLI restore path. Restore picks the **nearest snapshot** and, with `--to`, rolls the CDC changelog forward from there to an arbitrary moment. Download the object you want from the bucket and feed it to:
 
 ```bash
-# Restore a specific snapshot file (NDJSON imported via the admin /apply endpoint).
+# Coarse: restore a specific snapshot (NDJSON imported via the admin /apply endpoint).
 cirrus backup restore ./cirrus-backup-2026-06-07T03-00-00-000Z.ndjson
 
-# Or, for finer recovery, pair a base snapshot with CDC replay up to a moment:
+# Fine-grained PITR: take the nearest snapshot as a base, then replay the CDC
+# changelog (ts <= --to) forward to the exact moment you want to recover to.
 cirrus backup restore <id> --to 2026-06-07T12:00:00Z
 ```
 
-See [`cirrus backup`](../../packages/cli/src/commands/backup.ts) (`create | list | restore`) for the full restore surface, including point-in-time `--to` replay over the changelog and pairing with Cloudflare D1 Time Travel.
+`prune`'s retention window is therefore your recovery floor: as long as a snapshot at or before your target time still exists, `--to` can reconstruct any moment after it from the changelog. See [`cirrus backup`](../../packages/cli/src/commands/backup.ts) (`create | list | restore`) for the full restore surface, including the `--to` replay and pairing with Cloudflare D1 Time Travel.
 
 ## What you own
 
-Everything under `cirrus/backup/` is copied into your repo — change the table list, the object key scheme, the framing format, add a `prune` job, switch to per-table objects, or compress the body however you like. `@cirrus/storage` provides the R2 wrapper; this component is the idiomatic Cirrus glue that turns it into a scheduled snapshot.
+Everything under `cirrus/backup/` is copied into your repo — change the table list, the object key scheme, the framing format, the retention semantics, switch to per-table objects, or compress the body however you like. `@cirrus/storage` provides the R2 wrapper; this component is the idiomatic Cirrus glue that turns it into a scheduled snapshot + prune pair.

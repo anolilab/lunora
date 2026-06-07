@@ -17,7 +17,7 @@
             "title": "Auth — Clerk"
         },
         {
-            "description": "Scheduled, in-deployment snapshots — a cron-driven internalAction that exports a configured set of tables to a timestamped NDJSON object in a dedicated R2 bucket. The point-in-time-recovery building block; pairs with `cirrus backup restore`.",
+            "description": "Managed point-in-time recovery — a cron-driven `snapshot` internalAction exports a configured set of tables to timestamped NDJSON in a dedicated R2 bucket, and a cron-driven `prune` internalAction ages snapshots out by retention window. Pairs with `cirrus backup restore` (nearest snapshot + `--to` CDC replay).",
             "name": "backup",
             "title": "Backup"
         },
