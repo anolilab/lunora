@@ -10,11 +10,11 @@ import { CDC_LOG_TABLE, readCdcChanges } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
 import type { DependencyTracker } from "./dependency-tracker.js";
-import { createDependencyTracker, SCAN_DEP } from "./dependency-tracker.js";
+import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker.js";
 import type { FunctionMetricBucket } from "./function-metrics.js";
-import { readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics.js";
+import { mergeScanAttribution, readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics.js";
 import type { AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
-import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage, selectMatchingIds } from "./introspect.js";
+import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds } from "./introspect.js";
 import { LogBuffer } from "./log-buffer.js";
 import { armRestore, readBookmark } from "./pitr.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
@@ -477,10 +477,11 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
 /**
  * Hard server-side ceiling on rows removed per `deleteRows` / `clearTable` call.
  * The op never deletes more than this in one round-trip; the result's `hasMore`
- * tells the caller to loop. Matches `readTablePage`'s `MAX_PAGE_SIZE` so one
- * "delete matching" batch drains exactly one full preview page's worth of rows.
+ * tells the caller to loop. Bound TO `readTablePage`'s `MAX_PAGE_SIZE` (not just
+ * documented as matching it) so one "delete matching" batch drains exactly one
+ * full preview page's worth of rows and the two can't silently drift apart.
  */
-const SHARD_BULK_DELETE_CAP = 500;
+const SHARD_BULK_DELETE_CAP = MAX_PAGE_SIZE;
 
 /**
  * Validate the `__cirrus_admin__:writeRow` payload. Enforces that `id` is
@@ -764,7 +765,7 @@ const tablesFromDeps = (deps: Set<string>): Set<string> => {
     const tables = new Set<string>();
 
     for (const dep of deps) {
-        const table = dep.slice(0, dep.lastIndexOf(":"));
+        const table = tableFromDepKey(dep);
 
         if (table !== "") {
             tables.add(table);
@@ -1888,7 +1889,15 @@ abstract class ShardDO {
         return (table, idOrScan) => {
             this.currentTracker?.recordRead(table, idOrScan ?? SCAN_DEP);
 
-            if (idOrScan === undefined || idOrScan === SCAN_DEP) {
+            // Attribute a scan ONLY on the explicit `SCAN_DEP` sentinel. A
+            // predicated (indexed) `findMany` calls `onRead(table)` with no id
+            // marker BEFORE stamping its matched rows (see `ctx-db.ts`), so
+            // counting `undefined` here would mis-attribute every indexed query
+            // as a full scan and fabricate "missing index" insights. The cache
+            // tracker above still coalesces `undefined` to `SCAN_DEP` — that is
+            // a deliberately conservative invalidation choice, independent of
+            // this causal signal.
+            if (idOrScan === SCAN_DEP) {
                 this.currentScannedTables?.add(table);
             }
         };
@@ -2068,22 +2077,11 @@ abstract class ShardDO {
 
         // Fold the dispatch's full-scan attribution into the in-memory stat so
         // the warm-instance fallback (used when the durable read fails) carries
-        // the causal data too. One distinct table = one scan; per-table counts
-        // accumulate in `scannedTables`, re-sorted busiest-first.
+        // the causal data too — via the same `mergeScanAttribution` rule the
+        // durable `__cirrus_metrics_scans` upsert uses, so the two can't drift.
         if (scanned.length > 0) {
             stat.scans += scanned.length;
-
-            for (const table of scanned) {
-                const entry = stat.scannedTables.find((attribution) => attribution.table === table);
-
-                if (entry === undefined) {
-                    stat.scannedTables.push({ scans: 1, table });
-                } else {
-                    entry.scans += 1;
-                }
-            }
-
-            stat.scannedTables.sort((a, b) => b.scans - a.scans || a.table.localeCompare(b.table));
+            mergeScanAttribution(stat.scannedTables, scanned);
         }
 
         if (errorMessage !== undefined) {

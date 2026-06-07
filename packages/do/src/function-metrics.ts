@@ -298,6 +298,31 @@ const readFunctionMetricScans = (sql: SqlExec): Map<string, FunctionScanAttribut
 };
 
 /**
+ * Fold a dispatch's distinct full-scanned tables into an in-memory attribution
+ * list, mirroring the per-`(path, table)` upsert {@link recordFunctionMetric}
+ * applies to the durable `__cirrus_metrics_scans` table. Kept here, beside its
+ * SQL twin, so the one rule (one occurrence = +1 scan for that table, list
+ * re-sorted busiest-first) lives in a single module — the in-memory copy exists
+ * only for the warm-instance fallback when the durable read is unavailable.
+ * Mutates and returns `into`.
+ */
+const mergeScanAttribution = (into: FunctionScanAttribution[], scanned: ReadonlyArray<string>): FunctionScanAttribution[] => {
+    for (const table of scanned) {
+        const entry = into.find((attribution) => attribution.table === table);
+
+        if (entry === undefined) {
+            into.push({ scans: 1, table });
+        } else {
+            entry.scans += 1;
+        }
+    }
+
+    into.sort((a, b) => b.scans - a.scans || a.table.localeCompare(b.table));
+
+    return into;
+};
+
+/**
  * Read the persisted per-function accumulators as {@link FunctionCallStat}s,
  * newest-called first. Creates the table first so reads on a never-called shard
  * return `[]` instead of throwing. The shape is a superset of the legacy
@@ -387,6 +412,7 @@ export {
     FUNCTION_METRICS_BUCKETS_TABLE,
     FUNCTION_METRICS_SCANS_TABLE,
     FUNCTION_METRICS_TABLE,
+    mergeScanAttribution,
     readFunctionMetricBuckets,
     readFunctionMetrics,
     readFunctionMetricScans,

@@ -861,69 +861,39 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         [client, fetchPage, offset, search, selectedTable, shardKey],
     );
 
-    // Bulk delete every row matching the active search + filters via the server
-    // `deleteRows` admin op — one bounded round-trip per batch instead of the old
-    // N+1 read-then-delete-per-id loop. The server collects the matching ids and
-    // removes each THROUGH the schema-aware writer (so FTS / aggregate / rank
-    // shadow tables stay in sync), capped per call; we loop the single call while
-    // it reports `hasMore`, bounded by `MAX_BULK_DELETE_BATCHES` so it can never
-    // run unbounded.
-    const deleteMatching = useCallback(async (): Promise<void> => {
-        if (selectedTable === null) {
-            return;
-        }
-
-        setWriteError(null);
-        const filterClauses = toFilterClauses(filtersRef.current);
-
-        try {
-            for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
-                // Sequential by design: each call's deletes shrink the matching
-                // set, and `hasMore` from the prior call drives the next, so the
-                // round-trips can't be parallelised.
-                // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's deletes)
-                const result = (await client.query(
-                    DELETE_ROWS,
-                    { filters: filterClauses, search, table: selectedTable },
-                    callOptions(shardKey),
-                )) as BulkDeleteResult;
-
-                if (!result.hasMore) {
-                    break;
-                }
+    // Drain a server bulk-delete op (`deleteRows` with a predicate, or
+    // `clearTable` with none) by looping a single bounded round-trip while it
+    // reports `hasMore` — replacing the old N+1 read-then-delete-per-id loop. The
+    // server collects the matching ids and removes each THROUGH the schema-aware
+    // writer (so FTS / aggregate / rank shadow tables stay in sync), capped per
+    // call; the loop is bounded by `MAX_BULK_DELETE_BATCHES` so it can never run
+    // unbounded. Sequential by design: each call's deletes shrink the set the
+    // next read sees, so the round-trips can't be parallelised.
+    const drainBulk = useCallback(
+        async (ref: typeof DELETE_ROWS, args: Record<string, unknown>): Promise<void> => {
+            if (selectedTable === null) {
+                return;
             }
 
-            await fetchPage(shardKey, selectedTable, 0, search);
-        } catch (error) {
-            setWriteError((error as Error).message);
-        }
-    }, [client, fetchPage, search, selectedTable, shardKey]);
+            setWriteError(null);
 
-    // Empty the whole selected table via the server `clearTable` admin op — the
-    // same writer-routed, bounded delete as `deleteMatching` but with no
-    // predicate. Loops the single bounded call while `hasMore`.
-    const clearTable = useCallback(async (): Promise<void> => {
-        if (selectedTable === null) {
-            return;
-        }
+            try {
+                for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's deletes)
+                    const result = (await client.query(ref, args, callOptions(shardKey))) as BulkDeleteResult;
 
-        setWriteError(null);
-
-        try {
-            for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
-                // eslint-disable-next-line no-await-in-loop -- bounded batches drain the table sequentially
-                const result = (await client.query(CLEAR_TABLE, { table: selectedTable }, callOptions(shardKey))) as BulkDeleteResult;
-
-                if (!result.hasMore) {
-                    break;
+                    if (!result.hasMore) {
+                        break;
+                    }
                 }
-            }
 
-            await fetchPage(shardKey, selectedTable, 0, search);
-        } catch (error) {
-            setWriteError((error as Error).message);
-        }
-    }, [client, fetchPage, search, selectedTable, shardKey]);
+                await fetchPage(shardKey, selectedTable, 0, search);
+            } catch (error) {
+                setWriteError((error as Error).message);
+            }
+        },
+        [client, fetchPage, search, selectedTable, shardKey],
+    );
 
     // Headless table model + virtualizer for the loaded page. The page-local
     // `sorting` state stays here (table switches reset it via `setSorting`); the
@@ -953,12 +923,12 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     }, [goToPage, offset]);
 
     const bulkDelete = useCallback((): void => {
-        fireAndForget(deleteMatching());
-    }, [deleteMatching]);
+        fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filtersRef.current), search, table: selectedTable }));
+    }, [drainBulk, search, selectedTable]);
 
     const emptyTable = useCallback((): void => {
-        fireAndForget(clearTable());
-    }, [clearTable]);
+        fireAndForget(drainBulk(CLEAR_TABLE, { table: selectedTable }));
+    }, [drainBulk, selectedTable]);
 
     const onFilterChange = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
         setFilter(event.target.value);
