@@ -3,9 +3,12 @@
 > Generated 2026-06-04 from a code-grounded inventory of the repo (10 Convex feature
 > domains verified against the actual `packages/*` and `apps/*` source — not guessed).
 > Original tally: **117 full · 12 lead · 15 partial · 17 missing**.
-> **Refreshed 2026-06-06:** of the 24 tracked gaps below, **15 are now closed** and **2 are
-> deliberate won't-do/by-design** — the per-row Status column reflects current code. What
-> remains is a small set of additive features plus inherent DO-sharding trade-offs.
+> **Refreshed 2026-06-07:** of the 24 tracked gaps below, **16 are now closed** (#4, #6–#17 as
+> noted, #20, #21, #24, plus the #5 registry) and **5 are deliberate won't-do/by-design** (#1,
+> #2, #3, #18, #22, and #23's deployment plane) — the per-row Status column reflects current
+> code. What remains is a short tail: managed PITR (#19 ships the building block), the buildable
+> read-only half of #23, and #9's connector wrappers — plus the `PLAN3.md` dashboard
+> differentiators, which go beyond raw Convex parity.
 
 Legend: **full** = equivalent capability · **partial** = present but shallower · **missing** = no equivalent · **cirrus-only** = Cirrus exceeds Convex.
 
@@ -81,11 +84,14 @@ These are differentiators — do not regress them.
 >   `ctx.db.system`) are also done.
 > - **Deliberate won't-do / by-design:** #1 (workerd has no Node runtime for actions), #2 & #3
 >   (cross-shard atomicity / snapshot — the price of the sharding model that is Cirrus's lead),
->   #22 (keyset-only pagination).
-> - **Still genuinely open:** #18 (env-as-runtime-store), #19 (always-on managed PITR — the
->   `backup` registry item ships the scheduled-snapshot building block), #23 (dashboard deploy/env
->   UI), and #9's deployable Fivetran/Airbyte connector _wrappers_ (the source endpoint exists; the
->   wrappers are an external effort).
+>   #22 (keyset-only pagination), #18 (no runtime env store — secrets live in the wrangler/CF
+>   plane; PLAN3 §3.2), and the deployment/rollback half of #23 (CF's control plane — dashboard
+>   deep-links, not a reimplementation).
+> - **Still genuinely open:** #19 (always-on managed PITR — the `backup` registry item ships the
+>   scheduled-snapshot building block), the buildable half of #23 (a read-only env/bindings
+>   Settings tab — PLAN3 §3.2), and #9's deployable Fivetran/Airbyte connector _wrappers_ (the
+>   source endpoint exists; the wrappers are an external effort). The dashboard differentiators
+>   (correlated request log, causal insights, app-aware Files) are tracked in `PLAN3.md`.
 
 ### Tier 1 — Architectural / fundamental (hardest; these define the platform)
 
@@ -115,16 +121,16 @@ These are differentiators — do not regress them.
 
 ### Tier 3 — Polish / DX
 
-| #   | Feature                                      | Status  | Gap                                                                                                                                                                  |
-| --- | -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 17  | **Persisted function metrics**               | partial | Metrics are in-memory (reset on DO restart); no time-series/graphs, call hierarchies, or custom dimensions.                                                          |
-| 18  | **Env vars as a runtime data store**         | partial | Cirrus uses Workers secrets (platform bindings) managed via wrangler; Convex offers a durable, runtime-queryable env service.                                        |
-| 19  | **Automatic PITR**                           | partial | `cirrus registry add backup` ships a scheduled-snapshot cron (→ R2 NDJSON) as the PITR building block; an always-on managed/branching service is still out of scope. |
-| 20  | **Live-updating pagination deltas**          | partial | Pages update live (each page is its own subscription), but client-side delta merging isn't implemented (`ServerDataMessage.delta` is an opaque blob on the wire).    |
-| 21  | **Scheduler list/inspect**                   | partial | Implemented in `SchedulerDO` storage but not exposed on the public `Scheduler` client (requires direct DO `/list` access).                                           |
-| 22  | **Aggregate randomness / offset pagination** | missing | No random-access operator; keyset cursors only (offset pagination is omitted by design).                                                                             |
-| 23  | **Dashboard: deployment/env management UI**  | missing | No UI for deployments, env bindings, rollback, or deploy history.                                                                                                    |
-| 24  | **CLI `verify` (type check)**                | shipped | `cirrus verify` runs `tsc --noEmit` over the project (plus wrangler + codegen checks); `--no-typecheck` opts out, skips cleanly without a tsconfig.                  |
+| #   | Feature                                      | Status              | Gap                                                                                                                                                                                                                                                                                                                                            |
+| --- | -------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 17  | **Persisted function metrics**               | partial             | Metrics are in-memory (reset on DO restart); no time-series/graphs, call hierarchies, or custom dimensions.                                                                                                                                                                                                                                    |
+| 18  | **Env vars as a runtime data store**         | by-design           | Deliberate (PLAN3 §3.2): Cirrus uses Workers secrets/bindings managed via wrangler — **view in Cirrus, edit in wrangler/CF**, no runtime config store. A runtime-mutable env service would duplicate the platform's secret plane. (App data that needs to be runtime-editable belongs in a table.)                                             |
+| 19  | **Automatic PITR**                           | partial             | `cirrus registry add backup` ships a scheduled-snapshot cron (→ R2 NDJSON) as the PITR building block; an always-on managed/branching service is still out of scope.                                                                                                                                                                           |
+| 20  | **Live-updating pagination deltas**          | partial             | Pages update live (each page is its own subscription), but client-side delta merging isn't implemented (`ServerDataMessage.delta` is an opaque blob on the wire).                                                                                                                                                                              |
+| 21  | **Scheduler list/inspect**                   | partial             | Implemented in `SchedulerDO` storage but not exposed on the public `Scheduler` client (requires direct DO `/list` access).                                                                                                                                                                                                                     |
+| 22  | **Aggregate randomness / offset pagination** | missing             | No random-access operator; keyset cursors only (offset pagination is omitted by design).                                                                                                                                                                                                                                                       |
+| 23  | **Dashboard: deployment/env management UI**  | partial / by-design | Split (PLAN3 §3.1–3.2 + Non-goals): deployments / rollbacks / routes are an **explicit non-goal** — CF's control plane, reached via dashboard deep-links, not half-reimplemented. Env/bindings get a planned **read-only** Settings tab (values masked). The app-lens dashboard (Data/Schema/Functions/Metrics/Logs/Insights/…) already ships. |
+| 24  | **CLI `verify` (type check)**                | shipped             | `cirrus verify` runs `tsc --noEmit` over the project (plus wrangler + codegen checks); `--no-typecheck` opts out, skips cleanly without a tsconfig.                                                                                                                                                                                            |
 
 ---
 
@@ -132,8 +138,9 @@ These are differentiators — do not regress them.
 
 The bounded, high-value gaps are essentially cleared (Phase A/B/C). What's left:
 
-- **Inherent trade-offs (won't-do / by-design):** #1 (no Node runtime), #2/#3 (cross-shard atomicity & snapshot), #22 (keyset-only). #2 is the deliberate price of the DO-sharding model that gives Cirrus its scaling lead — not a bug.
+- **Inherent trade-offs (won't-do / by-design):** #1 (no Node runtime), #2/#3 (cross-shard atomicity & snapshot), #22 (keyset-only), #18 (no runtime env store), and #23's deployment/rollback half (CF's control plane). #2 is the deliberate price of the DO-sharding model that gives Cirrus its scaling lead — not a bug; the env/deploy ones are deliberate CF hand-offs (PLAN3 §3.1–3.2): Cirrus is the app lens, CF is the infra plane.
 - **#5 registry — done & extensible:** function-namespacing, the add/list/view/build surface, and a 9-item CI-checked catalog all shipped. Growth from here is just authoring more items. See `COMPONENT-REGISTRY.md`.
-- **Remaining additive features:** #18 (env-as-runtime-store), #23 (dashboard deploy/env UI), an always-on managed PITR beyond the #19 `backup` snapshot item, and the deployable Fivetran/Airbyte connector wrappers on top of #9's source endpoint.
+- **Remaining additive features:** an always-on managed PITR beyond the #19 `backup` snapshot item, the deployable Fivetran/Airbyte connector wrappers on top of #9's source endpoint, and a read-only env/bindings Settings tab (the buildable half of #23).
+- **Dashboard differentiators (separate roadmap):** the correlated structured request log, causal metrics→insights attribution, and app-aware Files (schema↔R2) — the "beat Cloudflare" work in `PLAN3.md`, beyond raw Convex parity.
 
 > Benchmark context: the closest Convex-on-Cloudflare competitor is `zerodeploy-dev/zeroback` — useful for tracking parity over time.
