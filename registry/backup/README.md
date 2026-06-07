@@ -124,6 +124,10 @@ cirrus backup restore <id> --to 2026-06-07T12:00:00Z
 
 `prune`'s retention window is therefore your recovery floor: as long as a snapshot at or before your target time still exists, `--to` can reconstruct any moment after it from the changelog. See [`cirrus backup`](../../packages/cli/src/commands/backup.ts) (`create | list | restore`) for the full restore surface, including the `--to` replay and pairing with Cloudflare D1 Time Travel.
 
+## Two recovery tiers
+
+This item is the **off-platform / long-horizon** tier — portable NDJSON in _your_ R2 bucket, restorable across deployments and beyond 30 days, with retention you control. For quick **in-place** recovery, prefer Cirrus's **native PITR**: SQLite-backed shards can restore their whole database to any bookmark in the **last 30 days** via the platform's change log, exposed as the admin ops `getPitrBookmark` (current / for-a-time bookmark) and `pitrRestore` (`{ time | bookmark, restart? }`, returns an **undo bookmark**, audited). Native PITR is one round-trip with no R2 read; this item is what you reach for when the moment is older than 30 days, or you need a portable copy off the platform.
+
 ## What you own
 
 Everything under `cirrus/backup/` is copied into your repo — change the table list, the object key scheme, the framing format, the retention semantics, switch to per-table objects, or compress the body however you like. `@cirrus/storage` provides the R2 wrapper; this component is the idiomatic Cirrus glue that turns it into a scheduled snapshot + prune pair.

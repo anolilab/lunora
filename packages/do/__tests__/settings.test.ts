@@ -124,7 +124,7 @@ describe("getSettings admin RPC", () => {
 
         expect(response.status).toBe(200);
 
-        const body = await response.json();
+        const body = await response.json<{ result: { settings: { kind: string; name: string }[] } }>();
         const raw = JSON.stringify(body);
 
         // The secret value never crosses the wire.

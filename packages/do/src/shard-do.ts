@@ -16,6 +16,7 @@ import { readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTota
 import type { AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
 import { LogBuffer } from "./log-buffer.js";
+import { armRestore, readBookmark } from "./pitr.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
 import { buildSettings } from "./settings.js";
@@ -35,6 +36,9 @@ import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope,
  * production code now matches the workerd shape.
  */
 interface ShardDOState {
+    /** Abort + restart the DO — used to apply a native PITR restore immediately (`ctx.abort()`). */
+    abort?: (reason?: string) => void;
+
     acceptWebSocket: (ws: WebSocket, tags?: string[]) => void;
 
     /**
@@ -49,6 +53,12 @@ interface ShardDOState {
     /** Optional pointer to the DO instance id so we can detect `__root__`. */
     id?: { name?: string };
     storage: {
+        /** Native PITR (≤30 days): bookmark for a past `time`. Absent in local dev. */
+        getBookmarkForTime?: (time: Date | number) => Promise<string>;
+        /** Native PITR: bookmark for the object's current state. Absent in local dev. */
+        getCurrentBookmark?: () => Promise<string>;
+        /** Native PITR: arm a restore to `bookmark` on next restart; returns the undo bookmark. */
+        onNextSessionRestoreBookmark?: (bookmark: string) => Promise<string>;
         sql: {
             [key: string]: unknown;
 
@@ -2014,6 +2024,12 @@ abstract class ShardDO {
                 return jsonResponse({ result }, 200);
             }
 
+            const pitr = await this.handlePitrAdminOp(functionPath, args);
+
+            if (pitr) {
+                return pitr;
+            }
+
             return jsonResponse({ error: { code: "UNKNOWN_ADMIN_OP", message: `unknown admin op: ${functionPath}` } }, 404);
         } catch (error: unknown) {
             return this.errorToResponse(error);
@@ -2033,6 +2049,43 @@ abstract class ShardDO {
         const detail = userId === undefined ? fields.detail : { ...fields.detail, userId };
 
         appendAuditEntry(sql, { detail, id: fields.id, op, table: fields.table, ts: Date.now() });
+    }
+
+    /**
+     * Native Durable-Object PITR ops (the ≤30-day in-place tier). `getPitrBookmark`
+     * reads the current/for-time bookmark; `pitrRestore` arms a restore to a
+     * bookmark/time (auditing the target + undo bookmark before any restart, so the
+     * undo point survives even if `abort()` drops the response). Returns `null` when
+     * `functionPath` isn't a PITR op so the caller falls through. Kept out of
+     * `handleAdminRpc` to hold that dispatcher under the complexity budget.
+     */
+    private async handlePitrAdminOp(functionPath: string, args: Record<string, unknown>): Promise<Response | undefined> {
+        const time = typeof args.time === "number" || typeof args.time === "string" ? args.time : undefined;
+
+        if (functionPath === ADMIN_FUNCTIONS.getPitrBookmark) {
+            // Read-only — native ≤30-day tier, no write, nothing to flush.
+            return jsonResponse({ result: await readBookmark(this.state.storage, time) }, 200);
+        }
+
+        if (functionPath !== ADMIN_FUNCTIONS.pitrRestore) {
+            return undefined;
+        }
+
+        // Destructive: arm a native restore to a bookmark/time.
+        const restart = args.restart === true;
+        const bookmark = typeof args.bookmark === "string" ? args.bookmark : undefined;
+        const armed = await armRestore(this.state.storage, { bookmark, time });
+
+        this.recordAudit("pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
+
+        const response = jsonResponse({ result: { ...armed, restarted: restart } }, 200);
+
+        if (restart) {
+            // Apply now: restart the DO so it reopens at the armed bookmark.
+            this.state.abort?.("cirrus PITR restore");
+        }
+
+        return response;
     }
 
     /**

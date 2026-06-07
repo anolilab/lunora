@@ -113,6 +113,8 @@ export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } fro
 export type { LogEntry, LogLevel } from "./log-buffer.js";
 export { LogBuffer } from "./log-buffer.js";
 export { default as NotFoundError } from "./not-found-error.js";
+export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr.js";
+export { armRestore, readBookmark } from "./pitr.js";
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args.js";
 export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
 export type { RankDirection, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult, RankSortKeyLike } from "./rank.js";
