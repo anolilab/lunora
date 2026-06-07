@@ -171,11 +171,14 @@ vars/bindings with values masked. Resolves the deferred env-vars fork
 (`DASHBOARD-VS-CLOUDFLARE.md` #4): **view in Cirrus, edit in wrangler/CF** — no runtime
 config store. _Possible follow-up:_ deploy URL/info + the 3.1 deep-links wired in here.
 
-### 3.3 Emit structured events to Logpush
+### 3.3 Emit structured events to Logpush — ✅ shipped
 
-Have the 1.1 request log also emit its structured events to `console`/Logpush so CF's
-pipeline carries them to external SIEMs. Produce richer events; don't reimplement the
-transport.
+The 1.1 request log now also emits each entry as a single structured `console`
+event (`emitRequestLogEvent`, under a `source:"cirrus"` / `type:"request"` envelope),
+so CF's Workers Logs / Logpush pipeline carries it to external SIEMs — no transport
+reimplemented. Error outcomes go to `console.error`. Opt-in via `CIRRUS_REQUEST_LOG_EMIT`
+(default off — a line per dispatch is real volume). args/identity are redacted the same
+way as the durable write.
 
 ---
 
@@ -207,21 +210,25 @@ dashboard links out; it never half-reimplements them.
 ```
 Tier 1 (differentiators):  1.1 request log ✅ → 1.2 causal attribution ✅ → 1.3 Files (R2-Explorer)
 Tier 2 (depth):            2.1 data-browser decomposition + staged edits · 2.2 bulk ops ✅ · 2.3 SLO
-Tier 3 (hand-off):         3.1 CF deep-links (quick) · 3.2 Settings ✅ · 3.3 Logpush emit
+Tier 3 (hand-off):         3.1 CF deep-links (quick) · 3.2 Settings ✅ · 3.3 Logpush emit ✅
 Tier 4:                    backups ✅ · integrations · TanStack decision
 ```
 
 **1.1 (structured correlated request log) — the keystone — is now shipped**, along with
-1.2 (causal attribution) and 2.2 (bulk ops). Next up: **1.3 Files→schema join**
-(R2-Explorer lift, the last Tier-1 item) and the cheap **3.1 CF deep-links**, which can
-land anytime. Tier 3.3 (Logpush emit) now has a natural home — fold it into the 1.1
-request-log write site.
+1.2 (causal attribution), 2.2 (bulk ops), and 3.3 (Logpush emit). Next up: **1.3
+Files→schema join** (R2-Explorer lift, the last Tier-1 item) and the cheap **3.1 CF
+deep-links**, which can land anytime.
 
 ## Open questions
 
-- **Request-log volume/retention.** Per-shard durable log needs a sane retention cap +
-  sampling under high write rates (mirror CDC-log trim). Decide defaults.
-- **PII in the request log.** Args/identity must be redacted by default (reuse
-  `@visulima/redact`); decide the opt-in for full capture in dev.
+- **Request-log volume/retention — ✅ decided.** Count-based trim, default **1000** rows,
+  configurable via `CIRRUS_REQUEST_LOG_RETENTION`. Successful dispatches are sampled at
+  `CIRRUS_REQUEST_LOG_SAMPLE` (0..1, default **1.0** = record all); **errors are always
+  recorded**. One sampling decision governs both the durable row and the Logpush emit.
+- **PII in the request log — ✅ decided.** args/identity redacted by default via
+  `@visulima/redact` `standardRules` (value-pattern masking; benign values stay readable).
+  Full raw capture only in a **development environment** (`isDevEnvironment`, from the
+  `CF_ENV`/`ENVIRONMENT`/`WORKER_ENV`/`NODE_ENV` convention); production stays redacted by
+  default — a deploy that omits the var is treated as production.
 - **Storage-reference modelling (1.3).** Does the schema express "this column points at
   an R2 object" today, or does that need a `v.storage()`-style marker first?
