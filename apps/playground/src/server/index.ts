@@ -155,8 +155,10 @@ interface Env {
  *
  * Better-auth handles its own arbitrarily nested routes under `/api/auth/*`
  * via a single handler, which doesn't fit the runtime's exact-path router.
- * We intercept the auth prefix here, then fall through to the runtime for
- * RPC + WebSocket traffic.
+ * We hand the bound `handleAuthRequest` to the runtime as its `authHandler`,
+ * so the worker dispatches the auth prefix itself — and instruments auth
+ * attempts/failures for the app-level auth-failure SLO — before falling
+ * through to the runtime for RPC + WebSocket traffic.
  */
 let worker: ReturnType<typeof createWorker> | null = null;
 let auth: CirrusAuth | null = null;
@@ -179,6 +181,13 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // When set, enables the admin-gated export/import and scheduled-job
         // endpoints the @cirrus/dashboard panels call.
         adminToken: env.CIRRUS_ADMIN_TOKEN,
+        // Dispatch better-auth's `/api/auth/*` routes INSIDE the worker (rather
+        // than ahead of it) so the runtime instruments auth attempts/failures
+        // for the app-level auth-failure SLO. Lazy like `resolveIdentity`: the
+        // module-level `auth` is built on the first request before `worker.fetch`.
+        // The default `authBasePath` (`/api/auth`) matches `handleAuthRequest`,
+        // so it's omitted.
+        authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
         // Exposes /_cirrus/admin/auth/* so the dashboard can browse users/sessions.
         authIntrospector: env.DB ? authIntrospector(env.DB as D1DatabaseLike) : undefined,
         // Code-first crons: the worker's `scheduled()` entry dispatches every job
@@ -205,7 +214,7 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
             return session?.user?.id ? { userId: session.user.id } : null;
         },
         // The runtime's route map can stay empty: better-auth routes are
-        // dispatched ahead of the worker by the `handleAuthRequest` hook.
+        // dispatched inside the worker via the `authHandler` option above.
         routes: {},
         // Exposes /_cirrus/admin/scheduled so the dashboard can list/cancel jobs.
         schedulerDO: env.SCHEDULER,
@@ -331,12 +340,9 @@ export default {
             await ensureMigrated(auth);
         }
 
-        const authResponse = await handleAuthRequest(auth, request);
-
-        if (authResponse) {
-            return authResponse;
-        }
-
+        // `auth` is now built, so both the worker's `authHandler` and
+        // `resolveIdentity` closures see it. The worker owns auth dispatch
+        // (and its instrumentation) from here.
         worker ??= buildWorker(env);
 
         return worker.fetch(request, env, context);
