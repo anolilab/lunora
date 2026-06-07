@@ -80,7 +80,7 @@ describe("d1 ctx-db auto-provisions .global() tables", () => {
 
         await expect(db.insert("channels", { createdAt: 1, name: "dup" })).resolves.toBeDefined();
         // The `by_name` unique index must have been created, so a duplicate name is rejected.
-        await expect(db.insert("channels", { createdAt: 2, name: "dup" })).rejects.toThrow();
+        await expect(db.insert("channels", { createdAt: 2, name: "dup" })).rejects.toThrow(/unique constraint violation/i);
     });
 
     it("lets the introspector list a .global() table on a fresh database (no `no such table`)", async () => {

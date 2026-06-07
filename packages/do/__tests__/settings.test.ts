@@ -35,7 +35,7 @@ describe("buildSettings masking", () => {
         expect.assertions(5);
 
         // eslint-disable-next-line no-secrets/no-secrets -- fake high-entropy value to prove it's never returned raw
-        const secretValue = "sk_live_abcdef0123456789";
+        const secretValue = "sk_live_abcdef0123456789"; // gitleaks:allow
         const result = buildSettings({ API_KEY: secretValue, GREETING: "hello-world" });
 
         const apiKey = result.settings.find((entry) => entry.name === "API_KEY");

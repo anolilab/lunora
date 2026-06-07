@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { insertSchemaExtension } from "../../src/util/insert-schema-extension.js";
 
+// The `if (!result.ok)` guards below narrow the `{ ok: true } | { ok: false }`
+// discriminated union for type-safe `.text` access — they are not test-logic
+// branching, so vitest/no-conditional-in-test is a false positive here.
+/* eslint-disable vitest/no-conditional-in-test -- discriminated-union narrowing guards, not test branching */
+
 const BASE_SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
 
 export const schema = defineSchema({
