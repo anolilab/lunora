@@ -1062,10 +1062,18 @@ const buildTableIndexes = (schema: SchemaIR): Record<string, EmittedTableIndex[]
 
     for (const table of schema.tables) {
         const entries: EmittedTableIndex[] = [
-            ...table.indexes.map((index) => {return { fields: [...index.fields], name: index.name, type: "index" as const, ...(index.unique === true ? { unique: true } : {}) }}),
-            ...table.searchIndexes.map((index) => {return { fields: [index.field, ...(index.filterFields ?? [])], name: index.name, type: "search" as const }}),
-            ...table.rankIndexes.map((index) => {return { fields: index.sortBy.map((key) => key.field), name: index.name, type: "rank" as const }}),
-            ...table.vectorIndexes.map((index) => {return { fields: index.field === undefined ? [] : [index.field], name: index.name, type: "vector" as const }}),
+            ...table.indexes.map((index) => {
+                return { fields: [...index.fields], name: index.name, type: "index" as const, ...(index.unique === true ? { unique: true } : {}) };
+            }),
+            ...table.searchIndexes.map((index) => {
+                return { fields: [index.field, ...(index.filterFields ?? [])], name: index.name, type: "search" as const };
+            }),
+            ...table.rankIndexes.map((index) => {
+                return { fields: index.sortBy.map((key) => key.field), name: index.name, type: "rank" as const };
+            }),
+            ...table.vectorIndexes.map((index) => {
+                return { fields: index.field === undefined ? [] : [index.field], name: index.name, type: "vector" as const };
+            }),
         ];
 
         if (entries.length > 0) {
@@ -1877,6 +1885,13 @@ const emitDrizzleSchema = (schema: SchemaIR): { global: string; shard: string } 
  *
  * Jobs arrive pre-sorted by name (deterministic output); the trigger array
  * preserves first-seen order of distinct expressions.
+ *
+ * Cloudflare caps a Worker at **3 Cron Triggers** (i.e. 3 distinct cron
+ * expressions). Because the dispatcher fires every job sharing an expression,
+ * many jobs can ride a single trigger — only the count of *distinct* schedules
+ * matters. `cirrus codegen` warns when that count exceeds the limit; for
+ * finer-grained scheduling use Durable Object alarms (`@cirrus/scheduler`),
+ * which have no such cap.
  */
 const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     const triggers: string[] = [];
