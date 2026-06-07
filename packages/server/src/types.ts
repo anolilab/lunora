@@ -712,9 +712,20 @@ interface Storage extends ReadOnlyStorage {
 
     /**
      * Upload `body` to `key` from the server, returning the stored object's key
-     * and etag. Mirrors Convex's `storage.store`.
+     * and etag. Mirrors Convex's `storage.store`. Accepts the same guard fields
+     * as `@cirrus/storage`'s `UploadOptions` so `maxSize` /
+     * `allowedContentTypes` enforcement isn't lost behind the Convex-style alias.
      */
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: { contentType?: string }) => Promise<{ etag: string; key: string }>;
+    store: (
+        key: string,
+        body: ReadableStream | ArrayBuffer | Blob,
+        options?: {
+            allowedContentTypes?: ReadonlyArray<string>;
+            contentType?: string;
+            customMetadata?: Record<string, string>;
+            maxSize?: number;
+        },
+    ) => Promise<{ etag: string; key: string }>;
 }
 
 interface VectorMatch {
