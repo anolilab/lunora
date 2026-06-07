@@ -1575,58 +1575,42 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const isGlobalTable = (tableName: string): boolean => schema.tables[tableName]?.shardMode?.kind === "global";
 
     /**
-     * Pick the writer that owns `holderTable`. Local tables stay on this DO's
-     * SQLite (`writer`); global tables route to the optional `globalDb`. Without
-     * a globalDb supplied, cross-backend cascades throw — same behaviour as
-     * the v1 unsupported path, but the message now points at the missing
-     * wiring instead of the relation itself.
+     * Pick the writer that owns `table`, by backend. Shard-local tables stay on
+     * this DO's SQLite (`writer`); a global (D1) table routes to the optional
+     * `globalDb`. Without a `globalDb` supplied, the cross-backend path throws a
+     * wiring error (pointing at the missing option) rather than silently
+     * querying the wrong backend. `op` only colours the error message — the two
+     * cross-backend paths (onDelete cascade, relation `with`-load) share one
+     * routing primitive so they can't drift on the DO↔D1 invariant.
+     *
+     * The local branch reads `writer` at call time (a closure variable defined
+     * below): the forward reference is safe because this only runs while a
+     * read/write is in flight, long after `writer` is initialized.
      */
-    const routeForHolder = (holderTable: string): DatabaseWriterLike => {
-        if (isGlobalTable(holderTable)) {
+    const routeBackend = (table: string, op: "cascade" | "relation load"): DatabaseWriterLike => {
+        if (isGlobalTable(table)) {
             if (!globalDb) {
-                throw new Error(
-                    `cross-backend cascade for global holder '${holderTable}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`,
-                );
+                throw new Error(`cross-backend ${op} for global table '${table}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`);
             }
 
             return globalDb;
         }
 
-        // Same backend — return the local writer at call time so we get the
-        // post-construction reference (it's a closure variable). Forward
-        // reference is safe: this closure only runs while a write is in flight,
-        // long after `writer` is initialized below.
         // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure read of post-construction `writer`
         return writer;
     };
+
+    /** Pick the writer for an `onDelete` cascade holder. See {@link routeBackend}. */
+    const routeForHolder = (holderTable: string): DatabaseWriterLike => routeBackend(holderTable, "cascade");
 
     /**
-     * Pick the reader that owns a relation's target table when loading `with`.
-     * Shard-local children stay on this DO's SQLite (`writer`); a global (D1)
-     * child routes to `globalDb`, so a shard-local parent can load it in a
-     * single bounded `IN (...)` read. A missing `globalDb` throws a wiring
-     * error rather than silently querying the wrong backend. The unsupported
-     * direction (global parent → shard-local child) is rejected upstream in
-     * `resolveWith`'s `requireRelation`.
+     * Backend-routed `fetcher`/`counter` pair handed to {@link resolveWith} so a
+     * shard-local parent's `with` can load a global (D1) child in one bounded
+     * `IN (...)` read. The unsupported direction (global parent → shard-local
+     * child) is rejected upstream in `resolveWith`'s `requireRelation`.
      */
-    const routeReaderForTable = (relationTable: string): DatabaseWriterLike => {
-        if (isGlobalTable(relationTable)) {
-            if (!globalDb) {
-                throw new Error(
-                    `cross-backend relation load for global table '${relationTable}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`,
-                );
-            }
-
-            return globalDb;
-        }
-
-        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure read of post-construction `writer`
-        return writer;
-    };
-
-    /** Backend-routed `fetcher`/`counter` pair handed to {@link resolveWith} so a `with` can cross into D1. */
-    const relationFetcher = (relationTable: string, relationArgs: QueryArgs): Promise<QueryPage> => routeReaderForTable(relationTable).findMany(relationTable, relationArgs);
-    const relationCounter = (relationTable: string, relationWhere?: WhereInput): Promise<number> => routeReaderForTable(relationTable).count(relationTable, relationWhere);
+    const relationFetcher = (relationTable: string, relationArgs: QueryArgs): Promise<QueryPage> => routeBackend(relationTable, "relation load").findMany(relationTable, relationArgs);
+    const relationCounter = (relationTable: string, relationWhere?: WhereInput): Promise<number> => routeBackend(relationTable, "relation load").count(relationTable, relationWhere);
 
     let triggerDepth = 0;
 

@@ -120,7 +120,7 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         // The reverse — a shard-local parent loading a **global** child — is a
         // single bounded `IN (...)` read against D1, so it's allowed. The
         // injected `fetcher`/`counter` route the global child's queries to the
-        // D1 writer (see the DO's `routeReaderForTable`); a same-backend
+        // D1 writer (see the DO's `routeBackend`); a same-backend
         // relation routes straight back to the local writer.
         if (isGlobal(parentDefinition) && !isGlobal(schema.tables[relation.table])) {
             throw new Error(
