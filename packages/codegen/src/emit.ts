@@ -1231,7 +1231,7 @@ const vectorsStub: VectorSearchLike = {
                     this.recordChangedTable(delta.table);
                 },
                 cdc: config.cdc ?? false,
-                onRead: options.onRead,
+                onRead: options.onRead ?? this.getCtxDbReadHook(),
                 onWrite,
                 scheduler,
                 schema: schema as unknown as SchemaLike,
@@ -1243,7 +1243,7 @@ const vectorsStub: VectorSearchLike = {
                     this.recordChangedTable(delta.table);
                 },
                 cdc: config.cdc ?? false,
-                onRead: options.onRead,
+                onRead: options.onRead ?? this.getCtxDbReadHook(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
