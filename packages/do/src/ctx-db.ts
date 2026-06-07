@@ -1990,6 +1990,36 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const rankBackfilled = new Set<string>();
 
     /**
+     * Reject a `rank()`/`rankPage()` whose partition spans shards. When a table
+     * is `.shardBy(field)` and the rankIndex's `partitionBy` does NOT include
+     * that shard field, each partition is split across every DO — so this
+     * shard's local count-of-rows-before is only a slice of the global answer.
+     * Rather than return a silently-wrong position/page, refuse: a cross-shard
+     * rank must be rolled up by the Query Coordinator (`orchestrateRank`), not
+     * the shard-local `ctx.db`. `rankBefore` (the per-shard primitive the
+     * coordinator fans out to) is intentionally exempt — counting this shard's
+     * local slice against an explicit key is its whole job.
+     */
+    const assertRankPartitionLocal = (tableName: string, definition: TableDefinitionLike, index: RankIndexDefinitionLike): void => {
+        const { shardMode } = definition;
+
+        if (shardMode?.kind !== "shardBy") {
+            return;
+        }
+
+        if (shardMode.field !== undefined && (index.partitionBy ?? []).includes(shardMode.field)) {
+            return;
+        }
+
+        throw Object.assign(
+            new Error(
+                `rank index "${index.name}" on "${tableName}" partitions across shards (shard key "${shardMode.field ?? "?"}" is not in partitionBy) — a shard-local rank()/rankPage() would be wrong; roll it up through the Query Coordinator instead`,
+            ),
+            { code: "CROSS_SHARD_RANK_UNSUPPORTED", name: "CirrusError", status: 400 },
+        );
+    };
+
+    /**
      * Lazily rebuild a rank companion the first time the ctx-db instance
      * touches it. TRUNCATE then re-insert so a rankIndex declared after rows
      * already existed heals on first use. Must run BEFORE the triggering row
@@ -2767,6 +2797,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
             }
 
+            // Refuse a shard-local rank when the partition spans shards (a
+            // silently-wrong position otherwise) — see assertRankPartitionLocal.
+            assertRankPartitionLocal(tableName, definition, index);
+
             // Same RLS coupling-seam semantics as count(): position is a
             // count-rows-strictly-before; an RLS-restricted ctx can't be
             // trusted to return a correct count, so we throw the same error.
@@ -2885,6 +2919,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (!index) {
                 throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
             }
+
+            // Refuse a shard-local page when the partition spans shards (the
+            // page would be a per-shard slice, not the global order).
+            assertRankPartitionLocal(tableName, definition, index);
 
             // rankPage() is a paginated read over the rank companion; the
             // result depends on every row in the partition, so SCAN_DEP
