@@ -439,7 +439,6 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                     subcommand: sub,
                     tables: toStringOrUndefined(parsed.tables),
                     target: argument[1],
-                    to: toStringOrUndefined(parsed.to),
                     token: toStringOrUndefined(parsed.token),
                     url: toStringOrUndefined(parsed.url),
                 });
@@ -454,7 +453,6 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         options: [
             { description: "Backup directory (default .cirrus-backups)", name: "dir", type: String },
             { description: "Comma-separated table allowlist (create)", name: "tables", type: String },
-            { description: "Point-in-time recovery: replay CDC up to an ISO time (restore)", name: "to", type: String },
             { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
             { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
             { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },

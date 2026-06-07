@@ -6,14 +6,14 @@
  * directory and records it in a `manifest.json`; `list` prints the manifest;
  * `restore &lt;id|file>` imports a chosen snapshot back through the import
  * endpoint. Schedule `create` (CI cron, or a cron-triggered action) for
- * automated backups; pair with Cloudflare D1 Time Travel for sub-snapshot
- * recovery, or `restore --to &lt;time>` once replay-PITR lands.
+ * automated backups. For in-place time-travel to an arbitrary moment in the
+ * last 30 days, use native PITR (`cirrus backup pitr` / the dashboard) instead
+ * of replaying a snapshot; this command is the off-platform / portable tier.
  */
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import resolveAdminBaseUrl from "../util/admin-url.js";
 import type { Logger } from "../util/logger.js";
 import type { StreamingFetchLike } from "./data-transfer.js";
 import { runExportCommand, runImportCommand } from "./data-transfer.js";
@@ -21,10 +21,6 @@ import { runExportCommand, runImportCommand } from "./data-transfer.js";
 /** Default directory (relative to cwd) backups and their manifest live in. */
 const DEFAULT_BACKUP_DIR = ".cirrus-backups";
 const MANIFEST_FILE = "manifest.json";
-const SYNC_ENDPOINT_PATH = "/_cirrus/admin/sync";
-const APPLY_ENDPOINT_PATH = "/_cirrus/admin/apply";
-/** Safety bound on the replay drain loop — far above any realistic changelog depth. */
-const MAX_REPLAY_PAGES = 10_000;
 
 type BackupSubcommand = "create" | "list" | "restore";
 
@@ -52,12 +48,6 @@ interface BackupCommandOptions {
     tables?: string;
     /** `restore` target: a backup id (from the manifest) or a direct NDJSON path. */
     target?: string;
-
-    /**
-     * `restore` only: ISO timestamp for point-in-time recovery. After importing
-     * the base snapshot, replay the CDC changelog up to this moment (`ts &lt;= T`).
-     */
-    to?: string;
     token?: string;
     url?: string;
 }
@@ -143,172 +133,6 @@ const runBackupList = async (options: BackupCommandOptions, directory: string): 
     return { code: 0 };
 };
 
-/** One CDC change as it crosses the wire from `/sync` (we only read `ts` here). */
-interface WireChange {
-    [key: string]: unknown;
-    ts?: number;
-}
-
-interface SyncPage {
-    global?: { changes?: ReadonlyArray<WireChange>; cursor?: number };
-    shards?: ReadonlyArray<{ changes?: ReadonlyArray<WireChange>; cursor?: number; error?: { message?: string }; shardKey?: string }>;
-}
-
-interface ReplayBatch {
-    changes: ReadonlyArray<WireChange>;
-    shardKey: string;
-}
-
-interface CollectedPage {
-    advanced: boolean;
-    batches: ReplayBatch[];
-    /** Next per-shard cursor map (a fresh object — the input is not mutated). */
-    cursors: Record<string, number>;
-    globalChanges: ReadonlyArray<WireChange>;
-    globalCursor: number;
-    /** True if this page collected at least one in-window (ts at or before `toMs`) change. */
-    inWindow: boolean;
-    /** True if this page dropped at least one change for being past `toMs`. */
-    pastWindow: boolean;
-}
-
-/**
- * Project one `/sync` page into the changes to replay (ts at or before `toMs`),
- * returning the advanced per-shard cursor map, the next global cursor, and
- * whether any cursor moved (the loop's drained signal). Pure — cursors copied.
- */
-const collectReplayPage = (data: SyncPage, cursors: Readonly<Record<string, number>>, globalCursor: number, toMs: number): CollectedPage => {
-    const batches: ReplayBatch[] = [];
-    const nextCursors: Record<string, number> = { ...cursors };
-    let advanced = false;
-    let inWindow = false;
-    let pastWindow = false;
-
-    const partitionByWindow = (changes: ReadonlyArray<WireChange>): WireChange[] => {
-        const fresh: WireChange[] = [];
-
-        for (const entry of changes) {
-            if ((entry.ts ?? 0) <= toMs) {
-                fresh.push(entry);
-            } else {
-                pastWindow = true;
-            }
-        }
-
-        return fresh;
-    };
-
-    for (const shard of data.shards ?? []) {
-        if (shard.shardKey === undefined) {
-            continue;
-        }
-
-        const fresh = partitionByWindow(shard.changes ?? []);
-
-        if (fresh.length > 0) {
-            batches.push({ changes: fresh, shardKey: shard.shardKey });
-            inWindow = true;
-        }
-
-        if (typeof shard.cursor === "number" && shard.cursor > (nextCursors[shard.shardKey] ?? 0)) {
-            nextCursors[shard.shardKey] = shard.cursor;
-            advanced = true;
-        }
-    }
-
-    const globalChanges = partitionByWindow(data.global?.changes ?? []);
-
-    if (globalChanges.length > 0) {
-        inWindow = true;
-    }
-
-    let nextGlobalCursor = globalCursor;
-
-    if (typeof data.global?.cursor === "number" && data.global.cursor > globalCursor) {
-        nextGlobalCursor = data.global.cursor;
-        advanced = true;
-    }
-
-    return { advanced, batches, cursors: nextCursors, globalChanges, globalCursor: nextGlobalCursor, inWindow, pastWindow };
-};
-
-/** POST one replay page to `/apply` and return how many changes it applied. */
-const postReplayPage = async (fetchImpl: StreamingFetchLike, baseUrl: string, headers: Record<string, string>, page: CollectedPage): Promise<number> => {
-    if (page.batches.length === 0 && page.globalChanges.length === 0) {
-        return 0;
-    }
-
-    const response = await fetchImpl(`${baseUrl}${APPLY_ENDPOINT_PATH}`, {
-        body: JSON.stringify({ batches: page.batches, globalChanges: page.globalChanges }),
-        headers,
-        method: "POST",
-    });
-
-    if (!response.ok) {
-        throw new Error(`apply failed (${String(response.status)}): ${await response.text()}`);
-    }
-
-    const result = (await response.json()) as { applied?: number; failed?: number };
-
-    if ((result.failed ?? 0) > 0) {
-        throw new Error(`apply reported ${String(result.failed)} failed shard(s) — aborting point-in-time restore to avoid a partial replay`);
-    }
-
-    return result.applied ?? 0;
-};
-
-const replayCdcTo = async (options: BackupCommandOptions, baseUrl: string, token: string, toMs: number): Promise<number> => {
-    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-    const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-    let cursors: Record<string, number> = {};
-    let globalCursor = 0;
-    let applied = 0;
-
-    for (let page = 0; page < MAX_REPLAY_PAGES; page += 1) {
-        // eslint-disable-next-line no-await-in-loop -- the feed is paged: each request resumes from the cursors the previous page returned.
-        const syncResponse = await fetchImpl(`${baseUrl}${SYNC_ENDPOINT_PATH}`, { body: JSON.stringify({ cursors, globalCursor }), headers, method: "POST" });
-
-        if (!syncResponse.ok) {
-            // eslint-disable-next-line no-await-in-loop -- error path: read the body for the message before throwing.
-            throw new Error(`sync failed (${String(syncResponse.status)}): ${await syncResponse.text()}`);
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- sequential paging (see above).
-        const data = (await syncResponse.json()) as SyncPage;
-        // A per-shard error means that shard's history is missing from this page;
-        // replaying anyway would silently skip it, so abort the restore instead.
-        const failedShard = (data.shards ?? []).find((shard) => shard.error !== undefined);
-
-        if (failedShard !== undefined) {
-            throw new Error(
-                `sync reported a failed shard "${failedShard.shardKey ?? "?"}": ${failedShard.error?.message ?? "unknown"} — aborting point-in-time restore to avoid a partial replay`,
-            );
-        }
-
-        const collected = collectReplayPage(data, cursors, globalCursor, toMs);
-
-        cursors = collected.cursors;
-        globalCursor = collected.globalCursor;
-        // eslint-disable-next-line no-await-in-loop -- apply this page before fetching the next (bounded memory, ordered replay).
-        applied += await postReplayPage(fetchImpl, baseUrl, headers, collected);
-
-        if (!collected.advanced) {
-            break;
-        }
-
-        // Once the feed passes `--to`, every later page filters to an empty
-        // in-window batch yet cursors keep advancing — without this guard the
-        // loop would keep doing real /sync round-trips up to MAX_REPLAY_PAGES
-        // for zero applied work. Stop as soon as a page collects nothing in
-        // window but did drop changes for being past the cutoff.
-        if (!collected.inWindow && collected.pastWindow) {
-            break;
-        }
-    }
-
-    return applied;
-};
-
 const runBackupRestore = async (options: BackupCommandOptions, directory: string): Promise<BackupCommandResult> => {
     const { target } = options;
 
@@ -340,46 +164,10 @@ const runBackupRestore = async (options: BackupCommandOptions, directory: string
         url: options.url,
     });
 
-    if (result.code !== 0 || options.to === undefined) {
-        return { code: result.code };
-    }
-
-    // Point-in-time recovery: roll forward from the snapshot to `--to`.
-    const toMs = Date.parse(options.to);
-
-    if (Number.isNaN(toMs)) {
-        options.logger.error(`invalid --to time: ${options.to} (expected an ISO timestamp)`);
-
-        return { code: 1 };
-    }
-
-    const token = options.token ?? process.env["CIRRUS_ADMIN_TOKEN"];
-
-    if (token === undefined || token.length === 0) {
-        options.logger.error("admin token required for --to replay — pass --token or set CIRRUS_ADMIN_TOKEN");
-
-        return { code: 1 };
-    }
-
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
-
-    if (baseUrl === undefined) {
-        return { code: 1 };
-    }
-
-    try {
-        const applied = await replayCdcTo(options, baseUrl, token, toMs);
-
-        options.logger.success(`replayed ${String(applied)} change(s) up to ${options.to}`);
-
-        return { code: 0 };
-    } catch (error: unknown) {
-        // A failed/partial replay must not leave the operator thinking the
-        // point-in-time restore succeeded — surface it as a non-zero exit.
-        options.logger.error(error instanceof Error ? error.message : String(error));
-
-        return { code: 1 };
-    }
+    // Plain snapshot import — the off-platform / portable restore. For in-place
+    // time-travel to an arbitrary moment in the last 30 days, use native PITR
+    // (`cirrus backup pitr` / the dashboard) rather than replaying a snapshot.
+    return { code: result.code };
 };
 
 const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {

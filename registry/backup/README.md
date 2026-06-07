@@ -111,18 +111,13 @@ Both `snapshot` and `prune` in `cirrus/backup/index.ts` read the bucket via `imp
 
 ## Restore
 
-Snapshots are plain NDJSON, so recovery goes through the existing CLI restore path. Restore picks the **nearest snapshot** and, with `--to`, rolls the CDC changelog forward from there to an arbitrary moment. Download the object you want from the bucket and feed it to:
+Snapshots are plain NDJSON, so recovery is a straight import — download the object you want from the bucket and feed it to the restore CLI:
 
 ```bash
-# Coarse: restore a specific snapshot (NDJSON imported via the admin /apply endpoint).
 cirrus backup restore ./cirrus-backup-2026-06-07T03-00-00-000Z.ndjson
-
-# Fine-grained PITR: take the nearest snapshot as a base, then replay the CDC
-# changelog (ts <= --to) forward to the exact moment you want to recover to.
-cirrus backup restore <id> --to 2026-06-07T12:00:00Z
 ```
 
-`prune`'s retention window is therefore your recovery floor: as long as a snapshot at or before your target time still exists, `--to` can reconstruct any moment after it from the changelog. See [`cirrus backup`](../../packages/cli/src/commands/backup.ts) (`create | list | restore`) for the full restore surface, including the `--to` replay and pairing with Cloudflare D1 Time Travel.
+For **in-place time-travel to an arbitrary moment** (rather than to a snapshot boundary), use **native PITR** — `cirrus backup pitr` / the dashboard — which restores the shard from the platform's own change log to any point in the last 30 days (see below). This off-platform snapshot path is for portable, cross-deployment, or >30-day recovery; `prune`'s retention window is your recovery floor here. See [`cirrus backup`](../../packages/cli/src/commands/backup.ts) (`create | list | restore`) and Cloudflare D1 Time Travel for the `.global()` plane.
 
 ## Two recovery tiers
 
