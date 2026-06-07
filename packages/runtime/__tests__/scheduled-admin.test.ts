@@ -22,6 +22,8 @@ const ADMIN_TOKEN = "admin-bear";
 
 const RECORDS = [{ args: {}, enqueuedAt: 1, functionPath: "email:send", id: "j1", scheduledFor: 2000 }];
 
+const STATUS = { backlog: 5, inFlight: 2, pools: [{ inFlight: 2, maxConcurrency: 3, name: "mail", queued: 5 }] };
+
 /** A scheduler namespace whose stub records the requests it receives. */
 const recordingScheduler = (): { calls: { body: string; method: string; pathname: string }[]; idArgs: string[]; namespace: ShardNamespaceLike } => {
     const calls: { body: string; method: string; pathname: string }[] = [];
@@ -36,6 +38,10 @@ const recordingScheduler = (): { calls: { body: string; method: string; pathname
 
             if (url.pathname === "/list") {
                 return Response.json({ records: RECORDS });
+            }
+
+            if (url.pathname === "/status") {
+                return Response.json(STATUS);
             }
 
             return Response.json({ cancelled: true });
@@ -128,6 +134,88 @@ describe("createWorker — scheduled admin endpoints", () => {
 
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(405);
+    });
+
+    it("status rejects without a valid admin bearer (403)", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/scheduled/status", { method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+        // The admin gate rejects before the request ever reaches the DO stub.
+        expect(calls).toEqual([]);
+    });
+
+    it("status reports SCHEDULER_NOT_CONFIGURED when no namespace is bound (400)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("SCHEDULER_NOT_CONFIGURED");
+    });
+
+    it("status forwards GET /status to the default scheduler instance and returns the backlog", async () => {
+        expect.assertions(4);
+
+        const { calls, idArgs, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body: unknown = await response.json();
+
+        expect(body).toEqual(STATUS);
+        expect(calls).toEqual([{ body: "", method: "GET", pathname: "/status" }]);
+        expect(idArgs).toEqual(["default"]);
+    });
+
+    it("status targets a named scheduler instance", async () => {
+        expect.assertions(1);
+
+        const { idArgs, namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, schedulerInstanceName: "tenant-a", shardDO: noopNamespace });
+
+        await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(idArgs).toEqual(["tenant-a"]);
+    });
+
+    it("status rejects non-GET (405)", async () => {
+        expect.assertions(1);
+
+        const { namespace } = recordingScheduler();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
             {},
             fakeContext,
         );

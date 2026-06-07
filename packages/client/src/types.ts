@@ -249,6 +249,38 @@ export interface ScheduleRecord {
 }
 
 /**
+ * One workpool's live backlog, as returned by the worker's
+ * `GET /_cirrus/admin/scheduled/status` endpoint. Mirrors `@cirrus/scheduler`'s
+ * `SchedulerPoolStatus` structurally so the client carries no dependency on it.
+ */
+export interface SchedulerPoolStatus {
+    /** Jobs currently dispatched-but-not-yet-completed (the held concurrency slots). */
+    inFlight: number;
+    /** The pool's concurrency cap. */
+    maxConcurrency: number;
+    /** The logical workpool name. */
+    name: string;
+    /** Pending jobs routed to this pool but not yet dispatched. */
+    queued: number;
+}
+
+/**
+ * The app-level scheduler backlog, as returned by the worker's
+ * `GET /_cirrus/admin/scheduled/status` endpoint. `pools` is the per-pool
+ * breakdown; `backlog` and `inFlight` are the app-wide sums of `queued` and
+ * `inFlight` across every pool — the headline numbers for the dashboard SLO
+ * view. Mirrors `@cirrus/scheduler`'s `SchedulerStatus` structurally.
+ */
+export interface SchedulerStatus {
+    /** Sum of every pool's `queued` count — the total pending backlog. */
+    backlog: number;
+    /** Sum of every pool's `inFlight` count — the total held concurrency slots. */
+    inFlight: number;
+    /** Per-pool backlog breakdown. */
+    pools: SchedulerPoolStatus[];
+}
+
+/**
  * One object in the storage bucket, as returned by the worker's
  * `GET /_cirrus/admin/storage` endpoint. Mirrors `@cirrus/storage`'s
  * `R2ObjectLike` structurally.

@@ -38,6 +38,8 @@ export type {
     RpcEnvelope,
     RpcResponseBody,
     ScheduleRecord,
+    SchedulerPoolStatus,
+    SchedulerStatus,
     ServerMessage,
     StorageListPage,
     StorageObject,

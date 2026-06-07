@@ -659,6 +659,7 @@ const SYNC_PATH = "/_cirrus/admin/sync";
 const CONNECTOR_SYNC_PATH = "/_cirrus/admin/connector/sync";
 const APPLY_PATH = "/_cirrus/admin/apply";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
+const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
@@ -2166,6 +2167,23 @@ const createWorker = (
     };
 
     /**
+     * Proxy the SchedulerDO's `GET /status` so the dashboard can read the
+     * app-level workpool backlog (per-pool `{ queued, inFlight, maxConcurrency }`
+     * plus app-wide `backlog`/`inFlight` totals) that powers the SLO view. A
+     * sibling of {@link handleScheduledList}: same admin gate + scheduler-instance
+     * resolution via {@link resolveSchedulerStub}, just a different DO route.
+     */
+    const handleSchedulerStatus = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Scheduler-status endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const stub = resolveSchedulerStub(request);
+
+        return stub.fetch(new Request("https://scheduler.internal/status", { method: "GET" }));
+    };
+
+    /**
      * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
      * dashboard can subscribe to the live job list. A browser `WebSocket` can't
      * set an `Authorization` header, so the admin token is also accepted via the
@@ -2768,6 +2786,7 @@ const createWorker = (
         [APPLY_PATH]: (request, env) => handleApplyCdc(request, env),
         [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
+        [SCHEDULED_STATUS_PATH]: (request) => handleSchedulerStatus(request),
         [SCHEDULED_PATH]: (request) => handleScheduledList(request),
         [STORAGE_PATH]: (request) => handleStorageList(request),
         [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
