@@ -1111,6 +1111,43 @@ describe("cirrusClient", () => {
             expect(JSON.parse(init.body as string)).toEqual({ id: "j1" });
         });
 
+        it("schedulerStatus GETs the status endpoint with the bearer and returns the backlog", async () => {
+            expect.assertions(4);
+
+            const status = { backlog: 5, inFlight: 2, pools: [{ inFlight: 2, maxConcurrency: 3, name: "mail", queued: 5 }] };
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(status));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.setAuthToken("tkn");
+
+            const result = await client.schedulerStatus();
+
+            expect(result).toEqual(status);
+
+            const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(requestUrl).toBe("https://app.example/_cirrus/admin/scheduled/status");
+            expect(init.method).toBe("GET");
+            expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer tkn");
+        });
+
+        it("schedulerStatus defaults absent fields to an empty backlog", async () => {
+            expect.assertions(1);
+
+            const client = new CirrusClient({
+                fetch: async () => jsonResponse({}),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.schedulerStatus()).resolves.toEqual({ backlog: 0, inFlight: 0, pools: [] });
+        });
+
         it("scheduler admin surfaces the worker error envelope as a coded Error", async () => {
             expect.assertions(1);
 

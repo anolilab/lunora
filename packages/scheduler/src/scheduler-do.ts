@@ -118,6 +118,36 @@ interface PoolState {
     maxConcurrency: number;
 }
 
+/**
+ * One pool's live backlog, as surfaced by `GET /status`. `inFlight`/
+ * `maxConcurrency` mirror the durable {@link PoolState} semaphore; `queued`
+ * is the number of pending (not-yet-dispatched) jobs routed to this pool.
+ */
+interface SchedulerPoolStatus {
+    /** Jobs currently dispatched-but-not-yet-completed (the held slots). */
+    inFlight: number;
+    /** The pool's concurrency cap. */
+    maxConcurrency: number;
+    /** The logical workpool name (the `pool:&lt;name>` suffix). */
+    name: string;
+    /** Pending jobs routed to this pool but not yet dispatched. */
+    queued: number;
+}
+
+/**
+ * App-level scheduler backlog, as returned by `GET /status`. `pools` carries
+ * the per-pool breakdown; `backlog` and `inFlight` are the app-wide sums of
+ * `queued` and `inFlight` across every pool — the SLO view's headline numbers.
+ */
+interface SchedulerStatus {
+    /** Sum of every pool's `queued` count — the total pending backlog. */
+    backlog: number;
+    /** Sum of every pool's `inFlight` count — the total held concurrency slots. */
+    inFlight: number;
+    /** Per-pool backlog breakdown, one entry per `pool:&lt;name>` record. */
+    pools: SchedulerPoolStatus[];
+}
+
 interface CancelRequestBody {
     id: string;
 }
@@ -239,6 +269,10 @@ class SchedulerDO {
 
         if (url.pathname === "/pool" && request.method === "GET") {
             return this.handlePoolStatus(url);
+        }
+
+        if (url.pathname === "/status" && request.method === "GET") {
+            return this.handleStatus();
         }
 
         return Response.json(
@@ -648,6 +682,58 @@ class SchedulerDO {
         return SchedulerDO.json({ inFlight: pool.inFlight, maxConcurrency: pool.maxConcurrency, queued });
     }
 
+    /**
+     * `GET /status` — the app-level backlog signal that powers the dashboard's
+     * SLO view. Enumerates every durable `pool:&lt;name>` row for its `inFlight`/
+     * `maxConcurrency` semaphore, counts the pending (not-yet-dispatched) jobs
+     * routed to each pool with the same single-pass scan {@link handlePoolStatus}
+     * uses, and rolls those up into app-wide `backlog` (sum of `queued`) and
+     * `inFlight` (sum of held slots) totals.
+     *
+     * Pools that have rows but no queued jobs still appear (with `queued: 0`) so
+     * a saturated-but-idle pool stays visible; a pool that only ever existed as
+     * queued jobs without a persisted row is unreachable here (the schedule path
+     * always writes a `pool:&lt;name>` row before the job's header), so a single
+     * scan over `pool:`/`id:` is sufficient.
+     */
+    private async handleStatus(): Promise<Response> {
+        // One scan for the durable pool rows (concurrency state) and one for the
+        // pending headers (queued counts). Both are bounded prefix lists, mirroring
+        // the existing `/pool` read path rather than re-deriving pool state.
+        const poolRows = await this.state.storage.list<PoolState>({ prefix: POOL_PREFIX });
+        const headers = await this.state.storage.list<ScheduleRecord>({ prefix: HEADER_PREFIX });
+
+        // Count pending jobs per pool name in a single pass over the headers,
+        // exactly as handlePoolStatus() counts for one pool.
+        const queuedByPool = new Map<string, number>();
+
+        for (const record of headers.values()) {
+            if (record.pool !== undefined) {
+                queuedByPool.set(record.pool, (queuedByPool.get(record.pool) ?? 0) + 1);
+            }
+        }
+
+        const pools: SchedulerPoolStatus[] = [];
+        let backlog = 0;
+        let inFlight = 0;
+
+        for (const [key, pool] of poolRows.entries()) {
+            const name = key.slice(POOL_PREFIX.length);
+            // Defend against a corrupted row (`inFlight` should never go negative)
+            // exactly as loadPool() does on the alarm path.
+            const slots = Math.max(0, pool.inFlight);
+            const queued = queuedByPool.get(name) ?? 0;
+
+            pools.push({ inFlight: slots, maxConcurrency: pool.maxConcurrency, name, queued });
+            backlog += queued;
+            inFlight += slots;
+        }
+
+        const status: SchedulerStatus = { backlog, inFlight, pools };
+
+        return SchedulerDO.json(status);
+    }
+
     private async handleSchedule(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => undefined)) as ScheduleRequestBody | undefined;
 
@@ -805,4 +891,4 @@ class SchedulerDO {
 }
 
 export { SchedulerDO };
-export type { SchedulerDOState, SchedulerEnv };
+export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus };
