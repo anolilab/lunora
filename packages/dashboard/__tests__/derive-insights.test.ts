@@ -3,27 +3,31 @@ import { describe, expect, it } from "vitest";
 import type { FunctionCallStat, ShardMetrics } from "../src/admin.js";
 import { deriveInsights } from "../src/derive-insights.js";
 
-const metrics = (cache: ShardMetrics["cache"]): ShardMetrics => {return {
-    cache,
-    databaseSize: 1024,
-    errors: 0,
-    requests: 100,
-    shard: "__root__",
-    sinceMs: 1_700_000_000_000,
-    uptimeMs: 1000,
-}};
+const metrics = (cache: ShardMetrics["cache"]): ShardMetrics => {
+    return {
+        cache,
+        databaseSize: 1024,
+        errors: 0,
+        requests: 100,
+        shard: "__root__",
+        sinceMs: 1_700_000_000_000,
+        uptimeMs: 1000,
+    };
+};
 
-const fn = (overrides: Partial<FunctionCallStat>): FunctionCallStat => {return {
-    calls: 1,
-    errors: 0,
-    lastCalledAt: 1000,
-    lastErrorAt: null,
-    lastErrorMessage: null,
-    maxDurationMs: 0,
-    path: "messages:list",
-    totalDurationMs: 0,
-    ...overrides,
-}};
+const fn = (overrides: Partial<FunctionCallStat>): FunctionCallStat => {
+    return {
+        calls: 1,
+        errors: 0,
+        lastCalledAt: 1000,
+        lastErrorAt: null,
+        lastErrorMessage: null,
+        maxDurationMs: 0,
+        path: "messages:list",
+        totalDurationMs: 0,
+        ...overrides,
+    };
+};
 
 describe(deriveInsights, () => {
     it("returns nothing for healthy snapshots", () => {
@@ -63,6 +67,39 @@ describe(deriveInsights, () => {
         const [insight] = deriveInsights(null, [fn({ calls: 3, maxDurationMs: 2500, path: "reports:build" })]);
 
         expect(insight).toMatchObject({ fn: "reports:build", kind: "slow-function", severity: "info", value: 2500 });
+    });
+
+    it("upgrades a slow function with scan attribution to a causal missing-index insight", () => {
+        expect.assertions(2);
+
+        const [insight] = deriveInsights(null, [
+            fn({
+                calls: 3,
+                maxDurationMs: 2500,
+                path: "feed:list",
+                scannedTables: [
+                    { scans: 9, table: "posts" },
+                    { scans: 2, table: "tags" },
+                ],
+                scans: 11,
+            }),
+        ]);
+
+        // The causal kind names the scanned tables (busiest first) and bumps the
+        // severity to warning so it sorts above the bare slow-function info.
+        expect(insight).toMatchObject({ fn: "feed:list", kind: "missing-index", severity: "warning", tables: ["posts", "tags"], value: 2500 });
+        // It replaces — does NOT co-emit — the plain slow-function symptom.
+        expect(
+            deriveInsights(null, [fn({ calls: 3, maxDurationMs: 2500, path: "feed:list", scannedTables: [{ scans: 1, table: "posts" }], scans: 1 })]),
+        ).toHaveLength(1);
+    });
+
+    it("keeps a slow function with empty scan attribution as a plain slow-function", () => {
+        expect.assertions(1);
+
+        const [insight] = deriveInsights(null, [fn({ calls: 3, maxDurationMs: 2500, path: "reports:build", scannedTables: [], scans: 0 })]);
+
+        expect(insight).toMatchObject({ kind: "slow-function" });
     });
 
     it("flags a high error rate over a meaningful call count, carrying the last error", () => {

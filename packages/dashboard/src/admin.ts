@@ -127,10 +127,25 @@ export interface ShardMetrics {
 }
 
 /**
+ * One full-scan attribution entry on a {@link FunctionCallStat}, mirroring
+ * `@cirrus/do`'s `FunctionScanAttribution`: how many times the function
+ * full-scanned `table`. The causal evidence behind the "missing index" insight.
+ */
+export interface FunctionScanAttribution {
+    scans: number;
+    table: string;
+}
+
+/**
  * Per-function execution counters returned by `__cirrus_admin__:getFunctionStats`
  * for one shard. Mirrors `@cirrus/do`'s `FunctionCallStat`. Counters are
  * per-DO-instance and reset on hibernation/restart — a "since this instance
  * woke" readout. Durations are handler wall-clock milliseconds.
+ *
+ * `scans` / `scannedTables` carry the causal full-scan attribution (PLAN3 1.2).
+ * They're additive — a worker predating the feature reports `scans: 0` and
+ * `scannedTables: []`, so the fields are optional on the wire and the consumer
+ * defaults them.
  */
 export interface FunctionCallStat {
     calls: number;
@@ -140,6 +155,10 @@ export interface FunctionCallStat {
     lastErrorMessage: null | string;
     maxDurationMs: number;
     path: string;
+    /** Per-table full-scan attribution, busiest scan first; absent on a pre-1.2 worker. */
+    scannedTables?: FunctionScanAttribution[];
+    /** Total full-table scans across every dispatch; absent on a pre-1.2 worker. */
+    scans?: number;
     totalDurationMs: number;
 }
 

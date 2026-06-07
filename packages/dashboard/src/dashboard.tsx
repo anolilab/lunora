@@ -9,6 +9,7 @@ import {
     RouterProvider,
     useNavigate,
     useRouterState,
+    useSearch,
 } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo } from "react";
@@ -347,6 +348,22 @@ const RoutePending = (): ReactElement => (
     </div>
 );
 
+/**
+ * Schema tab wrapper that lifts the optional `?table=&lt;name>` search param off
+ * the URL and forwards it to {@link SchemaViewer} as `initialTable`. This is the
+ * landing target of the Insights "add the index" deep-link: navigating to
+ * `/schema?table=posts` auto-expands `posts`'s index list. Read with
+ * `strict: false` because the generic tab routes don't declare a typed search
+ * schema; the param is coerced to a string or dropped.
+ */
+const SchemaRoutePanel = ({ initialShardKey }: { readonly initialShardKey?: string }): ReactElement => {
+    const search: Record<string, unknown> = useSearch({ strict: false });
+    const { table } = search;
+    const initialTable = typeof table === "string" ? table : undefined;
+
+    return <SchemaViewer initialShardKey={initialShardKey} initialTable={initialTable} />;
+};
+
 /** Sends unknown paths back to the default tab. */
 const NotFoundRedirect = (): null => {
     const navigate = useNavigate();
@@ -388,7 +405,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
         schedule: <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />,
-        schema: <SchemaViewer initialShardKey={initialShardKey} />,
+        schema: <SchemaRoutePanel initialShardKey={initialShardKey} />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         users: <UsersPanel />,
     };
