@@ -970,3 +970,154 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
         expect(database.calls.some((entry) => entry.method === "rank")).toBe(true);
     });
 });
+
+describe("rls — per-table facade + orm (no RLS bypass)", () => {
+    const ownerPolicy = definePolicy<TestContext>({
+        on: "read",
+        table: "documents",
+        when: ({ auth }) => {
+            return { ownerId: auth.userId };
+        },
+    });
+
+    /**
+     * Glue a per-table facade (the `ctx.db.documents.findMany(...)` form) and
+     * `ctx.orm` onto the fake writer, mirroring codegen's `bindTable`/`bindOrm`
+     * — the exact shape the real runtime hands the middleware. This is what the
+     * C1 regression test guards: `wrapDatabase` must re-bind these to route
+     * through the RLS layer rather than the raw writer.
+     */
+    const withFacade = (database: FakeDatabase): FakeDatabase["writer"] & Record<string, unknown> => {
+        const { writer } = database;
+        const bindTable = (tableName: string): Record<string, unknown> => {
+            return {
+                aggregate: (options: unknown) => writer.aggregate(tableName, options),
+                count: (where?: unknown) => writer.count(tableName, where),
+                delete: (id: string) => writer.delete(id),
+                findFirst: (args?: unknown) => writer.findFirst(tableName, args),
+                findFirstOrThrow: (args?: unknown) => writer.findFirstOrThrow(tableName, args),
+                findMany: (args?: unknown) => writer.findMany(tableName, args),
+                get: (id: string) => writer.get(id),
+                groupBy: (options: unknown) => writer.groupBy(tableName, options),
+                insert: (document: Record<string, unknown>) => writer.insert(tableName, document),
+                patch: (id: string, patch: Record<string, unknown>) => writer.patch(id, patch),
+                rank: (indexName: string, options: unknown) => writer.rank(tableName, indexName, options),
+                rankPage: (indexName: string, options?: unknown) => writer.rankPage(tableName, indexName, options),
+                replace: (id: string, document: Record<string, unknown>) => writer.replace(id, document),
+                // Stub so `isFacadeEntry` recognises this as a table accessor.
+                withSearchIndex: () => {
+                    throw new Error("withSearchIndex not used in these tests");
+                },
+            };
+        };
+
+        const db = writer as FakeDatabase["writer"] & Record<string, unknown>;
+
+        db["documents"] = bindTable("documents");
+
+        return db;
+    };
+
+    const makeFacadeContext = (database: FakeDatabase, userId: null | string): Record<string, unknown> => {
+        const db = withFacade(database);
+        const resolve = (table: string): Record<string, unknown> => db[table] as Record<string, unknown>;
+
+        return {
+            auth: { roles: [], userId },
+            db,
+            orm: {
+                delete: (table: string, id: string) => (resolve(table)["delete"] as (id: string) => unknown)(id),
+                insert: (table: string) => {
+                    return { values: (values: Record<string, unknown>) => (resolve(table)["insert"] as (v: Record<string, unknown>) => unknown)(values) };
+                },
+                query: db,
+                replace: (table: string, id: string) => {
+                    return { with: (values: Record<string, unknown>) => (resolve(table)["replace"] as (id: string, v: Record<string, unknown>) => unknown)(id, values) };
+                },
+                update: (table: string, id: string) => {
+                    return { set: (values: Record<string, unknown>) => (resolve(table)["patch"] as (id: string, v: Record<string, unknown>) => unknown)(id, values) };
+                },
+            },
+        };
+    };
+
+    interface FacadeCtx {
+        db: Record<string, { count: (where?: unknown) => Promise<number>; findMany: (args?: unknown) => Promise<unknown>; get: (id: string) => Promise<unknown> }>;
+        orm: { query: Record<string, { findMany: (args?: unknown) => Promise<unknown> }> };
+    }
+
+    it("injects baseWhere into ctx.db.<table>.findMany() (the facade is not a bypass)", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = cirrus.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as FacadeCtx).db["documents"]!.findMany({ where: { archived: false } }));
+
+        await handler.handler(makeFacadeContext(database, "u1"), {});
+
+        const call = database.calls.find((entry) => entry.method === "findMany");
+
+        expect(call?.args).toMatchObject({ baseWhere: { ownerId: "u1" }, where: { archived: false } });
+    });
+
+    it("injects baseWhere into ctx.orm.query.<table>.findMany()", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = cirrus.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as FacadeCtx).orm.query["documents"]!.findMany());
+
+        await handler.handler(makeFacadeContext(database, "u1"), {});
+
+        const call = database.calls.find((entry) => entry.method === "findMany");
+
+        expect((call?.args as { baseWhere?: unknown }).baseWhere).toEqual({ ownerId: "u1" });
+    });
+
+    it("propagates restrictsCounts through ctx.db.<table>.count()", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([]);
+        const handler = cirrus.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as FacadeCtx).db["documents"]!.count());
+
+        await handler.handler(makeFacadeContext(database, "u1"), {});
+
+        const call = database.calls.find((entry) => entry.method === "count");
+
+        expect((call?.args as { restrictsCounts?: boolean }).restrictsCounts).toBe(true);
+    });
+
+    it("does NOT leak a denied row through ctx.db.<table>.get()", async () => {
+        expect.assertions(1);
+
+        // Row owned by u2; policy for u1 denies it. The fake findFirst honours
+        // baseWhere (returns null when the row fails the predicate).
+        const database = createFakeDatabase([{ _id: "d2", ownerId: "u2", table: "documents" }]);
+
+        // Honour baseWhere in the fake's findFirst, mirroring @cirrus/do.
+        const originalFindFirst = database.writer.findFirst.bind(database.writer);
+
+        database.writer.findFirst = async (tableName, args) => {
+            const row = await originalFindFirst(tableName, args);
+            const baseWhere = (args as { baseWhere?: { ownerId?: string } } | undefined)?.baseWhere;
+
+            if (row && baseWhere?.ownerId !== undefined && row["ownerId"] !== baseWhere.ownerId) {
+                return null;
+            }
+
+            return row;
+        };
+
+        const handler = cirrus.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as FacadeCtx).db["documents"]!.get("d2"));
+
+        const result = await handler.handler(makeFacadeContext(database, "u1"), {});
+
+        expect(result).toBeNull();
+    });
+});
