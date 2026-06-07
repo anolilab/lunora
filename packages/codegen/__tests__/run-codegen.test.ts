@@ -173,7 +173,7 @@ describe("run-codegen", () => {
         });
 
         it("emits per-table ctx.db facade types in dataModel.ts", () => {
-            expect.assertions(8);
+            expect.assertions(11);
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -188,6 +188,14 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("export interface TableWriterFacade<T extends keyof DataModel>");
             expect(result.generated.dataModel).toContain("export type DatabaseReaderFacade");
             expect(result.generated.dataModel).toContain("export type DatabaseWriterFacade");
+
+            // Typed full-text search on the facade: the index name is constrained
+            // to the table's declared `searchIndex`es via `SearchIndexName<T>`.
+            /* eslint-disable no-secrets/no-secrets -- generated framework type names, not credentials */
+            expect(result.generated.dataModel).toContain("export interface SearchFilterBuilder<TDoc>");
+            expect(result.generated.dataModel).toContain("export interface SearchReader<TDoc>");
+            expect(result.generated.dataModel).toContain("withSearchIndex: (indexName: SearchIndexName<T>,");
+            /* eslint-enable no-secrets/no-secrets */
         });
 
         it("emits the ctx.orm namespace + findFirstOrThrow on the read facade", () => {
