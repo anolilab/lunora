@@ -200,6 +200,59 @@ describe("schedulerDO — workpool concurrency", () => {
         // 2 of the 4 were kicked (their id: headers cleared); the other 2 stay queued.
         expect(status.queued).toBe(2);
     });
+
+    it("aggregates every pool's backlog via GET /status", async () => {
+        expect.assertions(5);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+
+        // Pool "a": cap 2, 4 jobs -> 2 kicked (inFlight 2), 2 queued.
+        await enqueuePool(scheduler, "a", 2, 4);
+        // Pool "b": cap 1, 3 jobs -> 1 kicked (inFlight 1), 2 queued.
+        await enqueuePool(scheduler, "b", 1, 3);
+        await scheduler.alarm();
+
+        const response = await scheduler.fetch(get("/status"));
+        const status = await response.json<{
+            backlog: number;
+            inFlight: number;
+            pools: { inFlight: number; maxConcurrency: number; name: string; queued: number }[];
+        }>();
+
+        // Sort for a stable assertion regardless of storage iteration order.
+        const pools = [...status.pools].toSorted((left, right) => left.name.localeCompare(right.name));
+
+        expect(pools).toEqual([
+            { inFlight: 2, maxConcurrency: 2, name: "a", queued: 2 },
+            { inFlight: 1, maxConcurrency: 1, name: "b", queued: 2 },
+        ]);
+        // App-wide totals are the sums across both pools.
+        expect(status.backlog).toBe(4);
+        expect(status.inFlight).toBe(3);
+
+        // Each pool's per-pool /pool view stays consistent with the rollup.
+        const poolA = await (await scheduler.fetch(get("/pool?name=a"))).json<{ queued: number }>();
+
+        expect(poolA.queued).toBe(2);
+
+        const poolB = await (await scheduler.fetch(get("/pool?name=b"))).json<{ inFlight: number }>();
+
+        expect(poolB.inFlight).toBe(1);
+    });
+
+    it("reports an empty backlog when no pools exist", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+
+        const status = await (await scheduler.fetch(get("/status"))).json<{ backlog: number; inFlight: number; pools: unknown[] }>();
+
+        expect(status.pools).toEqual([]);
+        expect(status.backlog).toBe(0);
+        expect(status.inFlight).toBe(0);
+    });
 });
 
 describe("schedulerDO — configurable retry policy", () => {

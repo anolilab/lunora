@@ -27,6 +27,7 @@ import type {
     ReturnOf,
     RpcResponseBody,
     ScheduleRecord,
+    SchedulerStatus,
     ServerDataMessage,
     ServerErrorMessage,
     ServerMessage,
@@ -59,6 +60,7 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
  */
 const MAX_PENDING_STREAMS = 64;
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
+const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
@@ -681,6 +683,29 @@ class CirrusClient {
         const body = (await this.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
 
         return body.records ?? [];
+    }
+
+    /**
+     * Read the app-level workpool backlog that powers `@cirrus/dashboard`'s SLO
+     * view: per-pool `{ name, queued, inFlight, maxConcurrency }` plus the
+     * app-wide `backlog` (total queued) and `inFlight` (total held slots) sums.
+     * Hits the admin-gated `GET /_cirrus/admin/scheduled/status` endpoint, so the
+     * same preconditions as {@link listScheduledJobs} apply (a `schedulerDO`
+     * namespace + `adminToken` on the worker and a matching auth token here).
+     * Defaults any absent field so an older worker still yields a valid shape.
+     */
+    public async schedulerStatus(): Promise<SchedulerStatus> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const body = (await this.adminFetch(SCHEDULED_STATUS_PATH, "GET")) as Partial<SchedulerStatus>;
+
+        return {
+            backlog: body.backlog ?? 0,
+            inFlight: body.inFlight ?? 0,
+            pools: body.pools ?? [],
+        };
     }
 
     /** Cancel a pending scheduled job by id. Returns whether a job was removed. */
