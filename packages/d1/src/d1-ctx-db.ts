@@ -969,55 +969,65 @@ const globalColumnAffinity = (validator: ValidatorLike): ReturnType<typeof sqlAf
  * drops or retypes an existing column, so destructive schema changes still need
  * an explicit migration.
  */
+/** Build the column DDL for a global table: framework columns plus a typed column per declared field. */
+const globalTableColumnsDdl = (definition: SchemaLike["tables"][string]): string => {
+    const fieldColumns: string[] = [];
+
+    for (const [field, validator] of Object.entries(definition.shape)) {
+        if (!validator._meta?.column) {
+            continue;
+        }
+
+        // Required, non-optional fields get NOT NULL; optional ones stay nullable
+        // so an insert that omits them can't trip a constraint.
+        const notNull = validator._meta.column.notNull && validator.kind !== "optional" ? " NOT NULL" : "";
+
+        fieldColumns.push(`${quoteIdentifier(field)} ${globalColumnAffinity(validator)}${notNull}`);
+    }
+
+    return [...frameworkColumnDdl(), ...fieldColumns].join(", ");
+};
+
+/** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
+const createGlobalTableIndexes = async (exec: D1Exec, tableName: string, definition: SchemaLike["tables"][string]): Promise<void> => {
+    for (const index of definition.indexes) {
+        const expressions = index.fields.map((field) => columnRef(field)).join(", ");
+
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+        await exec.run(
+            `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${physicalIndexName(tableName, index.name)} ON ${quoteIdentifier(tableName)} (${expressions})`,
+            [],
+        );
+    }
+
+    // `.unique()` columns synthesize a UNIQUE index so SQLite enforces the
+    // constraint (the write layer maps breaches to ConflictError), mirroring the
+    // DO twin's `migrateSecondaryIndexes`.
+    for (const [field, column] of tableColumns(definition)) {
+        if (!column.unique) {
+            continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
+        await exec.run(
+            `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(`${tableName}_unique_${field}`)} ON ${quoteIdentifier(tableName)} (${columnRef(field)})`,
+            [],
+        );
+    }
+};
+
 const runD1GlobalTableMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<void> => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind !== "global") {
             continue;
         }
 
-        const fieldColumns: string[] = [];
-
-        for (const [field, validator] of Object.entries(definition.shape)) {
-            if (!validator._meta?.column) {
-                continue;
-            }
-
-            // Required, non-optional fields get NOT NULL; optional ones stay
-            // nullable so an insert that omits them can't trip a constraint.
-            const notNull = validator._meta.column.notNull && validator.kind !== "optional" ? " NOT NULL" : "";
-
-            fieldColumns.push(`${quoteIdentifier(field)} ${globalColumnAffinity(validator)}${notNull}`);
-        }
-
-        const columns = [...frameworkColumnDdl(), ...fieldColumns].join(", ");
+        const columns = globalTableColumnsDdl(definition);
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes below.
         await exec.run(`CREATE TABLE IF NOT EXISTS ${quoteIdentifier(tableName)} (${columns})`, []);
-
-        for (const index of definition.indexes) {
-            const expressions = index.fields.map((field) => columnRef(field)).join(", ");
-
-            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-            await exec.run(
-                `CREATE ${index.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${physicalIndexName(tableName, index.name)} ON ${quoteIdentifier(tableName)} (${expressions})`,
-                [],
-            );
-        }
-
-        // `.unique()` columns synthesize a UNIQUE index so SQLite enforces the
-        // constraint (the write layer maps breaches to ConflictError), mirroring
-        // the DO twin's `migrateSecondaryIndexes`.
-        for (const [field, column] of tableColumns(definition)) {
-            if (!column.unique) {
-                continue;
-            }
-
-            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-            await exec.run(
-                `CREATE UNIQUE INDEX IF NOT EXISTS ${quoteIdentifier(`${tableName}_unique_${field}`)} ON ${quoteIdentifier(tableName)} (${columnRef(field)})`,
-                [],
-            );
-        }
+        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; indexes follow the table.
+        await createGlobalTableIndexes(exec, tableName, definition);
     }
 };
 

@@ -10,9 +10,9 @@
  * `user`/`session`/`account`/`verification`). Two guardrails keep that safe:
  *
  * - Internal/bookkeeping tables (SQLite, Cloudflare D1, Cirrus companions for
- *   aggregate/rank/fts/cdc indexes) are filtered out — see {@link isInternalTable}.
+ * aggregate/rank/fts/cdc indexes) are filtered out — see {@link isInternalTable}.
  * - Values in obviously-sensitive columns (password/token/secret/hash/salt) are
- *   redacted, so browsing an external auth table can't leak credentials.
+ * redacted, so browsing an external auth table can't leak credentials.
  *
  * `.global()` tables declared in the schema are decoded back into their doc
  * shape (re-exposing `_id`, folding booleans); any other table is shown with its
@@ -29,7 +29,7 @@ import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db.js";
  * DDL is idempotent (`CREATE … IF NOT EXISTS`) and admin introspection isn't a
  * hot path, so it runs unmemoised — correct for any (exec, schema) pair rather
  * than caching against a single binding. The hot read/write path memoises this
- * per-ctx-db; see {@link createD1CtxDb}.
+ * per-ctx-db; see `createD1CtxDb`.
  */
 const ensureGlobalTables = (exec: D1Exec, schema: SchemaLike): Promise<void> => runD1GlobalTableMigrations(exec, schema);
 
@@ -136,7 +136,11 @@ const listGlobalTables = async (exec: D1Exec, schema: SchemaLike): Promise<Globa
     const names = await listTableNames(exec);
 
     // Independent COUNT(*) probes — fan out and preserve the sorted order.
-    return Promise.all(names.map(async (name) => ({ name, rowCount: await countRows(exec, quoteIdentifier(name)) })));
+    return Promise.all(
+        names.map(async (name) => {
+            return { name, rowCount: await countRows(exec, quoteIdentifier(name)) };
+        }),
+    );
 };
 
 /**
@@ -150,7 +154,9 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
 
     await ensureGlobalTables(exec, schema);
 
-    if (!(await listTableNames(exec)).includes(table)) {
+    const tableNames = await listTableNames(exec);
+
+    if (!tableNames.includes(table)) {
         throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
     }
 

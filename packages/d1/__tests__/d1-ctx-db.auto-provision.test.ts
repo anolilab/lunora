@@ -16,7 +16,9 @@ import createD1Exec from "./_helpers/node-sqlite-d1.js";
  * tables under test exist only if the runtime created them from the schema.
  */
 
-const col = (kind: string, notNull = true): ValidatorLike => ({ _meta: { column: { notNull } }, kind });
+const col = (kind: string, notNull = true): ValidatorLike => {
+    return { _meta: { column: { notNull } }, kind };
+};
 
 const globalSchema: SchemaLike = {
     tables: {
@@ -63,7 +65,12 @@ describe("d1 ctx-db auto-provisions .global() tables", () => {
         // The physical table now exists with the framework + field columns.
         const columns = await harness.exec.all(`PRAGMA table_info("channels")`, []);
 
-        expect(columns.map((column) => column["name"]).toSorted()).toStrictEqual(["_creationTime", "createdAt", "id", "name"]);
+        expect(columns.map((column) => String(column["name"])).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "_creationTime",
+            "createdAt",
+            "id",
+            "name",
+        ]);
     });
 
     it("enforces a UNIQUE index declared in the schema", async () => {

@@ -26,8 +26,8 @@ export const quoteIdentifier = (name: string): string => `"${name.replaceAll('"'
  * - `number`/`timestamp`/`date` → REAL (numeric, never coerced to text)
  * - `bytes` → BLOB
  * - everything else → TEXT — string/id/literal, `bigint` (serialized as a
- *   decimal string), and object/array/record/union/any (JSON). A numeric
- *   affinity would coerce a numeric-looking string and corrupt the decode.
+ * decimal string), and object/array/record/union/any (JSON). A numeric affinity
+ * would coerce a numeric-looking string and corrupt the decode.
  */
 export const sqlAffinityForKind = (kind: string | undefined): SqlAffinity => {
     switch (kind) {
@@ -49,7 +49,10 @@ export const sqlAffinityForKind = (kind: string | undefined): SqlAffinity => {
 };
 
 /** Framework columns every global table carries: the physical `id` (exposed as `_id`) and `_creationTime`. */
-export const frameworkColumnDdl = (): ReadonlyArray<string> => [`${quoteIdentifier("id")} TEXT PRIMARY KEY`, `${quoteIdentifier("_creationTime")} REAL NOT NULL`];
+export const frameworkColumnDdl = (): ReadonlyArray<string> => [
+    `${quoteIdentifier("id")} TEXT PRIMARY KEY`,
+    `${quoteIdentifier("_creationTime")} REAL NOT NULL`,
+];
 
 /**
  * Resolve a schema field to its physical D1 column: `_id`/`id` both map to the
@@ -67,5 +70,5 @@ export const columnRef = (field: string): string => {
     return quoteIdentifier(field);
 };
 
-/** Physical index identifier — `<table>_<name>`, so two tables' like-named indexes don't collide in SQLite's flat index namespace. */
+/** Physical index identifier — `&lt;table>_&lt;name>`, so two tables' like-named indexes don't collide in SQLite's flat index namespace. */
 export const physicalIndexName = (tableName: string, indexName: string): string => quoteIdentifier(`${tableName}_${indexName}`);
