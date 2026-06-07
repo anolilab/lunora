@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 // inlines the same module, so the Vite route and the CLI server render an
 // identical dashboard.
 import type { DashboardAssets } from "@cirrus/dashboard-host";
+// eslint-disable-next-line import/no-extraneous-dependencies -- devDependency on purpose: packem bundles it at build time (see the note above) rather than externalizing it
 import { loadDashboardAssets, renderDashboardHtml, resolveAdminToken } from "@cirrus/dashboard-host";
 import type { Plugin, ViteDevServer } from "vite";
 
@@ -122,6 +123,9 @@ const createDashboardHandler = (
         // is read from `.dev.vars` at startup. `config.root` is absent on mocked
         // test servers — fall back to cwd.
         html ??= renderDashboardHtml({
+            // `config.root` is typed as a required string but is absent on mocked
+            // test servers, so the cwd fallback is real despite the type.
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime value can be undefined on a mocked server even though the type says string
             adminToken: resolveAdminToken(server.config.root ?? process.cwd()),
             basePath: DASHBOARD_PATH,
             scriptSrc: DASHBOARD_SCRIPT_PATH,
@@ -179,6 +183,7 @@ const dashboardPlugin = (): Plugin => {
                 if (typeof server.printUrls === "function") {
                     const printUrls = server.printUrls.bind(server);
 
+                    // eslint-disable-next-line no-param-reassign -- intentionally wrap the live dev server's printUrls so our line prints under Local/Network
                     server.printUrls = (): void => {
                         printUrls();
                         announce();

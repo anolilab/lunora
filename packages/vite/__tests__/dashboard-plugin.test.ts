@@ -117,33 +117,16 @@ describe("dashboardPlugin", () => {
         expect(server.config.logger.info).toHaveBeenCalledWith(expect.stringContaining("/__cirrus"));
     });
 
-    it("handles the static asset routes rather than passing them through", () => {
-        expect.assertions(5);
-
-        const middleware = installMiddleware("localhost");
-        const next = vi.fn<() => void>();
-
-        // Both the script and stylesheet routes are owned by the plugin. They
-        // resolve to 200 when @cirrus/dashboard is built, or 501 when it isn't —
-        // either way the request must not fall through to the next middleware.
-        for (const url of [`${DASHBOARD_PATH}/dashboard.js`, `${DASHBOARD_PATH}/styles.css`]) {
-            const { end, response } = makeResponse();
-
-            middleware({ url }, response, next);
-
-            expect([200, 501]).toContain(response.statusCode);
-            expect(end).toHaveBeenCalledTimes(1);
-        }
-
-        expect(next).not.toHaveBeenCalled();
-    });
-
     const installMiddleware = (configuredHost: unknown): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
         const plugin = dashboardPlugin();
         let middleware: ((request: { url?: string }, response: ServerResponse, next: () => void) => void) | undefined;
 
         const server = {
-            config: { base: "/", logger: { info: vi.fn<(message: string) => void>(), warnOnce: vi.fn<(message: string) => void>() }, server: { host: configuredHost } },
+            config: {
+                base: "/",
+                logger: { info: vi.fn<(message: string) => void>(), warnOnce: vi.fn<(message: string) => void>() },
+                server: { host: configuredHost },
+            },
             httpServer: { listening: false, once: vi.fn<() => void>() },
             middlewares: {
                 use: (function_: typeof middleware) => {
@@ -168,6 +151,27 @@ describe("dashboardPlugin", () => {
 
         return { end, response };
     };
+
+    it("handles the static asset routes rather than passing them through", () => {
+        expect.assertions(5);
+
+        const middleware = installMiddleware("localhost");
+        const next = vi.fn<() => void>();
+
+        // Both the script and stylesheet routes are owned by the plugin. They
+        // resolve to 200 when @cirrus/dashboard is built, or 501 when it isn't —
+        // either way the request must not fall through to the next middleware.
+        for (const url of [`${DASHBOARD_PATH}/dashboard.js`, `${DASHBOARD_PATH}/styles.css`]) {
+            const { end, response } = makeResponse();
+
+            middleware({ url }, response, next);
+
+            expect([200, 501]).toContain(response.statusCode);
+            expect(end).toHaveBeenCalledTimes(1);
+        }
+
+        expect(next).not.toHaveBeenCalled();
+    });
 
     it("returns 403 on a non-loopback bind", () => {
         expect.assertions(3);

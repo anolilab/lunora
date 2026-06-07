@@ -1,6 +1,6 @@
-import { mountDashboard } from "@cirrus/dashboard/mount";
-
 import "./index.css";
+
+import { mountDashboard } from "@cirrus/dashboard/mount";
 
 // The dashboard talks to a remote Cirrus worker. Point it at one via
 // `VITE_CIRRUS_URL` (e.g. `https://my-app.workers.dev`); when unset it falls

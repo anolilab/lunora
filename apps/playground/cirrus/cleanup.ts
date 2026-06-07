@@ -1,5 +1,5 @@
-import { mutation } from "./_generated/server.js";
 import type { Id } from "./_generated/server.js";
+import { mutation } from "./_generated/server.js";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
