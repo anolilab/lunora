@@ -101,6 +101,65 @@ describe("cirrus add", () => {
                 ),
             ).toThrow(/newline/);
         });
+
+        it("rejects a newline in an env var name (.dev.vars line injection)", () => {
+            expect.assertions(1);
+
+            expect(() =>
+                parseManifest(
+                    {
+                        envVars: [{ name: "A\nINJECTED=evil", value: "ok" }],
+                        files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }],
+                        name: "x",
+                    },
+                    "x",
+                ),
+            ).toThrow(/\.name must match/u);
+        });
+
+        it("rejects an '=' in an env var name (.dev.vars key overwrite)", () => {
+            expect.assertions(1);
+
+            expect(() =>
+                parseManifest(
+                    {
+                        envVars: [{ name: "EXISTING=evil", secret: false, value: "v" }],
+                        files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }],
+                        name: "x",
+                    },
+                    "x",
+                ),
+            ).toThrow(/\.name must match/u);
+        });
+
+        it("rejects a path-traversing item name (manifest.name used as path segment + import)", () => {
+            expect.assertions(2);
+
+            expect(() => parseManifest({ files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }], name: "../../evil" }, "x")).toThrow(/name/u);
+            expect(() => parseManifest({ files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }], name: 'x } from "evil"; //' }, "x")).toThrow(
+                /name/u,
+            );
+        });
+    });
+
+    describe("item name validation", () => {
+        it("refuses a path-traversing item name on --from (no arbitrary-dir read)", async () => {
+            expect.assertions(2);
+
+            const { lines, logger } = makeLogger();
+            const result = await runAddCommand({ cwd: workdir, from: registryRoot, logger, names: ["../../../../etc"], yes: true });
+
+            expect(result.code).toBe(1);
+            expect(lines.join("\n")).toContain("invalid registry item name");
+        });
+
+        it("refuses an item name containing a path separator", async () => {
+            expect.assertions(1);
+
+            const result = await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["foo/bar"], yes: true });
+
+            expect(result.code).toBe(1);
+        });
     });
 
     describe("plan / dry-run", () => {

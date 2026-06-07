@@ -8,6 +8,24 @@ import type { RegistryBinding, RegistryFile, RegistryManifest } from "./types.js
 /** A CR or LF — illegal in a `.dev.vars` value (it would inject a spurious line). */
 const NEWLINE_PRESENT = /[\r\n]/u;
 
+/**
+ * A valid environment-variable key: a leading letter/underscore followed by
+ * letters/digits/underscores. Anything else (a `=`, a newline, spaces, shell
+ * metacharacters) would corrupt the line-oriented `.dev.vars` file — e.g.
+ * `name: "FOO\nINJECTED=evil"` or `name: "FOO=bar"` would write extra/overlong
+ * keys. Reject at parse time, before any value is written.
+ */
+const VALID_ENV_NAME = /^[A-Za-z_]\w*$/u;
+
+/**
+ * A valid registry item `name`. It is used as a path segment, as the lock key,
+ * and — for schema-extension items — spliced into `cirrus/schema.ts` as both an
+ * import specifier (`./${name}/schema`) and an identifier (`.extend(${name}.extension)`).
+ * Restricting it to a single safe identifier segment stops a hostile manifest
+ * from injecting a path separator or breaking out of the import to smuggle code.
+ */
+const VALID_ITEM_NAME = /^[A-Za-z0-9][\w-]*$/u;
+
 /** Validate + narrow a parsed JSON value into a {@link RegistryManifest}. */
 const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
     if (typeof raw !== "object" || raw === null) {
@@ -19,6 +37,12 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
 
     if (typeof name !== "string" || name.length === 0) {
         throw new Error(`registry.json for "${itemName}" is missing a string "name"`);
+    }
+
+    if (!VALID_ITEM_NAME.test(name)) {
+        throw new Error(
+            `registry.json for "${itemName}": name "${name}" must match ${VALID_ITEM_NAME.source} (letters, digits, "-", "_"; no path separators, "..", or code)`,
+        );
     }
 
     const filesRaw = record.files;
@@ -87,6 +111,15 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
               )
               .map((entry) => {
                   const hasValue = typeof entry.value === "string";
+
+                  // The key is written verbatim as `${name}=...` into `.dev.vars`; a
+                  // newline or `=` (or any non-identifier char) would inject/overwrite
+                  // an unrelated key. Enforce a strict env-var identifier shape.
+                  if (!VALID_ENV_NAME.test(entry.name)) {
+                      throw new Error(
+                          `registry.json "${itemName}": envVars["${entry.name}"].name must match ${VALID_ENV_NAME.source} (letters, digits, underscore; no "=" or newline)`,
+                      );
+                  }
 
                   // `.dev.vars` is line-oriented; a newline in a value would inject a
                   // spurious key. Reject at parse time, before anything is written.

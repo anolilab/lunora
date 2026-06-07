@@ -15,6 +15,26 @@ import type { AddCommandOptions, RegistryManifest, ResolvedItem } from "./types.
 const DEFAULT_SOURCE_BASE = "gh:anolilab/cirrus/registry";
 const DEFAULT_SOURCE_REF = "alpha";
 
+/**
+ * A registry item name is a single path segment / identifier. It becomes a
+ * filesystem path segment (`join(--from, name)`), a remote giget subpath
+ * (`&lt;base>/&lt;name>#&lt;ref>`), and — for schema-extension items — an import
+ * specifier and identifier spliced into `cirrus/schema.ts`. Allow only
+ * letters/digits/`-`/`_`, no leading dot, so a name can never traverse out of
+ * the registry root (`../../etc`), inject a path separator, or smuggle code
+ * into the generated import.
+ */
+const VALID_ITEM_NAME = /^[A-Za-z0-9][\w-]*$/u;
+
+/** Throw on any item name that isn't a safe single-segment identifier. */
+const assertSafeItemName = (name: string): void => {
+    if (!VALID_ITEM_NAME.test(name)) {
+        throw new Error(
+            `invalid registry item name "${name}" — names must match ${VALID_ITEM_NAME.source} (letters, digits, "-", "_"; no path separators or "..")`,
+        );
+    }
+};
+
 /** Mirror init's `--source` gate: only gh:/github:/https:, and no traversal. */
 const isSafeSource = (source: string): boolean => {
     if (source.includes("..")) {
@@ -80,6 +100,8 @@ const fetchToStaging = async (remote: string, label: string, logger: Logger): Pr
  * fetching it via giget. Returns the directory + a cleanup callback.
  */
 const resolveItemDirectory = async (name: string, options: AddCommandOptions): Promise<{ cleanup: () => void; directory: string }> => {
+    assertSafeItemName(name);
+
     if (options.from !== undefined) {
         const directory = join(options.from, name);
 
