@@ -14,6 +14,7 @@ import type { ShardMetricsResult } from "./metrics-aggregate.js";
 import { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate.js";
 import { loadRecentShards, recordShard } from "./shard-history.js";
 import { ShardInput } from "./shard-input.js";
+import { SPARK_HEIGHT, SPARK_WIDTH, sparklinePoints } from "./sparkline.js";
 import useLiveAdmin from "./use-live-admin.js";
 import { useLiveToggle } from "./use-live-toggle.js";
 
@@ -26,35 +27,6 @@ const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
 
 /** Maximum number of samples retained in the rolling history window. */
 const MAX_HISTORY = 30;
-
-/** Inline-SVG sparkline geometry. */
-const SPARK_WIDTH = 120;
-const SPARK_HEIGHT = 24;
-
-/**
- * Build an SVG polyline `points` string for a series, scaled to fit the
- * {@link SPARK_WIDTH} x {@link SPARK_HEIGHT} viewbox. A flat series renders along
- * the vertical midline.
- */
-const sparklinePoints = (series: ReadonlyArray<number>): string => {
-    if (series.length < 2) {
-        return "";
-    }
-
-    const max = Math.max(...series);
-    const min = Math.min(...series);
-    const span = max - min;
-    const stepX = SPARK_WIDTH / (series.length - 1);
-
-    return series
-        .map((value, index) => {
-            const x = index * stepX;
-            const y = span === 0 ? SPARK_HEIGHT / 2 : SPARK_HEIGHT - ((value - min) / span) * SPARK_HEIGHT;
-
-            return `${x.toFixed(2)},${y.toFixed(2)}`;
-        })
-        .join(" ");
-};
 
 /** Render an elapsed-millisecond duration as `1h 2m`, `3m 4s`, or `5s`. */
 const formatDuration = (ms: number): string => {

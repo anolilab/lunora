@@ -129,6 +129,31 @@ export interface ShardMetrics {
 }
 
 /**
+ * One minute-bucketed per-function sample on a {@link MetricsSnapshot}, mirroring
+ * `@cirrus/do`'s `FunctionMetricBucket & { path }`. `bucketMs` is the epoch-ms
+ * floor of the 60s window; `calls`/`errors` are the per-window counts. The SLO
+ * panel sums these across functions per bucket to draw the durable request /
+ * error sparklines (PLAN3 §2.3) — unlike the Metrics panel's live in-memory series.
+ */
+export interface MetricsHistoryBucket {
+    bucketMs: number;
+    calls: number;
+    errors: number;
+    path: string;
+}
+
+/**
+ * The full `__cirrus_admin__:getMetrics` payload. The wire response carries the
+ * per-function lifetime stats (`functions`) and the durable time buckets
+ * (`history`) alongside the {@link ShardMetrics} snapshot; both are optional so a
+ * pre-2.3 worker (or a consumer that only needs the snapshot) still type-checks.
+ */
+export interface MetricsSnapshot extends ShardMetrics {
+    functions?: FunctionCallStat[];
+    history?: MetricsHistoryBucket[];
+}
+
+/**
  * One full-scan attribution entry on a {@link FunctionCallStat}, mirroring
  * `@cirrus/do`'s `FunctionScanAttribution`: how many times the function
  * full-scanned `table`. The causal evidence behind the "missing index" insight.
