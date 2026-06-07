@@ -121,6 +121,28 @@ describe("createStorage", () => {
         expect(bucket.puts).toHaveLength(1);
     });
 
+    it("upload() rejects a matching-but-absent contentType when allowedContentTypes is set", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // Omitting contentType must NOT bypass the allowlist (stored-XSS guard).
+        await expect(storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: ["image/png"] })).rejects.toThrow(/contentType is required/);
+        expect(bucket.puts).toHaveLength(0);
+    });
+
+    it("upload() accepts an allowed contentType when allowedContentTypes is set", async () => {
+        expect.assertions(1);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        await expect(storage.upload("img.png", new ArrayBuffer(4), { allowedContentTypes: ["image/png"], contentType: "image/png" })).resolves.toMatchObject({
+            key: "img.png",
+        });
+    });
+
     it("download() returns the R2 object body or null", async () => {
         expect.assertions(3);
 

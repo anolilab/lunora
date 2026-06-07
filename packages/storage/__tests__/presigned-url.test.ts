@@ -116,4 +116,14 @@ describe("buildPresignedUrl", () => {
 
         expect(url).toContain("X-Amz-Expires=900");
     });
+
+    it.each([Number.NaN, Number.POSITIVE_INFINITY])("falls back to the default expiry for a non-finite expiresInSeconds (%s)", async (expiresInSeconds) => {
+        expect.assertions(2);
+
+        const url = await buildPresignedUrl({ credentials: CREDENTIALS, expiresInSeconds, key: "x", now: () => FIXED_NOW });
+
+        // Never mint a broken `X-Amz-Expires=NaN`/`=Infinity` URL.
+        expect(url).not.toMatch(/X-Amz-Expires=(NaN|Infinity)/u);
+        expect(url).toContain("X-Amz-Expires=900");
+    });
 });

@@ -203,8 +203,19 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
     ): Promise<{ etag: string; key: string }> => {
         validateKey(key);
 
-        if (uploadOptions.allowedContentTypes && uploadOptions.contentType && !uploadOptions.allowedContentTypes.includes(uploadOptions.contentType)) {
-            throw new Error(`@cirrus/storage: contentType "${uploadOptions.contentType}" not in allowedContentTypes`);
+        // An `allowedContentTypes` allowlist is a security control (e.g. block
+        // `text/html` to prevent stored-XSS). Omitting `contentType` must NOT
+        // bypass it — otherwise an uploader sidesteps the allowlist by simply
+        // not declaring a type. So when an allowlist is configured, a
+        // `contentType` is REQUIRED and must be a member of the list.
+        if (uploadOptions.allowedContentTypes && uploadOptions.allowedContentTypes.length > 0) {
+            if (uploadOptions.contentType === undefined) {
+                throw new Error("@cirrus/storage: contentType is required when allowedContentTypes is set");
+            }
+
+            if (!uploadOptions.allowedContentTypes.includes(uploadOptions.contentType)) {
+                throw new Error(`@cirrus/storage: contentType "${uploadOptions.contentType}" not in allowedContentTypes`);
+            }
         }
 
         // `maxSize` is best-effort: enforced for byte sources we can size

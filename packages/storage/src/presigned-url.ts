@@ -119,8 +119,12 @@ export interface PresignedUrlParams {
 export const buildPresignedUrl = async (parameters: PresignedUrlParams): Promise<string> => {
     const { credentials, key } = parameters;
     const method = parameters.method ?? "GET";
+    // A non-finite `expiresInSeconds` (NaN/Infinity from a JS caller) would
+    // propagate through the clamp as NaN and mint an `X-Amz-Expires=NaN` URL
+    // that R2 rejects — fall back to the default instead of emitting garbage.
     const requested = parameters.expiresInSeconds ?? DEFAULT_EXPIRES_SECONDS;
-    const expires = Math.min(Math.max(MIN_EXPIRES_SECONDS, Math.floor(requested)), MAX_EXPIRES_SECONDS);
+    const normalised = Number.isFinite(requested) ? requested : DEFAULT_EXPIRES_SECONDS;
+    const expires = Math.min(Math.max(MIN_EXPIRES_SECONDS, Math.floor(normalised)), MAX_EXPIRES_SECONDS);
 
     const host = endpointHost(credentials);
     const date = new Date(parameters.now?.() ?? Date.now());
