@@ -18,7 +18,7 @@ const fakeObject = (bytes: Uint8Array, size: number, options: FakeObjectOptions)
             },
         }),
         etag: options.etag ?? "etag-1",
-        httpMetadata: { contentType: options.contentType ?? "application/octet-stream" },
+        httpMetadata: { contentType: options.contentType ?? "application/octet-stream" }, // gitleaks:allow -- "octet-stream" mime, not a Stream API key
         key: "k",
         sha256Base64: options.sha256Base64,
         // `size` is always the full object size, even for a ranged read (mirrors R2).
