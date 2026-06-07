@@ -24,6 +24,7 @@ export const ADMIN_FUNCTIONS = {
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
+    getSettings: "__cirrus_admin__:getSettings",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
     migrationStatus: "__cirrus_admin__:migrationStatus",
@@ -166,6 +167,45 @@ export interface AuditEntry {
 /** Payload of a `__cirrus_admin__:getAuditLog` call: the recorded entries, newest first. */
 export interface AuditLogResult {
     entries: AuditEntry[];
+}
+
+/**
+ * How a deployment binding/var classifies, mirroring `@cirrus/do`'s `SettingKind`.
+ * `var` is a plain Worker var, `secret` a sensitive string (always masked), and
+ * `binding` a non-string binding object (R2/KV/DO/D1/queue/service).
+ */
+export type SettingKind = "binding" | "secret" | "var";
+
+/**
+ * One row of the read-only deployment-settings view, mirroring `@cirrus/do`'s
+ * `SettingEntry`. `value` is a masked preview for `var`/`secret` strings (never
+ * the raw secret) and `null` for `binding` entries. The server masks every
+ * string value, so the dashboard only ever renders the masked text.
+ */
+export interface SettingEntry {
+    /** Coarse runtime class for `binding` entries (`r2`, `kv`, `durable-object`, …). */
+    bindingType?: string;
+    kind: SettingKind;
+    name: string;
+    value: null | string;
+}
+
+/**
+ * Best-effort deploy metadata, mirroring `@cirrus/do`'s `DeployInfo`. Every
+ * field is optional: the server reads only what the Worker `env` exposes and
+ * omits the rest.
+ */
+export interface DeployInfo {
+    deploymentId?: string;
+    environment?: string;
+    versionTag?: string;
+    workerUrl?: string;
+}
+
+/** Payload of a `__cirrus_admin__:getSettings` call, mirroring `@cirrus/do`'s `SettingsResult`. */
+export interface SettingsResult {
+    deploy: DeployInfo;
+    settings: SettingEntry[];
 }
 
 /** A user table plus its current row count. */

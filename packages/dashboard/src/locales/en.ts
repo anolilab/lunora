@@ -232,6 +232,18 @@ const MESSAGE_IDS = [
     "op",
     "table",
     "detail",
+    // Settings panel.
+    "Settings",
+    "Deployment",
+    "Read-only deployment config — vars, secrets, and bindings.",
+    "Environment & bindings",
+    "No environment variables or bindings.",
+    "Open in Cloudflare",
+    "View-only — values are masked. Edit vars, secrets, and bindings in wrangler or the Cloudflare dashboard.",
+    "URL",
+    "Environment",
+    "Version",
+    "value",
 ] as const;
 
 /** A known dashboard message id — one of the entries in {@link MESSAGE_IDS}. */

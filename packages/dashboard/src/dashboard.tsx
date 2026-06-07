@@ -33,11 +33,27 @@ import { MigrationsPanel } from "./migrations.js";
 import type { ScheduledJobsProps } from "./scheduled-jobs.js";
 import { ScheduledJobs } from "./scheduled-jobs.js";
 import { SchemaViewer } from "./schema-viewer.js";
+import { SettingsPanel } from "./settings-panel.js";
 import type { FunctionDescriptor } from "./types.js";
 import { UsersPanel } from "./users-panel.js";
 
 /** Identifier for each built-in dashboard tab. */
-type DashboardTab = "audit" | "data" | "export" | "files" | "functions" | "globals" | "health" | "insights" | "logs" | "metrics" | "migrations" | "schedule" | "schema" | "users";
+type DashboardTab =
+    | "audit"
+    | "data"
+    | "export"
+    | "files"
+    | "functions"
+    | "globals"
+    | "health"
+    | "insights"
+    | "logs"
+    | "metrics"
+    | "migrations"
+    | "schedule"
+    | "schema"
+    | "settings"
+    | "users";
 
 interface DashboardProps {
     /**
@@ -88,7 +104,7 @@ interface DashboardProps {
 type DashboardShellProps = Omit<DashboardProps, "i18n" | "locale">;
 
 /** Stable identifier for each sidebar section; the display label is localised. */
-type NavGroupKey = "auth" | "database" | "logic" | "observability" | "storage";
+type NavGroupKey = "auth" | "database" | "deployment" | "logic" | "observability" | "storage";
 
 /**
  * 16px line glyphs (drawn at a 24-unit grid) keyed by tab. Inline so the
@@ -111,6 +127,9 @@ const TAB_ICONS: Record<DashboardTab, ReactNode> = {
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
+    settings: (
+        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6H10.5l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
+    ),
     users: (
         <path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm11.5 10v-2a4 4 0 0 0-3-3.85M16 3.13A4 4 0 0 1 16 11" />
     ),
@@ -123,6 +142,7 @@ const NAV_GROUPS: ReadonlyArray<{ readonly key: NavGroupKey; readonly tabs: Read
     { key: "storage", tabs: ["files", "export"] },
     { key: "auth", tabs: ["users"] },
     { key: "observability", tabs: ["health", "insights", "metrics", "logs", "audit"] },
+    { key: "deployment", tabs: ["settings"] },
 ];
 
 const TabIcon = ({ tab }: { readonly tab: DashboardTab }): ReactElement => (
@@ -141,7 +161,23 @@ const TabIcon = ({ tab }: { readonly tab: DashboardTab }): ReactElement => (
 );
 
 /** Flat list of every tab, in sidebar order; drives the route table. */
-const TABS = ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "health", "insights", "metrics", "logs", "audit"] as const;
+const TABS = [
+    "data",
+    "globals",
+    "schema",
+    "functions",
+    "migrations",
+    "export",
+    "files",
+    "schedule",
+    "users",
+    "health",
+    "insights",
+    "metrics",
+    "logs",
+    "audit",
+    "settings",
+] as const;
 
 /** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `data`. */
 const tabFromPathname = (pathname: string): DashboardTab => {
@@ -181,6 +217,7 @@ const DashboardLayout = (): ReactElement => {
             migrations: t("Migrations"),
             schedule: t("Scheduled"),
             schema: t("Schema"),
+            settings: t("Settings"),
             users: t("Users"),
         };
     }, [t]);
@@ -189,6 +226,7 @@ const DashboardLayout = (): ReactElement => {
         return {
             auth: t("Auth"),
             database: t("Database"),
+            deployment: t("Deployment"),
             logic: t("Logic"),
             observability: t("Observability"),
             storage: t("Storage"),
@@ -211,6 +249,7 @@ const DashboardLayout = (): ReactElement => {
             migrations: t("Review migration status and run them."),
             schedule: t("Inspect and cancel scheduled jobs."),
             schema: t("Inspect each table and its columns."),
+            settings: t("Read-only deployment config — vars, secrets, and bindings."),
             users: t("Browse auth users and their active sessions."),
         };
     }, [t]);
@@ -343,6 +382,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
         schedule: <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />,
         schema: <SchemaViewer initialShardKey={initialShardKey} />,
+        settings: <SettingsPanel initialShardKey={initialShardKey} />,
         users: <UsersPanel />,
     };
 

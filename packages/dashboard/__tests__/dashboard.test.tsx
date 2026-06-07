@@ -30,13 +30,13 @@ const renderDashboard = (mock: MockClientHooks) => (
 
 describe("dashboard", () => {
     it("shows every tab by default", async () => {
-        expect.assertions(11);
+        expect.assertions(12);
 
         render(renderDashboard(createClient()));
 
         // The sidebar renders inside the router's root route (resolved a tick
         // after mount), so await each tab rather than querying synchronously.
-        for (const tab of ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics", "logs"]) {
+        for (const tab of ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics", "logs", "settings"]) {
             // eslint-disable-next-line no-await-in-loop -- after the first resolves the rest are already present; awaiting each keeps the assertion shape simple.
             expect(await screen.findByTestId(`dash-tab-${tab}`)).toBeDefined();
         }

@@ -2,6 +2,7 @@ export type {
     AuditEntry,
     AuditLogResult,
     CacheStats,
+    DeployInfo,
     ExportRow,
     FilterClause,
     FilterOperator,
@@ -17,6 +18,9 @@ export type {
     MigrationStatus,
     MigrationStatusRow,
     RunMigrationArgs,
+    SettingEntry,
+    SettingKind,
+    SettingsResult,
     ShardMetrics,
     TableIndexesResult,
     TableIndexInfo,
@@ -74,6 +78,8 @@ export type { ScheduledJobsProps } from "./scheduled-jobs.js";
 export { ScheduledJobs } from "./scheduled-jobs.js";
 export type { SchemaViewerProps } from "./schema-viewer.js";
 export { SchemaViewer } from "./schema-viewer.js";
+export type { SettingsPanelProps } from "./settings-panel.js";
+export { SettingsPanel } from "./settings-panel.js";
 export type { ShardInputProps } from "./shard-input.js";
 export { ShardInput } from "./shard-input.js";
 export { default as DASHBOARD_ROOT_CLASS } from "./theme-constants.js";
