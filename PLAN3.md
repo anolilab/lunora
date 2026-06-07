@@ -160,11 +160,13 @@ The only major copy-safe lift available.
   per-function error-rate list. The sparkline primitive was extracted to a shared
   `Sparkline` component. Each read is best-effort/degrades to `—`; all cirrus-attributed,
   not CF's per-Worker charts.
-- **Follow-ups:** (1) a host must opt into auth instrumentation by passing the worker's
-  `authHandler` option (wired in the runtime + unit-tested, but `apps/playground` doesn't
-  pass it yet, so its auth tile reads `—`); (2) the per-shard signals (function stats,
-  migrations) are read from the **root shard** only — a cross-shard rollup (à la
-  `metrics-aggregate.ts`) is a later enhancement; (3) snapshot-only (no live toggle yet).
+- **Follow-ups — all ✅ resolved.** (1) Auth instrumentation is now live: `apps/playground`
+  dispatches auth via the worker's `authHandler` option, so the `/api/auth/*` flow records
+  attempts/failures. (2) The per-shard signals (metrics, function stats, migrations) now
+  roll up across the known-shard set (`shardsToAggregate`) via a tested `slo-aggregate.ts`
+  (sum metrics, merge function stats by path, dedupe migrations to the worst status); the
+  global signals (logs, auth, scheduler) stay single-read. (3) A **Live** toggle re-pulls
+  the cross-shard view on every root-shard `getMetrics` push (in-flight-coalesced).
 
 ---
 
