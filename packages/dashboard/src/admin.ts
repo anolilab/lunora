@@ -18,6 +18,8 @@ export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
  * `CIRRUS_ADMIN_TOKEN`.
  */
 export const ADMIN_FUNCTIONS = {
+    clearTable: "__cirrus_admin__:clearTable",
+    deleteRows: "__cirrus_admin__:deleteRows",
     exportShard: "__cirrus_admin__:exportShard",
     getAuditLog: "__cirrus_admin__:getAuditLog",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
@@ -66,6 +68,42 @@ export interface WriteRowArgs {
 export interface WriteRowResult {
     id: null | string;
     op: WriteRowOp;
+}
+
+/**
+ * Arguments for the `__cirrus_admin__:deleteRows` admin op — the writer-routed
+ * bulk delete behind "delete matching". `filters`/`search` mirror
+ * {@link TablePage}'s predicate args so the deleted set equals the previewed
+ * one; `limit` caps the rows removed per call (clamped server-side). The server
+ * removes each matched row through the schema-aware writer (keeping FTS /
+ * aggregate / rank shadow tables in sync), bounded per call.
+ */
+export interface DeleteRowsArgs {
+    filters?: FilterClause[];
+    limit?: number;
+    search?: string;
+    table: string;
+}
+
+/**
+ * Arguments for the `__cirrus_admin__:clearTable` admin op — "empty this table".
+ * The same writer-routed bounded delete as {@link DeleteRowsArgs} with no
+ * predicate (it matches every row).
+ */
+export interface ClearTableArgs {
+    limit?: number;
+    table: string;
+}
+
+/**
+ * Result of a {@link DeleteRowsArgs} / {@link ClearTableArgs} op. `deleted` is
+ * the rows removed in this call; `hasMore` is `true` when matching rows remain
+ * beyond the server's per-call cap, so the caller loops a single bounded
+ * round-trip rather than deleting an unbounded set at once.
+ */
+export interface BulkDeleteResult {
+    deleted: number;
+    hasMore: boolean;
 }
 
 /** Reactive-cache hit/miss/eviction stats, present when a cache is configured. */

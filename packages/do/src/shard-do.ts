@@ -14,7 +14,7 @@ import { createDependencyTracker } from "./dependency-tracker.js";
 import type { FunctionMetricBucket } from "./function-metrics.js";
 import { readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics.js";
 import type { AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
-import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage } from "./introspect.js";
+import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage, selectMatchingIds } from "./introspect.js";
 import { LogBuffer } from "./log-buffer.js";
 import { armRestore, readBookmark } from "./pitr.js";
 import type { ReactiveCacheOptions } from "./reactive-cache.js";
@@ -192,6 +192,35 @@ interface RunShardWriteArgs {
 interface RunShardWriteResult {
     id: null | string;
     op: "delete" | "insert" | "patch" | "replace";
+}
+
+/**
+ * The bulk delete the data browser's "delete matching" / "clear table" actions
+ * issue. The matching rows are collected on the shard (via the same
+ * `filters` + `search` predicate `readTablePage` previews), then removed one at
+ * a time THROUGH the schema-aware writer — never raw `DELETE` — so the FTS /
+ * aggregate / rank shadow tables and `onDelete` cascades stay in sync, exactly
+ * like a user mutation would.
+ *
+ * Bounded by design: at most {@link SHARD_BULK_DELETE_CAP} rows are removed per
+ * call and the result reports `hasMore`, so the caller loops a single bounded
+ * server round-trip rather than deleting an unbounded set in one transaction.
+ * The `clearTable` op is the same path with no predicate (it matches every row).
+ */
+interface RunShardBulkDeleteArgs {
+    filters?: FilterClause[];
+    /** Per-call row cap; clamped server-side to `[1, SHARD_BULK_DELETE_CAP]`. */
+    limit?: number;
+    search?: string;
+    table: string;
+}
+
+/** Outcome of a {@link RunShardBulkDeleteArgs} operation. */
+interface RunShardBulkDeleteResult {
+    /** Rows removed through the writer in this call. */
+    deleted: number;
+    /** `true` when matching rows remain beyond this batch — loop the call to drain them. */
+    hasMore: boolean;
 }
 
 /**
@@ -437,6 +466,14 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
 };
 
 /**
+ * Hard server-side ceiling on rows removed per `deleteRows` / `clearTable` call.
+ * The op never deletes more than this in one round-trip; the result's `hasMore`
+ * tells the caller to loop. Matches `readTablePage`'s `MAX_PAGE_SIZE` so one
+ * "delete matching" batch drains exactly one full preview page's worth of rows.
+ */
+const SHARD_BULK_DELETE_CAP = 500;
+
+/**
  * Validate the `__cirrus_admin__:writeRow` payload. Enforces that `id` is
  * present for ops that target an existing row and that `doc` is present for ops
  * that carry one, throwing a 400 `CirrusError` otherwise — the writer would
@@ -501,6 +538,44 @@ const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
     }
 
     return clauses.length > 0 ? clauses : undefined;
+};
+
+/**
+ * Validate the `__cirrus_admin__:deleteRows` payload. `table` must be a
+ * non-empty string; `filters`/`search` mirror `readTablePage`'s predicate args
+ * (so "delete matching" removes exactly the previewed rows) and a numeric
+ * `limit` passes through to be clamped against {@link SHARD_BULK_DELETE_CAP}.
+ * Throws a 400 `CirrusError` on a missing table, keeping the error shape uniform.
+ */
+const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkDeleteArgs => {
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+
+    if (table.trim() === "") {
+        throw Object.assign(new Error("deleteRows: `table` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    return {
+        filters: parseTablePageFilters(args["filters"]),
+        limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+        search: typeof args["search"] === "string" ? args["search"] : undefined,
+        table,
+    };
+};
+
+/**
+ * Validate the `__cirrus_admin__:clearTable` payload — the "empty this table"
+ * action. Only `table` is meaningful (clearTable carries no predicate: it
+ * matches every row); a numeric `limit` passes through for the per-call cap.
+ * Throws a 400 `CirrusError` on a missing table.
+ */
+const parseClearTableArgs = (args: Record<string, unknown>): RunShardBulkDeleteArgs => {
+    const table = typeof args["table"] === "string" ? args["table"] : "";
+
+    if (table.trim() === "") {
+        throw Object.assign(new Error("clearTable: `table` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    return { limit: typeof args["limit"] === "number" ? args["limit"] : undefined, table };
 };
 
 /**
@@ -1414,6 +1489,59 @@ abstract class ShardDO {
     }
 
     /**
+     * Delete one row by primary key THROUGH the schema-aware writer — the
+     * per-row seam {@link runShardBulkDelete} loops over. Routing each delete
+     * through the writer (not raw SQL) is the whole point: it keeps the FTS /
+     * aggregate / rank shadow tables in sync and fires `onDelete` cascades,
+     * exactly like {@link runShardWrite}'s single-row delete.
+     *
+     * The base class can't build a writer without the user's `schema.ts`, so it
+     * reports the table as unknown; the codegen-generated subclass overrides
+     * this to call `writer.delete(id)` on a live `createShardCtxDb(...)` writer.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected deleteRowThroughWriter(_table: string, _id: string): Promise<void> {
+        return Promise.reject(Object.assign(new Error(`unknown table: ${_table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 }));
+    }
+
+    /**
+     * Bulk-delete the rows of `table` matching the active `filters`/`search`
+     * (or every row, for `clearTable`), bounded to {@link SHARD_BULK_DELETE_CAP}
+     * per call. Concrete in the base: it collects the matching ids with the same
+     * predicate {@link readTablePage} previews, then deletes them ONE AT A TIME
+     * through {@link deleteRowThroughWriter} so the FTS / aggregate / rank shadow
+     * tables stay correct. Returns `{ deleted, hasMore }` so the caller loops a
+     * single bounded round-trip rather than deleting an unbounded set at once.
+     *
+     * Deletes are sequential by design — parallel writes to one DO would contend
+     * on OCC — so the per-row `await` is intentional.
+     */
+    protected async runShardBulkDelete(args: RunShardBulkDeleteArgs): Promise<RunShardBulkDeleteResult> {
+        const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_DELETE_CAP), 1), SHARD_BULK_DELETE_CAP);
+
+        // Collect this batch's ids first (a read; raw SQL is fine), then remove
+        // each through the writer. `hasMore` reflects whether matches remained
+        // beyond `limit`, so the caller can loop to drain the rest.
+        const { hasMore, ids } = selectMatchingIds(this.sql as SqlExec, {
+            filters: args.filters,
+            limit,
+            search: args.search,
+            table: args.table,
+        });
+
+        let deleted = 0;
+
+        for (const id of ids) {
+            // Sequential: serialise writes to avoid OCC contention on this DO.
+            // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO
+            await this.deleteRowThroughWriter(args.table, id);
+            deleted += 1;
+        }
+
+        return { deleted, hasMore };
+    }
+
+    /**
      * Count, for the row identified by `rowId`, how many rows precede it under
      * `index` within `partitionKey` on this shard (`before`) and the partition's
      * total (`total`). The cross-shard coordinator fans this out to every shard
@@ -2011,6 +2139,34 @@ abstract class ShardDO {
                 await this.flushChangedTables();
 
                 this.recordAudit("writeRow", { table: parsed.table, id: result.id ?? parsed.id, detail: { op: result.op } });
+
+                return jsonResponse({ result }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.deleteRows) {
+                const parsed = parseBulkDeleteArgs(args);
+                const result = await this.runShardBulkDelete(parsed);
+
+                // Every row was removed through the writer, which records each
+                // touched table; flush so live subscribers re-run against the
+                // shrunken set.
+                await this.flushChangedTables();
+
+                this.recordAudit("deleteRows", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
+
+                return jsonResponse({ result }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.clearTable) {
+                const parsed = parseClearTableArgs(args);
+
+                // `clearTable` is `deleteRows` with no predicate — the same
+                // writer-routed bounded loop, matching every row.
+                const result = await this.runShardBulkDelete(parsed);
+
+                await this.flushChangedTables();
+
+                this.recordAudit("clearTable", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
 
                 return jsonResponse({ result }, 200);
             }
@@ -2644,6 +2800,8 @@ export type {
     HibernatableWebSocket,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
+    RunShardBulkDeleteArgs,
+    RunShardBulkDeleteResult,
     RunShardExportArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,

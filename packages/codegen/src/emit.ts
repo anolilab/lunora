@@ -1569,6 +1569,43 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return { id: args.id ?? null, op: "patch" };
         }
 
+        protected override async deleteRowThroughWriter(table: string, id: string): Promise<void> {
+            const definition = (schema as unknown as SchemaLike).tables[table];
+
+            if (!definition) {
+                throw Object.assign(new Error(\`unknown table: \${table}\`), { name: "CirrusError", code: "UNKNOWN_TABLE", status: 404 });
+            }
+
+            // \`.global()\` tables live in D1, not this DO's SQLite — the same
+            // guard \`runShardWrite\` applies to single-row edits.
+            if (definition.shardMode?.kind === "global") {
+                throw Object.assign(new Error(\`table "\${table}" is global; edit it through D1, not the shard\`), {
+                    name: "CirrusError",
+                    code: "GLOBAL_TABLE_NOT_EDITABLE",
+                    status: 400,
+                });
+            }
+
+            this.ensureMigrated();
+
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table);
+                },
+                cdc: config.cdc ?? false,
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+
+            // Routes through the writer (not raw SQL) so FTS / aggregate / rank
+            // shadow tables stay in sync and \`onDelete\` cascades fire — the
+            // bounded loop lives in the base \`runShardBulkDelete\`.
+            await writer.delete(id);
+        }
+
         protected override async runShardRankBefore(args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
             this.ensureMigrated();
 

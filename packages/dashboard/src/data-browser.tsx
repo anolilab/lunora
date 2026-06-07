@@ -5,7 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { TableInfo, TablePage, WriteRowResult } from "./admin.js";
+import type { BulkDeleteResult, TableInfo, TablePage, WriteRowResult } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
 import type { EditableFilter } from "./data-filters.js";
@@ -35,7 +35,12 @@ interface DataBrowserProps {
 
 const DEFAULT_PAGE_SIZE = 50;
 
-/** Hard ceiling on bulk-delete read/delete batches, so "delete matching" can never run unbounded. */
+/**
+ * Hard ceiling on the number of bounded server `deleteRows`/`clearTable` calls
+ * one bulk action loops through, so "delete matching" / "clear table" can never
+ * run unbounded. Each call deletes up to the server's per-call cap (500 rows)
+ * and reports `hasMore`; the client loops the single round-trip — never per-row.
+ */
 const MAX_BULK_DELETE_BATCHES = 200;
 
 /** Height of the virtualized scroll viewport, in px. */
@@ -51,6 +56,8 @@ const ROW_BASE_STYLE: CSSProperties = { left: 0, position: "absolute", top: 0, w
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 const WRITE_ROW = adminRef(ADMIN_FUNCTIONS.writeRow);
+const DELETE_ROWS = adminRef(ADMIN_FUNCTIONS.deleteRows);
+const CLEAR_TABLE = adminRef(ADMIN_FUNCTIONS.clearTable);
 
 /** A loaded row keyed by column name. */
 type TableRow = Record<string, unknown>;
@@ -216,6 +223,7 @@ const DataBrowserViewControls = ({
     liveError,
     onAddRow,
     onBulkDelete,
+    onClearTable,
     onFilterChange,
     onFiltersChange,
     onRefresh,
@@ -233,6 +241,7 @@ const DataBrowserViewControls = ({
     liveError: string | undefined;
     onAddRow: () => void;
     onBulkDelete: () => void;
+    onClearTable: () => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
     onRefresh: () => void;
@@ -262,6 +271,11 @@ const DataBrowserViewControls = ({
             {editable && total > 0 && (filter !== "" || filters.length > 0) && (
                 <ConfirmButton confirmLabel={`Delete ${total.toString()} matching?`} onConfirm={onBulkDelete} testId="db-bulk-delete">
                     {`Delete ${total.toString()} matching`}
+                </ConfirmButton>
+            )}
+            {editable && total > 0 && filter === "" && filters.length === 0 && (
+                <ConfirmButton confirmLabel={`Clear all ${total.toString()} rows?`} onConfirm={onClearTable} testId="db-clear-table">
+                    {`Clear table (${total.toString()})`}
                 </ConfirmButton>
             )}
         </div>
@@ -564,6 +578,7 @@ interface DataBrowserModel {
     addRow: () => void;
     bulkDelete: () => void;
     cancelEdit: () => void;
+    clearTable: () => void;
     columns: string[];
     editing: null | { docText: string; id: null | string };
     filter: string;
@@ -840,11 +855,13 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         [client, fetchPage, offset, search, selectedTable, shardKey],
     );
 
-    // Bulk delete every row matching the active search + filters, by reading the
-    // matching set a page at a time (offset 0 — each batch's deletes shrink it)
-    // and issuing the same schema-aware single-row delete the row button uses, so
-    // FTS / aggregate / rank shadow tables stay in sync. Bounded by
-    // `MAX_BULK_DELETE_BATCHES` so it can never run unbounded.
+    // Bulk delete every row matching the active search + filters via the server
+    // `deleteRows` admin op — one bounded round-trip per batch instead of the old
+    // N+1 read-then-delete-per-id loop. The server collects the matching ids and
+    // removes each THROUGH the schema-aware writer (so FTS / aggregate / rank
+    // shadow tables stay in sync), capped per call; we loop the single call while
+    // it reports `hasMore`, bounded by `MAX_BULK_DELETE_BATCHES` so it can never
+    // run unbounded.
     const deleteMatching = useCallback(async (): Promise<void> => {
         if (selectedTable === null) {
             return;
@@ -855,26 +872,18 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
 
         try {
             for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
-                // Sequential by design: each batch's deletes shrink the matching
-                // set the next read sees, so the reads can't be parallelised.
-                // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each read reflects the prior batch's deletes)
+                // Sequential by design: each call's deletes shrink the matching
+                // set, and `hasMore` from the prior call drives the next, so the
+                // round-trips can't be parallelised.
+                // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's deletes)
                 const result = (await client.query(
-                    READ_TABLE_PAGE,
-                    { filters: filterClauses, limit: pageSize, offset: 0, search, table: selectedTable },
+                    DELETE_ROWS,
+                    { filters: filterClauses, search, table: selectedTable },
                     callOptions(shardKey),
-                )) as TablePage;
+                )) as BulkDeleteResult;
 
-                const ids = result.rows.map((row) => rowId(row)).filter((id): id is string => id !== null);
-
-                if (ids.length === 0) {
+                if (!result.hasMore) {
                     break;
-                }
-
-                for (const id of ids) {
-                    // Sequential single-row deletes through the writer; parallel
-                    // writes to one DO would contend on OCC, so we serialise them.
-                    // eslint-disable-next-line no-await-in-loop -- serialise writes to avoid OCC contention on the shard DO
-                    await client.query(WRITE_ROW, { id, op: "delete", table: selectedTable }, callOptions(shardKey));
                 }
             }
 
@@ -882,7 +891,33 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         } catch (error) {
             setWriteError((error as Error).message);
         }
-    }, [client, fetchPage, pageSize, search, selectedTable, shardKey]);
+    }, [client, fetchPage, search, selectedTable, shardKey]);
+
+    // Empty the whole selected table via the server `clearTable` admin op — the
+    // same writer-routed, bounded delete as `deleteMatching` but with no
+    // predicate. Loops the single bounded call while `hasMore`.
+    const clearTable = useCallback(async (): Promise<void> => {
+        if (selectedTable === null) {
+            return;
+        }
+
+        setWriteError(null);
+
+        try {
+            for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
+                // eslint-disable-next-line no-await-in-loop -- bounded batches drain the table sequentially
+                const result = (await client.query(CLEAR_TABLE, { table: selectedTable }, callOptions(shardKey))) as BulkDeleteResult;
+
+                if (!result.hasMore) {
+                    break;
+                }
+            }
+
+            await fetchPage(shardKey, selectedTable, 0, search);
+        } catch (error) {
+            setWriteError((error as Error).message);
+        }
+    }, [client, fetchPage, search, selectedTable, shardKey]);
 
     // Headless table model + virtualizer for the loaded page. The page-local
     // `sorting` state stays here (table switches reset it via `setSorting`); the
@@ -914,6 +949,10 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     const bulkDelete = useCallback((): void => {
         fireAndForget(deleteMatching());
     }, [deleteMatching]);
+
+    const emptyTable = useCallback((): void => {
+        fireAndForget(clearTable());
+    }, [clearTable]);
 
     const onFilterChange = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
         setFilter(event.target.value);
@@ -965,6 +1004,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         addRow,
         bulkDelete,
         cancelEdit,
+        clearTable: emptyTable,
         columns: page?.columns ?? [],
         editing,
         filter,
@@ -1026,6 +1066,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         addRow,
         bulkDelete,
         cancelEdit,
+        clearTable,
         columns,
         editing,
         filter,
@@ -1102,6 +1143,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                         liveError={liveError}
                         onAddRow={addRow}
                         onBulkDelete={bulkDelete}
+                        onClearTable={clearTable}
                         onFilterChange={onFilterChange}
                         onFiltersChange={onFiltersChange}
                         onRefresh={refreshPage}
