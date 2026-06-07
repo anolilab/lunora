@@ -52,7 +52,7 @@ const VALID_WRANGLER = `{
 const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => {
     return {
         cloudflare: false,
-        dashboard: false,
+        studio: false,
         generatedDir: "cirrus/_generated",
         overlay: false,
         projectRoot,

@@ -16,7 +16,7 @@
 
 import type { SqlCursor, SqlExec } from "./ctx-db.js";
 
-/** Reserved append-only table backing the dashboard Audit tab. Auto-hidden from the data browser by the `__cirrus` prefix. */
+/** Reserved append-only table backing the studio Audit tab. Auto-hidden from the data browser by the `__cirrus` prefix. */
 const AUDIT_LOG_TABLE = "__cirrus_audit__";
 
 /** Most recent entries kept; older rows are trimmed after each append so the log stays bounded. */

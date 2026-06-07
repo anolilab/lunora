@@ -132,7 +132,7 @@ export interface CirrusClientOptions {
      * Token appended to the WebSocket URL as `?token=…`. The server matches it
      * against `CIRRUS_WS_BEARER` (to clear the upgrade gate) and/or
      * `CIRRUS_ADMIN_TOKEN` (to authorize `__cirrus_admin__:*` subscriptions —
-     * what the dashboard sets it to). Browsers can't set headers on the
+     * what the studio sets it to). Browsers can't set headers on the
      * `WebSocket` constructor, so the query parameter is the only channel; it
      * ends up in server logs and history, so prefer a short-lived rotating
      * token in production.
@@ -268,7 +268,7 @@ export interface SchedulerPoolStatus {
  * The app-level scheduler backlog, as returned by the worker's
  * `GET /_cirrus/admin/scheduled/status` endpoint. `pools` is the per-pool
  * breakdown; `backlog` and `inFlight` are the app-wide sums of `queued` and
- * `inFlight` across every pool — the headline numbers for the dashboard SLO
+ * `inFlight` across every pool — the headline numbers for the studio SLO
  * view. Mirrors `@cirrus/scheduler`'s `SchedulerStatus` structurally.
  */
 export interface SchedulerStatus {

@@ -117,7 +117,7 @@ Snapshots are plain NDJSON, so recovery is a straight import — download the ob
 cirrus backup restore ./cirrus-backup-2026-06-07T03-00-00-000Z.ndjson
 ```
 
-For **in-place time-travel to an arbitrary moment** (rather than to a snapshot boundary), use **native PITR** — `cirrus backup pitr` / the dashboard — which restores the shard from the platform's own change log to any point in the last 30 days (see below). This off-platform snapshot path is for portable, cross-deployment, or >30-day recovery; `prune`'s retention window is your recovery floor here. See [`cirrus backup`](../../packages/cli/src/commands/backup.ts) (`create | list | restore`) and Cloudflare D1 Time Travel for the `.global()` plane.
+For **in-place time-travel to an arbitrary moment** (rather than to a snapshot boundary), use **native PITR** — `cirrus backup pitr` / the studio — which restores the shard from the platform's own change log to any point in the last 30 days (see below). This off-platform snapshot path is for portable, cross-deployment, or >30-day recovery; `prune`'s retention window is your recovery floor here. See [`cirrus backup`](../../packages/cli/src/commands/backup.ts) (`create | list | restore`) and Cloudflare D1 Time Travel for the `.global()` plane.
 
 ## Two recovery tiers
 

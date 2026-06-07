@@ -17,7 +17,7 @@
  *
  * This is a **queryable readout, not a log transport** (see
  * `CLOUDFLARE-REUSE-AUDIT.md` #5): the raw firehose stays with Workers Logs /
- * Logpush; this table exists only to power the dashboard's correlated filters.
+ * Logpush; this table exists only to power the studio's correlated filters.
  * It must not grow into a pipeline.
  */
 
@@ -25,7 +25,7 @@ import { redact, standardRules } from "@visulima/redact";
 
 import type { SqlCursor, SqlExec } from "./ctx-db.js";
 
-/** Reserved append-only table backing the dashboard Logs tab. Auto-hidden from the data browser by the `__cirrus` prefix. */
+/** Reserved append-only table backing the studio Logs tab. Auto-hidden from the data browser by the `__cirrus` prefix. */
 const REQUEST_LOG_TABLE = "__cirrus_reqlog__";
 
 /** Most recent entries kept; older rows are trimmed after each append so the log stays bounded. */
@@ -130,7 +130,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
  * covering API keys, tokens, credit cards, SSNs, emails, phone numbers,
  * passwords and bearer/auth material. Unlike a blunt type-tag stamp this masks
  * sensitive values by PATTERN (not just by key name) while leaving benign values
- * readable, so the dashboard's args/identity columns stay useful. `null` /
+ * readable, so the studio's args/identity columns stay useful. `null` /
  * `undefined` pass through unchanged.
  *
  * `captureRaw` is the development escape hatch: in a dev environment the dispatch
@@ -216,7 +216,7 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
         entry.userId ?? null,
         // Identity claims (email/name/roles) are PII, so they're redacted by
         // default exactly like args — keeping the envelope's shape for the
-        // dashboard while keeping raw PII out of the durable log. The opaque
+        // studio while keeping raw PII out of the durable log. The opaque
         // `user_id` column above stays raw; it's the non-PII correlation key the
         // `getRequestLog` filters key on.
         // eslint-disable-next-line unicorn/no-null -- anonymous request or no claims attached.

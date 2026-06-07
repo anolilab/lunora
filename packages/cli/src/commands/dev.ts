@@ -3,14 +3,14 @@ import { spawn as nodeSpawn } from "node:child_process";
 
 import type { CodegenWatcherHandle } from "../util/codegen-watch.js";
 import { startCodegenWatch } from "../util/codegen-watch.js";
-import type { DashboardServerHandle } from "../util/dashboard-server.js";
-import { startDashboardServer } from "../util/dashboard-server.js";
+import type { StudioServerHandle } from "../util/studio-server.js";
+import { startStudioServer } from "../util/studio-server.js";
 import { detectPackageManager, execArgsFor } from "../util/detect-package-manager.js";
 import type { Logger } from "../util/logger.js";
 import type { SpawnDescriptor } from "../util/spawn.js";
 
-/** Default port the embedded dashboard server listens on (the URL you open). */
-const DEFAULT_DASHBOARD_PORT = 6173;
+/** Default port the embedded studio server listens on (the URL you open). */
+const DEFAULT_STUDIO_PORT = 6173;
 /** Default port `wrangler dev` serves the worker on. */
 const DEFAULT_WORKER_PORT = 8787;
 /** Grace period after the first SIGINT before we force-kill the worker. */
@@ -30,15 +30,15 @@ interface DevCommandOptions {
     /** Disable the codegen watch loop. */
     codegen?: boolean;
     cwd?: string;
-    /** Disable the embedded dashboard server. */
-    dashboard?: boolean;
+    /** Disable the embedded studio server. */
+    studio?: boolean;
     logger: Logger;
-    /** Dashboard server port. */
+    /** Studio server port. */
     port?: number;
     /** Injection seam for tests — defaults to the real codegen watcher. */
     startCodegen?: typeof startCodegenWatch;
-    /** Injection seam for tests — defaults to the real dashboard server. */
-    startDashboard?: typeof startDashboardServer;
+    /** Injection seam for tests — defaults to the real studio server. */
+    startStudio?: typeof startStudioServer;
     /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
     startWorker?: WorkerSpawner;
     /** `wrangler dev` port. */
@@ -47,8 +47,8 @@ interface DevCommandOptions {
 
 interface DevCommandPlan {
     codegenEnabled: boolean;
-    dashboardEnabled: boolean;
-    dashboardPort: number;
+    studioEnabled: boolean;
+    studioPort: number;
     workerOrigin: string;
     workerPort: number;
     /** The single child process `cirrus dev` spawns: `wrangler dev`. */
@@ -69,8 +69,8 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
 
     return {
         codegenEnabled: options.codegen !== false,
-        dashboardEnabled: options.dashboard !== false,
-        dashboardPort: options.port ?? DEFAULT_DASHBOARD_PORT,
+        studioEnabled: options.studio !== false,
+        studioPort: options.port ?? DEFAULT_STUDIO_PORT,
         workerOrigin: `http://localhost:${String(workerPort)}`,
         workerPort,
         wrangler: { args: exec.args, command: exec.command, cwd, tag: "wrangler" },
@@ -135,14 +135,14 @@ const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
     };
 };
 
-/** Print the Convex-style startup banner once the dashboard + worker URLs are known. */
-const printBanner = (logger: Logger, plan: DevCommandPlan, dashboardUrl: string | undefined): void => {
+/** Print the Convex-style startup banner once the studio + worker URLs are known. */
+const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined): void => {
     logger.info("");
     logger.success("Cirrus dev");
     logger.info(`  ➜  Worker:     ${plan.workerOrigin}`);
 
-    if (dashboardUrl !== undefined) {
-        logger.info(`  ➜  Dashboard:  ${dashboardUrl}`);
+    if (studioUrl !== undefined) {
+        logger.info(`  ➜  Studio:  ${studioUrl}`);
     }
 
     if (plan.codegenEnabled) {
@@ -154,20 +154,20 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, dashboardUrl: string 
 
 interface Teardown {
     codegen?: CodegenWatcherHandle;
-    dashboard?: DashboardServerHandle;
+    studio?: StudioServerHandle;
 }
 
-/** Best-effort shutdown of the dashboard server + codegen watcher. */
+/** Best-effort shutdown of the studio server + codegen watcher. */
 const teardown = async (handles: Teardown): Promise<void> => {
     handles.codegen?.close();
-    await handles.dashboard?.close().catch(() => undefined);
+    await handles.studio?.close().catch(() => undefined);
 };
 
 /**
- * Start codegen watch + the dashboard server, spawn `wrangler dev`, print the
+ * Start codegen watch + the studio server, spawn `wrangler dev`, print the
  * banner, and resolve when the worker exits or the user interrupts — tearing
  * down the sibling servers either way. The three side-effecting pieces (worker,
- * dashboard, codegen) are injectable so this is testable without real I/O.
+ * studio, codegen) are injectable so this is testable without real I/O.
  */
 const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
     const plan = planDevCommand(options);
@@ -175,35 +175,35 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     const cwd = plan.wrangler.cwd ?? process.cwd();
     const handles: Teardown = {};
 
-    logger.info("starting wrangler dev + dashboard");
+    logger.info("starting wrangler dev + studio");
 
     if (plan.codegenEnabled) {
         handles.codegen = (options.startCodegen ?? startCodegenWatch)({ logger, projectRoot: cwd });
     }
 
-    let dashboardUrl: string | undefined;
+    let studioUrl: string | undefined;
 
-    if (plan.dashboardEnabled) {
+    if (plan.studioEnabled) {
         try {
-            handles.dashboard = await (options.startDashboard ?? startDashboardServer)({
+            handles.studio = await (options.startStudio ?? startStudioServer)({
                 cwd,
                 logger: {
                     warnOnce: (message) => {
                         logger.warn(message);
                     },
                 },
-                port: plan.dashboardPort,
+                port: plan.studioPort,
                 workerOrigin: plan.workerOrigin,
             });
-            dashboardUrl = handles.dashboard.url;
+            studioUrl = handles.studio.url;
         } catch (error: unknown) {
-            logger.warn(`dashboard server failed to start (${error instanceof Error ? error.message : String(error)}) — continuing without it`);
+            logger.warn(`studio server failed to start (${error instanceof Error ? error.message : String(error)}) — continuing without it`);
         }
     }
 
     const worker = (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
 
-    printBanner(logger, plan, dashboardUrl);
+    printBanner(logger, plan, studioUrl);
 
     let sigintCount = 0;
     let escalationTimer: NodeJS.Timeout | undefined;

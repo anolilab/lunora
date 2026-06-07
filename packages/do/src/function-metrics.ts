@@ -18,7 +18,7 @@
  * UPDATE` upsert against this row, on the hot path.
  *
  * `__cirrus_metrics_buckets` holds coarse time-bucketed counters
- * (`path` × `bucketMs`) giving a basic per-function time series the dashboard
+ * (`path` × `bucketMs`) giving a basic per-function time series the studio
  * can chart. Bucketing the timestamp to a fixed window keeps the row count
  * bounded (one row per function per window) while still surviving restart.
  *
@@ -26,7 +26,7 @@
  * (`path` × `table`): how many times the function full-scanned each table (a
  * read with no index / point lookup, stamped via `SCAN_DEP` in `ctx-db.ts`).
  * This is the raw signal behind the Insights "missing index" / "full scan"
- * reads — it lets the dashboard say "`feed:list` is slow BECAUSE it
+ * reads — it lets the studio say "`feed:list` is slow BECAUSE it
  * full-scanned `posts`" rather than flagging the slow function as an isolated
  * symptom. Keyed by `(path, table)` so the row count is bounded by the
  * (functions × tables) the app actually scans. The `__cirrus_metrics` row also
@@ -51,7 +51,7 @@ const FUNCTION_METRICS_SCANS_TABLE = "__cirrus_metrics_scans";
 
 /**
  * Width of one history bucket, in milliseconds. 60s gives a minute-resolution
- * time series — fine-grained enough to chart bursts on the dashboard, coarse
+ * time series — fine-grained enough to chart bursts on the studio, coarse
  * enough that a single function emits at most one row per minute. Exported so
  * consumers (and tests) can align timestamps to the same grid.
  */

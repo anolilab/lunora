@@ -98,7 +98,7 @@ const BOOLEAN_OPTIONS: Set<string> = new Set<string>([
     "json",
     "list",
     "no-codegen",
-    "no-dashboard",
+    "no-studio",
     "no-typecheck",
     "overwrite",
     "prod",
@@ -131,7 +131,7 @@ const optionTakesValue = (token: string): boolean => {
  * positional as their value.
  *
  * For example `["init", "my-app", "-t", "vite"]` becomes
- * `["init", "-t", "vite", "my-app"]`, while `["dev", "--no-dashboard", "--port", "1"]`
+ * `["init", "-t", "vite", "my-app"]`, while `["dev", "--no-studio", "--port", "1"]`
  * is unchanged.
  */
 interface ArgvBuckets {
@@ -337,13 +337,13 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.addCommand({
-        description: "Run the dev stack: wrangler worker + dashboard + codegen watch",
+        description: "Run the dev stack: wrangler worker + studio + codegen watch",
         execute: async ({ options: parsed }) => {
             const { runDevCommand } = await import("./commands/dev.js");
             const result = await runDevCommand({
                 codegen: parsed.noCodegen === true ? false : undefined,
                 cwd,
-                dashboard: parsed.noDashboard === true ? false : undefined,
+                studio: parsed.noStudio === true ? false : undefined,
                 logger,
                 port: toNumberOrUndefined(parsed.port),
                 workerPort: toNumberOrUndefined(parsed.workerPort),
@@ -353,9 +353,9 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         },
         name: "dev",
         options: [
-            { description: "Dashboard server port (default 6173)", name: "port", type: Number },
+            { description: "Studio server port (default 6173)", name: "port", type: Number },
             { description: "wrangler dev port (default 8787)", name: "worker-port", type: Number },
-            { description: "Don't start the embedded dashboard server", name: "no-dashboard", type: Boolean },
+            { description: "Don't start the embedded studio server", name: "no-studio", type: Boolean },
             { description: "Don't watch + regenerate codegen", name: "no-codegen", type: Boolean },
         ],
     });
@@ -771,7 +771,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.addCommand({
-        description: "Open the Cirrus dashboard in your browser (local dev by default, --remote for production)",
+        description: "Open the Cirrus studio in your browser (local dev by default, --remote for production)",
         execute: async ({ options: parsed }) => {
             try {
                 const { runViewCommand } = await import("./commands/view.js");
@@ -788,7 +788,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.addCommand({
-        argument: { description: "Optional path under the docs site (e.g. addons/dashboard)", name: "section", type: String },
+        argument: { description: "Optional path under the docs site (e.g. addons/studio)", name: "section", type: String },
         description: "Open the Cirrus docs in your browser (optional [section] path)",
         execute: async ({ argument }) => {
             try {
@@ -817,8 +817,8 @@ Commands:
   add <name> [...names]         Add component-registry item(s) into cirrus/ (scaffold + schema merge)
        [--dry-run] [--from <dir>] [--source <src>] [--yes] [--json]
   list [--from <dir>]           List available component-registry items
-  dev  [--port <n>] [--worker-port <n>]  Run the dev stack: wrangler worker + dashboard + codegen watch
-       [--no-dashboard] [--no-codegen]
+  dev  [--port <n>] [--worker-port <n>]  Run the dev stack: wrangler worker + studio + codegen watch
+       [--no-studio] [--no-codegen]
   codegen                       Run codegen for cirrus/ functions and schema
   deploy [--env <name>]         Codegen, validate wrangler, then wrangler deploy
   logs [worker]                 Stream live logs from a deployed Worker via wrangler tail
@@ -845,7 +845,7 @@ Commands:
   info [--json]                 Print resolved project config (packages, wrangler, schema)
   env <sub> [args]              Manage .dev.vars (list | get <K> | set <K> <V> | unset <K> | push --yes [--prod])
   analyze [--json]              Run wrangler dry-run and report bundle size + top modules
-  view [--remote]               Open the dashboard in your browser
+  view [--remote]               Open the studio in your browser
   docs [section]                Open the Cirrus docs in your browser
 
 Global options:

@@ -26,7 +26,7 @@
  * The reader is intentionally minimal: `query(table).collect()` returns the full
  * list (no indexes, no filtering, no pagination) and `get(table, id)` resolves a
  * single row. That matches Convex's system-table read surface closely enough for
- * the dashboard / introspection use cases without re-implementing the query
+ * the studio / introspection use cases without re-implementing the query
  * planner against a remote source.
  */
 

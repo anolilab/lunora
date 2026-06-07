@@ -1,11 +1,11 @@
 /**
- * Read-only D1 introspection for the dashboard's database browser.
+ * Read-only D1 introspection for the studio's database browser.
  *
  * The DO twin (`@cirrus/do`'s `introspect.ts`) lists shard-local tables and
  * pages their rows from the DO's JSON-blob SQLite. This is the D1 counterpart.
  *
  * It surfaces **every** real table in the D1 database, not just the ones the
- * schema marks `.global()` — so the dashboard reflects the actual database,
+ * schema marks `.global()` — so the studio reflects the actual database,
  * including tables managed by other libraries (e.g. better-auth's
  * `user`/`session`/`account`/`verification`). Two guardrails keep that safe:
  *

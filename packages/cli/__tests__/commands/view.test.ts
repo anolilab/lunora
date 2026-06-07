@@ -51,7 +51,7 @@ describe("cirrus view", () => {
     });
 
     describe("cirrus view", () => {
-        it("defaults to localhost:8787/_cirrus/dashboard", async () => {
+        it("defaults to localhost:8787/_cirrus/studio", async () => {
             expect.assertions(2);
 
             const { logger } = recordingLogger();
@@ -60,10 +60,10 @@ describe("cirrus view", () => {
             const result = await runViewCommand({ cwd: workdir, logger, opener });
 
             expect(result.code).toBe(0);
-            expect(openedUrls).toEqual(["http://localhost:8787/_cirrus/dashboard"]);
+            expect(openedUrls).toEqual(["http://localhost:8787/_cirrus/studio"]);
         });
 
-        it("honours wrangler.dev.port for the local dashboard", async () => {
+        it("honours wrangler.dev.port for the local studio", async () => {
             expect.assertions(1);
 
             writeFileSync(
@@ -80,7 +80,7 @@ describe("cirrus view", () => {
 
             await runViewCommand({ cwd: workdir, logger, opener });
 
-            expect(openedUrls).toEqual(["http://localhost:9091/_cirrus/dashboard"]);
+            expect(openedUrls).toEqual(["http://localhost:9091/_cirrus/studio"]);
         });
 
         it("--remote builds a URL from wrangler.routes when present", async () => {
@@ -100,7 +100,7 @@ describe("cirrus view", () => {
 
             await runViewCommand({ cwd: workdir, logger, opener, remote: true });
 
-            expect(openedUrls).toEqual(["https://api.example.com/_cirrus/dashboard"]);
+            expect(openedUrls).toEqual(["https://api.example.com/_cirrus/studio"]);
         });
 
         it("--remote falls back to <name>.workers.dev when no routes are set", async () => {
@@ -119,7 +119,7 @@ describe("cirrus view", () => {
 
             await runViewCommand({ cwd: workdir, logger, opener, remote: true });
 
-            expect(openedUrls).toEqual(["https://my-worker.workers.dev/_cirrus/dashboard"]);
+            expect(openedUrls).toEqual(["https://my-worker.workers.dev/_cirrus/studio"]);
         });
 
         it("--remote without wrangler returns 1", async () => {

@@ -62,7 +62,7 @@ describe("request-log module", () => {
             const [row] = readRequestLog(database.sql);
             const args = row!.redactedArgs as Record<string, unknown>;
 
-            // Structure/keys survive so the dashboard can still correlate.
+            // Structure/keys survive so the studio can still correlate.
             expect(Object.keys(args).toSorted((a, b) => a.localeCompare(b))).toEqual(["message", "nested", "password"]);
             // Benign values stay readable (richer than a blunt type-tag stamp).
             expect(args.message).toBe("hello world");

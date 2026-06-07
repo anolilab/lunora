@@ -92,7 +92,7 @@ Do **not** grow multi-step orchestration on SchedulerDO — that's Cloudflare **
 sink. We should not build a real log pipeline here.
 
 **Verdict:** Hand raw log transport off to Workers Logs / Logpush. Keep only a tiny in-dev readout
-buffer for the dashboard's live log panel. Don't invest in a production log transport of our own.
+buffer for the studio's live log panel. Don't invest in a production log transport of our own.
 
 ---
 
@@ -159,7 +159,7 @@ Larger / decision-gated:
   `Storage.createMultipartUpload` / `resumeMultipartUpload` wrap R2's native multipart API.
 
 Also surfaced as a paused follow-up and then shipped alongside this audit: **native PITR surfaces**
-(`cirrus backup pitr` + the dashboard Time Travel panel), Convex-parity #19's in-place tier.
+(`cirrus backup pitr` + the studio Time Travel panel), Convex-parity #19's in-place tier.
 
 ---
 

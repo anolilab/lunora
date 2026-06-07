@@ -381,7 +381,7 @@ class SchedulerDO {
         await this.rescheduleAlarm();
 
         // Jobs fired (and were removed or moved to retry), so push the new list
-        // to live subscribers — this is the moment a dashboard wants to see.
+        // to live subscribers — this is the moment a studio wants to see.
         if (due.length > 0) {
             await this.broadcastChange();
         }
@@ -575,7 +575,7 @@ class SchedulerDO {
 
     /**
      * Re-list the jobs and push them to every connected subscriber. Called after
-     * any change (schedule / cancel / alarm-fire) so live dashboards reflect it
+     * any change (schedule / cancel / alarm-fire) so live studios reflect it
      * immediately. A no-op when the runtime doesn't support hibernated sockets.
      */
     private async broadcastChange(): Promise<void> {
@@ -643,7 +643,7 @@ class SchedulerDO {
             await this.state.storage.put(`${DEAD_PREFIX}${record.id}`, { ...record, attempts });
             // Park is terminal; clear the pending retry row AND the live header
             // row in one batched delete. Leaving `id:<id>` behind would keep the
-            // dead job visible in listRecords()/`/list` (and the dashboard) as a
+            // dead job visible in listRecords()/`/list` (and the studio) as a
             // scheduled job that can never fire — only the `dead:` record should
             // survive.
             await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
@@ -756,7 +756,7 @@ class SchedulerDO {
     }
 
     /**
-     * `GET /status` — the app-level backlog signal that powers the dashboard's
+     * `GET /status` — the app-level backlog signal that powers the studio's
      * SLO view. Enumerates every durable `pool:&lt;name>` row for its `inFlight`/
      * `maxConcurrency` semaphore, counts the pending (not-yet-dispatched) jobs
      * routed to each pool with the same single-pass scan {@link handlePoolStatus}

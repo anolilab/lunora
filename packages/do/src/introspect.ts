@@ -51,7 +51,7 @@ interface TableInfo {
  * from the reserved `__cirrus_audit__` table (see `audit-log.ts`). Unlike the
  * in-memory `getMetrics`/`getFunctionStats` counters, the audit log is durable —
  * it survives hibernation/restart and is bounded only by a retention cap. `seq`
- * is a monotonic per-shard cursor the dashboard pages through; `op` is the short
+ * is a monotonic per-shard cursor the studio pages through; `op` is the short
  * op name (`writeRow`, `runMigration`, `importShard`, `applyCdc`); `table`/`id`
  * are present when the op targets one; `detail` carries op-specific context
  * (notably the acting `userId`).
@@ -81,7 +81,7 @@ interface AuditLogResult {
  * the function full-scanned `table` (a read with no index / point lookup). This
  * is the causal evidence behind the Insights "missing index" / "full scan"
  * signal — it pins a slow function to the specific table it scanned, so the
- * dashboard can say "`feed:list` is slow BECAUSE it full-scanned `posts`" and
+ * studio can say "`feed:list` is slow BECAUSE it full-scanned `posts`" and
  * deep-link to add the index.
  */
 interface FunctionScanAttribution {

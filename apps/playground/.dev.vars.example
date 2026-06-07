@@ -16,8 +16,8 @@ AUTH_URL="http://localhost:5173"
 # Signing secret for R2 signed URLs (@cirrus/storage). Any strong random value.
 STORAGE_SECRET="replace-with-openssl-rand-hex-32"
 
-# Admin token gating the dashboard's /_cirrus/admin/* endpoints. The @cirrus/vite
-# dev route reads this same value and auto-injects it into the dashboard served
+# Admin token gating the studio's /_cirrus/admin/* endpoints. The @cirrus/vite
+# dev route reads this same value and auto-injects it into the studio served
 # at /__cirrus, so you never paste it by hand in dev. Without it, admin endpoints
-# return 403 and the dashboard panels stay empty.
+# return 403 and the studio panels stay empty.
 CIRRUS_ADMIN_TOKEN="replace-with-openssl-rand-hex-32"

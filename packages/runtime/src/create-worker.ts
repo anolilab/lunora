@@ -236,7 +236,7 @@ interface AuthPage<T> {
 
 /**
  * Read-only introspector for the auth store's users and sessions, backing the
- * dashboard's users panel via `GET /_cirrus/admin/auth/users` and
+ * studio's users panel via `GET /_cirrus/admin/auth/users` and
  * `/_cirrus/admin/auth/sessions`. The host wires this to better-auth's tables;
  * the runtime stays free of a hard dependency on `@cirrus/auth`. Omit it and
  * those endpoints respond `AUTH_NOT_CONFIGURED`.
@@ -379,7 +379,7 @@ interface WorkerOptions {
 
     /**
      * Read-only introspector for the auth store's users and sessions, backing
-     * the dashboard's users panel via `GET /_cirrus/admin/auth/users` and
+     * the studio's users panel via `GET /_cirrus/admin/auth/users` and
      * `/_cirrus/admin/auth/sessions`. Omit it and those endpoints respond
      * `AUTH_NOT_CONFIGURED`.
      */
@@ -490,7 +490,7 @@ interface WorkerOptions {
     /**
      * The generated `CIRRUS_FUNCTIONS` map (from `_generated/server.ts`). When
      * set, the worker exposes the admin-gated `GET /_cirrus/admin/functions`
-     * endpoint the dashboard uses to auto-discover queries/mutations/actions
+     * endpoint the studio uses to auto-discover queries/mutations/actions
      * (internal functions are filtered out). Omit it and the endpoint responds
      * `FUNCTIONS_NOT_CONFIGURED`.
      */
@@ -573,7 +573,7 @@ interface WorkerOptions {
     /**
      * Namespace binding for the `SchedulerDO` (typically `env.SCHEDULER`). When
      * set, the worker exposes the admin-gated `/_cirrus/admin/scheduled`
-     * endpoints used by the dashboard to list and cancel `runAfter` / `runAt`
+     * endpoints used by the studio to list and cancel `runAfter` / `runAt`
      * jobs. Omit it and those endpoints respond `SCHEDULER_NOT_CONFIGURED`.
      */
     schedulerDO?: ShardNamespaceLike;
@@ -589,7 +589,7 @@ interface WorkerOptions {
 
     /**
      * Storage lister backing the admin-gated `GET /_cirrus/admin/storage`
-     * endpoint the dashboard's file browser calls. The structural shape matches
+     * endpoint the studio's file browser calls. The structural shape matches
      * `@cirrus/storage`'s `Storage["list"]`, so passing `createStorage(...).list`
      * (or the raw R2 bucket's `list`) satisfies it. Omit it and the endpoint
      * responds `STORAGE_NOT_CONFIGURED`.
@@ -1610,7 +1610,7 @@ const checkAdminAuth = (request: Request, expected: string | undefined): boolean
 /**
  * Admin check for a browser WebSocket upgrade, which can't set an
  * `Authorization` header — so the token rides in the `?token=` query parameter
- * instead (the dashboard sends it there as the client's `wsToken`). It ends up
+ * instead (the studio sends it there as the client's `wsToken`). It ends up
  * in server logs, so a short-lived rotating token is preferable in production.
  */
 const checkAdminWsToken = (request: Request, expected: string | undefined): boolean => {
@@ -2348,7 +2348,7 @@ const createWorker = (
     };
 
     /**
-     * Proxy the SchedulerDO's `GET /status` so the dashboard can read the
+     * Proxy the SchedulerDO's `GET /status` so the studio can read the
      * app-level workpool backlog (per-pool `{ queued, inFlight, maxConcurrency }`
      * plus app-wide `backlog`/`inFlight` totals) that powers the SLO view. A
      * sibling of {@link handleScheduledList}: same admin gate + scheduler-instance
@@ -2366,7 +2366,7 @@ const createWorker = (
 
     /**
      * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
-     * dashboard can subscribe to the live job list. A browser `WebSocket` can't
+     * studio can subscribe to the live job list. A browser `WebSocket` can't
      * set an `Authorization` header, so the admin token is also accepted via the
      * `?token=` query parameter — the only channel the constructor allows.
      */

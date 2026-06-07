@@ -35,9 +35,9 @@
  * Widen `AuthEnv` (in `cirrus/auth/index.ts`) with the Auth0 vars, or import
  * {@link Auth0Env} from here.
  *
- * # Auth0 dashboard setup
+ * # Auth0 studio setup
  *
- * Create a **Regular Web Application** in the Auth0 dashboard and set its
+ * Create a **Regular Web Application** in the Auth0 studio and set its
  * Allowed Callback URL to:
  *
  *     <BETTER_AUTH_URL>/api/auth/oauth2/callback/auth0

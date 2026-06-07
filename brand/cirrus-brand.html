@@ -4,7 +4,10 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>cirrus — brand &amp; design system</title>
-        <meta name="description" content="Cirrus brand and design language: type-safe realtime at the edge of the atmosphere." />
+        <meta
+            name="description"
+            content="Cirrus brand and design language: type-safe realtime at the edge of the atmosphere."
+        />
 
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -55,7 +58,8 @@
                 overflow: hidden;
                 background:
                     radial-gradient(120% 80% at 50% -10%, rgba(124, 196, 255, 0.12), transparent 60%),
-                    radial-gradient(80% 50% at 85% 0%, rgba(124, 196, 255, 0.07), transparent 55%), var(--cirrus-bg);
+                    radial-gradient(80% 50% at 85% 0%, rgba(124, 196, 255, 0.07), transparent 55%),
+                    var(--cirrus-bg);
             }
 
             .streak {
@@ -501,16 +505,14 @@
                 border-radius: var(--cirrus-radius-sm);
                 padding: 9px 12px;
                 outline: none;
-                transition:
-                    border-color 0.15s,
-                    box-shadow 0.15s;
+                transition: border-color 0.15s, box-shadow 0.15s;
             }
             .field:focus {
                 border-color: var(--cirrus-accent);
                 box-shadow: 0 0 0 3px var(--cirrus-accent-soft);
             }
 
-            /* ── Dashboard preview ─────────────────────────────────────────── */
+            /* ── Studio preview ─────────────────────────────────────────── */
             .preview {
                 border: 1px solid var(--cirrus-border);
                 border-radius: var(--cirrus-radius-lg);
@@ -717,7 +719,7 @@
                     <a href="#palette">Palette</a>
                     <a href="#type">Type</a>
                     <a href="#components">Components</a>
-                    <a href="#dashboard">Dashboard</a>
+                    <a href="#studio">Studio</a>
                 </nav>
                 <button class="btn icon-btn btn-ghost" id="theme" title="Toggle theme" aria-label="Toggle theme">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
@@ -737,31 +739,17 @@
                         <span class="eyebrow">Type-safe realtime · Cloudflare edge</span>
                         <h1>Backends at the <em>edge of the atmosphere.</em></h1>
                         <p class="lead">
-                            Cirrus is a type-safe, realtime backend on Cloudflare Workers and Durable Objects — with a Vite-first DX. Queries, mutations and
-                            subscriptions, inferred end to end.
+                            Cirrus is a type-safe, realtime backend on Cloudflare Workers and Durable Objects —
+                            with a Vite-first DX. Queries, mutations and subscriptions, inferred end to end.
                         </p>
                         <div class="hero-cta">
                             <a class="btn btn-primary" href="#top">
                                 Start building
-                                <svg
-                                    width="15"
-                                    height="15"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                >
-                                    <path d="M5 12h14m-6-6 6 6-6 6" />
-                                </svg>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
                             </a>
-                            <a class="btn btn-ghost" href="#dashboard">
-                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
-                                    <rect x="3" y="4" width="18" height="16" rx="2" />
-                                    <path d="M3 9h18M9 9v11" />
-                                </svg>
-                                View the dashboard
+                            <a class="btn btn-ghost" href="#studio">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M9 9v11" /></svg>
+                                View the studio
                             </a>
                         </div>
                         <div class="hero-meta">
@@ -776,7 +764,7 @@
                             <span class="dotrow"><i></i><i></i><i></i></span>
                             cirrus/messages.ts
                         </div>
-                        <pre class="code"><span class="k">import</span> { query, mutation } <span class="k">from</span> <span class="s">"@cirrus/server"</span>
+<pre class="code"><span class="k">import</span> { query, mutation } <span class="k">from</span> <span class="s">"@cirrus/server"</span>
 
 <span class="c">// realtime by default — subscribers update on write</span>
 <span class="k">export const</span> <span class="fn">list</span> = <span class="fn">query</span>({
@@ -803,8 +791,9 @@
                     <span class="eyebrow">01 — The mark</span>
                     <h2>The triple streak</h2>
                     <p>
-                        Three thin strokes, long&nbsp;→&nbsp;medium&nbsp;→&nbsp;short. It reads as speed, as the layers underneath (Worker · Durable Object ·
-                        D1), and as the trailing edge of a cirrus cloud. Monochrome only — ink on light, paper on dark. Never orange.
+                        Three thin strokes, long&nbsp;→&nbsp;medium&nbsp;→&nbsp;short. It reads as speed, as the
+                        layers underneath (Worker · Durable Object · D1), and as the trailing edge of a cirrus
+                        cloud. Monochrome only — ink on light, paper on dark. Never orange.
                     </p>
                 </div>
 
@@ -841,67 +830,20 @@
                     <span class="eyebrow">02 — Colour</span>
                     <h2>Neutral dark, one yellow</h2>
                     <p>
-                        Supabase-grade neutral grays — near-black content, ink chrome — with a single brand yellow used once per surface: links, the i-dot, a
-                        primary button, the focus ring. Green is freed up for success states; red for destructive.
+                        Supabase-grade neutral grays — near-black content, ink chrome — with a single
+                        brand yellow used once per surface: links, the i-dot, a primary button, the focus
+                        ring. Green is freed up for success states; red for destructive.
                     </p>
                 </div>
                 <div class="swatches">
-                    <div class="swatch">
-                        <div class="chip" style="background: #121212"></div>
-                        <div class="meta">
-                            <div class="name">Base</div>
-                            <div class="hex">#121212</div>
-                        </div>
-                    </div>
-                    <div class="swatch">
-                        <div class="chip" style="background: #1c1c1c"></div>
-                        <div class="meta">
-                            <div class="name">Surface</div>
-                            <div class="hex">#1C1C1C</div>
-                        </div>
-                    </div>
-                    <div class="swatch">
-                        <div class="chip" style="background: #2a2a2a"></div>
-                        <div class="meta">
-                            <div class="name">Raised</div>
-                            <div class="hex">#2A2A2A</div>
-                        </div>
-                    </div>
-                    <div class="swatch">
-                        <div class="chip" style="background: #2e2e2e"></div>
-                        <div class="meta">
-                            <div class="name">Border</div>
-                            <div class="hex">#2E2E2E</div>
-                        </div>
-                    </div>
-                    <div class="swatch">
-                        <div class="chip" style="background: #fcc419"></div>
-                        <div class="meta">
-                            <div class="name">Brand yellow</div>
-                            <div class="hex">#FCC419</div>
-                        </div>
-                    </div>
-                    <div class="swatch">
-                        <div class="chip" style="background: #ededed"></div>
-                        <div class="meta">
-                            <div class="name">Foreground</div>
-                            <div class="hex">#EDEDED</div>
-                        </div>
-                    </div>
-                    <div class="swatch">
-                        <div class="chip" style="background: #3ecf8e"></div>
-                        <div class="meta">
-                            <div class="name">Success</div>
-                            <div class="hex">#3ECF8E</div>
-                        </div>
-                    </div>
-                    <div class="swatch">
-                        <div class="chip" style="background: #f25c5c"></div>
-                        <div class="meta">
-                            <div class="name">Danger</div>
-                            <div class="hex">#F25C5C</div>
-                        </div>
-                    </div>
+                    <div class="swatch"><div class="chip" style="background: #121212"></div><div class="meta"><div class="name">Base</div><div class="hex">#121212</div></div></div>
+                    <div class="swatch"><div class="chip" style="background: #1c1c1c"></div><div class="meta"><div class="name">Surface</div><div class="hex">#1C1C1C</div></div></div>
+                    <div class="swatch"><div class="chip" style="background: #2a2a2a"></div><div class="meta"><div class="name">Raised</div><div class="hex">#2A2A2A</div></div></div>
+                    <div class="swatch"><div class="chip" style="background: #2e2e2e"></div><div class="meta"><div class="name">Border</div><div class="hex">#2E2E2E</div></div></div>
+                    <div class="swatch"><div class="chip" style="background: #fcc419"></div><div class="meta"><div class="name">Brand yellow</div><div class="hex">#FCC419</div></div></div>
+                    <div class="swatch"><div class="chip" style="background: #ededed"></div><div class="meta"><div class="name">Foreground</div><div class="hex">#EDEDED</div></div></div>
+                    <div class="swatch"><div class="chip" style="background: #3ecf8e"></div><div class="meta"><div class="name">Success</div><div class="hex">#3ECF8E</div></div></div>
+                    <div class="swatch"><div class="chip" style="background: #f25c5c"></div><div class="meta"><div class="name">Danger</div><div class="hex">#F25C5C</div></div></div>
                 </div>
             </section>
 
@@ -911,15 +853,17 @@
                     <span class="eyebrow">03 — Typography</span>
                     <h2>Tight display, mono labels</h2>
                     <p>
-                        Inter Tight carries headings at negative tracking; JetBrains Mono carries eyebrows, code and every number. The pairing reads engineered,
-                        not marketed.
+                        Inter Tight carries headings at negative tracking; JetBrains Mono carries eyebrows,
+                        code and every number. The pairing reads engineered, not marketed.
                     </p>
                 </div>
                 <div class="specimen">
                     <div class="spec-card">
                         <div class="label">Inter Tight · display</div>
                         <div class="spec-display">Aa Gg 0123</div>
-                        <p style="color: var(--cirrus-fg-muted); margin-top: 16px">The quick brown fox jumps over the lazy dog — set tight, weight 600.</p>
+                        <p style="color: var(--cirrus-fg-muted); margin-top: 16px">
+                            The quick brown fox jumps over the lazy dog — set tight, weight 600.
+                        </p>
                     </div>
                     <div class="spec-card">
                         <div class="label">JetBrains Mono · technical</div>
@@ -937,7 +881,7 @@
                 <div class="section-head">
                     <span class="eyebrow">04 — Components</span>
                     <h2>The kit</h2>
-                    <p>Buttons, badges and fields — the same tokens the dashboard ships with.</p>
+                    <p>Buttons, badges and fields — the same tokens the studio ships with.</p>
                 </div>
                 <div class="kit">
                     <div class="kit-card">
@@ -964,14 +908,14 @@
                 </div>
             </section>
 
-            <!-- ── Dashboard preview ────────────────────────────────────── -->
-            <section class="wrap section" id="dashboard">
+            <!-- ── Studio preview ────────────────────────────────────── -->
+            <section class="wrap section" id="studio">
                 <div class="section-head">
                     <span class="eyebrow">05 — Studio</span>
-                    <h2>The dashboard, in the brand</h2>
+                    <h2>The studio, in the brand</h2>
                     <p>
                         Top bar, grouped sidebar, content — the same design language the
-                        <code style="font-family: var(--cirrus-font-mono); font-size: 0.85em">@cirrus/dashboard</code>
+                        <code style="font-family: var(--cirrus-font-mono); font-size: 0.85em">@cirrus/studio</code>
                         package now ships.
                     </p>
                 </div>
@@ -984,7 +928,7 @@
                                 <path d="M12 60 H72" stroke="currentColor" stroke-width="9" stroke-linecap="round" />
                             </svg>
                             <span class="wordmark">cirrus<span class="dot"></span></span>
-                            <span class="pv-tag" style="margin-left: 8px">Dashboard</span>
+                            <span class="pv-tag" style="margin-left: 8px">Studio</span>
                         </span>
                         <span class="badge live">connected</span>
                     </div>
@@ -992,36 +936,24 @@
                         <aside class="pv-side">
                             <div class="pv-group">Database</div>
                             <div class="pv-item active">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                                    <path
-                                        d="M5 6c0-1.4 3.1-2.5 7-2.5s7 1.1 7 2.5-3.1 2.5-7 2.5S5 7.4 5 6Zm0 0v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"
-                                    />
-                                </svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6c0-1.4 3.1-2.5 7-2.5s7 1.1 7 2.5-3.1 2.5-7 2.5S5 7.4 5 6Zm0 0v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" /></svg>
                                 Data
                             </div>
                             <div class="pv-item">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0 0c2.5-2 3.8-5.3 3.8-9S14.5 5 12 3M3.5 9h17M3.5 15h17" />
-                                </svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0 0c2.5-2 3.8-5.3 3.8-9S14.5 5 12 3M3.5 9h17M3.5 15h17" /></svg>
                                 Global Tables
                             </div>
                             <div class="pv-item">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M4 5h16v14H4V5Zm6 0v14M4 14.5h16" />
-                                </svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4V5Zm6 0v14M4 14.5h16" /></svg>
                                 Schema
                             </div>
                             <div class="pv-group">Observability</div>
                             <div class="pv-item">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />
-                                </svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" /></svg>
                                 Metrics
                             </div>
                             <div class="pv-item">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />
-                                </svg>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M5 10h14M5 14h9M5 18h11" /></svg>
                                 Logs
                             </div>
                         </aside>
@@ -1032,34 +964,12 @@
                                 <span class="badge live">live</span>
                             </div>
                             <table class="pv-table">
-                                <thead>
-                                    <tr>
-                                        <th>id</th>
-                                        <th>body</th>
-                                        <th>created</th>
-                                    </tr>
-                                </thead>
+                                <thead><tr><th>id</th><th>body</th><th>created</th></tr></thead>
                                 <tbody>
-                                    <tr>
-                                        <td><b>msg_8f2a</b></td>
-                                        <td>shipping the new theme ✨</td>
-                                        <td>38ms ago</td>
-                                    </tr>
-                                    <tr>
-                                        <td><b>msg_7c1b</b></td>
-                                        <td>edge replication is wild</td>
-                                        <td>2m ago</td>
-                                    </tr>
-                                    <tr>
-                                        <td><b>msg_5d9e</b></td>
-                                        <td>type inference end to end</td>
-                                        <td>11m ago</td>
-                                    </tr>
-                                    <tr>
-                                        <td><b>msg_3a04</b></td>
-                                        <td>one DO per app by default</td>
-                                        <td>1h ago</td>
-                                    </tr>
+                                    <tr><td><b>msg_8f2a</b></td><td>shipping the new theme ✨</td><td>38ms ago</td></tr>
+                                    <tr><td><b>msg_7c1b</b></td><td>edge replication is wild</td><td>2m ago</td></tr>
+                                    <tr><td><b>msg_5d9e</b></td><td>type inference end to end</td><td>11m ago</td></tr>
+                                    <tr><td><b>msg_3a04</b></td><td>one DO per app by default</td><td>1h ago</td></tr>
                                 </tbody>
                             </table>
                         </div>

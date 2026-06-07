@@ -37,7 +37,7 @@
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
-        "@cirrus/dashboard-host": "workspace:*",
+        "@cirrus/studio-host": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
@@ -46,11 +46,11 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@cirrus/dashboard": "workspace:*",
+        "@cirrus/studio": "workspace:*",
         "vite": "catalog:vite"
     },
     "peerDependenciesMeta": {
-        "@cirrus/dashboard": {
+        "@cirrus/studio": {
             "optional": true
         }
     },

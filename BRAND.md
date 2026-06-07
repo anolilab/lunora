@@ -38,7 +38,7 @@ The brand-yellow accent is a single visual hook — use it on the i-dot, primary
 ## Design system (UI)
 
 The four-colour brand palette above is the _identity_. For product surfaces — the
-docs/marketing site and the dashboard — it expands into a tokenised UI scale that
+docs/marketing site and the studio — it expands into a tokenised UI scale that
 keeps the same anchors (neutral-dark base, brand-yellow accent, no orange) but
 adds the surfaces, borders and semantic colours an interface needs. The product
 surfaces follow **Supabase Studio's neutral-gray scale** — swap their signature
@@ -48,7 +48,7 @@ The canonical tokens live in **[`brand/tokens.css`](./brand/tokens.css)** as CSS
 custom properties (`--cirrus-*`). The **dark theme is primary** — a near-black
 night sky above the cirrus layer — with a `:root[data-theme="light"]` paper
 variant. A self-contained reference page that exercises the whole language
-(mark, palette, type, components, a dashboard mock) is at
+(mark, palette, type, components, a studio mock) is at
 **[`brand/cirrus-brand.html`](./brand/cirrus-brand.html)** — open it in a browser
 when designing the cirrus page.
 
@@ -68,7 +68,7 @@ headings), **JetBrains Mono** for eyebrows, code, IDs and every number. The
 mono-eyebrow + tight-display pairing is the product's signature — it reads
 engineered, not marketed.
 
-The dashboard (`@cirrus/dashboard`) mirrors these values under a `--c-*` namespace
+The studio (`@cirrus/studio`) mirrors these values under a `--c-*` namespace
 in its own scoped stylesheet (it can't ship globals into a host page); the layout
 is a top bar + grouped left sidebar + content, in the spirit of a studio console.
 

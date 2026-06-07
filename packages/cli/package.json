@@ -36,7 +36,7 @@
         "@cirrus/codegen": "workspace:*",
         "@cirrus/config": "workspace:*",
         "@cirrus/d1": "workspace:*",
-        "@cirrus/dashboard": "workspace:*",
+        "@cirrus/studio": "workspace:*",
         "@visulima/boxen": "2.0.10",
         "@visulima/cerebro": "2.1.5",
         "@visulima/colorize": "1.4.29",
@@ -48,7 +48,7 @@
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
-        "@cirrus/dashboard-host": "workspace:*",
+        "@cirrus/studio-host": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",

@@ -60,7 +60,7 @@ export interface ScheduleRecord {
      * Number of dispatch attempts already made. Absent (treated as 0) until the
      * first failure, after which `recordRetry()` persists it on both the
      * `retry:` row and the `id:` header. Surfaced here so `/list` consumers and
-     * the dashboard see the field the storage layer actually writes.
+     * the studio see the field the storage layer actually writes.
      */
     attempts?: number;
     enqueuedAt: number;

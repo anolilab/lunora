@@ -53,13 +53,13 @@ state; signed-URL secrets gate R2 blobs; codegen emits into the user's repo.
   field names must be rejected or quoted — else code injection into `_generated/`.
 - Destructive CLI ops must be gated: `reset` and `migrate --prod` require
   `--yes`/TTY; `init` rejects unsafe `--source` without `--allow-unsafe-source`;
-  the Vite dashboard plugin must refuse to serve off-loopback.
+  the Vite studio plugin must refuse to serve off-loopback.
 
 ## Known false-positives
 
 - `apps/` examples, `templates/`, and `.vis/templates/cirrus-*.ts` are
   scaffolding/fixtures — not production attack surface.
-- The Vite dashboard plugin and `cirrus dev` server are dev-only and
+- The Vite studio plugin and `cirrus dev` server are dev-only and
   loopback-bound; localhost binding there is intentional.
 - Admin export accepting `?token=` is deliberate (DO subrequests can't set
   the `Authorization` header), not a token-in-URL leak.

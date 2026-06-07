@@ -42,7 +42,7 @@ const buildExec = (database: D1DatabaseLike): D1Exec => {
 };
 
 /**
- * Introspect `.global()` (D1-backed) tables so the dashboard's global data
+ * Introspect `.global()` (D1-backed) tables so the studio's global data
  * browser can list and page them.
  */
 const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
@@ -179,7 +179,7 @@ const buildAuth = (env: Env): CirrusAuth => {
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         // When set, enables the admin-gated export/import and scheduled-job
-        // endpoints the @cirrus/dashboard panels call.
+        // endpoints the @cirrus/studio panels call.
         adminToken: env.CIRRUS_ADMIN_TOKEN,
         // Dispatch better-auth's `/api/auth/*` routes INSIDE the worker (rather
         // than ahead of it) so the runtime instruments auth attempts/failures
@@ -188,20 +188,20 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // The default `authBasePath` (`/api/auth`) matches `handleAuthRequest`,
         // so it's omitted.
         authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
-        // Exposes /_cirrus/admin/auth/* so the dashboard can browse users/sessions.
+        // Exposes /_cirrus/admin/auth/* so the studio can browse users/sessions.
         authIntrospector: env.DB ? authIntrospector(env.DB as D1DatabaseLike) : undefined,
         // Code-first crons: the worker's `scheduled()` entry dispatches every job
         // declared in `cirrus/crons.ts` (compiled into the generated CIRRUS_CRONS
         // map) on its firing trigger. Empty until a `crons.ts` is added.
         cronJobs: CIRRUS_CRONS,
         d1: env.DB,
-        // Exposes /_cirrus/admin/functions so the dashboard's runner can
+        // Exposes /_cirrus/admin/functions so the studio's runner can
         // auto-discover queries/mutations/actions. The generated registry's
         // `kind` union also carries `"stream"`, which the discovery endpoint
         // (queries/mutations/actions only) structurally ignores — narrow to the
         // registry view the runtime reads.
         functions: CIRRUS_FUNCTIONS as unknown as FunctionRegistryLike,
-        // Exposes /_cirrus/admin/global/* so the dashboard can browse `.global()`
+        // Exposes /_cirrus/admin/global/* so the studio can browse `.global()`
         // (D1-backed) tables.
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
         resolveIdentity: async (request) => {
@@ -216,10 +216,10 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // The runtime's route map can stay empty: better-auth routes are
         // dispatched inside the worker via the `authHandler` option above.
         routes: {},
-        // Exposes /_cirrus/admin/scheduled so the dashboard can list/cancel jobs.
+        // Exposes /_cirrus/admin/scheduled so the studio can list/cancel jobs.
         schedulerDO: env.SCHEDULER,
         shardDO: env.SHARD,
-        // Exposes /_cirrus/admin/storage so the dashboard's file browser can
+        // Exposes /_cirrus/admin/storage so the studio's file browser can
         // page through R2 objects. Omitted when no bucket is bound.
         storageList: env.FILES ? createStorage({ bucket: env.FILES }).list : undefined,
     });

@@ -69,7 +69,7 @@ with `.global()` are skipped: those live in D1 via `@cirrus/d1`.
 ## Logging
 
 `ShardDO` keeps a small in-memory `LogBuffer` — a bounded ring of recent log
-lines that powers the dashboard's live log panel and the `getLogs` admin op. It
+lines that powers the studio's live log panel and the `getLogs` admin op. It
 is a per-instance "recent activity" readout: it resets on hibernation/restart
 and is **not** a durable log store or a shipping transport.
 
