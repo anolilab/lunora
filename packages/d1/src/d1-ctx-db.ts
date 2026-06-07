@@ -91,8 +91,11 @@ interface D1ContextDatabaseOptions {
     /**
      * Opt into change-data-capture: when `true`, every committed write appends a
      * post-image to the `__cdc_log` table (created lazily alongside the other
-     * companion tables). Backs streaming export and replay-PITR for global
-     * tables. Leave undefined for zero-cost legacy behaviour.
+     * companion tables). Backs CDC streaming export for `.global()` tables — the
+     * log is for export/CDC consumers, NOT point-in-time recovery: D1's PITR is
+     * the platform's own Time Travel (`wrangler d1 time-travel restore`), an
+     * atomic restore, not a changelog replay. Leave undefined for zero-cost
+     * legacy behaviour.
      */
     cdc?: boolean;
     clock?: () => number;
@@ -120,7 +123,6 @@ const throwingScheduler: SchedulerLike = {
         throw new Error("ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to createD1CtxDb().");
     },
 };
-
 
 /**
  * Closed allowlist mapping each reducer `op` to the literal SQL function it may
@@ -1146,7 +1148,7 @@ const runD1SearchMigrations = async (exec: D1Exec, schema: SchemaLike): Promise<
     }
 };
 
-/** Reserved append-only changelog table backing CDC streaming export and replay-PITR (global tables). */
+/** Reserved append-only changelog table backing CDC streaming export for global tables (CDC consumers only — D1 point-in-time recovery is the platform's Time Travel, not a changelog replay). */
 const CDC_LOG_TABLE = "__cdc_log";
 
 /** One change-data-capture entry: a committed mutation, in monotonic `seq` order. Mirrors the DO twin. */
