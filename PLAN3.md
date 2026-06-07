@@ -15,6 +15,11 @@
 > **Refreshed 2026-06-07.** Since first writing: backups/PITR + a **Time Travel** panel and
 > a read-only **Settings** panel shipped (Tier 4 + Tier 3.2 below now ✅), per-function
 > metrics moved to durable SQLite, and storage gained native S3-presigned + R2 multipart.
+>
+> **Update 2026-06-07 (Tier 1 keystone landed).** The three differentiator items **1.1**
+> (structured correlated request log — the keystone), **1.2** (causal full-scan / missing-index
+> attribution), and **2.2** (writer-routed bulk ops) shipped together on
+> `feat/plan3-observability`. Only **1.3 Files→schema join** remains in Tier 1.
 
 ## Thesis
 
@@ -54,12 +59,20 @@ buckets** (`packages/do/src/function-metrics.ts` — `__cirrus_metrics` /
 
 ## Tier 1 — Differentiators (beat CF). Build in order.
 
-### 1.1 Structured correlated request log `[the keystone]`
+### 1.1 Structured correlated request log `[the keystone]` — ✅ shipped
 
-**Today.** `Logs` is a 500-entry in-memory RPC-error buffer that resets on hibernation
-(`packages/do/src/log-buffer.ts`). Strictly worse than CF Workers Logs.
+**Shipped.** A durable per-request log (`packages/do/src/request-log.ts` →
+`__cirrus_reqlog__`, mirroring the audit-log append/trim/read pattern) is written once
+per `/rpc` dispatch on both success and error paths, carrying function path, shard key,
+acting `userId`/identity, **type-tag-redacted** args, outcome + duration, tables written
+(always) / tables read + cache-hit (cached-query paths), served by the `getRequestLog`
+admin RPC with server-side correlated filters (function-path prefix, userId, shard,
+outcome, table-touched). The Logs panel gained a **Requests** view (durable, filtered)
+alongside the kept **Errors** view (in-memory buffer) and a CF-Observability deep-link.
+_Deferred:_ `subscriptionsReRun` is recorded as `0` (the refresh runs off-path via
+`waitUntil`, so no count is available synchronously); the column exists for a later fill-in.
 
-**Target.** A durable, per-request **structured** log that CF cannot produce: each entry
+**Original target.** A durable, per-request **structured** log that CF cannot produce: each entry
 carries the cirrus function path, shard key, acting `userId`/identity, redacted args,
 outcome + execution time, **tables read/written** (from the dependency tracker),
 **cache hit/miss**, and **subscriptions re-run**. Client panel filters and correlates on
@@ -81,12 +94,17 @@ already-implemented `analyticsEngineSink` (audit #3).
 **Why #1.** It's the single clearest place Cirrus leaves the CF dashboard behind, and
 every hook already exists.
 
-### 1.2 Causal metrics & insights attribution `[matrix: Insights/Metrics]`
+### 1.2 Causal metrics & insights attribution `[matrix: Insights/Metrics]` — ✅ shipped
 
-**Today.** Insights detect slow functions / error spikes / cache issues from
-`getFunctionStats` + `getMetrics`, but as independent signals.
+**Shipped.** Full-scan events (`SCAN_DEP` from the dependency tracker) are aggregated per
+function and per `(function, table)` into durable metrics (a `scans` column on
+`__cirrus_metrics` + a new `__cirrus_metrics_scans` table), threaded from the dispatch
+site through `recordFunctionCall` and surfaced additively on `getFunctionStats`. Insights
+gained a **`missing-index`** kind: a slow function with scan attribution now renders the
+causal chain ("slowest call full-scanned `<tables>` with no index") with an **"add index"
+deep-link** that navigates to the Schema tab pre-expanded on the offending table.
 
-**Target.** **Link** them: "`feed:list` is slow _because_ it full-scanned `posts`
+**Original target.** **Link** them: "`feed:list` is slow _because_ it full-scanned `posts`
 (missing index)." Aggregate `SCAN_DEP` per function/table, expose a "full scans by
 function / tables read without an index" signal, and render the causal chain in Insights
 (→ jump to the Schema/Indexes tab to add the index).
@@ -120,11 +138,15 @@ The only major copy-safe lift available.
   `useDataBrowser` hook into its own module before further growth.
 - Optional: surface column types so the filter builder offers type-correct operators.
 
-### 2.2 Writer-routed bulk operations
+### 2.2 Writer-routed bulk operations — ✅ shipped
 
-- Replace the client-side N+1 delete loop with a server `deleteRows`/`clearTable` admin op
-  routed through the schema-aware writer (keeps FTS/aggregate/rank in sync). Bounded,
-  filter-aware. Cleaner and faster than the current loop.
+- **Shipped.** Server `deleteRows` / `clearTable` admin ops route through the schema-aware
+  writer (FTS/aggregate/rank shadow tables + `onDelete` cascades stay in sync), reusing
+  `readTablePage`'s filter/search predicate via a shared `selectMatchingIds`. Bounded by a
+  hard `SHARD_BULK_DELETE_CAP = 500` per call returning `{ deleted, hasMore }`; the data
+  browser now loops the single server call (capped) instead of issuing one `writeRow` per
+  row, and gained a "clear table" affordance. The generated `ShardDO` emits a
+  `deleteRowThroughWriter` override so codegen consumers get the writer path.
 
 ### 2.3 Health → app SLO + time-series
 
@@ -183,15 +205,17 @@ dashboard links out; it never half-reimplements them.
 ## Recommended sequencing
 
 ```
-Tier 1 (differentiators):  1.1 request log → 1.2 causal attribution → 1.3 Files (R2-Explorer)
-Tier 2 (depth):            2.1 data-browser decomposition + staged edits · 2.2 bulk ops · 2.3 SLO
+Tier 1 (differentiators):  1.1 request log ✅ → 1.2 causal attribution ✅ → 1.3 Files (R2-Explorer)
+Tier 2 (depth):            2.1 data-browser decomposition + staged edits · 2.2 bulk ops ✅ · 2.3 SLO
 Tier 3 (hand-off):         3.1 CF deep-links (quick) · 3.2 Settings ✅ · 3.3 Logpush emit
 Tier 4:                    backups ✅ · integrations · TanStack decision
 ```
 
-**1.1 (structured correlated request log) is the keystone** — it's the clearest "better
-than Cloudflare" win and the hooks already exist. Tier 3.1 (deep-links) is the cheapest
-high-clarity change and can land anytime.
+**1.1 (structured correlated request log) — the keystone — is now shipped**, along with
+1.2 (causal attribution) and 2.2 (bulk ops). Next up: **1.3 Files→schema join**
+(R2-Explorer lift, the last Tier-1 item) and the cheap **3.1 CF deep-links**, which can
+land anytime. Tier 3.3 (Logpush emit) now has a natural home — fold it into the 1.1
+request-log write site.
 
 ## Open questions
 
