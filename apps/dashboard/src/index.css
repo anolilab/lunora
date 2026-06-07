@@ -18,5 +18,5 @@
 /* This dev app upgrades the system stack to Geist (the library CSS stays
    asset-free). Overrides the --font-sans imported from theme.css. */
 @theme inline {
-    --font-sans: 'Geist Variable', sans-serif;
+    --font-sans: "Geist Variable", sans-serif;
 }

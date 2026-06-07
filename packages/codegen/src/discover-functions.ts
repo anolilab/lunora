@@ -44,8 +44,7 @@ interface DiscoveredFunction {
  */
 const GENERATED_SERVER_RE = /(?:^|\/)_generated\/server(?:\.js)?$/u;
 
-const isCirrusSurfaceModule = (moduleSpecifier: string): boolean =>
-    moduleSpecifier === "@cirrus/server" || GENERATED_SERVER_RE.test(moduleSpecifier);
+const isCirrusSurfaceModule = (moduleSpecifier: string): boolean => moduleSpecifier === "@cirrus/server" || GENERATED_SERVER_RE.test(moduleSpecifier);
 
 /**
  * Resolve a callee identifier through its import declaration, returning the

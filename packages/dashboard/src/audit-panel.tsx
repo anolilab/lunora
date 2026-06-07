@@ -109,7 +109,9 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
 
         return entries.filter(
             (entry) =>
-                entry.op.toLowerCase().includes(needle) || (entry.table ?? "").toLowerCase().includes(needle) || (entry.id ?? "").toLowerCase().includes(needle),
+                entry.op.toLowerCase().includes(needle) ||
+                (entry.table ?? "").toLowerCase().includes(needle) ||
+                (entry.id ?? "").toLowerCase().includes(needle),
         );
     }, [entries, search]);
 

@@ -604,7 +604,9 @@ describe("run-codegen", () => {
             expect(output).not.toContain("const callRegistered");
 
             // Nothing references Doc/Id, so the facade import stays minimal (ORM types are always pulled in).
-            expect(output).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";');
+            expect(output).toContain(
+                'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";',
+            );
         });
     });
 

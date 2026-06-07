@@ -857,11 +857,7 @@ const discoverSchema = (project: Project, schemaPath: string): SchemaIR => {
 
     // Flatten inline Shape A indexes (hoisted with their owning table) plus Shape B
     // plus extension-contributed standalone vector indexes.
-    const vectorIndexes: VectorIndexIR[] = [
-        ...tables.flatMap((table) => table.vectorIndexes),
-        ...standaloneVectorIndexes,
-        ...extensionStandaloneVectorIndexes,
-    ];
+    const vectorIndexes: VectorIndexIR[] = [...tables.flatMap((table) => table.vectorIndexes), ...standaloneVectorIndexes, ...extensionStandaloneVectorIndexes];
 
     return { tables, vectorIndexes };
 };

@@ -100,7 +100,10 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
 
     // Compile-time `kind` is phantom on FunctionReference, so the server can't
     // report it — annotate each row from the codegen descriptors by path.
-    const kindByPath = useMemo<Map<string, FunctionKind>>(() => new Map((functions ?? []).map((descriptor) => [descriptor.path, descriptor.kind])), [functions]);
+    const kindByPath = useMemo<Map<string, FunctionKind>>(
+        () => new Map((functions ?? []).map((descriptor) => [descriptor.path, descriptor.kind])),
+        [functions],
+    );
 
     const applyResult = useCallback(
         (result: FunctionStatsResult): void => {
@@ -235,10 +238,18 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
                             return (
                                 <TableRow data-testid={`fs-row-${stat.path}`} key={stat.path}>
                                     <TableCell className="font-medium">{stat.path}</TableCell>
-                                    <TableCell>{kind === undefined ? <span className="text-muted-foreground">—</span> : <Badge variant={KIND_VARIANT[kind]}>{kind}</Badge>}</TableCell>
+                                    <TableCell>
+                                        {kind === undefined ? (
+                                            <span className="text-muted-foreground">—</span>
+                                        ) : (
+                                            <Badge variant={KIND_VARIANT[kind]}>{kind}</Badge>
+                                        )}
+                                    </TableCell>
                                     <TableCell className="text-right tabular-nums">{stat.calls}</TableCell>
                                     <TableCell className={`text-right tabular-nums${stat.errors > 0 ? " text-destructive" : ""}`}>{errorCell(stat)}</TableCell>
-                                    <TableCell className="text-right tabular-nums">{stat.calls === 0 ? "—" : formatMs(stat.totalDurationMs / stat.calls)}</TableCell>
+                                    <TableCell className="text-right tabular-nums">
+                                        {stat.calls === 0 ? "—" : formatMs(stat.totalDurationMs / stat.calls)}
+                                    </TableCell>
                                     <TableCell className="text-right tabular-nums">{stat.calls === 0 ? "—" : formatMs(stat.maxDurationMs)}</TableCell>
                                     <TableCell className="text-muted-foreground">{formatTimestamp(stat.lastCalledAt, "—")}</TableCell>
                                     <TableCell className="max-w-[24ch] truncate text-destructive" title={stat.lastErrorMessage ?? undefined}>

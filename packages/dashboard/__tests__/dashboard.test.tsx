@@ -38,7 +38,7 @@ describe("dashboard", () => {
         // after mount), so await each tab rather than querying synchronously.
         for (const tab of ["data", "globals", "schema", "functions", "migrations", "export", "files", "schedule", "users", "metrics", "logs", "settings"]) {
             // eslint-disable-next-line no-await-in-loop -- after the first resolves the rest are already present; awaiting each keeps the assertion shape simple.
-            expect(await screen.findByTestId(`dash-tab-${tab}`)).toBeDefined();
+            await expect(screen.findByTestId(`dash-tab-${tab}`)).resolves.toBeDefined();
         }
     });
 

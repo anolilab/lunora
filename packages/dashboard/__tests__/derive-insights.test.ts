@@ -3,27 +3,31 @@ import { describe, expect, it } from "vitest";
 import type { FunctionCallStat, ShardMetrics } from "../src/admin.js";
 import { deriveInsights } from "../src/derive-insights.js";
 
-const metrics = (cache: ShardMetrics["cache"]): ShardMetrics => {return {
-    cache,
-    databaseSize: 1024,
-    errors: 0,
-    requests: 100,
-    shard: "__root__",
-    sinceMs: 1_700_000_000_000,
-    uptimeMs: 1000,
-}};
+const metrics = (cache: ShardMetrics["cache"]): ShardMetrics => {
+    return {
+        cache,
+        databaseSize: 1024,
+        errors: 0,
+        requests: 100,
+        shard: "__root__",
+        sinceMs: 1_700_000_000_000,
+        uptimeMs: 1000,
+    };
+};
 
-const fn = (overrides: Partial<FunctionCallStat>): FunctionCallStat => {return {
-    calls: 1,
-    errors: 0,
-    lastCalledAt: 1000,
-    lastErrorAt: null,
-    lastErrorMessage: null,
-    maxDurationMs: 0,
-    path: "messages:list",
-    totalDurationMs: 0,
-    ...overrides,
-}};
+const fn = (overrides: Partial<FunctionCallStat>): FunctionCallStat => {
+    return {
+        calls: 1,
+        errors: 0,
+        lastCalledAt: 1000,
+        lastErrorAt: null,
+        lastErrorMessage: null,
+        maxDurationMs: 0,
+        path: "messages:list",
+        totalDurationMs: 0,
+        ...overrides,
+    };
+};
 
 describe(deriveInsights, () => {
     it("returns nothing for healthy snapshots", () => {

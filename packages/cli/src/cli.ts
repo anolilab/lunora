@@ -48,8 +48,7 @@ const isTemplate = (value: unknown): value is Template => value === "vite" || va
 const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
     value === "list" || value === "get" || value === "set" || value === "unset" || value === "push";
 
-const isBackupSubcommand = (value: unknown): value is BackupSubcommand =>
-    value === "create" || value === "list" || value === "pitr" || value === "restore";
+const isBackupSubcommand = (value: unknown): value is BackupSubcommand => value === "create" || value === "list" || value === "pitr" || value === "restore";
 
 const toStringOrUndefined = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 

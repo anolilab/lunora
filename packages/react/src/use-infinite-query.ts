@@ -29,11 +29,7 @@ const useInfiniteQuery = <F extends FunctionReference>(
     options: UseInfiniteQueryOptions,
 ): UseInfiniteQueryResult<PageItemOf<F>> => {
     const { initialNumItems } = options;
-    const { loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(
-        function_,
-        args === "skip" ? "skip" : args,
-        options,
-    );
+    const { loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(function_, args === "skip" ? "skip" : args, options);
 
     const skipped = args === "skip";
 

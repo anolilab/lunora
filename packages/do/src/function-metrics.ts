@@ -212,8 +212,8 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
         total_duration_ms: number;
     }>(sql, `SELECT * FROM "${FUNCTION_METRICS_TABLE}" ORDER BY last_called_at DESC`).toArray();
 
-    return rows.map(
-        (row): FunctionCallStat => {return {
+    return rows.map((row): FunctionCallStat => {
+        return {
             calls: row.calls,
             errors: row.errors,
             lastCalledAt: row.last_called_at,
@@ -222,8 +222,8 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
             maxDurationMs: row.max_duration_ms,
             path: row.path,
             totalDurationMs: row.total_duration_ms,
-        }},
-    );
+        };
+    });
 };
 
 /**
@@ -246,7 +246,9 @@ const readFunctionMetricBuckets = (sql: SqlExec, path?: string): (FunctionMetric
                   path,
               ).toArray();
 
-    return rows.map((row) => {return { bucketMs: row.bucket_ms, calls: row.calls, errors: row.errors, path: row.path }});
+    return rows.map((row) => {
+        return { bucketMs: row.bucket_ms, calls: row.calls, errors: row.errors, path: row.path };
+    });
 };
 
 /**

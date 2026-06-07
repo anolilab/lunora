@@ -19,7 +19,18 @@ const HEALTHY: ShardMetrics = {
 };
 
 const SLOW_STATS: FunctionStatsResult = {
-    functions: [{ calls: 3, errors: 0, lastCalledAt: 1000, lastErrorAt: null, lastErrorMessage: null, maxDurationMs: 4200, path: "reports:build", totalDurationMs: 9000 }],
+    functions: [
+        {
+            calls: 3,
+            errors: 0,
+            lastCalledAt: 1000,
+            lastErrorAt: null,
+            lastErrorMessage: null,
+            maxDurationMs: 4200,
+            path: "reports:build",
+            totalDurationMs: 9000,
+        },
+    ],
     sinceMs: 1_700_000_000_000,
 };
 

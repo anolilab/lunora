@@ -26,7 +26,7 @@ describe("dashboardApp", () => {
 
         // The shell renders inside the router's root route, which resolves its
         // first match a tick after mount — await it rather than querying sync.
-        expect(await screen.findByTestId("cirrus-dashboard")).toBeDefined();
+        await expect(screen.findByTestId("cirrus-dashboard")).resolves.toBeDefined();
     });
 
     it("shows the connection badge (idle without a live socket)", () => {

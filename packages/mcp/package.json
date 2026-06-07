@@ -1,8 +1,8 @@
 {
     "name": "@cirrus/mcp",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Model Context Protocol server exposing a Cirrus deployment to AI agents",
+    "license": "FSL-1.1-Apache-2.0",
     "bin": {
         "cirrus-mcp": "./dist/bin.mjs"
     },

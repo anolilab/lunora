@@ -783,7 +783,9 @@ const createFilterableClient = (): MockClientHooks => {
                 throw new Error(`unknown table: ${table}`);
             }
 
-            const matched = rows.filter((row) => filters.every((clause) => clause.operator !== "eq" || String((row as Record<string, unknown>)[clause.column]) === String(clause.value)));
+            const matched = rows.filter((row) =>
+                filters.every((clause) => clause.operator !== "eq" || String((row as Record<string, unknown>)[clause.column]) === String(clause.value)),
+            );
 
             return { columns: ["__id__", "status", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
         },

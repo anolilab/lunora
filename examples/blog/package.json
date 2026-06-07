@@ -1,8 +1,8 @@
 {
     "name": "@cirrus-example/blog",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "private": true,
+    "license": "FSL-1.1-Apache-2.0",
     "type": "module",
     "sideEffects": false,
     "scripts": {

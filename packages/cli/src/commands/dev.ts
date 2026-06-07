@@ -97,13 +97,21 @@ const pipeChildOutput = (child: ChildProcess, tag: string, logger: Logger): void
         }
     };
 
-    child.stdout?.on("data", (chunk: Buffer) => { onLine(chunk, "stdout"); });
-    child.stderr?.on("data", (chunk: Buffer) => { onLine(chunk, "stderr"); });
+    child.stdout?.on("data", (chunk: Buffer) => {
+        onLine(chunk, "stdout");
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+        onLine(chunk, "stderr");
+    });
 };
 
 /** Real worker spawner: runs the descriptor as a child and pipes its output through the logger. */
 const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
-    const child = nodeSpawn(descriptor.command, [...descriptor.args], { cwd: descriptor.cwd ?? process.cwd(), env: process.env, stdio: ["inherit", "pipe", "pipe"] });
+    const child = nodeSpawn(descriptor.command, [...descriptor.args], {
+        cwd: descriptor.cwd ?? process.cwd(),
+        env: process.env,
+        stdio: ["inherit", "pipe", "pipe"],
+    });
 
     pipeChildOutput(child, descriptor.tag, logger);
 
@@ -113,7 +121,9 @@ const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
                 logger.error(`[${descriptor.tag}] failed to start: ${error.message}`);
                 resolve(1);
             });
-            child.on("exit", (code) => { resolve(code ?? 0); });
+            child.on("exit", (code) => {
+                resolve(code ?? 0);
+            });
         }),
         kill: (signal) => {
             try {
@@ -177,7 +187,11 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         try {
             handles.dashboard = await (options.startDashboard ?? startDashboardServer)({
                 cwd,
-                logger: { warnOnce: (message) => { logger.warn(message); } },
+                logger: {
+                    warnOnce: (message) => {
+                        logger.warn(message);
+                    },
+                },
                 port: plan.dashboardPort,
                 workerOrigin: plan.workerOrigin,
             });
@@ -200,7 +214,9 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         if (sigintCount === 1) {
             logger.info("received SIGINT — shutting down (press Ctrl-C again to force-kill)");
             worker.kill("SIGTERM");
-            escalationTimer = setTimeout(() => { worker.kill("SIGKILL"); }, SIGINT_GRACE_MS);
+            escalationTimer = setTimeout(() => {
+                worker.kill("SIGKILL");
+            }, SIGINT_GRACE_MS);
             escalationTimer.unref();
         } else {
             worker.kill("SIGKILL");

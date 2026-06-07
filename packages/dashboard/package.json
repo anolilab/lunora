@@ -54,12 +54,12 @@
         "tailwind-merge": "catalog:ui"
     },
     "devDependencies": {
+        "@tailwindcss/cli": "catalog:vite",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
-        "@tailwindcss/cli": "catalog:vite",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
         "jsdom": "catalog:frontend",

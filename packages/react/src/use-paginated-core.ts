@@ -252,9 +252,13 @@ const usePaginatedCore = <T>(
             // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above.
             const initialFetch = queryClient.fetchQuery({
                 queryFn: () =>
-                    (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(desired.fn, entry.args, {
-                        shardKey: desired.shardKey,
-                    }),
+                    (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(
+                        desired.fn,
+                        entry.args,
+                        {
+                            shardKey: desired.shardKey,
+                        },
+                    ),
                 queryKey: entry.key,
                 staleTime: 0,
             });

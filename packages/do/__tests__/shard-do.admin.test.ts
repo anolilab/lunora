@@ -127,7 +127,9 @@ describe("shardDO admin introspection", () => {
         // The codegen subclass overrides `tableIndexes` from the schema; mimic it.
         class IndexedShard extends AdminShard {
             // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-            protected override tableIndexes(table: string): { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[] {
+            protected override tableIndexes(
+                table: string,
+            ): { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[] {
                 return table === "messages" ? [{ fields: ["author"], name: "by_author", type: "index", unique: true }] : [];
             }
         }

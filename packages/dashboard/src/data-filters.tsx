@@ -125,7 +125,14 @@ const DataFilters = ({
                             </option>
                         ))}
                     </select>
-                    <input aria-label="Filter value" data-index={index} data-testid="db-filter-value" onChange={changeValue} placeholder="value" value={filter.value} />
+                    <input
+                        aria-label="Filter value"
+                        data-index={index}
+                        data-testid="db-filter-value"
+                        onChange={changeValue}
+                        placeholder="value"
+                        value={filter.value}
+                    />
                     <button aria-label="Remove filter" data-index={index} data-testid="db-filter-remove" onClick={removeFilter} type="button">
                         ✕
                     </button>

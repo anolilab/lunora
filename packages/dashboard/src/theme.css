@@ -9,7 +9,6 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-
     --font-heading: var(--font-sans);
 
     --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -92,7 +91,6 @@
 }
 
 :root {
-
     --background: oklch(1 0 0);
 
     --foreground: oklch(0.141 0.005 285.823);
@@ -206,13 +204,13 @@
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
+    * {
+        @apply border-border outline-ring/50;
     }
-  body {
-    @apply bg-background text-foreground;
+    body {
+        @apply bg-background text-foreground;
     }
-  html {
-    @apply font-sans;
+    html {
+        @apply font-sans;
     }
 }

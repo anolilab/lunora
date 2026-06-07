@@ -38,11 +38,7 @@ const usePaginatedQuery = <F extends FunctionReference>(
     args: "skip" | PaginatedArgs<F>,
     options: UsePaginatedQueryOptions,
 ): UsePaginatedQueryResult<PageItemOf<F>> => {
-    const { loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(
-        function_,
-        args === "skip" ? "skip" : args,
-        options,
-    );
+    const { loadMore, pageResults, status } = usePaginatedCore<PageItemOf<F>>(function_, args === "skip" ? "skip" : args, options);
 
     const results: PageItemOf<F>[] = [];
 

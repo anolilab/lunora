@@ -45,11 +45,7 @@ describe("applyDelta", () => {
         const current = [row("a", { _creationTime: 10 }), row("c", { _creationTime: 30 })];
         const delta: MutationDelta = { key: "b", op: "insert", row: row("b", { _creationTime: 20 }), table: "messages" };
 
-        expect(applyDelta(current, delta)).toStrictEqual([
-            row("a", { _creationTime: 10 }),
-            row("b", { _creationTime: 20 }),
-            row("c", { _creationTime: 30 }),
-        ]);
+        expect(applyDelta(current, delta)).toStrictEqual([row("a", { _creationTime: 10 }), row("b", { _creationTime: 20 }), row("c", { _creationTime: 30 })]);
     });
 
     it("updates a matching row in place, preserving position", () => {

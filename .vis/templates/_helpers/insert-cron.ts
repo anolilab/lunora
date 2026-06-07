@@ -68,19 +68,17 @@ export const insertCronJob = (source: string, name: string): InsertCronResult =>
     // existing registration or the `cronJobs()` call, then add the new
     // registration immediately after it.
     const anchorCall = registrationCalls.at(-1) ?? cronJobsCall;
-    const anchorStatement = anchorCall.getFirstAncestorByKind(SyntaxKind.ExpressionStatement) ?? anchorCall.getFirstAncestorByKind(SyntaxKind.VariableStatement);
+    const anchorStatement =
+        anchorCall.getFirstAncestorByKind(SyntaxKind.ExpressionStatement) ?? anchorCall.getFirstAncestorByKind(SyntaxKind.VariableStatement);
 
     if (!anchorStatement) {
         return { ok: false, reason: "no-cron-jobs" };
     }
 
     const index = anchorStatement.getChildIndex();
-    const escapedName = name.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"");
+    const escapedName = name.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 
-    sourceFile.insertStatements(
-        index + 1,
-        `crons.interval("${escapedName}", { minutes: 60 }, internal.example.run, {});`,
-    );
+    sourceFile.insertStatements(index + 1, `crons.interval("${escapedName}", { minutes: 60 }, internal.example.run, {});`);
 
     return { ok: true, text: sourceFile.getFullText() };
 };

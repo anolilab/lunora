@@ -33,7 +33,9 @@ describe("toFilterClauses", () => {
     it("keeps the value a string for `contains`, even when numeric", () => {
         expect.assertions(1);
 
-        expect(toFilterClauses([{ column: "code", operator: "contains", value: "100" }])).toStrictEqual([{ column: "code", operator: "contains", value: "100" }]);
+        expect(toFilterClauses([{ column: "code", operator: "contains", value: "100" }])).toStrictEqual([
+            { column: "code", operator: "contains", value: "100" },
+        ]);
     });
 });
 

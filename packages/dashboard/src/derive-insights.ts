@@ -60,7 +60,11 @@ const SEVERITY_ORDER: Record<InsightSeverity, number> = { error: 0, info: 2, war
  * function whose slowest call crosses the threshold — likely a full scan or
  * missing index); high-error-rate (a function failing over a meaningful count).
  */
-const deriveInsights = (metrics: ShardMetrics | null, functions: FunctionCallStat[] | null, thresholds: InsightThresholds = DEFAULT_INSIGHT_THRESHOLDS): Insight[] => {
+const deriveInsights = (
+    metrics: ShardMetrics | null,
+    functions: FunctionCallStat[] | null,
+    thresholds: InsightThresholds = DEFAULT_INSIGHT_THRESHOLDS,
+): Insight[] => {
     const insights: Insight[] = [];
 
     if (metrics?.cache) {

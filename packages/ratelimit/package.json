@@ -1,8 +1,8 @@
 {
     "name": "@cirrus/ratelimit",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware",
+    "license": "FSL-1.1-Apache-2.0",
     "files": [
         "dist",
         "README.md",

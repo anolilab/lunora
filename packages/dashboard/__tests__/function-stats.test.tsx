@@ -14,7 +14,16 @@ const STATS: FunctionStatsResult = {
         // `messages:list` ran more often and more recently; `messages:send` is
         // slower per call and is the only one to have errored.
         { calls: 5, errors: 0, lastCalledAt: 2000, lastErrorAt: null, lastErrorMessage: null, maxDurationMs: 120, path: "messages:list", totalDurationMs: 250 },
-        { calls: 2, errors: 1, lastCalledAt: 1000, lastErrorAt: 1000, lastErrorMessage: "kaboom", maxDurationMs: 3000, path: "messages:send", totalDurationMs: 4000 },
+        {
+            calls: 2,
+            errors: 1,
+            lastCalledAt: 1000,
+            lastErrorAt: 1000,
+            lastErrorMessage: "kaboom",
+            maxDurationMs: 3000,
+            path: "messages:send",
+            totalDurationMs: 4000,
+        },
     ],
     sinceMs: 1_700_000_000_000,
 };

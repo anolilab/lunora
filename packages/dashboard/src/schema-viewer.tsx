@@ -153,13 +153,17 @@ export const SchemaViewer = ({ initialShardKey }: SchemaViewerProps): ReactEleme
             ]);
 
             if (page.status === "fulfilled") {
-                setColumns((previous) => {return { ...previous, [cacheKey]: page.value.columns }});
+                setColumns((previous) => {
+                    return { ...previous, [cacheKey]: page.value.columns };
+                });
             } else {
                 setError(errorMessage(page.reason));
             }
 
             if (indexResult.status === "fulfilled") {
-                setIndexes((previous) => {return { ...previous, [cacheKey]: indexResult.value.indexes }});
+                setIndexes((previous) => {
+                    return { ...previous, [cacheKey]: indexResult.value.indexes };
+                });
             }
         },
         [client, columns, expanded, shardKey],

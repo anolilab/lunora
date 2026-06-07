@@ -709,7 +709,13 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     // still pending — and only runs once a page has actually loaded.
     useLiveAdmin(
         ADMIN_FUNCTIONS.readTablePage,
-        { filters: toFilterClauses(loaded?.filters ?? []), limit: pageSize, offset: loaded?.offset ?? 0, search: loaded?.search ?? "", table: loaded?.table ?? "" },
+        {
+            filters: toFilterClauses(loaded?.filters ?? []),
+            limit: pageSize,
+            offset: loaded?.offset ?? 0,
+            search: loaded?.search ?? "",
+            table: loaded?.table ?? "",
+        },
         loaded?.shard ?? "",
         (result) => {
             setPageError(null);

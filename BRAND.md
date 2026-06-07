@@ -24,12 +24,12 @@ All in [`apps/docs/public/`](./apps/docs/public/):
 
 ## Palette
 
-| Token       | Hex       | Usage                                                               |
-| ----------- | --------- | ------------------------------------------------------------------- |
-| Ink          | `#0B0F19` | Default foreground. Mark, wordmark, body text on light surfaces.       |
-| Paper        | `#FFFFFF` | Default background.                                                    |
-| Brand yellow | `#FCC419` | The accent. The dot on the `i`, primary buttons, links, focus rings.   |
-| Mute         | `#A0A0A0` | Secondary text on dark backgrounds (taglines, captions).               |
+| Token        | Hex       | Usage                                                                |
+| ------------ | --------- | -------------------------------------------------------------------- |
+| Ink          | `#0B0F19` | Default foreground. Mark, wordmark, body text on light surfaces.     |
+| Paper        | `#FFFFFF` | Default background.                                                  |
+| Brand yellow | `#FCC419` | The accent. The dot on the `i`, primary buttons, links, focus rings. |
+| Mute         | `#A0A0A0` | Secondary text on dark backgrounds (taglines, captions).             |
 
 **Hard rule:** _never_ tint the mark Cloudflare orange (`#F38020`) or any orange. Cirrus runs on Cloudflare but is not a Cloudflare product, and orange immediately confuses that. The brand accent is a clear lemon-gold yellow (`#FCC419`) — keep it on the yellow side of the line, never let it drift toward amber/orange.
 
@@ -52,16 +52,16 @@ variant. A self-contained reference page that exercises the whole language
 **[`brand/cirrus-brand.html`](./brand/cirrus-brand.html)** — open it in a browser
 when designing the cirrus page.
 
-| Role               | Dark (primary) | Light (paper) | Notes                                     |
-| ------------------ | -------------- | ------------- | ----------------------------------------- |
-| App background     | `#121212`      | `#FBFBFB`     | Content area.                             |
-| Surface (chrome)   | `#1C1C1C`      | `#FFFFFF`     | Top bar, sidebar, cards.                  |
-| Border             | `#2E2E2E`      | `#E6E6E6`     | Strong variant `#3E3E3E` / `#D4D4D4`.     |
-| Foreground         | `#EDEDED`      | `#171717`     | Muted `#A0A0A0` / `#5D5D5D`.              |
-| Accent (fill)      | `#FCC419`      | `#FCC419`     | Brand yellow — near-black text on fill.   |
-| Accent (text/link) | `#FFD43B`      | `#8A6100`     | Brighter on dark; dark gold on paper.     |
-| Success            | `#3ECF8E`      | `#1A9D6A`     | Live/connected — the repurposed green.    |
-| Danger             | `#F25C5C`      | `#D92D20`     | Destructive confirms.                     |
+| Role               | Dark (primary) | Light (paper) | Notes                                   |
+| ------------------ | -------------- | ------------- | --------------------------------------- |
+| App background     | `#121212`      | `#FBFBFB`     | Content area.                           |
+| Surface (chrome)   | `#1C1C1C`      | `#FFFFFF`     | Top bar, sidebar, cards.                |
+| Border             | `#2E2E2E`      | `#E6E6E6`     | Strong variant `#3E3E3E` / `#D4D4D4`.   |
+| Foreground         | `#EDEDED`      | `#171717`     | Muted `#A0A0A0` / `#5D5D5D`.            |
+| Accent (fill)      | `#FCC419`      | `#FCC419`     | Brand yellow — near-black text on fill. |
+| Accent (text/link) | `#FFD43B`      | `#8A6100`     | Brighter on dark; dark gold on paper.   |
+| Success            | `#3ECF8E`      | `#1A9D6A`     | Live/connected — the repurposed green.  |
+| Danger             | `#F25C5C`      | `#D92D20`     | Destructive confirms.                   |
 
 **Type in product:** Inter Tight for display/body (tight tracking, weight 600 on
 headings), **JetBrains Mono** for eyebrows, code, IDs and every number. The

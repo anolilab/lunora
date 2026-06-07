@@ -99,11 +99,7 @@ describe("connector sync endpoint", () => {
 
         const { worker } = createSyncWorker({ logs: { c1: [] } });
 
-        const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/connector/sync", { body: "{}", method: "POST" }),
-            {},
-            fakeContext,
-        );
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/connector/sync", { body: "{}", method: "POST" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
 
@@ -214,7 +210,9 @@ describe("connector sync endpoint", () => {
             queryCoordinator: {
                 fanOut: vi.fn<() => never>(),
                 orchestrateApplyCdc: vi.fn<() => never>(),
-                orchestrateCdcSync: async () => {return { failed: 0, ok: 0, shards: [] }},
+                orchestrateCdcSync: async () => {
+                    return { failed: 0, ok: 0, shards: [] };
+                },
                 orchestrateExport: vi.fn<() => never>(),
                 orchestrateImport: vi.fn<() => never>(),
                 orchestrateMigration: vi.fn<() => never>(),

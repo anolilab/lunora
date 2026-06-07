@@ -850,7 +850,9 @@ describe("shardDO subscription re-execution", () => {
 });
 
 describe("subscriptionListDeltas", () => {
-    const row = (id: string, rest: Record<string, unknown> = {}): Record<string, unknown> => {return { _creationTime: 1, _id: id, ...rest }};
+    const row = (id: string, rest: Record<string, unknown> = {}): Record<string, unknown> => {
+        return { _creationTime: 1, _id: id, ...rest };
+    };
 
     it("emits an insert delta for a row present only in the new result", () => {
         expect.assertions(1);
@@ -948,7 +950,9 @@ describe("shardDO subscription delta push", () => {
         state = createFakeState();
     });
 
-    const idRow = (id: string, rest: Record<string, unknown> = {}): Record<string, unknown> => {return { _creationTime: 1, _id: id, ...rest }};
+    const idRow = (id: string, rest: Record<string, unknown> = {}): Record<string, unknown> => {
+        return { _creationTime: 1, _id: id, ...rest };
+    };
 
     const subscribeMessages = (shard: ReexecShard, ws: FakeWebSocket): Promise<void> =>
         shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "messages:list" }, type: "subscribe" });
