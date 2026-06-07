@@ -240,6 +240,13 @@ const readRowId = (row: unknown): string | undefined => {
  * Index an array of rows by `_id`, preserving insertion order. Returns
  * `undefined` the moment any element lacks a string `_id` (the diff can't key
  * such a list) — the caller then falls back to a full snapshot.
+ *
+ * Also bails on a duplicate `_id`: the delta protocol keys rows by `_id`, so a
+ * list carrying the same `_id` twice (e.g. a relational join that fans a parent
+ * out across children) cannot be expressed as deltas — the client would merge
+ * the collisions down to a single row and silently lose the duplicates, leaving
+ * its view shorter than the snapshot path. Returning `undefined` here forces the
+ * full-snapshot fallback so both paths agree.
  */
 const indexRowsById = (rows: unknown[]): undefined | { byId: Map<string, Record<string, unknown>>; order: string[] } => {
     const byId = new Map<string, Record<string, unknown>>();
@@ -248,7 +255,7 @@ const indexRowsById = (rows: unknown[]): undefined | { byId: Map<string, Record<
     for (const row of rows) {
         const id = readRowId(row);
 
-        if (id === undefined) {
+        if (id === undefined || byId.has(id)) {
             return undefined;
         }
 

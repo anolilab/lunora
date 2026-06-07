@@ -913,6 +913,17 @@ describe("subscriptionListDeltas", () => {
         expect(subscriptionListDeltas(JSON.stringify([row("a")]), [row("a"), { x: 2 }], "messages")).toBeUndefined();
     });
 
+    it("returns the snapshot sentinel when a list carries a duplicate _id (delta keying would lose rows)", () => {
+        expect.assertions(2);
+
+        // A relational join can fan one parent out across N children, producing
+        // the same `_id` twice. The delta protocol keys by `_id`, so the client
+        // would collapse the collisions and end up shorter than the snapshot —
+        // both the new and the previous side must force the full-snapshot path.
+        expect(subscriptionListDeltas(JSON.stringify([row("a")]), [row("a"), row("a", { text: "dup" })], "messages")).toBeUndefined();
+        expect(subscriptionListDeltas(JSON.stringify([row("a"), row("a")]), [row("a")], "messages")).toBeUndefined();
+    });
+
     it("returns the snapshot sentinel when surviving rows were reordered (client can't reorder in place)", () => {
         expect.assertions(1);
 
