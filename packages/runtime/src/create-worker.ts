@@ -658,6 +658,7 @@ const IMPORT_PATH = "/_cirrus/admin/import";
 const SYNC_PATH = "/_cirrus/admin/sync";
 const CONNECTOR_SYNC_PATH = "/_cirrus/admin/connector/sync";
 const APPLY_PATH = "/_cirrus/admin/apply";
+const RANK_PATH = "/_cirrus/admin/rank";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
@@ -891,6 +892,68 @@ const parseMigrateRequest = async (request: Request): Promise<MigrateRequest> =>
     return {
         args: (candidate.args ?? {}) as Record<string, unknown>,
         functionPath: candidate.functionPath,
+        table: candidate.table,
+    };
+};
+
+interface RankRequestBody {
+    index: string;
+    partitionKey: string;
+    rowId: string;
+    sortValues: ReadonlyArray<unknown>;
+    table: string;
+}
+
+/**
+ * Parse and validate a `POST /_cirrus/admin/rank` body. The caller supplies the
+ * EXPLICIT key tuple — `table`, `index`, `partitionKey`, `sortValues`, `rowId`
+ * — already built off the row doc via `@cirrus/do`'s `rankKeyFromDoc(index,
+ * doc)` (the worker carries no schema, so it can't derive the tuple itself).
+ * `partitionKey` may legitimately be `""` (a rankIndex with no `partitionBy`),
+ * so only its type is enforced. Mirrors the shard's own `parseRankBeforeArgs`.
+ */
+const parseRankRequest = async (request: Request): Promise<RankRequestBody> => {
+    let body: unknown;
+
+    try {
+        const text = await readBodyTextWithLimit(request);
+
+        body = text === "" ? {} : JSON.parse(text);
+    } catch (error) {
+        if (error instanceof CirrusError) {
+            throw error;
+        }
+
+        throw new CirrusError("Rank body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const candidate = (body ?? {}) as { index?: unknown; partitionKey?: unknown; rowId?: unknown; sortValues?: unknown; table?: unknown };
+
+    if (typeof candidate.table !== "string" || candidate.table.length === 0) {
+        throw new CirrusError("Rank request is missing `table`", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (typeof candidate.index !== "string" || candidate.index.length === 0) {
+        throw new CirrusError("Rank request is missing `index`", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (typeof candidate.partitionKey !== "string") {
+        throw new CirrusError("Rank request `partitionKey` must be a string", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (typeof candidate.rowId !== "string" || candidate.rowId.length === 0) {
+        throw new CirrusError("Rank request is missing `rowId`", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (!Array.isArray(candidate.sortValues)) {
+        throw new CirrusError("Rank request `sortValues` must be an array", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return {
+        index: candidate.index,
+        partitionKey: candidate.partitionKey,
+        rowId: candidate.rowId,
+        sortValues: candidate.sortValues,
         table: candidate.table,
     };
 };
@@ -1549,6 +1612,51 @@ const createWorker = (
             functionPath: migrate.functionPath,
             headers: forwardedHeaders,
             table: migrate.table,
+        });
+
+        return Response.json(result, {
+            headers: { "content-type": "application/json" },
+            status: 200,
+        });
+    };
+
+    /**
+     * `POST /_cirrus/admin/rank` — roll a cross-shard rank up across every live
+     * shard of a table. The shard-local per-table `rank()` refuses an index
+     * whose partition spans shards (it would return a per-shard slice); this is
+     * the path that produces the correct global `{position, total}` by fanning
+     * the `__cirrus_admin__:rankBefore` primitive out via the coordinator and
+     * summing `Σbefore + 1` / `Σtotal`.
+     *
+     * Admin-gated like the other orchestrators, since the per-shard `rankBefore`
+     * RPC it fans out is itself admin-gated — the inbound `Authorization` bearer
+     * is forwarded so each shard's admin gate accepts the fanned-out call. The
+     * caller passes the EXPLICIT key tuple (built off the row via `rankKeyFromDoc`).
+     */
+    const handleRank = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Rank endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
+        }
+
+        if (!options.queryCoordinator) {
+            throw new CirrusError("Rank endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const rank = await parseRankRequest(request);
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const result = await options.queryCoordinator.orchestrateRank(options.shardDO, {
+            headers: forwardedHeaders,
+            index: rank.index,
+            partitionKey: rank.partitionKey,
+            rowId: rank.rowId,
+            sortValues: rank.sortValues,
+            table: rank.table,
         });
 
         return Response.json(result, {
@@ -2766,6 +2874,7 @@ const createWorker = (
         [SYNC_PATH]: (request, env) => handleCdcSync(request, env),
         [CONNECTOR_SYNC_PATH]: (request, env) => handleConnectorSync(request, env),
         [APPLY_PATH]: (request, env) => handleApplyCdc(request, env),
+        [RANK_PATH]: (request, env) => handleRank(request, env),
         [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
         [SCHEDULED_PATH]: (request) => handleScheduledList(request),
