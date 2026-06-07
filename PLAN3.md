@@ -8,6 +8,13 @@
 > `__cirrus_admin__:*` RPC layer in `@cirrus/do`) and two strategy docs:
 > [`DASHBOARD-VS-CLOUDFLARE.md`](./DASHBOARD-VS-CLOUDFLARE.md) (what to own / beat /
 > hand-off) and [`ECOSYSTEM-BORROW.md`](./ECOSYSTEM-BORROW.md) (what to copy / learn).
+> Its framework-side counterpart is [`CLOUDFLARE-REUSE-AUDIT.md`](./CLOUDFLARE-REUSE-AUDIT.md)
+> (where the _runtime packages_ reuse vs. hand off CF primitives) — keep the log/metrics
+> positioning here consistent with it.
+>
+> **Refreshed 2026-06-07.** Since first writing: backups/PITR + a **Time Travel** panel and
+> a read-only **Settings** panel shipped (Tier 4 + Tier 3.2 below now ✅), per-function
+> metrics moved to durable SQLite, and storage gained native S3-presigned + R2 multipart.
 
 ## Thesis
 
@@ -31,13 +38,17 @@ builder + bulk delete), **Globals** (D1), **Schema** (viewer + graph + **indexes
 **Functions** (runner + **per-function metrics**), **Migrations**, **Scheduled**,
 **Export/Import**, **Files** (R2), **Users**, **Health**, **Insights** (auto-detected
 slow funcs / error spikes / cache problems), **Metrics**, **Logs**, **Audit** (durable
-admin-mutation log). All shard-aware with opt-in live subscriptions.
+admin-mutation log), **Time Travel** (`pitr` — restore a shard to a point in the last 30
+days), and **Settings** (read-only deployment config — vars/secrets/bindings, masked).
+All shard-aware with opt-in live subscriptions.
 
 The framework hooks the differentiators below depend on already exist: the dependency
 tracker (`packages/do/src/dependency-tracker.ts` — `SCAN_DEP`/`depKey` know which tables
-a query read/scanned), per-function counters (`getFunctionStats`), the reactive cache
-stats (`getMetrics`), `getCurrentUserId()`, and the durable reserved-table pattern
-(`__cirrus_audit__`, CDC log).
+a query read/scanned), per-function counters now **persisted to durable SQLite + time
+buckets** (`packages/do/src/function-metrics.ts` — `__cirrus_metrics` /
+`__cirrus_metrics_buckets`, served by `getFunctionStats`), the reactive cache stats
+(`getMetrics`), `getCurrentUserId()`, and the durable reserved-table pattern
+(`__cirrus_audit__`, `__cirrus_metrics*`, CDC log).
 
 ---
 
@@ -54,11 +65,18 @@ outcome + execution time, **tables read/written** (from the dependency tracker),
 **cache hit/miss**, and **subscriptions re-run**. Client panel filters and correlates on
 all of it ("show failed `messages:*` by user U on shard room-9 that scanned `posts`").
 
-**Mapping.** Server: a reserved `__cirrus_reqlog__` SQLite table (mirror the audit-log
-append/read/trim pattern), written once per `/rpc` dispatch at the same site that records
-metrics/function-stats; bounded retention. A `getRequestLog` admin RPC. Client: upgrade
-the Logs panel (correlated filters + a CF-Observability deep-link for the raw firehose).
-Borrow filtering/streaming UX ideas from **Fogwatch** (ideas-only).
+**Mapping.** Server: a reserved `__cirrus_reqlog__` SQLite table (mirror the audit-log /
+`__cirrus_metrics` append/read/trim pattern — both already exist), written once per `/rpc`
+dispatch at the same site that records metrics/function-stats; bounded retention. A
+`getRequestLog` admin RPC. Client: upgrade the Logs panel (correlated filters + a
+CF-Observability deep-link for the raw firehose). Borrow filtering/streaming UX from
+**Fogwatch** (MIT — code-copyable, though it's a TUI so the value is the UX).
+
+**Consistency with `CLOUDFLARE-REUSE-AUDIT.md` #5.** That audit already ruled: hand the
+raw log _transport_ off to Workers Logs / Logpush, keep only a dev/ops readout. This
+request log is exactly that — a **cirrus-attributed, queryable readout**, not a competing
+transport. It must not grow into a log pipeline; for high-volume metrics route to the
+already-implemented `analyticsEngineSink` (audit #3).
 
 **Why #1.** It's the single clearest place Cirrus leaves the CF dashboard behind, and
 every hook already exists.
@@ -124,12 +142,12 @@ From every overlapping panel, link out to the _infra plane_ (not an apology — 
 Logs → Workers Logs, Files → the R2 bucket, Globals → D1 console (raw SQL/Time-Travel),
 Metrics → the DO analytics page. Small, high-clarity change.
 
-### 3.2 Settings area (read-only)
+### 3.2 Settings area (read-only) — ✅ shipped
 
-A Settings tab surfacing **read-only** deployment config: configured env vars/bindings
-(values masked), deploy URL/info. This resolves the deferred env-vars fork
+A Settings tab (`settings-panel.tsx`) surfaces **read-only** deployment config — env
+vars/bindings with values masked. Resolves the deferred env-vars fork
 (`DASHBOARD-VS-CLOUDFLARE.md` #4): **view in Cirrus, edit in wrangler/CF** — no runtime
-config store.
+config store. _Possible follow-up:_ deploy URL/info + the 3.1 deep-links wired in here.
 
 ### 3.3 Emit structured events to Logpush
 
@@ -141,8 +159,11 @@ transport.
 
 ## Tier 4 — Deferred / decisions
 
-- **Scheduled backups** — extend shard Export/Import to scheduled snapshots (DO storage
-  has no CF backup; D1 has Time-Travel — hand that off). Ref: Durafetch pattern.
+- **Scheduled backups + PITR — ✅ shipped.** A `registry/backup` item (cron-driven
+  `snapshot` → timestamped R2 NDJSON + retention `prune`), the `cirrus backup
+create|list|pitr|restore` CLI, and the **Time Travel** dashboard panel (`pitr-panel.tsx`)
+  cover this. DO shard state has no native CF backup, so this is cirrus-owned; D1's own
+  Time Travel is handed off (see `CLOUDFLARE-REUSE-AUDIT.md` #2).
 - **External integrations** (Sentry/Datadog/Axiom) — defer to CF Logpush + the 3.3 event
   emission rather than building per-vendor adapters in the dashboard.
 - **TanStack Query adapter** for the dashboard's own data fetching — open decision
@@ -164,8 +185,8 @@ dashboard links out; it never half-reimplements them.
 ```
 Tier 1 (differentiators):  1.1 request log → 1.2 causal attribution → 1.3 Files (R2-Explorer)
 Tier 2 (depth):            2.1 data-browser decomposition + staged edits · 2.2 bulk ops · 2.3 SLO
-Tier 3 (hand-off):         3.1 CF deep-links (quick) · 3.2 Settings (read-only) · 3.3 Logpush emit
-Tier 4:                    backups · integrations · TanStack decision
+Tier 3 (hand-off):         3.1 CF deep-links (quick) · 3.2 Settings ✅ · 3.3 Logpush emit
+Tier 4:                    backups ✅ · integrations · TanStack decision
 ```
 
 **1.1 (structured correlated request log) is the keystone** — it's the clearest "better
