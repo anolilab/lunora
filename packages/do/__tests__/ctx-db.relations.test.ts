@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
+import { resolveWith } from "../src/relations.js";
 import createSqliteExec from "./_helpers/node-sqlite.js";
 
 /**
@@ -254,7 +255,7 @@ describe("ctx-db relations", () => {
         });
     });
 
-    describe("cross-backend guard", () => {
+    describe("cross-backend relation load (DO parent → D1 child)", () => {
         const schema: SchemaLike = {
             tables: {
                 globals: { indexes: [], shape: { value: { kind: "string" } }, shardMode: { kind: "global" } },
@@ -267,14 +268,90 @@ describe("ctx-db relations", () => {
             },
         };
 
-        it("throws when a relation crosses the DO↔D1 boundary", async () => {
+        /** Minimal in-memory "D1" reader: answers `findMany` with `where._id in [...]`. */
+        const buildFakeGlobalDatabase = (rows: Record<string, unknown>[]) => {
+            const byId = new Map(rows.map((row) => [row["_id"] as string, row] as const));
+
+            return {
+                async count(_table: string, where?: { _id?: { in?: unknown[] } }) {
+                    const inList = where?._id?.in;
+
+                    return Array.isArray(inList) ? inList.filter((id) => byId.has(id as string)).length : byId.size;
+                },
+                async findMany(_table: string, query?: { where?: { _id?: { in?: unknown[] } } }) {
+                    const inList = query?.where?._id?.in;
+                    const page = Array.isArray(inList) ? (inList.map((id) => byId.get(id as string)).filter(Boolean) as Record<string, unknown>[]) : [...byId.values()];
+
+                    return { continueCursor: null, isDone: true, page };
+                },
+            };
+        };
+
+        it("loads a shard-local parent's global child through the supplied globalDb", async () => {
+            expect.assertions(2);
+
+            runShardMigrations(harness.sql, schema);
+
+            const fake = buildFakeGlobalDatabase([
+                { _id: "g1", value: "alpha" },
+                { _id: "g2", value: "beta" },
+            ]);
+            const writer = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                globalDb: fake as unknown as DatabaseWriterLike,
+                schema,
+                sql: harness.sql,
+            });
+
+            await writer.insert("local", { _id: "l1", ref: "g1" }, { allowExplicitId: true });
+
+            const { page } = await writer.findMany("local", { with: { remote: true } });
+
+            expect(page).toHaveLength(1);
+            expect(page[0]?.["remote"]).toMatchObject({ _id: "g1", value: "alpha" });
+        });
+
+        it("throws a wiring error when the global child has no globalDb to route to", async () => {
             expect.assertions(1);
 
             const writer = makeWriter(schema);
 
             await writer.insert("local", { _id: "l1", ref: "g1" }, { allowExplicitId: true });
 
-            await expect(writer.findMany("local", { with: { remote: true } })).rejects.toThrow(/cross-backend relation 'local.remote' not supported/);
+            await expect(writer.findMany("local", { with: { remote: true } })).rejects.toThrow(/requires a globalDb writer/u);
+        });
+
+        it("rejects the reverse direction: a global parent cannot load a shard-local child", async () => {
+            expect.assertions(1);
+
+            // `globals` (global, D1) declares a relation back to `local` (shard-local).
+            // Resolving it would need a fan-out across every DO, so the loader refuses.
+            const reverseSchema: SchemaLike = {
+                tables: {
+                    globals: {
+                        indexes: [],
+                        relationMap: { owner: { field: "ownerId", kind: "one", references: "_id", table: "local" } },
+                        shape: { ownerId: { kind: "string" } },
+                        shardMode: { kind: "global" },
+                    },
+                    local: { indexes: [], shape: { name: { kind: "string" } }, shardMode: { kind: "root" } },
+                },
+            };
+
+            const reject = async (): Promise<never> => {
+                throw new Error("fetcher should never be called for a rejected cross-backend direction");
+            };
+
+            await expect(
+                resolveWith({
+                    counter: async () => 0,
+                    fetcher: reject,
+                    parents: [{ _id: "g1", ownerId: "l1" }],
+                    schema: reverseSchema,
+                    tableName: "globals",
+                    with: { owner: true },
+                }),
+            ).rejects.toThrow(/a global table cannot load the shard-local relation 'local'/u);
         });
     });
 
