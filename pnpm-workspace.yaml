@@ -56,7 +56,7 @@ catalogs:
     "@commitlint/cli": ^21.0.2
     "@commitlint/config-conventional": ^21.0.2
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 1.0.0-alpha.31
+    "@visulima/vis": 1.0.0-alpha.32
     "@visulima/tabular": 4.0.0-alpha.13
   test:
     "@vitest/coverage-v8": 4.1.8
@@ -257,15 +257,15 @@ minimumReleaseAgeExclude:
   - '@visulima/tui-binding-win32-arm64-msvc@1.0.0-alpha.23'
   - '@visulima/tui-binding-win32-x64-msvc@1.0.0-alpha.23'
   - '@visulima/tui@1.0.0-alpha.23'
-  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.31'
-  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.31'
-  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.31'
-  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.31'
-  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.31'
-  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.31'
-  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.31'
-  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.31'
-  - '@visulima/vis@1.0.0-alpha.31'
+  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.32'
+  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.32'
+  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.32'
+  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.32'
+  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.32'
+  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.32'
+  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.32'
+  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.32'
+  - '@visulima/vis@1.0.0-alpha.32'
   - '@cloudflare/workers-types@4.20260605.1'
   - '@eslint-react/ast@5.8.12'
   - '@eslint-react/core@5.8.12'
