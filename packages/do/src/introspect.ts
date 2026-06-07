@@ -72,6 +72,21 @@ interface AuditLogResult {
 }
 
 /**
+ * One full-scan attribution entry on a {@link FunctionCallStat}: how many times
+ * the function full-scanned `table` (a read with no index / point lookup). This
+ * is the causal evidence behind the Insights "missing index" / "full scan"
+ * signal — it pins a slow function to the specific table it scanned, so the
+ * dashboard can say "`feed:list` is slow BECAUSE it full-scanned `posts`" and
+ * deep-link to add the index.
+ */
+interface FunctionScanAttribution {
+    /** Total full-scans of `table` attributed to this function. */
+    scans: number;
+    /** The full-scanned table name. */
+    table: string;
+}
+
+/**
  * Per-function execution counters served by `__cirrus_admin__:getFunctionStats`,
  * one entry per `&lt;file>:&lt;function>` path dispatched since this DO instance woke.
  * Like `getMetrics`'s counters these are in-memory and reset on
@@ -79,6 +94,10 @@ interface AuditLogResult {
  * time series. Durations are wall-clock milliseconds of the handler call itself
  * (before the subscription write-flush), so `totalDurationMs / calls` is the
  * mean and `maxDurationMs` the slowest single call.
+ *
+ * `scans` and `scannedTables` carry the causal full-scan attribution (added by
+ * PLAN3 1.2). They're additive: older consumers ignore them, and a worker that
+ * predates the feature simply reports `scans: 0` / `scannedTables: []`.
  */
 interface FunctionCallStat {
     /** Total dispatches, successful or failed. */
@@ -95,6 +114,15 @@ interface FunctionCallStat {
     maxDurationMs: number;
     /** The `&lt;file>:&lt;function>` identifier, e.g. `messages:list`. */
     path: string;
+
+    /**
+     * Per-table full-scan attribution, busiest scan first — the causal evidence
+     * for the "missing index" insight. Empty when the function never
+     * full-scanned a table (the indexed case) or on a worker predating 1.2.
+     */
+    scannedTables: FunctionScanAttribution[];
+    /** Total full-table scans across every dispatch (sum of `scannedTables[].scans`). */
+    scans: number;
     /** Summed handler wall-clock across every dispatch; divide by `calls` for the mean. */
     totalDurationMs: number;
 }
@@ -485,6 +513,7 @@ export type {
     FilterClause,
     FilterOperator,
     FunctionCallStat,
+    FunctionScanAttribution,
     FunctionStatsResult,
     ReadTablePageOptions,
     SettingEntry,
