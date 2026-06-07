@@ -44,7 +44,7 @@ describe("index", () => {
         it("returns an array of plugins including the cirrus internals and cloudflare", async () => {
             expect.hasAssertions();
 
-            const plugins = await cirrus({ overlay: false, projectRoot: workdir, validateWrangler: true });
+            const plugins = cirrus({ overlay: false, projectRoot: workdir, validateWrangler: true });
 
             expect(Array.isArray(plugins)).toBe(true);
 
@@ -59,7 +59,7 @@ describe("index", () => {
         it("excludes the cloudflare plugin when cloudflare is false", async () => {
             expect.hasAssertions();
 
-            const plugins = await cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
+            const plugins = cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
 
             const names = plugins.map((plugin) => plugin.name);
 
@@ -70,7 +70,7 @@ describe("index", () => {
         it("excludes the wrangler validator when validateWrangler is false", async () => {
             expect.hasAssertions();
 
-            const plugins = await cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
+            const plugins = cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
 
             const names = plugins.map((plugin) => plugin.name);
 
@@ -80,12 +80,12 @@ describe("index", () => {
         it("includes the overlay plugin when overlay is true", async () => {
             expect.assertions(1);
 
-            const plugins = await cirrus({ cloudflare: false, overlay: true, projectRoot: workdir, validateWrangler: false });
+            const plugins = cirrus({ cloudflare: false, overlay: true, projectRoot: workdir, validateWrangler: false });
 
             // Either the real overlay (whatever name it carries) or our no-op injector
             // should be present — but the array length must be strictly greater than the
             // codegen-only case.
-            const minimal = await cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
+            const minimal = cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
 
             expect(plugins.length).toBeGreaterThan(minimal.length);
         });

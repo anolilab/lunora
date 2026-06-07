@@ -7,6 +7,6 @@ import { defineConfig } from "vite";
  * `cirrus()` runs codegen + wrangler validation + the dev overlay while
  * `TanStackRouterVite` generates the typed route tree.
  */
-export default defineConfig(async () => ({
-    plugins: [TanStackRouterVite({ autoCodeSplitting: true }), ...(await cirrus())],
-}));
+export default defineConfig({
+    plugins: [TanStackRouterVite({ autoCodeSplitting: true }), cirrus()],
+});

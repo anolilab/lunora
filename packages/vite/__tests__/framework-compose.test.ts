@@ -90,7 +90,7 @@ describe("framework-compose", () => {
         it("composes with a TanStack-Start-shaped plugin and resolveConfig succeeds", async () => {
             expect.hasAssertions();
 
-            const cirrusPlugins = await cirrus({
+            const cirrusPlugins = cirrus({
                 cloudflare: false,
                 overlay: false,
                 projectRoot: workdir,
@@ -120,7 +120,7 @@ describe("framework-compose", () => {
         it("composes with a React-Router-v7-shaped plugin and resolveConfig succeeds", async () => {
             expect.hasAssertions();
 
-            const cirrusPlugins = await cirrus({
+            const cirrusPlugins = cirrus({
                 cloudflare: false,
                 overlay: false,
                 projectRoot: workdir,
@@ -161,7 +161,7 @@ describe("framework-compose", () => {
                 "utf8",
             );
 
-            const cirrusPlugins = await cirrus({
+            const cirrusPlugins = cirrus({
                 cloudflare: false,
                 overlay: false,
                 projectRoot: workdir,

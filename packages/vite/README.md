@@ -23,16 +23,18 @@ import { defineConfig } from "vite";
 import { cirrus } from "@cirrus/vite";
 
 export default defineConfig({
-    plugins: [...(await cirrus())],
+    plugins: [cirrus()],
 });
 ```
+
+`cirrus()` returns an array of Vite plugins; Vite flattens nested plugin arrays, so it goes straight into `plugins` with no spread.
 
 With options:
 
 ```ts
 export default defineConfig({
     plugins: [
-        ...(await cirrus({
+        cirrus({
             projectRoot: process.cwd(),
             schemaDir: "cirrus",
             generatedDir: "cirrus/_generated",
@@ -41,7 +43,7 @@ export default defineConfig({
             cloudflare: {
                 /* forwarded to @cloudflare/vite-plugin */
             },
-        })),
+        }),
     ],
 });
 ```
@@ -73,13 +75,15 @@ The `cirrus(options)` factory composes up to four plugins in order:
 
 | Export                              | Description                                                                                              |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `cirrus(options?)`                  | Async factory. Returns `ReadonlyArray<Plugin>`.                                                          |
+| `cirrus(options?)`                  | Factory. Returns `Plugin[]` — drop it into `plugins` (Vite flattens it).                                 |
 | `codegenPlugin(resolved)`           | The codegen-on-save plugin in isolation.                                                                 |
+| `dashboardPlugin()`                 | The `/__cirrus` dashboard dev-server plugin in isolation.                                                |
 | `wranglerValidatorPlugin(resolved)` | The wrangler.jsonc validator plugin in isolation.                                                        |
-| `overlayPlugin()`                   | Async factory for the `@visulima/vite-overlay` plugin. Returns a no-op when the package isn't installed. |
 | `VERSION`                           | Plugin version string.                                                                                   |
 
-Types: `CirrusPluginOptions`, `ResolvedCirrusPluginOptions`, `CloudflarePluginOptions`, `CirrusPlugins`.
+Types: `CirrusPluginOptions`, `ResolvedCirrusPluginOptions`, `CloudflarePluginOptions`, `OverlayPluginOptions`, `CirrusPlugins`.
+
+The error overlay is `@visulima/vite-overlay` used directly (no Cirrus wrapper) — toggle it with the `overlay` option.
 
 ## Docs
 
