@@ -5,6 +5,8 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 import type { ExportRow, ImportShardResult } from "./admin-export-import.js";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import.js";
 import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log.js";
+import type { AuthMetrics } from "./auth-metrics.js";
+import { readAuthMetrics, recordAuthEvent } from "./auth-metrics.js";
 import type { CdcChange, SqlExec } from "./ctx-db.js";
 import { CDC_LOG_TABLE, readCdcChanges } from "./ctx-db.js";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
@@ -579,6 +581,23 @@ const parseClearTableArgs = (args: Record<string, unknown>): RunShardBulkDeleteA
     }
 
     return { limit: typeof args["limit"] === "number" ? args["limit"] : undefined, table };
+};
+
+/**
+ * Validate the `__cirrus_admin__:recordAuthEvent` payload — the worker's
+ * fire-and-forget record of one auth attempt (PLAN3 §2.3). `outcome` must be
+ * exactly `"ok"` or `"fail"`; anything else throws a 400 `CirrusError`, keeping
+ * the error shape uniform with the other admin write parsers. Returns the
+ * narrowed outcome the {@link recordAuthEvent} helper consumes.
+ */
+const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fail" | "ok" } => {
+    const { outcome } = args;
+
+    if (outcome !== "ok" && outcome !== "fail") {
+        throw Object.assign(new Error('recordAuthEvent: `outcome` must be "ok" or "fail"'), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    return { outcome };
 };
 
 /**
@@ -2359,6 +2378,10 @@ abstract class ShardDO {
                 return jsonResponse({ result }, 200);
             }
 
+            if (functionPath === ADMIN_FUNCTIONS.recordAuthEvent) {
+                return this.handleRecordAuthEvent(args);
+            }
+
             const pitr = await this.handlePitrAdminOp(functionPath, args);
 
             if (pitr) {
@@ -2369,6 +2392,27 @@ abstract class ShardDO {
         } catch (error: unknown) {
             return this.errorToResponse(error);
         }
+    }
+
+    /**
+     * Record one app-level auth attempt for the auth-failure SLO (PLAN3 §2.3).
+     * The worker calls this fire-and-forget (via `waitUntil`) after a top-level
+     * `/api/auth/*` ATTEMPT route returns, so it never blocks or fails the auth
+     * response. `outcome` is validated up front (400 `BAD_REQUEST` on a bad
+     * value); the durable upsert itself is best-effort — a SQL failure is
+     * swallowed so the SLO signal is simply absent rather than turning the
+     * recording call into an error. Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private handleRecordAuthEvent(args: Record<string, unknown>): Response {
+        const parsed = parseRecordAuthEventArgs(args);
+
+        try {
+            recordAuthEvent(this.state.storage.sql as unknown as SqlExec, { outcome: parsed.outcome, ts: Date.now() });
+        } catch {
+            // Best-effort: a metrics write must never fail the call.
+        }
+
+        return jsonResponse({ result: { recorded: true } }, 200);
     }
 
     /**
@@ -2577,6 +2621,10 @@ abstract class ShardDO {
             return this.readAdminRequestLog(sql, args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.getAuthMetrics) {
+            return this.readAdminAuthMetrics(sql);
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
             return this.readAdminTablePage(sql, args);
         }
@@ -2672,6 +2720,33 @@ abstract class ShardDO {
                 userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
             }),
         };
+
+        return { result, tables: new Set([ADMIN_WILDCARD]) };
+    }
+
+    /**
+     * Resolve a `getAuthMetrics` admin read: the durable app-level auth
+     * attempt/failure counters + minute-bucketed history the dashboard SLO panel
+     * charts (PLAN3 §2.3). Auth runs as a top-level `/api/auth/*` worker route,
+     * NOT through cirrus functions, so the worker records each attempt against
+     * the root shard via `recordAuthEvent` and this read surfaces the rollup.
+     *
+     * Best-effort: a SQL failure (e.g. a test double without a real `sql`
+     * handle) returns an empty all-zero {@link AuthMetrics} rather than throwing,
+     * so the SLO signal is simply absent instead of breaking the dashboard.
+     * Carries the {@link ADMIN_WILDCARD} like the other counter reads so a live
+     * subscription re-runs on every write-flush (the per-socket JSON memo still
+     * suppresses byte-identical pushes).
+     */
+    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
+    private readAdminAuthMetrics(sql: SqlExec): { result: unknown; tables: Set<string> } {
+        let result: AuthMetrics;
+
+        try {
+            result = readAuthMetrics(sql);
+        } catch {
+            result = { attempts: 0, failureRate: 0, failures: 0, history: [], sinceMs: 0 };
+        }
 
         return { result, tables: new Set([ADMIN_WILDCARD]) };
     }

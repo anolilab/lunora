@@ -817,3 +817,102 @@ describe("createWorker — HTTP actions", () => {
         expect(shard.calls).toHaveLength(1);
     });
 });
+
+describe("createWorker auth-metrics instrumentation (PLAN3 §2.3)", () => {
+    let shard: ShardSpy;
+    /** Captures `waitUntil` promises so the test can await the fire-and-forget recording. */
+    let deferred: Promise<unknown>[];
+    let collectingContext: ExecutionContextLike;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+        deferred = [];
+        collectingContext = {
+            passThroughOnException: () => undefined,
+            waitUntil: (promise) => {
+                deferred.push(promise);
+            },
+        };
+    });
+
+    it("records a `fail` event when an auth sign-in route answers with status >= 400", async () => {
+        expect.assertions(3);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response>>(async () => new Response("nope", { status: 401 }));
+
+        const worker = createWorker({ adminToken: "s3cret", authHandler, shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/api/auth/sign-in/email", { method: "POST" }), {}, collectingContext);
+
+        expect(res.status).toBe(401);
+
+        // Drain the fire-and-forget recording.
+        await Promise.all(deferred);
+
+        const recordCall = shard.calls.find((c) => c.request.url.endsWith("/rpc"));
+
+        expect(recordCall).toBeDefined();
+
+        const body = await recordCall!.request.json<{ args: { outcome: string }; functionPath: string }>();
+
+        expect(body).toEqual({ args: { outcome: "fail" }, functionPath: "__cirrus_admin__:recordAuthEvent" });
+    });
+
+    it("records an `ok` event for a successful sign-up attempt", async () => {
+        expect.assertions(1);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response>>(async () => new Response("ok", { status: 200 }));
+
+        const worker = createWorker({ adminToken: "s3cret", authHandler, shardDO: shard.namespace });
+
+        await worker.fetch(new Request("https://app.example/api/auth/sign-up/email", { method: "POST" }), {}, collectingContext);
+        await Promise.all(deferred);
+
+        const recordCall = shard.calls.find((c) => c.request.url.endsWith("/rpc"));
+        const body = await recordCall!.request.json<{ args: { outcome: string } }>();
+
+        expect(body.args.outcome).toBe("ok");
+    });
+
+    it("does NOT record for a non-attempt auth route (get-session)", async () => {
+        expect.assertions(2);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response>>(async () => new Response("session", { status: 200 }));
+
+        const worker = createWorker({ adminToken: "s3cret", authHandler, shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/api/auth/get-session", { method: "GET" }), {}, collectingContext);
+        await Promise.all(deferred);
+
+        expect(res.status).toBe(200);
+        // No recording fired — get-session is not an attempt.
+        expect(shard.calls.filter((c) => c.request.url.endsWith("/rpc"))).toHaveLength(0);
+    });
+
+    it("skips recording silently when no admin token is configured", async () => {
+        expect.assertions(2);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response>>(async () => new Response("nope", { status: 403 }));
+
+        const worker = createWorker({ authHandler, shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/api/auth/callback/github", { method: "GET" }), {}, collectingContext);
+        await Promise.all(deferred);
+
+        expect(res.status).toBe(403);
+        expect(shard.calls.filter((c) => c.request.url.endsWith("/rpc"))).toHaveLength(0);
+    });
+
+    it("falls through to normal routing when the auth handler returns undefined", async () => {
+        expect.assertions(2);
+
+        const authHandler = vi.fn<(request: Request) => Promise<Response | undefined>>(async () => undefined);
+
+        const worker = createWorker({ adminToken: "s3cret", authHandler, shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/nope", { method: "GET" }), {}, collectingContext);
+
+        expect(res.status).toBe(404);
+        expect(authHandler).toHaveBeenCalledTimes(1);
+    });
+});

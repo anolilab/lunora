@@ -21,6 +21,7 @@ const ADMIN_FUNCTIONS = {
     deleteRows: "__cirrus_admin__:deleteRows",
     exportShard: "__cirrus_admin__:exportShard",
     getAuditLog: "__cirrus_admin__:getAuditLog",
+    getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
@@ -34,6 +35,7 @@ const ADMIN_FUNCTIONS = {
     pitrRestore: "__cirrus_admin__:pitrRestore",
     rankBefore: "__cirrus_admin__:rankBefore",
     readTablePage: "__cirrus_admin__:readTablePage",
+    recordAuthEvent: "__cirrus_admin__:recordAuthEvent",
     runMigration: "__cirrus_admin__:runMigration",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;

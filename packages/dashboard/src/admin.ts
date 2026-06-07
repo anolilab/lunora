@@ -22,6 +22,7 @@ export const ADMIN_FUNCTIONS = {
     deleteRows: "__cirrus_admin__:deleteRows",
     exportShard: "__cirrus_admin__:exportShard",
     getAuditLog: "__cirrus_admin__:getAuditLog",
+    getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
@@ -166,6 +167,34 @@ export interface FunctionCallStat {
 /** Payload of a `__cirrus_admin__:getFunctionStats` call, mirroring `@cirrus/do`'s `FunctionStatsResult`. */
 export interface FunctionStatsResult {
     functions: FunctionCallStat[];
+    sinceMs: number;
+}
+
+/**
+ * One minute-bucketed auth sample returned by `__cirrus_admin__:getAuthMetrics`,
+ * mirroring `@cirrus/do`'s `AuthMetricsBucket`. Backs the SLO panel's
+ * auth-failure sparkline; `bucketMs` is the epoch-ms floor of the 60s window.
+ */
+export interface AuthMetricsBucket {
+    attempts: number;
+    bucketMs: number;
+    failures: number;
+}
+
+/**
+ * App-level auth-attempt metrics returned by `__cirrus_admin__:getAuthMetrics`
+ * for the root shard, mirroring `@cirrus/do`'s `AuthMetrics`. Backs the SLO
+ * panel's auth-failure rate (PLAN3 §2.3): `failureRate` is the precomputed
+ * `attempts === 0 ? 0 : failures / attempts`, `history` the minute-bucketed
+ * series (oldest first) for the sparkline, and `sinceMs` the first-attempt
+ * marker. Auth runs as a top-level `/api/auth/*` route, so these are recorded by
+ * the worker (not by cirrus-function metrics) and are durable across restart.
+ */
+export interface AuthMetrics {
+    attempts: number;
+    failureRate: number;
+    failures: number;
+    history: AuthMetricsBucket[];
     sinceMs: number;
 }
 
