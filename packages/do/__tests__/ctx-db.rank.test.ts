@@ -387,4 +387,48 @@ describe("ctx-db rank", () => {
             await expect(writer.rankBefore!("messages", "nope", { partitionKey: "", rowId: "x", sortValues: [] })).rejects.toThrow(/unknown rankIndex/);
         });
     });
+
+    describe("cross-shard partition guard", () => {
+        /** `events` is `.shardBy("userId")`; the rankIndex's partitionBy controls whether a partition stays on one shard. */
+        const makeShardedSchema = (partitionBy: string[]): SchemaLike => {
+            return {
+                tables: {
+                    events: {
+                        indexes: [],
+                        rankIndexes: [{ name: "byScore", on: "events", partitionBy, sortBy: [{ direction: "desc", field: "score" }] }],
+                        shape: { score: { kind: "number" }, userId: { kind: "string" } },
+                        shardMode: { field: "userId", kind: "shardBy" },
+                    },
+                },
+            };
+        };
+
+        it("rank() refuses when the partition spans shards (shard key not in partitionBy)", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter(makeShardedSchema([]));
+
+            await writer.insert("events", { _id: "e1", score: 10, userId: "u1" }, { allowExplicitId: true });
+
+            await expect(writer.rank("events", "byScore", { row: "e1" })).rejects.toMatchObject({ code: "CROSS_SHARD_RANK_UNSUPPORTED", name: "CirrusError" });
+        });
+
+        it("rankPage() refuses when the partition spans shards", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter(makeShardedSchema([]));
+
+            await expect(writer.rankPage("events", "byScore")).rejects.toMatchObject({ code: "CROSS_SHARD_RANK_UNSUPPORTED", name: "CirrusError" });
+        });
+
+        it("allows rank() when partitionBy includes the shard key (partition stays on one shard)", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter(makeShardedSchema(["userId"]));
+
+            await writer.insert("events", { _id: "e1", score: 10, userId: "u1" }, { allowExplicitId: true });
+
+            await expect(writer.rank("events", "byScore", { row: "e1", where: { userId: "u1" } })).resolves.toMatchObject({ position: 1 });
+        });
+    });
 });
