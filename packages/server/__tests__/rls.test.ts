@@ -790,3 +790,64 @@ describe("rls — role registry", () => {
         });
     });
 });
+
+describe("definePolicies — duplicate detection", () => {
+    it("throws when the same (table, on, when) policy is registered twice", () => {
+        expect.assertions(2);
+
+        const ownerOnly = definePolicy({
+            on: "read",
+            table: "documents",
+            when: () => {
+                return { ownerId: "u1" };
+            },
+        });
+
+        let error: unknown;
+
+        try {
+            // The same policy object spread/listed twice — a copy-paste bug.
+            definePolicies([ownerOnly, ownerOnly]);
+        } catch (error_: unknown) {
+            error = error_;
+        }
+
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain('duplicate policy for (table "documents", on "read")');
+    });
+
+    it("allows multiple DISTINCT policies on the same (table, on) — the OR/AND feature", () => {
+        expect.assertions(1);
+
+        const byOwner = definePolicy({
+            on: "read",
+            table: "documents",
+            when: () => {
+                return { ownerId: "u1" };
+            },
+        });
+        const byTeam = definePolicy({
+            on: "read",
+            table: "documents",
+            when: () => {
+                return { teamId: "t1" };
+            },
+        });
+
+        // Distinct `when` functions for the same (table, on) are legitimate.
+        expect(() => definePolicies([byOwner, byTeam])).not.toThrow();
+    });
+
+    it("allows the same `when` reuse across different (table, on) keys", () => {
+        expect.assertions(1);
+
+        const tenantScope = (): { tenantId: string } => {
+            return { tenantId: "t1" };
+        };
+        const readDocs = definePolicy({ on: "read", table: "documents", when: tenantScope });
+        const readNotes = definePolicy({ on: "read", table: "notes", when: tenantScope });
+        const updateDocs = definePolicy({ on: "update", table: "documents", when: tenantScope });
+
+        expect(() => definePolicies([readDocs, readNotes, updateDocs])).not.toThrow();
+    });
+});
