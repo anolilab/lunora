@@ -62,7 +62,9 @@ interface StudioAppBodyProps {
     readonly basePath?: string;
     readonly clearToken: () => void;
     readonly studio?: StudioAppProps["studio"];
+    readonly onToggleTheme: () => void;
     readonly onTokenChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    readonly theme: "dark" | "light";
     readonly token: string;
 }
 
@@ -72,12 +74,12 @@ interface StudioAppBodyProps {
  * read the `StudioI18nProvider` the app renders above it. The composed
  * `&lt;Studio>` inherits that same provider, so it isn't handed an instance here.
  */
-const StudioAppBody = ({ basePath, clearToken, studio, onTokenChange, token }: StudioAppBodyProps): ReactElement => {
+const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenChange, theme, token }: StudioAppBodyProps): ReactElement => {
     const t = useT();
 
     return (
         <>
-            <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-4" data-testid="dash-app-header">
+            <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3" data-testid="dash-app-header">
                 <span className="flex items-center gap-2">
                     <BrandMark />
                     <strong className="text-sm font-semibold tracking-tight">cirrus</strong>
@@ -86,6 +88,21 @@ const StudioAppBody = ({ basePath, clearToken, studio, onTokenChange, token }: S
                         {t("Studio")}
                     </Badge>
                 </span>
+
+                {/* Center command/search affordance — a Studio-style ⌘K entry. */}
+                <button
+                    className="mx-auto hidden h-7 w-72 items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted md:flex"
+                    data-testid="dash-app-search"
+                    type="button"
+                >
+                    <svg aria-hidden="true" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                        <circle cx="11" cy="11" r="7" />
+                        <path d="m21 21-4.3-4.3" strokeLinecap="round" />
+                    </svg>
+                    {t("Search…")}
+                    <kbd className="ms-auto rounded border border-border bg-background px-1 font-sans text-[10px] text-muted-foreground">⌘K</kbd>
+                </button>
+
                 <div className="ms-auto flex items-center gap-2">
                     {token !== "" && (
                         // Compact, contextual warning: only while a token is set, shown as a
@@ -120,6 +137,34 @@ const StudioAppBody = ({ basePath, clearToken, studio, onTokenChange, token }: S
                         </Button>
                     )}
                     <ConnectionBadge />
+
+                    <span aria-hidden="true" className="mx-0.5 h-5 w-px bg-border" />
+
+                    {/* Theme toggle — keeps dark mode reachable; light is the default. */}
+                    <button
+                        aria-label={theme === "dark" ? t("Switch to light theme") : t("Switch to dark theme")}
+                        className="flex size-7 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent"
+                        data-testid="dash-app-theme"
+                        onClick={onToggleTheme}
+                        title={theme === "dark" ? t("Switch to light theme") : t("Switch to dark theme")}
+                        type="button"
+                    >
+                        {theme === "dark" ? (
+                            <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} viewBox="0 0 24 24">
+                                <circle cx="12" cy="12" r="4" />
+                                <path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+                            </svg>
+                        ) : (
+                            <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} viewBox="0 0 24 24">
+                                <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+                            </svg>
+                        )}
+                    </button>
+
+                    {/* Account placeholder — rounds out the top-bar cluster. */}
+                    <span aria-hidden="true" className="flex size-7 items-center justify-center rounded-full bg-accent text-[11px] font-medium text-foreground">
+                        C
+                    </span>
                 </div>
             </header>
 
@@ -208,17 +253,36 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, studio, locale }: Stu
         setToken("");
     }, []);
 
+    // Light is the default (matches the Studio look); the top-bar toggle flips
+    // to dark and the `.dark` class on the root scopes every token.
+    const [theme, setTheme] = useState<"dark" | "light">("light");
+
+    const onToggleTheme = useCallback((): void => {
+        setTheme((current) => (current === "dark" ? "light" : "dark"));
+    }, []);
+
     // A studio-scoped Lingui instance (never the global singleton). This app
     // is the sole provider owner — the header and the composed `<Studio>` both
     // resolve their strings from it, so `<Studio>` isn't handed an instance.
     const i18n = useMemo(() => createStudioI18n(locale), [locale]);
 
     return (
-        <div className={`${STUDIO_ROOT_CLASS} dark flex min-h-screen flex-col bg-background text-sm text-foreground`} data-testid="cirrus-studio-app">
+        <div
+            className={`${STUDIO_ROOT_CLASS} ${theme === "dark" ? "dark" : ""} flex min-h-screen flex-col bg-background text-sm text-foreground`}
+            data-testid="cirrus-studio-app"
+        >
             <CirrusProvider client={client}>
                 <StudioI18nProvider i18n={i18n}>
                     <TooltipProvider>
-                        <StudioAppBody basePath={basePath} clearToken={clearToken} studio={studio} onTokenChange={onTokenChange} token={token} />
+                        <StudioAppBody
+                            basePath={basePath}
+                            clearToken={clearToken}
+                            onToggleTheme={onToggleTheme}
+                            onTokenChange={onTokenChange}
+                            studio={studio}
+                            theme={theme}
+                            token={token}
+                        />
                     </TooltipProvider>
                 </StudioI18nProvider>
             </CirrusProvider>
