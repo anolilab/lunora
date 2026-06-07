@@ -1,7 +1,7 @@
 import type { SchedulerStatus } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AuthMetrics, FunctionCallStat, LogEntry, LogsResult, MetricsSnapshot, MigrationStatusRow } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
@@ -11,8 +11,14 @@ import ConnectionBadge from "./connection-badge.js";
 import type { TFunction } from "./i18n-context.js";
 import { useT } from "./i18n-context.js";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
+import { LiveToggle } from "./live-toggle.js";
+import { shardsToAggregate } from "./metrics-aggregate.js";
 import { loadRecentShards } from "./shard-history.js";
+import type { ShardSloResult, SloTotals } from "./slo-aggregate.js";
+import { dedupeMigrations, mergeFunctionStats, sumShardMetrics } from "./slo-aggregate.js";
 import { Sparkline } from "./sparkline.js";
+import useLiveAdmin from "./use-live-admin.js";
+import { useLiveToggle } from "./use-live-toggle.js";
 
 interface HealthPanelProps {
     /** Shard key the metric/log reads target on first load. Defaults to the root shard. */
@@ -150,6 +156,71 @@ const SloTile = ({ label, level, testId, value }: { label: string; level: SloLev
     </div>
 );
 
+/** The composed, ready-to-render SLO model one cross-shard fetch resolves to. */
+interface SloData {
+    auth: AuthMetrics | null;
+    entries: LogEntry[];
+    functions: FunctionCallStat[];
+    logsError: null | string;
+    metricsError: null | string;
+    migrations: MigrationStatusRow[];
+    scheduler: SchedulerStatus | null;
+    totals: SloTotals;
+}
+
+/**
+ * Fan out the per-shard reads across `shards` and the global reads against the
+ * root shard, then compose the app-level SLO model. Every read is best-effort: an
+ * unreachable shard or a rejected signal degrades that part (empty / `—`) without
+ * failing the pull. `metricsError` is set only when NOT one shard returned
+ * metrics, carrying the root shard's reason.
+ */
+const loadSloData = async (client: ReturnType<typeof useCirrus>, rootShard: string, shards: ReadonlyArray<string>): Promise<SloData> => {
+    const perShardSettled = await Promise.all(
+        shards.map((shard) => {
+            const shardOptions = callOptions(shard);
+
+            return Promise.allSettled([
+                client.query(GET_METRICS, {}, shardOptions) as Promise<MetricsSnapshot>,
+                client.query(GET_FUNCTION_STATS, {}, shardOptions) as Promise<{ functions: FunctionCallStat[] }>,
+                client.query(MIGRATION_STATUS, {}, shardOptions) as Promise<{ migrations: MigrationStatusRow[] }>,
+            ]);
+        }),
+    );
+
+    const rootOptions = callOptions(rootShard);
+    // `schedulerStatus` is a client method (not an admin RPC), absent on an older
+    // client build, so guard it rather than let an undefined call throw.
+    const schedulerStatus = typeof client.schedulerStatus === "function" ? client.schedulerStatus() : Promise.reject(new Error("scheduler status unavailable"));
+    const [logs, authMetrics, schedulerState] = await Promise.allSettled([
+        client.query(GET_LOGS, {}, rootOptions) as Promise<LogsResult>,
+        client.query(GET_AUTH_METRICS, {}, rootOptions) as Promise<AuthMetrics>,
+        schedulerStatus,
+    ]);
+
+    const perShard: ShardSloResult[] = perShardSettled.map(([m, f, mig]) => {
+        return {
+            functions: f.status === "fulfilled" ? f.value.functions : [],
+            metrics: m.status === "fulfilled" ? m.value : null,
+            migrations: mig.status === "fulfilled" ? mig.value.migrations : [],
+        };
+    });
+
+    const totals = sumShardMetrics(perShard);
+    const rootMetrics = perShardSettled[0]?.[0];
+
+    return {
+        auth: authMetrics.status === "fulfilled" ? authMetrics.value : null,
+        entries: logs.status === "fulfilled" ? logs.value.entries : [],
+        functions: mergeFunctionStats(perShard.map((shardResult) => shardResult.functions)),
+        logsError: logs.status === "rejected" ? errorMessage(logs.reason) : null,
+        metricsError: totals.reachable === 0 && rootMetrics?.status === "rejected" ? errorMessage(rootMetrics.reason) : null,
+        migrations: dedupeMigrations(perShard.map((shardResult) => shardResult.migrations)),
+        scheduler: schedulerState.status === "fulfilled" ? schedulerState.value : null,
+        totals,
+    };
+};
+
 /**
  * App-level health & SLO overview. On top of the original single-shard snapshot
  * (recent errors, request/error counts, shards seen) it composes the
@@ -171,60 +242,65 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
     const [entries, setEntries] = useState<LogEntry[]>([]);
     const [logsError, setLogsError] = useState<null | string>(null);
-    const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+    const [totals, setTotals] = useState<SloTotals | null>(null);
     const [metricsError, setMetricsError] = useState<null | string>(null);
     const [functions, setFunctions] = useState<FunctionCallStat[]>([]);
     const [auth, setAuth] = useState<AuthMetrics | null>(null);
     const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null);
     const [migrations, setMigrations] = useState<MigrationStatusRow[]>([]);
     const [loading, setLoading] = useState<boolean>(false);
+    const { live, liveError, setLiveError, toggle } = useLiveToggle();
 
     // Recently-visited shard keys the dashboard remembers — read once on mount.
     const [recentShards] = useState<string[]>(loadRecentShards);
 
+    // Guard against overlapping refreshes (a live push landing mid-fan-out) and
+    // setState after unmount.
+    const inFlightRef = useRef(false);
+    const mountedRef = useRef(true);
+
+    useEffect(() => {
+        mountedRef.current = true;
+
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
+    const rootShard = initialShardKey ?? "";
+
     const refresh = useCallback(async (): Promise<void> => {
+        if (inFlightRef.current) {
+            return;
+        }
+
+        inFlightRef.current = true;
         setLoading(true);
 
-        const shard = initialShardKey ?? "";
-        const options = callOptions(shard);
-        // `schedulerStatus` lives on the client (not an admin RPC) and is absent on
-        // an older client build, so guard the call rather than let an undefined
-        // method throw synchronously outside the settled batch.
-        const schedulerStatus =
-            typeof client.schedulerStatus === "function" ? client.schedulerStatus() : Promise.reject(new Error("scheduler status unavailable"));
+        // Per-shard signals (metrics, function stats, migrations) sum across the
+        // best-effort "shards we know about" set — DOs aren't enumerable, so it's
+        // root + current + recently-visited. The global signals (logs buffer, auth
+        // metrics, scheduler backlog) live on the root shard / worker, read once.
+        const result = await loadSloData(client, rootShard, shardsToAggregate(rootShard, recentShards));
 
-        const [logs, snapshot, stats, authMetrics, migrationRows, schedulerState] = await Promise.allSettled([
-            client.query(GET_LOGS, {}, options) as Promise<LogsResult>,
-            client.query(GET_METRICS, {}, options) as Promise<MetricsSnapshot>,
-            client.query(GET_FUNCTION_STATS, {}, options) as Promise<{ functions: FunctionCallStat[] }>,
-            client.query(GET_AUTH_METRICS, {}, options) as Promise<AuthMetrics>,
-            client.query(MIGRATION_STATUS, {}, options) as Promise<{ migrations: MigrationStatusRow[] }>,
-            schedulerStatus,
-        ]);
+        if (!mountedRef.current) {
+            inFlightRef.current = false;
 
-        if (logs.status === "fulfilled") {
-            setEntries(logs.value.entries);
-            setLogsError(null);
-        } else {
-            setLogsError(errorMessage(logs.reason));
+            return;
         }
 
-        if (snapshot.status === "fulfilled") {
-            setMetrics(snapshot.value);
-            setMetricsError(null);
-        } else {
-            setMetricsError(errorMessage(snapshot.reason));
-        }
+        setTotals(result.totals);
+        setMetricsError(result.metricsError);
+        setFunctions(result.functions);
+        setMigrations(result.migrations);
+        setEntries(result.entries);
+        setLogsError(result.logsError);
+        setAuth(result.auth);
+        setScheduler(result.scheduler);
 
-        // The SLO tiles degrade silently — a rejected read just leaves the tile at
-        // its empty/`—` state rather than surfacing a banner per signal.
-        setFunctions(stats.status === "fulfilled" ? stats.value.functions : []);
-        setAuth(authMetrics.status === "fulfilled" ? authMetrics.value : null);
-        setMigrations(migrationRows.status === "fulfilled" ? migrationRows.value.migrations : []);
-        setScheduler(schedulerState.status === "fulfilled" ? schedulerState.value : null);
-
+        inFlightRef.current = false;
         setLoading(false);
-    }, [client, initialShardKey]);
+    }, [client, recentShards, rootShard]);
 
     useEffect(() => {
         fireAndForget(refresh());
@@ -234,11 +310,26 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
         fireAndForget(refresh());
     }, [refresh]);
 
+    // Live channel: while toggled on, a root-shard `getMetrics` push (every
+    // write-flush) drives a full cross-shard re-pull. Bounded by `inFlightRef`,
+    // so a burst of pushes coalesces into at most one in-flight refresh.
+    useLiveAdmin(
+        ADMIN_FUNCTIONS.getMetrics,
+        {},
+        rootShard,
+        () => {
+            setLiveError(undefined);
+            fireAndForget(refresh());
+        },
+        live,
+        setLiveError,
+    );
+
     // Entries arrive newest-first from the buffer.
     const recentErrors = useMemo<LogEntry[]>(() => entries.filter((entry) => entry.level === "error"), [entries]);
     const topErrors = useMemo<LogEntry[]>(() => recentErrors.slice(0, RECENT_ERROR_LIMIT), [recentErrors]);
 
-    const trend = useMemo(() => requestErrorSeries(metrics?.history), [metrics?.history]);
+    const trend = useMemo(() => requestErrorSeries(totals?.history), [totals?.history]);
     const authTrend = useMemo(() => {
         const buckets = auth?.history ?? [];
 
@@ -260,7 +351,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
     const migration = useMemo(() => migrationSummary(migrations), [migrations]);
 
-    const appErrorRate = metrics === null || metrics.requests === 0 ? 0 : metrics.errors / metrics.requests;
+    const appErrorRate = totals === null || totals.requests === 0 ? 0 : totals.errors / totals.requests;
     const errorLevel = rateLevel(appErrorRate, REQUEST_ERROR_WARN, REQUEST_ERROR_CRIT);
     const authLevel = auth === null ? "ok" : rateLevel(auth.failureRate, AUTH_FAIL_WARN, AUTH_FAIL_CRIT);
 
@@ -268,6 +359,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
         <div className="flex flex-col gap-4" data-testid="cirrus-health">
             <div className="flex flex-wrap items-center gap-3">
                 <ConnectionBadge />
+                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="hl" />
                 <Button data-testid="hl-refresh" disabled={loading} onClick={onRefresh} size="xs" type="button" variant="outline">
                     {t("Refresh")}
                 </Button>
@@ -280,7 +372,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
                         label={t("Error rate")}
                         level={errorLevel}
                         testId="hl-slo-errorrate"
-                        value={metrics === null ? "—" : ratePercent(metrics.errors, metrics.requests)}
+                        value={totals === null ? "—" : ratePercent(totals.errors, totals.requests)}
                     />
                     <SloTile
                         label={t("Auth failures")}
@@ -399,13 +491,13 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
                     <div>
                         <div className="text-xs text-muted-foreground">{t("Requests")}</div>
                         <div className="text-lg font-semibold" data-testid="hl-requests">
-                            {(metrics?.requests ?? 0).toString()}
+                            {(totals?.requests ?? 0).toString()}
                         </div>
                     </div>
                     <div>
                         <div className="text-xs text-muted-foreground">{t("Errors")}</div>
                         <div className="text-lg font-semibold" data-testid="hl-error-rate">
-                            {metrics === null ? "—" : ratePercent(metrics.errors, metrics.requests)}
+                            {totals === null ? "—" : ratePercent(totals.errors, totals.requests)}
                         </div>
                     </div>
                 </div>
