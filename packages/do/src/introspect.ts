@@ -583,7 +583,7 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     return { hasMore, ids };
 };
 
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage, selectMatchingIds };
+export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds };
 export type {
     AuditEntry,
     AuditLogResult,

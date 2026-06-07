@@ -37,6 +37,19 @@ export const SCAN_DEP = "*scan";
  */
 export const depKey = (table: string, idOrScan: string): string => `${table}:${idOrScan}`;
 
+/**
+ * Inverse of {@link depKey}: recover the table name from a dep key. Table names
+ * are SQL identifiers (never contain `:`), so the FIRST colon is always the
+ * separator — the id / `*scan` suffix may itself contain colons, so splitting on
+ * the LAST colon would truncate a colon-bearing row id into a bogus table name.
+ * A key with no colon (defensive) is returned whole.
+ */
+export const tableFromDepKey = (dep: string): string => {
+    const colon = dep.indexOf(":");
+
+    return colon === -1 ? dep : dep.slice(0, colon);
+};
+
 export interface DependencyTracker {
     /**
      * Snapshot the dep set collected so far. Returns the live `Set` (no

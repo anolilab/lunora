@@ -42,7 +42,7 @@ interface RequestLogEntry {
     errorMessage?: string;
     /** The `&lt;file>:&lt;function>` identifier dispatched, e.g. `messages:list`. */
     functionPath: string;
-    /** Identity claims (email, roles, …) forwarded by the runtime, JSON-decoded; absent for anonymous requests. */
+    /** Identity-claim envelope forwarded by the runtime, JSON-decoded; leaf values are redacted (the claims are PII), so only the shape survives. Absent for anonymous requests. Correlate on `userId` instead. */
     identity?: Record<string, unknown>;
     /** `ok` for a returned result, `error` for a thrown handler. */
     outcome: RequestOutcome;
@@ -230,8 +230,13 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry): void
         entry.shardKey ?? null,
         // eslint-disable-next-line unicorn/no-null -- anonymous request: no acting user.
         entry.userId ?? null,
+        // Identity claims (email/name/roles) are PII, so they're redacted by
+        // default exactly like args — keeping the envelope's shape for the
+        // dashboard while keeping raw PII out of the durable log. The opaque
+        // `user_id` column above stays raw; it's the non-PII correlation key the
+        // `getRequestLog` filters key on.
         // eslint-disable-next-line unicorn/no-null -- anonymous request or no claims attached.
-        entry.identity === undefined ? null : JSON.stringify(entry.identity),
+        entry.identity === undefined ? null : JSON.stringify(redactArgs(entry.identity)),
         // eslint-disable-next-line unicorn/no-null -- no args were sent on this dispatch.
         entry.redactedArgs === undefined ? null : JSON.stringify(redactArgs(entry.redactedArgs)),
         entry.outcome,

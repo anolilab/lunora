@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { SCAN_DEP } from "../src/dependency-tracker.js";
 import {
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKETS_TABLE,
@@ -41,8 +42,12 @@ class ScanningShard extends ShardDO {
         if (functionPath === "feed:list") {
             const onRead = this.getCtxDbReadHook();
 
-            // Stamp a full scan of `posts` (no row id → SCAN_DEP).
-            onRead("posts");
+            // Stamp a full scan of `posts` with the explicit `SCAN_DEP` sentinel —
+            // exactly what `ctx-db.ts` emits for an unindexed read.
+            onRead("posts", SCAN_DEP);
+            // A predicated (indexed) `findMany` stamps the table with NO id marker
+            // before its per-row reads — this must NOT be attributed as a scan.
+            onRead("comments");
             // An indexed point read of `users` must NOT count as a scan.
             onRead("users", "user-1");
         }
