@@ -49,6 +49,7 @@ export type {
     PaginationOptions,
     ReadHook,
     SchemaLike,
+    SearchFilterBuilderLike,
     SqlCursor,
     SqlExec,
     TableDefinitionLike,

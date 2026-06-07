@@ -463,6 +463,29 @@ export interface RankPage<TDoc> {
     page: TDoc[];
 }
 
+/**
+ * Builder passed to \`.withSearchIndex(name, q => …)\`. \`.search(field, query)\`
+ * runs the full-text match against the index's searchable field; \`.eq(field,
+ * value)\` narrows by a declared filter field. Field names are constrained to
+ * the table's columns.
+ */
+export interface SearchFilterBuilder<TDoc> {
+    eq: <F extends keyof TDoc & string>(field: F, value: TDoc[F]) => SearchFilterBuilder<TDoc>;
+    search: <F extends keyof TDoc & string>(field: F, query: string) => SearchFilterBuilder<TDoc>;
+}
+
+/**
+ * Chainable reader returned by \`.withSearchIndex()\` — rows come back ordered
+ * by relevance. \`.paginate()\` is intentionally absent (a relevance-ordered
+ * search can't keyset-paginate); cap the result set with \`.take(n)\`.
+ */
+export interface SearchReader<TDoc> {
+    collect: () => Promise<TDoc[]>;
+    first: () => Promise<TDoc | null>;
+    take: (limit: number) => Promise<TDoc[]>;
+    unique: () => Promise<TDoc | null>;
+}
+
 /** Read-only typed table accessor exposed on \`QueryCtx.db.<table>\`. */
 export interface TableReaderFacade<T extends keyof DataModel> {
     /**
@@ -502,6 +525,13 @@ export interface TableReaderFacade<T extends keyof DataModel> {
      * follow the Convex-style keyset shape.
      */
     rankPage: (indexName: RankIndexName<T>, options?: TableRankPageOptions<Doc<T>>) => Promise<RankPage<Doc<T>>>;
+    /**
+     * Restrict the query to a declared \`.searchIndex()\` and run a full-text
+     * match. \`indexName\` is constrained to this table's search indexes
+     * (\`never\` when it declares none). Returns a relevance-ordered reader —
+     * finish with \`.take(n)\` / \`.collect()\`.
+     */
+    withSearchIndex: (indexName: SearchIndexName<T>, search: (q: SearchFilterBuilder<Doc<T>>) => SearchFilterBuilder<Doc<T>>) => SearchReader<Doc<T>>;
 }
 
 /** Read-write typed table accessor exposed on \`MutationCtx.db.<table>\` / \`ActionCtx.db.<table>\`. */
@@ -1097,7 +1127,7 @@ const emitShard = (schema: SchemaIR): string => {
         "DataMigrationLike",
         "MigrationRunResult",
         "QueryArgs",
-        ...(hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions"] : []),
+        ...(hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions", "SearchFilterBuilderLike"] : []),
         "RunShardApplyCdcArgs",
         "RunShardMigrationArgs",
         "RunShardRankBeforeArgs",
@@ -1276,6 +1306,7 @@ const bindTable = (writer: DatabaseWriterLike, tableName: string) => ({
     rank: (indexName: string, options: RankOptions) => writer.rank(tableName, indexName, options),
     rankPage: (indexName: string, options?: RankPageOptions) => writer.rankPage(tableName, indexName, options),
     replace: (id: string, values: Record<string, unknown>) => writer.replace(id, values),
+    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => writer.query(tableName).withSearchIndex(indexName, search),
 });
 
 const bindOrm = (facade: Record<string, ReturnType<typeof bindTable>>) => {
