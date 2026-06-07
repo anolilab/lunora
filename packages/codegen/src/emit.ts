@@ -1121,13 +1121,13 @@ const emitShard = (schema: SchemaIR): string => {
     const tableReferences = buildTableReferences(schema);
     const tableIndexes = buildTableIndexes(schema);
 
+    // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
+    // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
+    // (from `@cirrus/server`) now owns the per-table accessor binding.
     const doTypeImports = [
-        ...(hasTables ? ["AggregateOptions", "GroupByOptions"] : []),
         "DatabaseWriterLike",
         "DataMigrationLike",
         "MigrationRunResult",
-        "QueryArgs",
-        ...(hasTables ? ["RankOptions", "RankPageOptions", "RestrictableQueryOptions", "SearchFilterBuilderLike"] : []),
         "RunShardApplyCdcArgs",
         "RunShardMigrationArgs",
         "RunShardRankBeforeArgs",
@@ -1138,7 +1138,6 @@ const emitShard = (schema: SchemaIR): string => {
         "ShardDOState",
         "SqlExec",
         "SystemReaderStorageLike",
-        "WhereInput",
         ...(hasVectors ? ["WriteHook"] : []),
     ];
 
@@ -1146,6 +1145,13 @@ const emitShard = (schema: SchemaIR): string => {
         `import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`,
         `import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`,
     ];
+
+    // The per-table facade binding lives in `@cirrus/server` so codegen and the
+    // RLS middleware share one implementation (no drift). Only needed when the
+    // project declares tables (otherwise no facade is built).
+    if (hasTables) {
+        importLines.push(`import { bindOrm, bindTableFacade } from "@cirrus/server";`);
+    }
 
     if (hasVectors) {
         importLines.push(
@@ -1290,57 +1296,21 @@ const vectorsStub: VectorSearchLike = {
     // over the structural `DatabaseWriterLike`: it pins `tableName` so callers
     // don't repeat it. `delete`/`get`/`patch`/`replace` address rows by id, so
     // they pass straight through.
-    const bindTableHelper = hasTables
-        ? `
-const bindTable = (writer: DatabaseWriterLike, tableName: string) => ({
-    aggregate: (options: AggregateOptions) => writer.aggregate(tableName, options),
-    count: (where?: RestrictableQueryOptions | WhereInput) => writer.count(tableName, where),
-    delete: (id: string) => writer.delete(id),
-    findFirst: (args?: QueryArgs) => writer.findFirst(tableName, args),
-    findFirstOrThrow: (args?: QueryArgs) => writer.findFirstOrThrow(tableName, args),
-    findMany: (args?: QueryArgs) => writer.findMany(tableName, args),
-    get: (id: string) => writer.get(id),
-    groupBy: (options: GroupByOptions) => writer.groupBy(tableName, options),
-    insert: (values: Record<string, unknown>) => writer.insert(tableName, values),
-    patch: (id: string, values: Record<string, unknown>) => writer.patch(id, values),
-    rank: (indexName: string, options: RankOptions) => writer.rank(tableName, indexName, options),
-    rankPage: (indexName: string, options?: RankPageOptions) => writer.rankPage(tableName, indexName, options),
-    replace: (id: string, values: Record<string, unknown>) => writer.replace(id, values),
-    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => writer.query(tableName).withSearchIndex(indexName, search),
-});
-
-const bindOrm = (facade: Record<string, ReturnType<typeof bindTable>>) => {
-    const resolve = (table: string): ReturnType<typeof bindTable> => {
-        const bound = facade[table];
-
-        if (!bound) {
-            throw new Error(\`unknown table: \${table}\`);
-        }
-
-        return bound;
-    };
-
-    return {
-        delete: (table: string, id: string) => resolve(table).delete(id),
-        insert: (table: string) => ({ values: (values: Record<string, unknown>) => resolve(table).insert(values) }),
-        query: facade,
-        replace: (table: string, id: string) => ({ with: (values: Record<string, unknown>) => resolve(table).replace(id, values) }),
-        update: (table: string, id: string) => ({ set: (values: Record<string, unknown>) => resolve(table).patch(id, values) }),
-    };
-};
-`
-        : "";
+    // `bindTableFacade` / `bindOrm` are imported from `@cirrus/server` (the ONE
+    // source of truth for the facade shape, also used by the RLS middleware) —
+    // see the import added below. Nothing to emit inline.
+    const bindTableHelper = "";
 
     // Build `globalDb` only when a `.global()` table exists; otherwise the
     // binding (and the stub it falls back to) would be unused.
     const globalDatabaseLine = hasGlobalTables ? `\n            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;` : "";
 
     const facadeBlock = hasTables
-        ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTable>>;
+        ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
 ${schema.tables
     .map(
         (table) =>
-            `            facade[${JSON.stringify(table.name)}] = bindTable(${table.shardMode === "global" ? "globalDb" : "db"}, ${JSON.stringify(table.name)});`,
+            `            facade[${JSON.stringify(table.name)}] = bindTableFacade(${table.shardMode === "global" ? "globalDb" : "db"}, ${JSON.stringify(table.name)});`,
     )
     .join("\n")}
 `

@@ -44,6 +44,8 @@
  */
 import type { Middleware } from "../builder/types.js";
 import { CirrusError } from "../error.js";
+import type { FacadeEntry } from "../facade.js";
+import { bindOrm, bindTableFacade } from "../facade.js";
 import type { Policy, PolicyContext, WhereInput } from "./types.js";
 
 /**
@@ -575,30 +577,6 @@ const mergeBaseWhere = (caller: undefined | WhereInput, injected: undefined | Wh
 };
 
 /**
- * The per-table accessor the generated runtime exposes on `ctx.db` (the
- * `ctx.db.messages.findMany(...)` form) — structurally mirrors codegen's
- * `bindTable` (see `@cirrus/codegen`'s emit). The RLS wrapper re-binds these so
- * they route through the wrapped writer; keep this method set in sync with
- * `bindTable` so no accessor escapes RLS.
- */
-interface FacadeEntry {
-    aggregate: (options: AggregateArgs) => Promise<null | number>;
-    count: (where?: CountArgs | WhereInput) => Promise<number>;
-    delete: (id: string) => Promise<void>;
-    findFirst: (args?: QueryArgs) => Promise<Record<string, unknown> | null>;
-    findFirstOrThrow: (args?: QueryArgs) => Promise<Record<string, unknown>>;
-    findMany: (args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string) => Promise<Record<string, unknown> | null>;
-    groupBy: (options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
-    insert: (document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
-    rank: (indexName: string, options: RankArgs) => Promise<null | { position: number; total: number }>;
-    rankPage: (indexName: string, options?: RankPageArgs) => Promise<QueryPage>;
-    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
-    withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike;
-}
-
-/**
  * A value glued onto `ctx.db` is a per-table facade entry when it carries the
  * distinctive `findMany` + `withSearchIndex` accessor pair (the `system` reader
  * and other ctx fields don't). Used to find the entries that need re-binding.
@@ -611,63 +589,6 @@ const isFacadeEntry = (value: unknown): value is Record<string, unknown> => {
     const candidate = value as Record<string, unknown>;
 
     return typeof candidate["findMany"] === "function" && typeof candidate["withSearchIndex"] === "function";
-};
-
-/**
- * Re-bind one per-table facade entry so every accessor routes through the
- * RLS-wrapped writer `wrapped` (which enforces `baseWhere` / write gates / rank
- * guards) instead of the raw writer the generated `bindTable` closed over.
- */
-const rlsFacadeEntry = (tableName: string, wrapped: RlsDatabase): FacadeEntry => {
-    return {
-        aggregate: (options) => wrapped.aggregate(tableName, options),
-        count: (where) => wrapped.count(tableName, where),
-        delete: (id) => wrapped.delete(id),
-        findFirst: (args) => wrapped.findFirst(tableName, args),
-        findFirstOrThrow: (args) => wrapped.findFirstOrThrow(tableName, args),
-        findMany: (args) => wrapped.findMany(tableName, args),
-        get: (id) => wrapped.get(id),
-        groupBy: (options) => wrapped.groupBy(tableName, options),
-        insert: (document) => wrapped.insert(tableName, document),
-        patch: (id, patch) => wrapped.patch(id, patch),
-        rank: (indexName, options) => wrapped.rank(tableName, indexName, options),
-        rankPage: (indexName, options) => wrapped.rankPage(tableName, indexName, options),
-        replace: (id, document) => wrapped.replace(id, document),
-        withSearchIndex: (indexName, search) => wrapped.query(tableName).withSearchIndex(indexName, search),
-    };
-};
-
-/**
- * Re-build `ctx.orm` (codegen's `bindOrm`) so its per-table accessors and the
- * `query` map route through the RLS-wrapped writer. `wrapped` already carries
- * the re-bound facade entries (installed by {@link wrapDatabase}), so `query`
- * is simply that object and the write helpers resolve their entry off it. Keep
- * in sync with `bindOrm` in `@cirrus/codegen`'s emit.
- */
-const rebindOrm = (wrapped: RlsDatabase): Record<string, unknown> => {
-    const resolve = (table: string): FacadeEntry => {
-        const bound = (wrapped as unknown as Record<string, FacadeEntry | undefined>)[table];
-
-        if (!bound) {
-            throw new Error(`unknown table: ${table}`);
-        }
-
-        return bound;
-    };
-
-    return {
-        delete: (table: string, id: string) => resolve(table).delete(id),
-        insert: (table: string) => {
-            return { values: (document: Record<string, unknown>) => resolve(table).insert(document) };
-        },
-        query: wrapped,
-        replace: (table: string, id: string) => {
-            return { with: (document: Record<string, unknown>) => resolve(table).replace(id, document) };
-        },
-        update: (table: string, id: string) => {
-            return { set: (values: Record<string, unknown>) => resolve(table).patch(id, values) };
-        },
-    };
 };
 
 /**
@@ -1012,16 +933,23 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
     };
 
     // SECURITY: the generated runtime glues a per-table facade
-    // (`ctx.db.<table>.findMany(...)`, codegen's `bindTable`) onto `ctx.db`,
-    // bound to the UNWRAPPED writer. The `...base` spread above copies those
-    // raw-bound accessors verbatim, so without this loop they would read around
-    // RLS entirely (and around the `count`/rank fail-closed guards). Re-bind
-    // every facade entry to route through the wrapped writer so the per-table
-    // API is policy-enforced too. (`ctx.orm` is a sibling ctx field, not on
-    // `ctx.db` — `rls()` re-binds it separately.)
-    for (const [key, value] of Object.entries(base)) {
-        if (isFacadeEntry(value)) {
-            (wrapped as unknown as Record<string, unknown>)[key] = rlsFacadeEntry(key, wrapped);
+    // (`ctx.db.messages.findMany(...)`, codegen's `bindTableFacade`) onto
+    // `ctx.db`, bound to the UNWRAPPED writer. The `...base` spread above copies
+    // those raw-bound accessors verbatim, so without this loop a policy table's
+    // facade would read around RLS (and around the `count`/rank fail-closed
+    // guards). Re-bind the policy tables to route through the wrapped writer,
+    // using the SAME `bindTableFacade` codegen emits so the two can't drift.
+    //
+    // Only POLICY tables are re-bound: a non-policy table's entry needs no RLS,
+    // and (crucially) a `.global()` table's entry is bound to the D1 `globalDb`
+    // writer — re-binding it through the local wrapped writer would query the
+    // wrong backend. Leaving non-policy entries on their original binding keeps
+    // both backends correct. (RLS policies target shard-local tables.)
+    const writableFacade = wrapped as unknown as Record<string, unknown>;
+
+    for (const tableName of perTable.keys()) {
+        if (isFacadeEntry((base as unknown as Record<string, unknown>)[tableName])) {
+            writableFacade[tableName] = bindTableFacade(wrapped, tableName);
         }
     }
 
@@ -1070,7 +998,11 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
         const { orm } = ctx as { orm?: unknown };
 
         if (orm !== null && typeof orm === "object") {
-            extension.orm = rebindOrm(wrapped);
+            // `wrapped` carries the re-bound policy-table facade entries (plus
+            // the originals for the rest), so rebuilding the orm over it routes
+            // `ctx.orm.query`/writes through the same enforcement. Same shared
+            // `bindOrm` codegen uses.
+            extension.orm = bindOrm(wrapped as unknown as Record<string, FacadeEntry>);
         }
 
         return next({ ctx: extension });
