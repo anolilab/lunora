@@ -27,6 +27,7 @@ export const ADMIN_FUNCTIONS = {
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
     getPitrBookmark: "__cirrus_admin__:getPitrBookmark",
+    getRequestLog: "__cirrus_admin__:getRequestLog",
     getSettings: "__cirrus_admin__:getSettings",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
@@ -226,6 +227,69 @@ export interface AuditEntry {
 /** Payload of a `__cirrus_admin__:getAuditLog` call: the recorded entries, newest first. */
 export interface AuditLogResult {
     entries: AuditEntry[];
+}
+
+/** Outcome of one dispatch in the request log, mirroring `@cirrus/do`'s `RequestOutcome`. */
+export type RequestOutcome = "error" | "ok";
+
+/**
+ * One structured `/rpc` dispatch returned by `__cirrus_admin__:getRequestLog`,
+ * mirroring `@cirrus/do`'s `RequestLogEntry`. Unlike the in-memory `getLogs`
+ * error buffer, the request log is durable and records EVERY dispatch with the
+ * app-level context Cloudflare cannot attribute: the `&lt;file>:&lt;function>` path,
+ * the shard key, the acting `userId`/identity, the (server-side redacted) args,
+ * the outcome + error message, the handler duration, the tables read/written,
+ * and whether the result came from the reactive cache. `seq` is a monotonic
+ * per-shard cursor the panel pages through.
+ */
+export interface RequestLogEntry {
+    /** Whether the result was served from the reactive cache; absent when the cache is off or the path isn't cached. */
+    cacheHit?: boolean;
+    /** Handler wall-clock duration in milliseconds. */
+    durationMs: number;
+    /** Error message when `outcome === "error"`; absent on success. */
+    errorMessage?: string;
+    /** The `&lt;file>:&lt;function>` identifier dispatched. */
+    functionPath: string;
+    /** Identity claims forwarded by the runtime; absent for anonymous requests. */
+    identity?: Record<string, unknown>;
+    /** `ok` for a returned result, `error` for a thrown handler. */
+    outcome: RequestOutcome;
+    /** Call args with leaf values redacted server-side (keys/shape preserved); absent when no args were sent. */
+    redactedArgs?: unknown;
+    /** Monotonic per-shard cursor — strictly increasing, never reused. */
+    seq: number;
+    /** Shard key (the DO id name); absent for the unnamed `__root__` DO. */
+    shardKey?: string;
+    /** Subscriptions re-run by this dispatch's write (`0` when none / not measured at the dispatch site). */
+    subscriptionsReRun: number;
+    /** Tables the handler read; empty when the reactive cache is off or nothing was read. */
+    tablesRead: string[];
+    /** Tables the handler wrote; empty for a read-only dispatch. */
+    tablesWritten: string[];
+    /** Epoch-ms the dispatch completed. */
+    ts: number;
+    /** Acting userId forwarded by the runtime; absent when anonymous. */
+    userId?: string;
+}
+
+/** Payload of a `__cirrus_admin__:getRequestLog` call: the recorded entries, newest first. */
+export interface RequestLogResult {
+    entries: RequestLogEntry[];
+}
+
+/**
+ * Correlated filters accepted by `__cirrus_admin__:getRequestLog`, mirroring
+ * `@cirrus/do`'s `ReadRequestLogOptions`. All AND-combined and bound server-side.
+ */
+export interface RequestLogQuery {
+    functionPathPrefix?: string;
+    limit?: number;
+    outcome?: RequestOutcome;
+    shardKey?: string;
+    sinceSeq?: number;
+    tableTouched?: string;
+    userId?: string;
 }
 
 /**
