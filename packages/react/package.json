@@ -52,7 +52,7 @@
         "esbuild": "catalog:build",
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
-        "react-doctor": "0.4.0",
+        "react-doctor": "0.4.2",
         "react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
