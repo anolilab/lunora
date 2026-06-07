@@ -36,6 +36,7 @@ interface CapturedCall {
 interface FakeDatabase {
     calls: CapturedCall[];
     writer: {
+        aggregate: (tableName: string, options: unknown) => Promise<null | number>;
         count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
         delete: (id: string) => Promise<void>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
@@ -43,9 +44,13 @@ interface FakeDatabase {
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         get: (id: string) => Promise<Record<string, unknown> | null>;
         getWithTable?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
+        groupBy: (tableName: string, options: unknown) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
         insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
         query: (tableName: string) => never;
+        rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
+        rankBefore: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;
+        rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         replace: (id: string, document: Record<string, unknown>) => Promise<void>;
     };
 }
@@ -64,6 +69,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
     return {
         calls,
         writer: {
+            async aggregate(tableName, options) {
+                calls.push({ args: options, method: "aggregate", tableOrId: tableName });
+
+                return rowsOfTable(tableName).length;
+            },
             async count(tableName, whereOrArgs) {
                 calls.push({ args: whereOrArgs, method: "count", tableOrId: tableName });
 
@@ -102,6 +112,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return byId.get(id) ?? null;
             },
+            async groupBy(tableName, options) {
+                calls.push({ args: options, method: "groupBy", tableOrId: tableName });
+
+                return [{ key: {}, value: rowsOfTable(tableName).length }];
+            },
             async insert(tableName, document) {
                 calls.push({ args: document, method: "insert", tableOrId: tableName });
 
@@ -112,6 +127,21 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
             },
             query() {
                 throw new Error("query() not used in these tests");
+            },
+            async rank(tableName, _indexName, options) {
+                calls.push({ args: options, method: "rank", tableOrId: tableName });
+
+                return { position: 1, total: rowsOfTable(tableName).length };
+            },
+            async rankBefore(tableName, _indexName, options) {
+                calls.push({ args: options, method: "rankBefore", tableOrId: tableName });
+
+                return { before: 0, total: rowsOfTable(tableName).length };
+            },
+            async rankPage(tableName, _indexName, options) {
+                calls.push({ args: options, method: "rankPage", tableOrId: tableName });
+
+                return { continueCursor: null, isDone: true, page: rowsOfTable(tableName) };
             },
             async replace(id, document) {
                 calls.push({ args: document, method: "replace", tableOrId: id });
@@ -849,5 +879,94 @@ describe("definePolicies — duplicate detection", () => {
         const updateDocs = definePolicy({ on: "update", table: "documents", when: tenantScope });
 
         expect(() => definePolicies([readDocs, readNotes, updateDocs])).not.toThrow();
+    });
+});
+
+describe("rls — analytical reads (baseWhere on the full facade)", () => {
+    const ownerPolicy = definePolicy<TestContext>({
+        on: "read",
+        table: "documents",
+        when: ({ auth }) => {
+            return { ownerId: auth.userId };
+        },
+    });
+
+    it("and-merges the read baseWhere into aggregate()", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = cirrus.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.aggregate("documents", { op: "sum", where: { archived: false } }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        const call = database.calls.find((entry) => entry.method === "aggregate");
+
+        expect(call?.args).toMatchObject({ baseWhere: { ownerId: "u1" }, op: "sum", where: { archived: false } });
+    });
+
+    it("and-merges the read baseWhere into groupBy()", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = cirrus.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.groupBy("documents", { by: ["status"] }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        const call = database.calls.find((entry) => entry.method === "groupBy");
+
+        expect(call?.args).toMatchObject({ baseWhere: { ownerId: "u1" }, by: ["status"] });
+    });
+
+    it("fails rank() closed with COUNT_RLS_UNSUPPORTED under a read policy", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = cirrus.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("documents", "byScore", { row: "d1" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "COUNT_RLS_UNSUPPORTED" });
+        // The underlying writer is never reached — the guard throws first.
+        expect(database.calls.some((entry) => entry.method === "rank")).toBe(false);
+    });
+
+    it("fails rankPage() closed with COUNT_RLS_UNSUPPORTED under a read policy", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = cirrus.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPage("documents", "byScore"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "COUNT_RLS_UNSUPPORTED" });
+        expect(database.calls.some((entry) => entry.method === "rankPage")).toBe(false);
+    });
+
+    it("leaves analytical reads UNRESTRICTED on a table with no read policy", async () => {
+        expect.assertions(3);
+
+        // Policy targets "documents"; "events" carries none, so its analytical
+        // reads pass through with no baseWhere and rank() doesn't throw.
+        const database = createFakeDatabase([{ _id: "e1", table: "events" }]);
+        const handler = cirrus.query.use(rlsForTest<TestContext>([ownerPolicy])).query(async ({ ctx }) => {
+            const typed = (ctx as unknown as TestContext).db;
+
+            await typed.aggregate("events", { op: "sum" });
+
+            return typed.rank("events", "byTime", { row: "e1" });
+        });
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result).toEqual({ position: 1, total: 1 });
+
+        const aggregateCall = database.calls.find((entry) => entry.method === "aggregate");
+
+        expect((aggregateCall?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
+        expect(database.calls.some((entry) => entry.method === "rank")).toBe(true);
     });
 });
