@@ -1600,6 +1600,34 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         return writer;
     };
 
+    /**
+     * Pick the reader that owns a relation's target table when loading `with`.
+     * Shard-local children stay on this DO's SQLite (`writer`); a global (D1)
+     * child routes to `globalDb`, so a shard-local parent can load it in a
+     * single bounded `IN (...)` read. A missing `globalDb` throws a wiring
+     * error rather than silently querying the wrong backend. The unsupported
+     * direction (global parent → shard-local child) is rejected upstream in
+     * `resolveWith`'s `requireRelation`.
+     */
+    const routeReaderForTable = (relationTable: string): DatabaseWriterLike => {
+        if (isGlobalTable(relationTable)) {
+            if (!globalDb) {
+                throw new Error(
+                    `cross-backend relation load for global table '${relationTable}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`,
+                );
+            }
+
+            return globalDb;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure read of post-construction `writer`
+        return writer;
+    };
+
+    /** Backend-routed `fetcher`/`counter` pair handed to {@link resolveWith} so a `with` can cross into D1. */
+    const relationFetcher = (relationTable: string, relationArgs: QueryArgs): Promise<QueryPage> => routeReaderForTable(relationTable).findMany(relationTable, relationArgs);
+    const relationCounter = (relationTable: string, relationWhere?: WhereInput): Promise<number> => routeReaderForTable(relationTable).count(relationTable, relationWhere);
+
     let triggerDepth = 0;
 
     /**
@@ -2415,7 +2443,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             if (limit === undefined) {
                 if (args.with) {
-                    await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: docs, schema, tableName, with: args.with });
+                    await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: docs, schema, tableName, with: args.with });
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
@@ -2427,7 +2455,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const last = page.at(-1);
 
             if (args.with) {
-                await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: page, schema, tableName, with: args.with });
+                await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: page, schema, tableName, with: args.with });
             }
 
             return {

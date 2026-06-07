@@ -14,8 +14,12 @@
  * dialects. Nested `with` recurses for free: the injected fetcher re-enters
  * its own `findMany`, which calls `resolveWith` again on the child page.
  *
- * Scope: **intra-shard / same-backend only.** A relation that crosses the
- * DO↔D1 boundary throws — those are deferred to the Query Coordinator.
+ * Cross-backend scope: a **shard-local parent → global (D1) child** is
+ * supported — the injected `fetcher`/`counter` route the child's queries to the
+ * D1 writer, so it's a single bounded read. The reverse (a **global parent →
+ * shard-local child**) is rejected: that child spans every DO and would need a
+ * Query Coordinator fan-out the loader can't issue. Same-backend relations
+ * route straight back to the local writer.
  */
 
 import type { TableDefinitionLike } from "./ctx-db.js";
@@ -109,8 +113,19 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             throw new Error(`unknown relation "${name}" on table "${tableName}"`);
         }
 
-        if (isGlobal(parentDefinition) !== isGlobal(schema.tables[relation.table])) {
-            throw new Error(`cross-backend relation '${tableName}.${name}' not supported in v1 — route through the Query Coordinator`);
+        // A **global** (D1) parent can't load a **shard-local** child: that
+        // child's rows are partitioned across every DO, so resolving it would
+        // need a Query Coordinator fan-out the loader can't issue. Reject it.
+        //
+        // The reverse — a shard-local parent loading a **global** child — is a
+        // single bounded `IN (...)` read against D1, so it's allowed. The
+        // injected `fetcher`/`counter` route the global child's queries to the
+        // D1 writer (see the DO's `routeReaderForTable`); a same-backend
+        // relation routes straight back to the local writer.
+        if (isGlobal(parentDefinition) && !isGlobal(schema.tables[relation.table])) {
+            throw new Error(
+                `cross-backend relation '${tableName}.${name}': a global table cannot load the shard-local relation '${relation.table}' (it spans every shard) — not supported`,
+            );
         }
 
         return relation;
