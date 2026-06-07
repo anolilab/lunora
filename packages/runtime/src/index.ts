@@ -39,8 +39,14 @@ export { CirrusError, toErrorResponse } from "./errors.js";
 /* eslint-disable perfectionist/sort-exports -- conflicts with simple-import-sort/exports on the observability/observability-sinks ordering; simple-import-sort's autofix wins, so we follow it and disable perfectionist for these lines */
 export type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
 export { emitRpcEvent } from "./observability.js";
-export type { SentrySinkOptions, WebhookSinkOptions } from "./observability-sinks.js";
-export { combineSinks, consoleSink, sentrySink, webhookSink } from "./observability-sinks.js";
+export type {
+    AnalyticsEngineDataPointLike,
+    AnalyticsEngineDatasetLike,
+    AnalyticsEngineSinkOptions,
+    SentrySinkOptions,
+    WebhookSinkOptions,
+} from "./observability-sinks.js";
+export { analyticsEngineSink, combineSinks, consoleSink, sentrySink, webhookSink } from "./observability-sinks.js";
 /* eslint-enable perfectionist/sort-exports */
 export type {
     ExportFanOutRequest,

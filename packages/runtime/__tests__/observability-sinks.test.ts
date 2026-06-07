@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ObservabilityEvent } from "../src/observability.js";
-import { combineSinks, consoleSink, sentrySink, webhookSink } from "../src/observability-sinks.js";
+import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks.js";
+import { analyticsEngineSink, combineSinks, consoleSink, sentrySink, webhookSink } from "../src/observability-sinks.js";
 
 const okEvent: ObservabilityEvent = { durationMs: 5, functionPath: "messages:list", ok: true, shardKey: "channel-1" };
 const errorEvent: ObservabilityEvent = {
@@ -293,6 +294,109 @@ describe("observability-sinks", () => {
             sink.onRpc!(okEvent);
 
             expect(b).toHaveBeenCalledWith(okEvent);
+        });
+    });
+
+    describe("analyticsEngineSink", () => {
+        it("writes a data point with index, blob dimensions, and numeric metrics", () => {
+            expect.assertions(3);
+
+            const points: AnalyticsEngineDataPointLike[] = [];
+            const sink = analyticsEngineSink({
+                dataset: {
+                    writeDataPoint: (point) => {
+                        points.push(point);
+                    },
+                },
+            });
+
+            sink.onRpc!(okEvent);
+
+            expect(points).toHaveLength(1);
+            expect(points[0]).toStrictEqual({
+                blobs: ["messages:list", "ok", "channel-1", "", ""],
+                doubles: [5, 0, 0, 0],
+                indexes: ["messages:list"],
+            });
+            // The error counter (double[1]) is 0 for a successful event.
+            expect(points[0]?.doubles?.[1]).toBe(0);
+        });
+
+        it("records error code and a 1 error-count for failed events", () => {
+            expect.assertions(2);
+
+            const points: AnalyticsEngineDataPointLike[] = [];
+            const sink = analyticsEngineSink({
+                dataset: {
+                    writeDataPoint: (point) => {
+                        points.push(point);
+                    },
+                },
+            });
+
+            sink.onRpc!(errorEvent);
+
+            expect(points[0]?.blobs).toStrictEqual(["messages:send", "error", "channel-1", "CONFLICT", ""]);
+            expect(points[0]?.doubles).toStrictEqual([9, 1, 0, 0]);
+        });
+
+        it("captures fan-out cardinality and the aggregated table", () => {
+            expect.assertions(2);
+
+            const fanOutEvent: ObservabilityEvent = {
+                durationMs: 12,
+                fanOut: { failed: 1, shards: 4, table: "messages" },
+                functionPath: "messages:countAll",
+                ok: true,
+            };
+            const points: AnalyticsEngineDataPointLike[] = [];
+            const sink = analyticsEngineSink({
+                dataset: {
+                    writeDataPoint: (point) => {
+                        points.push(point);
+                    },
+                },
+            });
+
+            sink.onRpc!(fanOutEvent);
+
+            expect(points[0]?.blobs).toStrictEqual(["messages:countAll", "ok", "", "", "messages"]);
+            expect(points[0]?.doubles).toStrictEqual([12, 0, 4, 1]);
+        });
+
+        it("skips ok events when onlyErrors is set", () => {
+            expect.assertions(1);
+
+            const points: AnalyticsEngineDataPointLike[] = [];
+            const sink = analyticsEngineSink({
+                dataset: {
+                    writeDataPoint: (point) => {
+                        points.push(point);
+                    },
+                },
+                onlyErrors: true,
+            });
+
+            sink.onRpc!(okEvent);
+            sink.onRpc!(errorEvent);
+
+            expect(points).toHaveLength(1);
+        });
+
+        it("swallows a throwing writeDataPoint so dispatch is never broken", () => {
+            expect.assertions(1);
+
+            const sink = analyticsEngineSink({
+                dataset: {
+                    writeDataPoint: () => {
+                        throw new Error("AE unavailable");
+                    },
+                },
+            });
+
+            expect(() => {
+                sink.onRpc!(okEvent);
+            }).not.toThrow();
         });
     });
 });

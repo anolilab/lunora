@@ -224,6 +224,77 @@ export const sentrySink = (options: SentrySinkOptions): ObservabilitySink => {
     };
 };
 
+/** One Analytics Engine data point — the structural subset {@link analyticsEngineSink} writes. */
+export interface AnalyticsEngineDataPointLike {
+    /** Free-form string dimensions (≤20, ≤5120 bytes total). */
+    blobs?: (null | string)[];
+    /** Numeric metrics (≤20). */
+    doubles?: number[];
+    /** Sampling key(s) — Analytics Engine accepts a single index (≤96 bytes). */
+    indexes?: (null | string)[];
+}
+
+/**
+ * The Cloudflare Analytics Engine dataset binding surface this sink needs — the
+ * `env` binding declared in `wrangler.jsonc` under `analytics_engine_datasets`.
+ * Typed structurally so the runtime takes no dependency on
+ * `@cloudflare/workers-types`.
+ */
+export interface AnalyticsEngineDatasetLike {
+    writeDataPoint: (point: AnalyticsEngineDataPointLike) => void;
+}
+
+/** Options for {@link analyticsEngineSink}. */
+export interface AnalyticsEngineSinkOptions extends OnlyErrorsOption {
+    /** The Analytics Engine dataset binding to write each event to. */
+    dataset: AnalyticsEngineDatasetLike;
+}
+
+/**
+ * A sink that writes each event to a Cloudflare Analytics Engine dataset.
+ *
+ * Analytics Engine is the platform's unbounded-cardinality, sampled time-series
+ * store — the natural backing for high-volume RPC observability metrics, queried
+ * later over SQL. Prefer it over rolling your own counters table for anything
+ * that doesn't need to be exact. Each event maps to one data point.
+ *
+ * indexes: `[functionPath]` — the sampling key, so Analytics Engine samples per
+ * function rather than globally.
+ *
+ * blobs (string dimensions): `[functionPath, ok-or-error, shardKey, error.code,
+ * fanOut.table]` — group/filter dimensions; absent fields are the empty string.
+ *
+ * doubles (numeric metrics): `[durationMs, errorCount, fanOut.shards,
+ * fanOut.failed]` where errorCount is 0 or 1 — so `SUM(double2)` is the error
+ * count and `AVG(double1)` the latency.
+ *
+ * `writeDataPoint` is fire-and-forget on the platform; the call is still wrapped
+ * in a try/catch so a missing/throwing binding can never break dispatch.
+ * @param options Sink options: `dataset` is the AE binding; `onlyErrors` writes
+ * only error events (defaults to all events).
+ */
+export const analyticsEngineSink = (options: AnalyticsEngineSinkOptions): ObservabilitySink => {
+    const { dataset, onlyErrors } = options;
+
+    return {
+        onRpc: (event) => {
+            if (shouldSkip(event, onlyErrors)) {
+                return;
+            }
+
+            try {
+                dataset.writeDataPoint({
+                    blobs: [event.functionPath, event.ok ? "ok" : "error", event.shardKey ?? "", event.error?.code ?? "", event.fanOut?.table ?? ""],
+                    doubles: [event.durationMs, event.ok ? 0 : 1, event.fanOut?.shards ?? 0, event.fanOut?.failed ?? 0],
+                    indexes: [event.functionPath],
+                });
+            } catch {
+                // A missing or throwing dataset binding must not break dispatch.
+            }
+        },
+    };
+};
+
 /**
  * Combine several sinks into one that fans each event out to all of them.
  *
