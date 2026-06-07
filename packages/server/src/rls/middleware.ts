@@ -747,7 +747,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
      * same `COUNT_RLS_UNSUPPORTED` constraint `count()` enforces). Returns the
      * effective read `baseWhere` for the non-restricted pass-through case.
      */
-    const guardRankFamily = (tableName: string, method: string): undefined | WhereInput => {
+    const requireUnrestrictedReadBase = (tableName: string, method: string): undefined | WhereInput => {
         const { baseWhere, restricts } = readBase(tableName);
 
         if (restricts) {
@@ -895,7 +895,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         // `groupBy` are scoped to `where`, so the read `baseWhere` is AND-merged
         // and the reduction only sees policy-visible rows. `rank` / `rankPage`
         // are counts-of-partition that can't be safely narrowed, so they fail
-        // closed under a read policy (see `guardRankFamily`).
+        // closed under a read policy (see `requireUnrestrictedReadBase`).
         aggregate(tableName, options) {
             const { baseWhere } = readBase(tableName);
 
@@ -909,13 +909,13 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         },
 
         rank(tableName, indexName, options) {
-            const baseWhere = guardRankFamily(tableName, "rank");
+            const baseWhere = requireUnrestrictedReadBase(tableName, "rank");
 
             return base.rank(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
         },
 
         rankPage(tableName, indexName, options) {
-            const baseWhere = guardRankFamily(tableName, "rankPage");
+            const baseWhere = requireUnrestrictedReadBase(tableName, "rankPage");
 
             return base.rankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
         },
@@ -924,7 +924,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         ...(baseRankBefore
             ? {
                   rankBefore: (tableName: string, indexName: string, options: RankBeforeArgs) => {
-                      guardRankFamily(tableName, "rankBefore");
+                      requireUnrestrictedReadBase(tableName, "rankBefore");
 
                       return baseRankBefore(tableName, indexName, options);
                   },
