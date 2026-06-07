@@ -132,6 +132,57 @@ describe("schedulerDO — workpool concurrency", () => {
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("retry:"))).toHaveLength(1);
     });
 
+    it("ignores a duplicate /complete for the same job (no slot over-release)", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+
+        // Two slots; dispatch two jobs so both hold a slot, queue one more.
+        await enqueuePool(scheduler, "p", 2, 3);
+        await scheduler.alarm();
+
+        const before = state.storageMap.get("pool:p") as { inFlight: number };
+
+        expect(before.inFlight).toBe(2);
+
+        const completedId = scheduler.dispatched[0]?.id;
+
+        // The runtime completion callback is at-least-once: the SAME job
+        // reports complete twice. Only one slot must be released.
+        await scheduler.fetch(post("/complete", { id: completedId, pool: "p" }));
+        await scheduler.fetch(post("/complete", { id: completedId, pool: "p" }));
+
+        const after = state.storageMap.get("pool:p") as { inFlight: number; inFlightIds: string[] };
+
+        // Without id-based dedup this would be 0, oversubscribing the pool.
+        expect(after.inFlight).toBe(1);
+        expect(after.inFlightIds).not.toContain(completedId);
+    });
+
+    it("cancelling a still-queued pooled job leaves the in-flight count intact", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+
+        // 1 slot, 2 jobs: one dispatched (holds the slot), one stays queued.
+        const ids = await enqueuePool(scheduler, "p", 1, 2);
+
+        await scheduler.alarm();
+
+        const queuedId = ids.find((id) => id !== scheduler.dispatched[0]?.id) ?? "";
+
+        expect((state.storageMap.get("pool:p") as { inFlight: number }).inFlight).toBe(1);
+
+        // Cancelling the queued (never-dispatched) job must NOT touch the slot
+        // held by the dispatched one — releaseSlot is a no-op for an id that
+        // isn't in flight.
+        await scheduler.fetch(post("/cancel", { id: queuedId }));
+
+        expect((state.storageMap.get("pool:p") as { inFlight: number }).inFlight).toBe(1);
+    });
+
     it("reports inFlight/maxConcurrency/queued via GET /pool", async () => {
         expect.assertions(3);
 

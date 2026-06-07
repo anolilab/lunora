@@ -115,6 +115,17 @@ interface ScheduleRequestBody {
 interface PoolState {
     /** Jobs currently dispatched-but-not-yet-completed. The concurrency semaphore. */
     inFlight: number;
+
+    /**
+     * Ids of the jobs that currently hold a slot (dispatched, awaiting
+     * `/complete`). Used to make slot release idempotent per job: a duplicate
+     * `/complete` (the dispatch/completion callback is at-least-once) for an id
+     * that no longer holds a slot is a no-op, so it can never over-release and
+     * oversubscribe the pool past `maxConcurrency`. `inFlight` is kept equal to
+     * `inFlightIds.length`; older rows without the field degrade gracefully
+     * (release falls back to the clamped counter decrement).
+     */
+    inFlightIds?: string[];
     maxConcurrency: number;
 }
 
@@ -199,6 +210,43 @@ class SchedulerDO {
         }
 
         return Object.keys(policy).length === 0 ? undefined : policy;
+    }
+
+    /**
+     * Idempotently release the slot held by `jobId`, returning the updated
+     * {@link PoolState} (pure — the caller persists it). A duplicate release for
+     * an id that no longer holds a slot is a no-op, so an at-least-once
+     * `/complete` (or a complete racing a failed-kick release) can never push
+     * `inFlight` below the true number of running jobs and oversubscribe the
+     * pool. Pools persisted before `inFlightIds` existed fall back to a clamped
+     * counter decrement.
+     */
+    private static releaseSlot(pool: PoolState, jobId: string): PoolState {
+        if (pool.inFlightIds === undefined) {
+            // Legacy row (no id set): best-effort clamped decrement.
+            return { ...pool, inFlight: Math.max(0, pool.inFlight - 1) };
+        }
+
+        const next = pool.inFlightIds.filter((id) => id !== jobId);
+
+        return { ...pool, inFlight: next.length, inFlightIds: next };
+    }
+
+    /**
+     * Best-effort release with no job id (legacy `/complete` payloads). Drops one
+     * tracked id if the set exists, else clamps the counter. Less precise than
+     * {@link SchedulerDO.releaseSlot} — a duplicate id-less complete CAN
+     * over-release — but every current client sends the id, so this is the
+     * compatibility shim, not the hot path.
+     */
+    private static releaseFirstSlot(pool: PoolState): PoolState {
+        if (pool.inFlightIds === undefined) {
+            return { ...pool, inFlight: Math.max(0, pool.inFlight - 1) };
+        }
+
+        const next = pool.inFlightIds.slice(0, Math.max(0, pool.inFlightIds.length - 1));
+
+        return { ...pool, inFlight: next.length, inFlightIds: next };
     }
 
     protected readonly state: SchedulerDOState;
@@ -411,11 +459,15 @@ class SchedulerDO {
         if (!ok && record.pool !== undefined) {
             // The kick itself failed: no completion callback is coming, so free
             // the reserved slot immediately. recordRetry() then re-arms the job.
+            // Release by id so a later (spurious) /complete for the same job
+            // can't double-free and oversubscribe the pool.
             const pool = pools.get(record.pool);
 
             if (pool !== undefined) {
-                pool.inFlight = Math.max(0, pool.inFlight - 1);
-                await this.savePool(record.pool, pool);
+                const released = SchedulerDO.releaseSlot(pool, record.id);
+
+                pools.set(record.pool, released);
+                await this.savePool(record.pool, released);
             }
         }
 
@@ -446,8 +498,17 @@ class SchedulerDO {
         }
 
         // Reserve a slot durably BEFORE dispatching so neither a concurrent
-        // alarm nor this same pass can oversubscribe the pool.
-        pool.inFlight += 1;
+        // alarm nor this same pass can oversubscribe the pool. Track the holding
+        // job id so the eventual release (success → /complete, failed kick →
+        // drainRecord) is idempotent per job and can't over-release.
+        const ids = pool.inFlightIds ?? [];
+
+        if (!ids.includes(record.id)) {
+            ids.push(record.id);
+        }
+
+        pool.inFlightIds = ids;
+        pool.inFlight = ids.length;
         await this.savePool(record.pool, pool);
 
         return true;
@@ -576,10 +637,16 @@ class SchedulerDO {
         const stored = await this.state.storage.get<PoolState>(`${POOL_PREFIX}${name}`);
 
         if (stored !== undefined) {
+            // When the id set is present it is authoritative for the in-flight
+            // count; otherwise (legacy row) fall back to the clamped counter.
+            if (Array.isArray(stored.inFlightIds)) {
+                return { inFlight: stored.inFlightIds.length, inFlightIds: [...stored.inFlightIds], maxConcurrency: stored.maxConcurrency };
+            }
+
             return { inFlight: Math.max(0, stored.inFlight), maxConcurrency: stored.maxConcurrency };
         }
 
-        return { inFlight: 0, maxConcurrency: SchedulerDO.normalizeConcurrency(maxConcurrencyHint, 1) };
+        return { inFlight: 0, inFlightIds: [], maxConcurrency: SchedulerDO.normalizeConcurrency(maxConcurrencyHint, 1) };
     }
 
     private async savePool(name: string, pool: PoolState): Promise<void> {
@@ -610,6 +677,7 @@ class SchedulerDO {
     private async handleComplete(request: Request): Promise<Response> {
         const body = (await request.json().catch(() => undefined)) as { id?: string; pool?: string } | undefined;
         const poolName = typeof body?.pool === "string" && body.pool.length > 0 ? body.pool : undefined;
+        const jobId = typeof body?.id === "string" && body.id.length > 0 ? body.id : undefined;
 
         if (poolName === undefined) {
             return SchedulerDO.error(400, "INVALID_INPUT", "pool is required");
@@ -617,14 +685,19 @@ class SchedulerDO {
 
         const pool = await this.loadPool(poolName);
 
-        pool.inFlight = Math.max(0, pool.inFlight - 1);
-        await this.savePool(poolName, pool);
+        // Release by job id so an at-least-once /complete (the runtime may
+        // re-deliver the completion callback) is idempotent and can't free a
+        // slot belonging to a different in-flight job. Without an id we fall
+        // back to a best-effort decrement (legacy clients / runtimes).
+        const next = jobId === undefined ? SchedulerDO.releaseFirstSlot(pool) : SchedulerDO.releaseSlot(pool, jobId);
+
+        await this.savePool(poolName, next);
 
         // A freed slot means a queued job can now run; pull the alarm forward so
         // the drain happens promptly instead of waiting for the backpressure tick.
         await this.armAlarmIfEarlier(Date.now());
 
-        return SchedulerDO.json({ inFlight: pool.inFlight });
+        return SchedulerDO.json({ inFlight: next.inFlight });
     }
 
     /** `GET /pool?name=` — inspect a pool's slot usage + queued count. */
@@ -706,6 +779,10 @@ class SchedulerDO {
 
             await this.savePool(pool, {
                 inFlight: current.inFlight,
+                // Preserve the in-flight id set so refreshing the cap on a new
+                // enqueue can't wipe the held-slot bookkeeping (which would let
+                // a later /complete over-release).
+                ...(current.inFlightIds === undefined ? {} : { inFlightIds: current.inFlightIds }),
                 maxConcurrency: SchedulerDO.normalizeConcurrency(body.maxConcurrency, current.maxConcurrency),
             });
         }
@@ -737,6 +814,12 @@ class SchedulerDO {
         }
 
         await this.removeRecord(record);
+        // NOTE: a pooled job that is still here (its `id:` header exists) is by
+        // definition NOT in flight — drainRecord() deletes the header the moment
+        // it dispatches and reserves a slot. So cancel never needs to release a
+        // pool slot: a queued job holds none, and a dispatched one is no longer
+        // reachable by id. (A dispatched-but-never-completed job's slot is freed
+        // only by /complete; the lack of a lease timeout is a known limitation.)
         await this.rescheduleAlarm();
         await this.broadcastChange();
 
