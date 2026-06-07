@@ -24,6 +24,7 @@ const MESSAGE_IDS = [
     "{status} — processed",
     "{title} failed",
     "Actions",
+    "Add index on {table}",
     "Add row",
     "admin token",
     "Aggregating…",
@@ -107,6 +108,7 @@ const MESSAGE_IDS = [
     "migration id",
     "Migration id",
     "Migrations",
+    "Missing index",
     "name",
     "Next",
     "no",
@@ -221,6 +223,7 @@ const MESSAGE_IDS = [
     "{rate} hit rate over recent traffic.",
     "{count} entries evicted recently.",
     "Slowest call took {duration}.",
+    "Slowest call took {duration} — it full-scanned {tables} with no index.",
     "{rate} of calls failed.",
     // Audit panel.
     "Audit",
