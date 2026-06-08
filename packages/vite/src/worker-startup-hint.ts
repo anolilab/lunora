@@ -77,6 +77,13 @@ export const augmentWorkerStartupError = (error: unknown): unknown => {
         return error;
     }
 
+    // A frozen/sealed error would make the assignments below throw, which would
+    // replace the real Worker-entry failure with a confusing TypeError. Bail out
+    // and let the original surface untouched.
+    if (Object.isFrozen(flagged) || Object.isSealed(flagged)) {
+        return error;
+    }
+
     flagged[HINTED] = true;
     flagged.message = `${flagged.message}\n${WORKER_STARTUP_HINT}`;
 
