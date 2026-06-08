@@ -51,7 +51,14 @@ const ROW_HEIGHT = 36;
 /** Static styles, hoisted so they aren't reallocated (and re-flagged) per render. */
 const SCROLL_STYLE: CSSProperties = { height: `${SCROLL_HEIGHT.toString()}px`, overflow: "auto", position: "relative" };
 const ROWS_STYLE: CSSProperties = { width: "100%" };
-const ROW_BASE_STYLE: CSSProperties = { left: 0, position: "absolute", top: 0, width: "100%" };
+// Virtualized rows are taken out of table flow (absolute + translateY), so the
+// row lays its cells out with flexbox rather than table-cell sizing — otherwise
+// the `<td>`s collapse onto each other. The header row shares the same flex
+// model so columns stay aligned.
+const ROW_BASE_STYLE: CSSProperties = { alignItems: "center", display: "flex", left: 0, position: "absolute", top: 0, width: "100%" };
+const HEAD_ROW_STYLE: CSSProperties = { display: "flex", width: "100%" };
+const CELL_STYLE: CSSProperties = { flex: "1 1 0", minWidth: 0, overflow: "hidden", padding: "0.375rem 0.75rem", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const ACTION_CELL_STYLE: CSSProperties = { flex: "0 0 7rem", padding: "0.375rem 0.75rem" };
 
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
@@ -383,9 +390,11 @@ const DataBrowserTableView = ({
         return (
             <tr data-testid="db-row" key={tableRow.id} style={rowStyle}>
                 {tableRow.getVisibleCells().map((cell) => (
-                    <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                    <td key={cell.id} style={CELL_STYLE}>
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
                 ))}
-                <td>
+                <td style={ACTION_CELL_STYLE}>
                     <button
                         data-testid={`db-inspect-${key}`}
                         // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over the original row; admin dev-tool render path
@@ -431,16 +440,16 @@ const DataBrowserTableView = ({
         <div data-testid="db-scroll" ref={scrollRef} style={SCROLL_STYLE}>
             <table data-testid="db-rows" style={ROWS_STYLE}>
                 <thead>
-                    <tr>
+                    <tr style={HEAD_ROW_STYLE}>
                         {table.getFlatHeaders().map((header) => (
-                            <th key={header.id}>
+                            <th key={header.id} style={CELL_STYLE}>
                                 <button data-testid={`db-sort-${header.column.id}`} onClick={header.column.getToggleSortingHandler()} type="button">
                                     {flexRender(header.column.columnDef.header, header.getContext())}
                                     {sortIndicator(header.column.getIsSorted())}
                                 </button>
                             </th>
                         ))}
-                        <th aria-label="Row actions" />
+                        <th aria-label="Row actions" style={ACTION_CELL_STYLE} />
                     </tr>
                 </thead>
                 <tbody style={tbodyStyle}>{virtualRows.map((virtualRow) => renderRow(virtualRow))}</tbody>
