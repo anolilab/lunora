@@ -582,4 +582,82 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe("string");
         });
     });
+
+    describe("re-exported plugin/component functions", () => {
+        // A component bundles its registered functions under `.functions`; the
+        // host app re-exports them so codegen discovers them in the app's
+        // namespace. These cover the resolver that chases a re-export back to its
+        // originating `query/mutation/action({...})` call.
+        const componentModule = `
+            import { mutation, query } from "@cirrus/server";
+            declare const v: { string: () => { __k: "string"; __t: string } };
+            const bundle = {
+                check: query({ args: { key: v.string() }, handler: () => ({ allowed: true }) }),
+                reset: mutation({ args: { key: v.string() }, handler: () => null }),
+            };
+            export const ratelimit = { functions: bundle };
+        `;
+
+        it("discovers a property-access re-export — `export const check = component.functions.check`", () => {
+            expect.hasAssertions();
+
+            writeFunction("_components/ratelimit.ts", componentModule);
+            writeFunction(
+                "ratelimit.ts",
+                `
+                import { ratelimit } from "./_components/ratelimit.js";
+                export const check = ratelimit.functions.check;
+                export const reset = ratelimit.functions.reset;
+            `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir).filter((f) => f.filePath === "ratelimit");
+            const byName = new Map(result.map((f) => [f.exportName, f]));
+
+            expect(byName.get("check")?.kind).toBe("query");
+            expect(Object.keys(byName.get("check")?.args ?? {})).toEqual(["key"]);
+            expect(byName.get("reset")?.kind).toBe("mutation");
+        });
+
+        it("discovers a destructured re-export — `export const { check, reset } = component.functions`", () => {
+            expect.hasAssertions();
+
+            writeFunction("_components/ratelimit.ts", componentModule);
+            writeFunction(
+                "ratelimit.ts",
+                `
+                import { ratelimit } from "./_components/ratelimit.js";
+                export const { check, reset } = ratelimit.functions;
+            `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir).filter((f) => f.filePath === "ratelimit");
+            const byName = new Map(result.map((f) => [f.exportName, f]));
+
+            expect(result.map((f) => f.exportName).toSorted((a, b) => a.localeCompare(b))).toEqual(["check", "reset"]);
+            expect(byName.get("check")?.kind).toBe("query");
+            expect(byName.get("reset")?.kind).toBe("mutation");
+        });
+
+        it("skips an unresolvable re-export instead of throwing", () => {
+            expect.hasAssertions();
+
+            // No local definition for `vendor` — resolution can't reach a call
+            // literal (the published-component case), so it's silently skipped.
+            writeFunction(
+                "ratelimit.ts",
+                `
+                import { vendor } from "@vendor/ratelimit-component";
+                export const check = vendor.functions.check;
+            `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(() => discoverFunctions(project, workdir)).not.toThrow();
+            expect(discoverFunctions(project, workdir).filter((f) => f.filePath === "ratelimit")).toEqual([]);
+        });
+    });
 });
