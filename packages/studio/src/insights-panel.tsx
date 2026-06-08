@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FunctionCallStat, FunctionStatsResult, ShardMetrics } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
 import { Badge } from "./components/ui/badge.js";
+import { EmptyState } from "./components/ui/empty-state.js";
 import { Button } from "./components/ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card.js";
 import type { Insight, InsightSeverity } from "./derive-insights.js";
@@ -186,9 +187,17 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
             )}
 
             {error === null && insights.length === 0 && (
-                <p className="text-sm text-muted-foreground" data-testid="in-empty">
-                    {t("No issues detected.")}
-                </p>
+                <EmptyState
+                    description={t("Cirrus surfaces slow functions, error spikes, and cache problems here.")}
+                    icon={
+                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                            <path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z" />
+                            <path d="m9 12 2 2 4-4" />
+                        </svg>
+                    }
+                    testId="in-empty"
+                    title={t("No issues detected.")}
+                />
             )}
 
             {insights.length > 0 && (

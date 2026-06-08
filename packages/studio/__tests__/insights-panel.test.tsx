@@ -113,7 +113,7 @@ describe("insightsPanel", () => {
 
         const empty = await screen.findByTestId("in-empty");
 
-        expect(empty.textContent).toBe("No issues detected.");
+        expect(empty.textContent).toContain("No issues detected.");
     });
 
     it("still renders insights when one snapshot fails (best-effort)", async () => {

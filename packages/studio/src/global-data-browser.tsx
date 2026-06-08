@@ -3,6 +3,7 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
+import { EmptyState } from "./components/ui/empty-state.js";
 import { errorMessage, fireAndForget, formatCell } from "./internal.js";
 import { StorageTierHeader } from "./storage-tier.js";
 
@@ -124,7 +125,19 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
                 </p>
             )}
 
-            {tables !== null && tables.length === 0 && <p data-testid="gdb-empty">No global tables.</p>}
+            {tables !== null && tables.length === 0 && (
+                <EmptyState
+                    description="Tables marked .global() (D1-backed, region-replicated) will appear here."
+                    icon={
+                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="9" />
+                            <path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18Z" />
+                        </svg>
+                    }
+                    testId="gdb-empty"
+                    title="No global tables."
+                />
+            )}
 
             {tables !== null && tables.length > 0 && (
                 <ul data-testid="gdb-table-list">

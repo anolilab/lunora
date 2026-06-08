@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "./components/ui/badge.js";
+import { EmptyState } from "./components/ui/empty-state.js";
 import { Button } from "./components/ui/button.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
 import { ConfirmButton } from "./confirm-button.js";
@@ -162,9 +163,17 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
             )}
 
             {jobs !== null && jobs.length === 0 && (
-                <p className="text-sm text-muted-foreground" data-testid="sj-empty">
-                    {t("No scheduled jobs.")}
-                </p>
+                <EmptyState
+                    description={t("Jobs queued with runAfter / runAt will appear here.")}
+                    icon={
+                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="9" />
+                            <path d="M12 7.5V12l4 2" />
+                        </svg>
+                    }
+                    testId="sj-empty"
+                    title={t("No scheduled jobs.")}
+                />
             )}
 
             {jobs !== null && jobs.length > 0 && (
