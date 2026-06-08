@@ -3,6 +3,8 @@ export { availableAt, evaluate } from "./algorithms.js";
 export { default as RateLimitError } from "./error.js";
 export type { LimiterResolver, RateLimitMiddlewareOptions } from "./middleware.js";
 export { rateLimit } from "./middleware.js";
+export type { RatelimitApiContext } from "./plugin.js";
+export { ratelimitPlugin } from "./plugin.js";
 export type { RateLimiterOptions } from "./rate-limiter.js";
 export { RateLimiter } from "./rate-limiter.js";
 export type { DbStoreOptions, RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, SqlLike, SqlStoreOptions } from "./store.js";
