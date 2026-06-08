@@ -1,3 +1,5 @@
+export type { AuthQuery, AuthRow, AuthStore, AuthWhereClause } from "./adapter.js";
+export { cirrusAuthAdapter, createMemoryAuthStore, matchesWhere } from "./adapter.js";
 export type { CirrusAuth, CirrusAuthOptions } from "./create-auth.js";
 export { createAuth } from "./create-auth.js";
 export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler.js";
