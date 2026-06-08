@@ -1,7 +1,7 @@
 "use client";
 
 import type { FunctionReference } from "@cirrus/client";
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import type { UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./types.js";
 import { usePaginatedCore } from "./use-paginated-core.js";
@@ -45,7 +45,13 @@ const useInfiniteQuery = <F extends FunctionReference>(
     // keep both in a ref so the callback identity stays stable across renders.
     const nextRef = useRef<{ defaultNumItems: number; loadMore: (numberItems: number) => void }>({ defaultNumItems: initialNumItems, loadMore });
 
-    nextRef.current = { defaultNumItems: initialNumItems, loadMore };
+    // Sync the latest size + loadMore via an effect rather than a render-phase
+    // ref write (which trips React Compiler). `nextRef` is read only inside the
+    // user-triggered `fetchNextPage` below, so the post-commit update is always
+    // current by the time it fires — and `fetchNextPage` keeps a stable identity.
+    useEffect(() => {
+        nextRef.current = { defaultNumItems: initialNumItems, loadMore };
+    });
 
     const fetchNextPage = useCallback((numberItems?: number) => {
         const { defaultNumItems, loadMore: load } = nextRef.current;

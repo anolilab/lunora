@@ -311,17 +311,16 @@ const usePaginatedCore = <T>(
 
     // SPLIT/JOIN maintenance: after results resolve, rebalance page boundaries so
     // no page's live range strays far from its target size. Guarded so we only
-    // setState when a boundary actually moves.
-    const rebalanceInputRef = useRef<{ pages: Page[]; results: (PaginationResult<T> | undefined)[] }>({ pages, results: pageResults });
-
-    rebalanceInputRef.current = { pages, results: pageResults };
-
+    // setState when a boundary actually moves. The effect has no dep array, so it
+    // closes over this render's `pages` + `pageResults` directly — no render-phase
+    // ref snapshot needed. `rebalance` applies one boundary edit per pass; the
+    // resulting re-render drives the next until the layout is balanced.
     useEffect(() => {
         if (skipped) {
             return;
         }
 
-        const next = rebalance(rebalanceInputRef.current.pages, rebalanceInputRef.current.results);
+        const next = rebalance(pages, pageResults);
 
         if (next) {
             setPages(next);
@@ -351,7 +350,13 @@ const usePaginatedCore = <T>(
 
     const nextCursorRef = useRef<null | string | undefined>(undefined);
 
-    nextCursorRef.current = status === "CanLoadMore" ? nextCursor : undefined;
+    // Sync the next-page cursor via an effect rather than a render-phase ref
+    // write (which trips React Compiler). It's read only inside the
+    // user-triggered `loadMore` below, so the post-commit value is always current
+    // by the time it fires — and `loadMore` keeps a stable identity.
+    useEffect(() => {
+        nextCursorRef.current = status === "CanLoadMore" ? nextCursor : undefined;
+    });
 
     const loadMore = useCallback((numberItems: number) => {
         const cursor = nextCursorRef.current;
