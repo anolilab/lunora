@@ -33,7 +33,7 @@ const entry = [
     "});",
 ].join("\n");
 
-await build({
+const baseOptions = {
     stdin: {
         contents: entry,
         loader: "js",
@@ -42,14 +42,30 @@ await build({
     },
     bundle: true,
     format: "esm",
-    outfile: "dist/standalone/studio.js",
     minify: true,
-    // React libraries gate dev-only warnings/checks on this; set it so the
-    // bundle ships the production code paths.
-    define: { "process.env.NODE_ENV": '"production"' },
     // The studio is a browser SPA.
     platform: "browser",
     target: ["es2022"],
     legalComments: "none",
+};
+
+// Some bundled deps (e.g. `@base-ui/react`) compile JSX to `jsxDEV`
+// (`react/jsx-dev-runtime`), which React only *exports* from its DEVELOPMENT
+// build; under `NODE_ENV=production` that module lacks `jsxDEV`, so the bundle
+// loads to `jsxDEV is not a function`. The marker lives in a transitive dep, not
+// our own dist, so detect it from the actual bundle output rather than guessing:
+// probe-build in memory, and only ship the production React paths when nothing in
+// the graph needs the dev JSX runtime.
+const probe = await build({ ...baseOptions, define: { "process.env.NODE_ENV": '"production"' }, write: false });
+const nodeEnv = probe.outputFiles.some((file) => file.text.includes("jsxDEV")) ? "development" : "production";
+
+await build({
+    ...baseOptions,
+    outfile: "dist/standalone/studio.js",
+    // React libraries gate dev-only warnings/checks (and the jsx vs jsxDEV
+    // runtime) on this; match it to what the bundle graph actually needs.
+    define: { "process.env.NODE_ENV": JSON.stringify(nodeEnv) },
     logLevel: "info",
 });
+
+console.log(`build-standalone: NODE_ENV=${nodeEnv}`);
