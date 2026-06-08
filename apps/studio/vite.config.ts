@@ -27,5 +27,22 @@ export default defineConfig({
     },
     server: {
         port: 5174,
+        // Opt-in dev proxy: point the standalone studio at a Cirrus worker
+        // running locally (e.g. the playground on :5173) without CORS/WS hassle —
+        // the studio's same-origin `/_cirrus/*` calls (HTTP + the live WebSocket)
+        // are forwarded to it. Enable with `CIRRUS_DEV_PROXY=http://localhost:5173
+        // pnpm --filter @cirrus/studio-app dev`. Off by default, so production
+        // builds are unaffected (proxy is a dev-server-only concept).
+        ...(process.env.CIRRUS_DEV_PROXY
+            ? {
+                  proxy: {
+                      "/_cirrus": {
+                          changeOrigin: true,
+                          target: process.env.CIRRUS_DEV_PROXY,
+                          ws: true,
+                      },
+                  },
+              }
+            : {}),
     },
 });

@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BulkDeleteResult, TableInfo, TablePage, WriteRowResult } from "./admin.js";
 import { ADMIN_FUNCTIONS } from "./admin.js";
 import { ConfirmButton } from "./confirm-button.js";
+import { EmptyState } from "./components/ui/empty-state.js";
 import type { EditableFilter } from "./data-filters.js";
 import { DataFilters, toFilterClauses } from "./data-filters.js";
 import { adminRef, callOptions, fireAndForget, formatCell } from "./internal.js";
@@ -1149,7 +1150,20 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                         </p>
                     )}
 
-                    {viewMode === "table" && (
+                    {viewMode === "table" && page.rows.length === 0 && (
+                        <EmptyState
+                            description="Rows you insert into this table will show up here."
+                            icon={
+                                <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                                    <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />
+                                </svg>
+                            }
+                            testId="db-empty-rows"
+                            title="This table is empty."
+                        />
+                    )}
+
+                    {viewMode === "table" && page.rows.length > 0 && (
                         <DataBrowserTableView
                             editable={editable}
                             onDelete={onRowDelete}
