@@ -1,5 +1,4 @@
 import { render } from "@react-email/render";
-import type { ReactElement } from "react";
 import { bench, describe } from "vitest";
 
 /**
@@ -14,10 +13,12 @@ import { bench, describe } from "vitest";
  * observable rather than asserted.
  */
 
-const Welcome = ({ name }: { name: string }): ReactElement => (
+// Inline JSX fixture — no named component needed since the element is never
+// reused across renders and the bench only cares about render throughput.
+const element = (
     <html lang="en">
         <body>
-            <h1>Welcome, {name}!</h1>
+            <h1>Welcome, Alice!</h1>
             <p>Thanks for joining Cirrus. We are glad to have you on board.</p>
             <ul>
                 <li>Set up your profile</li>
@@ -27,8 +28,6 @@ const Welcome = ({ name }: { name: string }): ReactElement => (
         </body>
     </html>
 );
-
-const element = <Welcome name="Alice" />;
 
 const renderSequential = async (): Promise<{ html: string; text: string }> => {
     const html = await render(element, { pretty: false });
