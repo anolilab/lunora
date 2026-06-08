@@ -6,6 +6,7 @@ import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from 
 import { ADMIN_FUNCTIONS } from "./admin.js";
 import { Badge } from "./components/ui/badge.js";
 import { Button } from "./components/ui/button.js";
+import { EmptyState } from "./components/ui/empty-state.js";
 import { Input } from "./components/ui/input.js";
 import { Label } from "./components/ui/label.js";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
@@ -157,9 +158,16 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
             )}
 
             {rows !== null && rows.length === 0 && (
-                <p className="text-sm text-muted-foreground" data-testid="mg-empty">
-                    {t("No migrations have run on this shard.")}
-                </p>
+                <EmptyState
+                    description={t("Data migrations you run against this shard will be tracked here.")}
+                    icon={
+                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                            <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />
+                        </svg>
+                    }
+                    testId="mg-empty"
+                    title={t("No migrations have run on this shard.")}
+                />
             )}
 
             {rows !== null && rows.length > 0 && (

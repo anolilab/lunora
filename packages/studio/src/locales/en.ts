@@ -59,6 +59,8 @@ const MESSAGE_IDS = [
     "Studio sections",
     "Switch to dark theme",
     "Switch to light theme",
+    "Objects you upload to your R2 buckets will appear here.",
+    "Data migrations you run against this shard will be tracked here.",
     "Data",
     "Database",
     "Database size",
