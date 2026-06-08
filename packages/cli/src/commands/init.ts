@@ -7,6 +7,7 @@ import { dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
 
 import type { Logger } from "../util/logger.js";
+import { patchViteConfig } from "../util/patch-vite-config.js";
 
 type Template = "next" | "standalone" | "tanstack-start" | "vite";
 
@@ -26,6 +27,15 @@ interface InitCommandOptions {
      * Useful for offline runs, the clean-machine smoke test, and unit tests.
      */
     from?: string;
+
+    /**
+     * When true, configure Cirrus into the CURRENT project (`cwd`) instead of
+     * scaffolding a new directory. Finds an existing `vite.config.*` and
+     * patches it via `patchViteConfig`, or creates a minimal one when absent.
+     * All other scaffold options (`name`, `templateType`, `source`, `from`)
+     * are ignored in this mode.
+     */
+    inPlace?: boolean;
     logger: Logger;
     name?: string;
 
@@ -45,6 +55,16 @@ interface InitCommandResult {
 }
 
 const TEXT_EXTENSIONS = new Set([".gitignore", ".html", ".js", ".json", ".jsonc", ".md", ".mjs", ".ts", ".tsx"]);
+
+/** Ordered list of vite config filenames to probe during in-place init. */
+const VITE_CONFIG_CANDIDATES = ["vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs"] as const;
+
+/** Minimal vite config written when none exists during in-place init. */
+const MINIMAL_VITE_CONFIG = `import { defineConfig } from "vite";
+import { cirrus } from "@cirrus/vite";
+
+export default defineConfig({ plugins: [cirrus()] });
+`;
 
 const DEFAULT_SOURCE_BASE = "gh:anolilab/cirrus/templates";
 const DEFAULT_SOURCE_REF_FALLBACK = "alpha";
@@ -242,8 +262,99 @@ const scaffoldFromRemote = async (
     }
 };
 
+/**
+ * Create a minimal vite.config.ts when no vite config exists in `cwd`.
+ * Returns the InitCommandResult for the in-place path.
+ */
+const createMinimalViteConfig = (cwd: string, logger: Logger): InitCommandResult => {
+    const target = join(cwd, "vite.config.ts");
+
+    try {
+        writeFileSync(target, MINIMAL_VITE_CONFIG, "utf8");
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.error(`init --in-place: could not write ${target}: ${message}`);
+
+        return { code: 1, files: [], target: cwd };
+    }
+
+    logger.success(`created ${target} with cirrus() plugin`);
+
+    return { code: 0, files: [target], target: cwd };
+};
+
+/**
+ * Patch an existing vite config file in-place: read it, call patchViteConfig,
+ * and write back when changed. Logs the outcome either way.
+ */
+const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Logger): InitCommandResult => {
+    let source: string;
+
+    try {
+        source = readFileSync(viteConfigPath, "utf8");
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.error(`init --in-place: could not read ${viteConfigPath}: ${message}`);
+
+        return { code: 1, files: [], target: cwd };
+    }
+
+    const result = patchViteConfig(source);
+
+    if (!result.changed) {
+        logger.info(`${viteConfigPath}: ${result.reason ?? "no changes needed"}`);
+
+        return { code: 0, files: [], target: cwd };
+    }
+
+    try {
+        writeFileSync(viteConfigPath, result.code, "utf8");
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.error(`init --in-place: could not write ${viteConfigPath}: ${message}`);
+
+        return { code: 1, files: [], target: cwd };
+    }
+
+    logger.success(`patched ${viteConfigPath} — added cirrus() plugin`);
+
+    return { code: 0, files: [viteConfigPath], target: cwd };
+};
+
+/**
+ * In-place mode: configure Cirrus into an existing project at `cwd`. Probes
+ * for a vite config, patches it if found, or creates a minimal one otherwise.
+ * Returns `{ code: 0 }` on success, `{ code: 1 }` on hard failure.
+ */
+const runInPlaceInit = (cwd: string, logger: Logger): InitCommandResult => {
+    let viteConfigPath: string | undefined;
+
+    for (const candidate of VITE_CONFIG_CANDIDATES) {
+        const full = join(cwd, candidate);
+
+        if (existsSync(full)) {
+            viteConfigPath = full;
+            break;
+        }
+    }
+
+    if (viteConfigPath === undefined) {
+        return createMinimalViteConfig(cwd, logger);
+    }
+
+    return patchExistingViteConfig(viteConfigPath, cwd, logger);
+};
+
 const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
+
+    if (options.inPlace === true) {
+        return runInPlaceInit(cwd, options.logger);
+    }
+
     const name = options.name ?? "cirrus-app";
     const templateType: Template = options.templateType ?? "vite";
 

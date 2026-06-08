@@ -1,18 +1,46 @@
 import { runCodegen } from "@cirrus/codegen";
-import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
+import { findWranglerFile, inferCirrusBindings, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
 import { Spinner } from "@visulima/pail/spinner";
 
 import type { Logger } from "../util/logger.js";
 import type { SpawnDescriptor, Spawner } from "../util/spawn.js";
 import { defaultSpawner } from "../util/spawn.js";
 import { validateWrangler } from "../util/wrangler-validator.js";
+import type { MigrateDataCommandOptions } from "./migrate.js";
+import { runMigrateDataCommand } from "./migrate.js";
+import type { FetchLike } from "./run.js";
+
+/** Placeholder written by `reconcileWranglerBindings` for auto-provisioned D1 bindings. */
+const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
 
 interface DeployCommandOptions {
     cwd?: string;
     env?: string;
+    /** Fetch implementation injected in tests for `--migrate` RPC calls. */
+    fetchImpl?: FetchLike;
     /** Set to `false` to disable interactive spinners (test injection). */
     interactive?: boolean;
     logger: Logger;
+
+    /**
+     * When true, after a successful `wrangler deploy`, discover and run all
+     * pending data migrations via the worker's `/_cirrus/migrate` admin RPC.
+     * The worker must be live (exit 0) before migrations are attempted.
+     *
+     * Implementation note: the status RPC returns the full shard-level
+     * migration state, but there is no single authoritative "list of pending
+     * migration ids" that can be read client-side before running the worker.
+     * Instead, `--migrate` runs `migrate status` followed by `migrate up` for
+     * each migration id discovered locally via `discoverMigrations`.  The
+     * worker's `MigrationRunner` is idempotent — running `up` on an already-
+     * applied migration is a no-op — so this approach is safe.
+     */
+    migrate?: boolean;
+
+    /** Admin bearer token for `--migrate` (falls back to `CIRRUS_ADMIN_TOKEN`). */
+    migrateToken?: string;
+    /** Worker URL for `--migrate` (defaults to the wrangler deploy target). */
+    migrateUrl?: string;
     skipCodegen?: boolean;
     spawner?: Spawner;
 }
@@ -28,12 +56,45 @@ interface DeployCommandResult {
     };
 }
 
+interface WranglerD1Entry {
+    binding?: string;
+    database_id?: string;
+}
+
+interface WranglerD1Shape {
+    d1_databases?: ReadonlyArray<WranglerD1Entry>;
+}
+
 const isInteractive = (options: DeployCommandOptions): boolean => {
     if (options.interactive !== undefined) {
         return options.interactive;
     }
 
     return process.stdout.isTTY && !process.env.CI;
+};
+
+/**
+ * Return the name of any D1 binding that still carries the placeholder
+ * database_id written by `reconcileWranglerBindings`. Returns `undefined`
+ * when no placeholder is found (or when wrangler.jsonc is absent/unparseable —
+ * the validator will report the real problem in that case).
+ */
+const findD1PlaceholderBinding = (cwd: string): string | undefined => {
+    const wranglerPath = findWranglerFile(cwd);
+
+    if (!wranglerPath) {
+        return undefined;
+    }
+
+    const { parsed } = readWranglerJsonc<WranglerD1Shape>(wranglerPath);
+
+    if (!parsed) {
+        return undefined;
+    }
+
+    const placeholder = (parsed.d1_databases ?? []).find((entry) => entry.database_id === D1_PLACEHOLDER_ID);
+
+    return placeholder?.binding;
 };
 
 /**
@@ -62,44 +123,157 @@ const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => 
     }
 };
 
+/**
+ * Discover migration ids from `cirrus/migrations.ts` and run them in declared
+ * order against the now-live worker. The worker's `MigrationRunner` is
+ * idempotent — running `up` on an already-applied migration is a no-op —
+ * so iterating every declared id is safe even when some were previously applied.
+ *
+ * We do not attempt to parse the `status` RPC response to filter "pending"
+ * ids, because the status response is shard-aggregated (each shard reports its
+ * own applied set) and there is no guaranteed single boolean per migration id.
+ * Running `up` unconditionally and relying on worker idempotency is simpler,
+ * auditable, and safe.
+ */
+const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
+    const { discoverMigrations } = await import("@cirrus/codegen");
+    const { Project } = await import("ts-morph");
+    const { join } = await import("@visulima/path");
+
+    const project = new Project({ skipAddingFilesFromTsConfig: true });
+    const cirrusDirectory = join(cwd, "cirrus");
+    let migrations: ReadonlyArray<{ id: string; table: string }>;
+
+    try {
+        migrations = discoverMigrations(project, cirrusDirectory);
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        options.logger.warn(`--migrate: could not discover migrations (${message}); skipping`);
+
+        return 0;
+    }
+
+    if (migrations.length === 0) {
+        options.logger.info("--migrate: no data migrations declared in cirrus/");
+
+        return 0;
+    }
+
+    options.logger.info(`--migrate: running ${String(migrations.length)} migration(s) against deployed worker`);
+
+    for (const migration of migrations) {
+        options.logger.info(`--migrate: up "${migration.id}" (table "${migration.table}")`);
+
+        const migrateOptions: MigrateDataCommandOptions = {
+            cwd,
+            fetchImpl: options.fetchImpl,
+            id: migration.id,
+            logger: options.logger,
+            prod: options.migrateUrl !== undefined,
+            subcommand: "up",
+            token: options.migrateToken,
+            url: options.migrateUrl,
+            yes: options.migrateUrl !== undefined,
+        };
+
+        // eslint-disable-next-line no-await-in-loop -- sequential: each migration must finish before the next
+        const migrateResult = await runMigrateDataCommand(migrateOptions);
+
+        if (migrateResult.code !== 0) {
+            options.logger.error(`--migrate: migration "${migration.id}" failed — see output above`);
+
+            return migrateResult.code;
+        }
+
+        options.logger.success(`--migrate: "${migration.id}" applied`);
+    }
+
+    return 0;
+};
+
+/** Run codegen (with optional spinner), returning an error message or `undefined` on success. */
+const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger): string | undefined => {
+    let codegenSpinner: Spinner | undefined;
+
+    if (interactive) {
+        codegenSpinner = new Spinner({ name: "dots" });
+        codegenSpinner.start("running codegen");
+    } else {
+        logger.info("running codegen");
+    }
+
+    try {
+        runCodegen({ projectRoot: cwd });
+        codegenSpinner?.succeed("codegen complete");
+
+        if (!codegenSpinner) {
+            logger.success("codegen complete");
+        }
+
+        return undefined;
+    } catch (error: unknown) {
+        codegenSpinner?.failed("codegen failed");
+
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.error(`codegen failed: ${message}`);
+
+        return `codegen failed: ${message}`;
+    }
+};
+
+/**
+ * Check for a D1 placeholder database_id and return an error message when one
+ * is found. Returns `undefined` when the config is clean (or absent/unparseable
+ * — those cases fall through to the validator). Extracted from `runDeployCommand`
+ * to keep its cognitive complexity within the 15-node budget.
+ */
+const checkD1Placeholder = (cwd: string, logger: Logger): string | undefined => {
+    const placeholderBinding = findD1PlaceholderBinding(cwd);
+
+    if (placeholderBinding === undefined) {
+        return undefined;
+    }
+
+    const message =
+        `deploy blocked: the "${placeholderBinding}" D1 binding has a placeholder database_id ` +
+        `("${D1_PLACEHOLDER_ID}"). Run \`wrangler d1 create <name>\` to create the database, ` +
+        `then replace the placeholder in wrangler.jsonc with the real id before deploying.`;
+
+    logger.error(message);
+
+    return message;
+};
+
 const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
 
-    let codegenSpinner: Spinner | undefined;
-
     if (!options.skipCodegen) {
-        if (interactive) {
-            codegenSpinner = new Spinner({ name: "dots" });
-            codegenSpinner.start("running codegen");
-        } else {
-            options.logger.info("running codegen");
-        }
+        const codegenError = runCodegenStep(cwd, interactive, options.logger);
 
-        try {
-            runCodegen({ projectRoot: cwd });
-            codegenSpinner?.succeed("codegen complete");
-
-            if (!codegenSpinner) {
-                options.logger.success("codegen complete");
-            }
-        } catch (error: unknown) {
-            codegenSpinner?.failed("codegen failed");
-
-            const message = error instanceof Error ? error.message : String(error);
-
-            options.logger.error(`codegen failed: ${message}`);
-
+        if (codegenError !== undefined) {
             return {
                 code: 1,
                 descriptor: undefined,
-                error: `codegen failed: ${message}`,
+                error: codegenError,
                 validation: { problems: [], wranglerPath: undefined },
             };
         }
     }
 
     await provisionBindings(cwd, options.logger);
+
+    // Hard-block: if any D1 binding still carries the placeholder id written by
+    // `reconcileWranglerBindings`, deploying would let `wrangler deploy` fail
+    // with a confusing "invalid database id" error deep in the output. Abort
+    // early with a clear, actionable message.
+    const d1Error = checkD1Placeholder(cwd, options.logger);
+
+    if (d1Error !== undefined) {
+        return { code: 1, descriptor: undefined, error: d1Error, validation: { problems: [], wranglerPath: undefined } };
+    }
 
     const validation = validateWrangler({ projectRoot: cwd });
 
@@ -134,6 +308,17 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 
     const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
+
+    if (result.code !== 0) {
+        return { code: result.code, descriptor, validation };
+    }
+
+    // Post-deploy migrations: only when explicitly requested AND deploy succeeded.
+    if (options.migrate) {
+        const migrateCode = await runPostDeployMigrations(options, cwd);
+
+        return { code: migrateCode, descriptor, validation };
+    }
 
     return {
         code: result.code,

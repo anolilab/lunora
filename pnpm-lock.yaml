@@ -845,6 +845,9 @@ importers:
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1
+      magic-string:
+        specifier: ^0.30.21
+        version: 0.30.21
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0

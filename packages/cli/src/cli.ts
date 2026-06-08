@@ -95,8 +95,10 @@ const BOOLEAN_OPTIONS: Set<string> = new Set<string>([
     "check",
     "diff",
     "dry-run",
+    "here",
     "json",
     "list",
+    "migrate",
     "no-codegen",
     "no-studio",
     "no-typecheck",
@@ -227,6 +229,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 allowUnsafeSource: parsed.allowUnsafeSource === true,
                 cwd,
                 from,
+                inPlace: parsed.here === true,
                 logger,
                 name,
                 source,
@@ -257,6 +260,11 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             {
                 description: "Permit --source values outside gh:/github:/https:// (e.g. local file://)",
                 name: "allow-unsafe-source",
+                type: Boolean,
+            },
+            {
+                description: "Configure Cirrus into the current project (patch vite.config) instead of scaffolding a new one",
+                name: "here",
                 type: Boolean,
             },
         ],
@@ -384,12 +392,31 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 cwd,
                 env: toStringOrUndefined(parsed.env),
                 logger,
+                migrate: parsed.migrate === true,
+                migrateToken: toStringOrUndefined(parsed.migrateToken),
+                migrateUrl: toStringOrUndefined(parsed.migrateUrl),
             });
 
             exitCode.value = result.code;
         },
         name: "deploy",
-        options: [{ description: "Cloudflare environment name", name: "env", type: String }],
+        options: [
+            { description: "Cloudflare environment name", name: "env", type: String },
+            { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
+            { description: "Admin bearer token for --migrate (falls back to CIRRUS_ADMIN_TOKEN)", name: "migrate-token", type: String },
+            { description: "Worker URL for --migrate (defaults to the deploy target)", name: "migrate-url", type: String },
+        ],
+    });
+
+    cli.addCommand({
+        description: "Run codegen + binding reconcile + wrangler validation (no Vite) — for CI",
+        execute: async () => {
+            const { runPrepareCommand } = await import("./commands/prepare.js");
+            const result = await runPrepareCommand({ cwd, logger });
+
+            exitCode.value = result.code;
+        },
+        name: "prepare",
     });
 
     cli.addCommand({
