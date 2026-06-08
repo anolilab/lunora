@@ -1,4 +1,4 @@
-import type { ExecutionContextLike, FunctionRegistryLike, ShardNamespaceLike } from "@cirrus/runtime";
+import type { ExecutionContextLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 
 import { CIRRUS_FUNCTIONS } from "../cirrus/_generated/functions.js";
@@ -28,9 +28,8 @@ let worker: ReturnType<typeof createWorker> | null = null;
 export default {
     async fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
         worker ??= createWorker({
-            // The generated registry's `kind` union also carries `"stream"`, which
-            // the runtime's registry view structurally ignores — narrow to it.
-            functions: CIRRUS_FUNCTIONS as unknown as FunctionRegistryLike,
+            // Exposes /_cirrus/admin/functions for the studio's function runner.
+            functions: CIRRUS_FUNCTIONS,
             // better-auth / OAuth callbacks etc. mount here; empty to start.
             routes: {},
             shardDO: env.SHARD,
