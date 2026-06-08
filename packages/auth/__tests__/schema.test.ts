@@ -1,4 +1,5 @@
-import { admin, organization } from "better-auth/plugins";
+import { passkey } from "@better-auth/passkey";
+import { admin, jwt, organization, twoFactor, username } from "better-auth/plugins";
 import { describe, expect, it } from "vitest";
 
 import type { CirrusAuthOptions } from "../src/create-auth.js";
@@ -58,5 +59,32 @@ describe("authTables", () => {
 
         expect(tables["user"]?.shape["role"]?.kind).toBe("string");
         expect(tables["user"]?.shape["banned"]?.kind).toBe("boolean");
+    });
+
+    it("generates a valid schema across a broad plugin set — no throws, every field mapped", () => {
+        expect.hasAssertions();
+
+        // Exercises the full breadth: FK references, plugin-added columns, and
+        // extra tables from org/teams, twoFactor, jwt, passkey, username.
+        const tables = authTables({
+            ...baseOptions,
+            plugins: [organization({ teams: { enabled: true } }), admin(), twoFactor(), jwt(), passkey(), username()],
+        });
+
+        // Every contributed table is present…
+        for (const name of ["user", "session", "account", "verification", "organization", "member", "invitation", "team", "twoFactor", "jwks", "passkey"]) {
+            expect(tables).toHaveProperty(name);
+        }
+
+        // …and no field fell through to the permissive `v.any()` fallback —
+        // i.e. every better-auth field type these plugins use is mapped to a
+        // concrete validator.
+        const fellBack = Object.entries(tables).flatMap(([table, definition]) =>
+            Object.entries(definition.shape)
+                .filter(([, validator]) => validator.kind === "any")
+                .map(([column]) => `${table}.${column}`),
+        );
+
+        expect(fellBack).toEqual([]);
     });
 });
