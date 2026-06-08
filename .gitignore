@@ -67,6 +67,10 @@ typings/
 # templates from there for `vis generate`.
 .vis/*
 !.vis/templates/
+# Committed git hooks live at .vis/hooks/<stage> (moved from .vis-hooks).
+# The generated dispatcher under .vis/hooks/_/ stays out of version control.
+!.vis/hooks/
+.vis/hooks/_/
 .task-runner/
 
 # Package build output

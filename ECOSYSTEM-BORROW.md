@@ -17,8 +17,8 @@ _in_.** Inbound compatibility is the usual permissive/copyleft question:
 
 - **MIT / Apache-2.0 / BSD → can copy code** into cirrus. Preserve the upstream
   copyright + license notice in the vendored files. (We already do this: the TanStack
-  `scripts/cleanup-empty-packages.js` / `generate-labeler-config.js` keep their
-  `Copyright (c) Tanner Linsley · MIT` headers.)
+  `scripts/generate-labeler-config.js` keeps its
+  `Copyright (c) Tanner Linsley · MIT` header.)
 - **AGPL / GPL → ideas only.** Copyleft would force its terms on the combined work,
   incompatible with redistributing cirrus under FSL.
 - **FSL / BSL (e.g. Convex) → ideas only.** Text-compatibility aside, using their

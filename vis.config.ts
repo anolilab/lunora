@@ -95,11 +95,12 @@ export default defineConfig({
         "**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx,yml,yaml,toml,json,json5,jsonc}": ["pnpm exec prettier --write"],
         // ESLint lives only in packages/* (each owns an eslint.config.js).
         // @anolilab/eslint-config picks plugins from the cwd's package.json, so
-        // staged package files must be linted from INSIDE their package — the
-        // wrapper groups files by package and runs `eslint --fix` in each, like
-        // the per-package lint:eslint task. (Running eslint from the repo root
-        // would load the wrong plugin set and break rules + disable directives.)
-        "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": ["node scripts/staged-eslint.mjs"],
+        // staged package files must be linted from INSIDE their package.
+        // `perPackage` runs the command once per owning workspace package with
+        // cwd = that package dir (replacing the old scripts/staged-eslint.mjs
+        // wrapper). Running eslint from the repo root would load the wrong
+        // plugin set and break rules + disable directives.
+        "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": [{ command: "pnpm exec eslint --fix", perPackage: true }],
         "**/*.{md,mdx}": ["pnpm exec prettier --write"],
     },
     secrets: {
