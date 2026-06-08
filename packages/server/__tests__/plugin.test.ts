@@ -3,7 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { initCirrus } from "../src/builder/index.js";
 import { mutation, query } from "../src/functions.js";
-import { defineComponent, definePlugin, defineSchemaExtension, mergeSchemaExtension } from "../src/plugin.js";
+import { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "../src/plugin.js";
 import { defineSchema, defineTable, defineVectorIndex } from "../src/schema.js";
 
 describe("defineSchemaExtension", () => {
@@ -375,6 +375,87 @@ describe("defineComponent", () => {
         const extension = defineSchemaExtension("foo", { tables: {} });
 
         expect(() => defineComponent("bar", { extension })).toThrow(/extension key "foo" does not match plugin key/);
+    });
+});
+
+describe("triggers survive the extension merge", () => {
+    it("carries an extension table's triggerMap onto the prefixed table", () => {
+        expect.assertions(3);
+
+        const handler = (): void => undefined;
+        const base = defineSchema({ todos: defineTable({ title: v.string() }) });
+        const extension = defineSchemaExtension("audit", {
+            tables: {
+                events: defineTable({ kind: v.string() }).triggers((t) => {
+                    return { onWrite: t.afterInsert(handler) };
+                }),
+            },
+        });
+
+        const merged = mergeSchemaExtension(base, extension);
+
+        // The trigger fires on the prefixed table name (`audit_events`), and the
+        // descriptor + handler reference survive the merge byte-for-byte.
+        expect(merged.tables).toHaveProperty("audit_events");
+        expect(merged.tables["audit_events"]?.triggerMap["onWrite"]).toMatchObject({ op: "insert", timing: "after" });
+        expect(merged.tables["audit_events"]?.triggerMap["onWrite"]?.handler).toBe(handler);
+    });
+});
+
+describe("installPlugins", () => {
+    it("installs every plugin's extension in one call, skipping middleware-only plugins", () => {
+        expect.assertions(2);
+
+        const ratelimit = definePlugin("ratelimit", {
+            extension: defineSchemaExtension("ratelimit", { tables: { buckets: defineTable({ count: v.number() }) } }),
+        });
+        const audit = definePlugin("audit", {
+            extension: defineSchemaExtension("audit", { tables: { events: defineTable({ kind: v.string() }) } }),
+        });
+        // Middleware-only plugin — contributes no tables, must be skipped cleanly.
+        const tracing = definePlugin("tracing", { middleware: ({ next }) => next({ ctx: { traced: true } }) });
+
+        const schema = installPlugins(defineSchema({ todos: defineTable({ title: v.string() }) }), [ratelimit, audit, tracing]);
+
+        expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["audit_events", "ratelimit_buckets", "todos"]);
+        // Same collision policy as `.extend(...)`: a duplicate prefixed table throws.
+        expect(() => installPlugins(schema, [ratelimit])).toThrow(/table "ratelimit_buckets" already exists/);
+    });
+});
+
+describe("composePluginMiddleware", () => {
+    it("runs every plugin middleware in order under a single .use()", async () => {
+        expect.assertions(2);
+
+        const order: string[] = [];
+        const first = definePlugin<Record<string, never>, { order: string[] }, { first: true; order: string[] }>("first", {
+            middleware: ({ ctx, next }) => {
+                ctx.order.push("first");
+
+                return next({ ctx: { first: true } });
+            },
+        });
+        const second = definePlugin<Record<string, never>, { first: true; order: string[] }, { first: true; order: string[]; second: true }>("second", {
+            middleware: ({ ctx, next }) => {
+                ctx.order.push("second");
+
+                return next({ ctx: { second: true } });
+            },
+        });
+
+        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const procedure = c.query
+            .use(async ({ next }) => next({ ctx: { order } }))
+            .use(composePluginMiddleware([first, second]))
+            .query(({ ctx }) => {
+                return { first: ctx.first, second: ctx.second };
+            });
+
+        const result = await procedure.handler({}, {});
+
+        // Both plugin contexts are visible to the handler, and they ran in array order.
+        expect(result).toEqual({ first: true, second: true });
+        expect(order).toEqual(["first", "second"]);
     });
 });
 

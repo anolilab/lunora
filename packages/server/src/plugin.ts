@@ -7,10 +7,12 @@
  * triggers) that the host app's schema merges in.
  * 2. **Middleware** — a builder-compatible middleware that runs on every
  * procedure that opts in via `.use(plugin.middleware)`. By convention it
- * extends `ctx.api.&lt;key>` with helpers the plugin exposes.
- * 3. **(Future) API surface** — typed functions to expose under
- * `ctx.api.&lt;key>`. v1 leaves typing to the user; codegen integration is a
- * follow-up so the type can be discovered automatically.
+ * extends `ctx.api.&lt;key>` with helpers the plugin exposes. Install several at
+ * once with `composePluginMiddleware([...])` (one `.use(...)`) and
+ * `installPlugins(schema, [...])` (one schema fold).
+ * 3. **Functions** — registered queries/mutations/actions bundled on a
+ * {@link Component} under `.functions`. The host app re-exports them and
+ * codegen discovers them in the app's namespace (see {@link ComponentFunctions}).
  *
  * Authoring shape (kitcn-style):
  *
@@ -56,7 +58,7 @@
  *     builder — each consumer decides which plugin middlewares to attach.
  */
 
-import type { Middleware } from "./builder/types.js";
+import type { Middleware, MiddlewareNext } from "./builder/types.js";
 import type {
     AggregateIndexDefinition,
     FunctionKind,
@@ -117,6 +119,40 @@ const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: 
 
     return { ...table, aggregateIndexes, rankIndexes, relationMap };
 };
+
+/* eslint-disable @typescript-eslint/no-explicit-any -- the install/compose accumulator types fold over a heterogeneous tuple of plugins; per-plugin types are recovered by the `infer`s below. */
+
+/**
+ * The prefixed tables a single plugin `P` contributes, or an empty map when it
+ * ships no schema extension. Mirrors {@link PrefixedTables} at the plugin level
+ * so {@link InstalledTables} can fold a tuple of plugins.
+ */
+type ExtensionTablesOf<P> = P extends { readonly extension: SchemaExtension<infer X> & { readonly key: infer K } }
+    ? K extends string
+        ? PrefixedTables<X, K>
+        : Record<never, never>
+    : Record<never, never>;
+
+/**
+ * Fold a tuple of plugins onto a base table map `T`, accumulating each plugin's
+ * auto-prefixed extension tables left-to-right — the type-level mirror of
+ * {@link installPlugins} applying `mergeSchemaExtension` for each plugin in turn.
+ */
+type InstalledTables<T extends Record<string, TableDefinition>, Plugins extends ReadonlyArray<unknown>> = Plugins extends readonly [infer Head, ...infer Rest]
+    ? InstalledTables<ExtensionTablesOf<Head> & T, Rest>
+    : T;
+
+/**
+ * Union every plugin's `ContextOut` in a tuple — the type-level mirror of the
+ * `ctx.api.&lt;key>` additions {@link composePluginMiddleware} accumulates as each
+ * plugin middleware runs. Independent of the incoming context, which the builder
+ * infers at the `.use(...)` site.
+ */
+type ComposedOut<Plugins extends ReadonlyArray<unknown>> = Plugins extends readonly [infer Head, ...infer Rest]
+    ? ComposedOut<Rest> & (Head extends Plugin<any, any, infer Out> ? Out : unknown)
+    : unknown;
+
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
  * Schema fragment a plugin contributes. Same shape as the `tables` map
@@ -234,8 +270,9 @@ export const definePlugin = <TExtension extends Record<string, TableDefinition>,
  * // Emits as `ratelimit:check` / `ratelimit:reset` in the generated `api`.
  * ```
  *
- * No codegen change is needed — re-exports are already how user code
- * exposes its own queries / mutations.
+ * Codegen follows the re-export back to the bundled `query/mutation/action`
+ * call (property access or destructuring both work), so the functions land in
+ * the generated `api` under the re-exporting file's namespace.
  */
 /* eslint-disable @typescript-eslint/no-explicit-any -- ComponentFunctions is a heterogeneous bag; per-entry types are recovered by the consumer's re-export. */
 export type ComponentFunctions = Readonly<Record<string, RegisteredFunction<any, any, FunctionKind>>>;
@@ -284,8 +321,9 @@ export interface DefineComponentOptions<
  * });
  * ```
  *
- * v1 leaves codegen-side namespacing of component functions as a follow-up;
- * the explicit re-export pattern works without any codegen change.
+ * Re-exporting an entry (by property access or destructuring) is enough for
+ * codegen to discover it in the host app's namespace — the discovery resolver
+ * chases the re-export back to the bundled registration call.
  */
 export const defineComponent = <
     TExtension extends Record<string, TableDefinition>,
@@ -375,3 +413,76 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
         vectorIndexes: mergedVectorIndexes,
     };
 };
+
+/* eslint-disable @typescript-eslint/no-explicit-any -- the install/compose helpers fold over a heterogeneous tuple of plugins; per-plugin types are recovered by the recursive accumulator types declared above. */
+
+/**
+ * Install several plugins' schema extensions in one call — the one-shot
+ * counterpart to chaining `defineSchema(...).extend(a).extend(b)`. Plugins
+ * without an `extension` (middleware-only) are skipped; tables from those that
+ * do are auto-prefixed and reference-rewritten exactly as
+ * {@link mergeSchemaExtension} does for a single `.extend(...)`.
+ *
+ * ```ts
+ * const schema = installPlugins(defineSchema({ todos }), [ratelimit, audit]);
+ * // → todos + ratelimit_* + audit_*
+ * ```
+ *
+ * Pair it with {@link composePluginMiddleware} to attach every plugin's
+ * middleware in a single `.use(...)`, so installing N plugins is two calls
+ * rather than N `.extend(...)` + N `.use(...)`.
+ */
+export const installPlugins = <T extends Record<string, TableDefinition>, const Plugins extends ReadonlyArray<Plugin<any, any, any>>>(
+    base: Schema<T>,
+    plugins: Plugins,
+): Schema<InstalledTables<T, Plugins>> => {
+    let schema = base as Schema;
+
+    for (const plugin of plugins) {
+        if (plugin.extension) {
+            schema = mergeSchemaExtension(schema, plugin.extension);
+        }
+    }
+
+    return schema as Schema<InstalledTables<T, Plugins>>;
+};
+
+/**
+ * Compose every plugin's middleware into a single middleware you attach with one
+ * `.use(...)`. Plugins without middleware (schema-only) are skipped; the rest run
+ * in array order, each seeing the context the previous one widened, so the final
+ * `next({ ctx })` the builder receives carries every plugin's `ctx.api.&lt;key>`
+ * additions. Equivalent to `.use(a.middleware).use(b.middleware)…` but as one
+ * value, the middleware sibling of {@link installPlugins}.
+ *
+ * `ContextIn` is left free so the builder infers it from the context at the
+ * `.use(...)` site; the result type widens it by the union of the plugins'
+ * outputs.
+ */
+export const composePluginMiddleware = <ContextIn = unknown, const Plugins extends ReadonlyArray<Plugin<any, any, any>> = ReadonlyArray<Plugin<any, any, any>>>(
+    plugins: Plugins,
+): Middleware<ContextIn, ComposedOut<Plugins> & ContextIn> => {
+    const middlewares = plugins.map((plugin) => plugin.middleware).filter(Boolean);
+
+    return (async ({ ctx, next }) => {
+        // Onion the sub-middlewares: each link advances to the next plugin's
+        // middleware; the innermost link hands the fully widened context to the
+        // builder's own `next` so downstream `.use()`s and the handler see it.
+        const run = async (index: number, context: unknown): Promise<unknown> => {
+            const middleware = middlewares[index];
+
+            if (!middleware) {
+                return (next as MiddlewareNext<unknown>)({ ctx: context as Record<string, unknown> });
+            }
+
+            const advance = ((options?: { ctx: Record<string, unknown> }) =>
+                run(index + 1, options?.ctx ? { ...(context as Record<string, unknown>), ...options.ctx } : context)) as MiddlewareNext<unknown>;
+
+            return middleware({ ctx: context, next: advance });
+        };
+
+        return run(0, ctx);
+    }) as Middleware<ContextIn, ComposedOut<Plugins> & ContextIn>;
+};
+
+/* eslint-enable @typescript-eslint/no-explicit-any */

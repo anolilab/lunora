@@ -37,7 +37,7 @@ export { httpAction, httpRoute, httpRouter, serveStorageObject } from "./http.js
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";
 export { defineMigration } from "./migration.js";
 export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, PrefixedTables, SchemaExtension } from "./plugin.js";
-export { defineComponent, definePlugin, defineSchemaExtension, mergeSchemaExtension } from "./plugin.js";
+export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin.js";
 export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence.js";
 export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence.js";
 export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./rls/index.js";
