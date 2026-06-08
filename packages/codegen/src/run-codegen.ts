@@ -7,7 +7,7 @@ import discoverCrons from "./discover-crons.js";
 import { discoverFunctions } from "./discover-functions.js";
 import discoverMigrations from "./discover-migrations.js";
 import discoverSchema from "./discover-schema.js";
-import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitServer, emitShard, emitWranglerCronTriggers } from "./emit.js";
+import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit.js";
 
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
@@ -70,7 +70,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
-    const serverContent = emitServer(functions, migrations);
+    const serverContent = emitServer();
+    const functionsContent = emitFunctions(functions, migrations);
     const shardContent = emitShard(schema);
     const cronsContent = emitCrons(crons);
     const drizzleFiles = emitDrizzleSchema(schema);
@@ -85,6 +86,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writeIfChanged(join(outputDirectory, "dataModel.ts"), dataModelContent);
         writeIfChanged(join(outputDirectory, "api.ts"), apiContent);
         writeIfChanged(join(outputDirectory, "server.ts"), serverContent);
+        writeIfChanged(join(outputDirectory, "functions.ts"), functionsContent);
         writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
         writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);
         writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
@@ -99,6 +101,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             dataModel: dataModelContent,
             drizzleGlobal: drizzleFiles.global,
             drizzleShard: drizzleFiles.shard,
+            functions: functionsContent,
             server: serverContent,
             shard: shardContent,
         },
@@ -133,6 +136,7 @@ export interface CodegenResult {
         dataModel: string;
         drizzleGlobal: string;
         drizzleShard: string;
+        functions: string;
         server: string;
         shard: string;
     };

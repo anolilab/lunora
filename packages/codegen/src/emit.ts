@@ -764,96 +764,19 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
 
 /**
  * Emit `_generated/server.ts` — re-exports of the user-facing factories
- * **plus** a static dispatch table that maps `${namespace}:${fnName}` keys
- * to the registered handler objects (and a `CIRRUS_MIGRATIONS` registry keyed
- * by migration id). A `ShardDO` subclass can plug these straight into
- * `handleRpc(functionPath, args)` / the data-migration runner.
+ * (`query`/`mutation`/`action`/`v` and the project-typed contexts).
+ *
+ * **This file must never import the user's function modules.** User code
+ * imports `v`/`query`/`mutation` from here, so if `server.ts` imported the
+ * function modules back, we'd form a cycle: the function module's top-level
+ * `mutation({ args: { x: v.string() } })` would run while `server.ts`'s
+ * `export const v = …` is still uninitialized, and `v` would read as
+ * `undefined` (TypeError: reading 'string'). The dispatch table that *does*
+ * import every function module lives in `_generated/functions.ts` instead.
  */
-const emitServer = (functions: ReadonlyArray<FunctionIR>, migrations: ReadonlyArray<MigrationIR> = []): string => {
-    // One import alias per distinct source file. Functions are registered
-    // first (preserving the prior alias numbering), then migration-only files
-    // pick up the next indices — deterministic across runs.
-    const aliasByPath = new Map<string, string>();
-
-    const registerPath = (filePath: string): void => {
-        if (!aliasByPath.has(filePath)) {
-            aliasByPath.set(filePath, moduleAlias(filePath, aliasByPath.size));
-        }
-    };
-
-    for (const definition of functions) {
-        registerPath(definition.filePath);
-    }
-
-    for (const migration of migrations) {
-        registerPath(migration.filePath);
-    }
-
-    const importLines = [...aliasByPath.entries()]
-        .map(([filePath, alias]) => {
-            if (!IMPORT_PATH_RE.test(filePath)) {
-                throw new Error(`@cirrus/codegen: refusing to emit import for unsafe file path: ${JSON.stringify(filePath)}`);
-            }
-
-            return `import * as ${alias} from "../${filePath}.js";`;
-        })
-        .join("\n");
-
-    // Functions arrive pre-sorted by `${filePath}:${exportName}`, so same-file
-    // entries stay contiguous and the alias lookup is always populated.
-    const dispatchEntries = functions
-        .map(
-            (definition) =>
-                `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": ${aliasByPath.get(definition.filePath) ?? ""}.${definition.exportName} as unknown as RegisteredCirrusFunction,`,
-        )
-        .join("\n");
-
-    const migrationEntries = migrations
-        .map(
-            (migration) =>
-                `    ${JSON.stringify(migration.id)}: ${aliasByPath.get(migration.filePath) ?? ""}.${migration.exportName} as unknown as RegisteredDataMigration,`,
-        )
-        .join("\n");
-
-    const dispatchBody = dispatchEntries.length > 0 ? `\n${dispatchEntries}\n` : "";
-    const migrationBody = migrationEntries.length > 0 ? `\n${migrationEntries}\n` : "";
-    const importBlock = importLines.length > 0 ? `${importLines}\n\n` : "";
-
-    const caller = renderCaller(functions);
-    const callerTypes = caller.types ? `\n${caller.types}\n` : "";
-    const callerImpl = caller.implementation ? `\n${caller.implementation}\n` : "";
-
-    // Pull the `Doc`/`Id` aliases the caller's arg/return types actually
-    // reference into the existing dataModel import (importing an unused one
-    // trips noUnusedLocals). The `export type` re-export below is separate — it
-    // re-exports without creating a local binding, so it can't satisfy these.
-    const callerDataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(caller.types));
-    const dataModelImportTail = callerDataModelImports.length > 0 ? `, ${callerDataModelImports.join(", ")}` : "";
-
-    // `callRegistered` (and thus `context`) is only referenced when at least one
-    // function exists; otherwise it would be an unused local / parameter.
-    const callerParameter = functions.length > 0 ? "context" : "_context";
-    const callRegisteredHelper =
-        functions.length > 0
-            ? `const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
-    const registered = CIRRUS_FUNCTIONS[functionPath];
-
-    if (!registered) {
-        throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
-            name: "CirrusError",
-            code: "FUNCTION_NOT_FOUND",
-            status: 404,
-        });
-    }
-
-    return (await registered.handler(context, args ?? {})) as R;
-};
-
-`
-            : "";
-
+const emitServer = (): string => {
     /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
-    return `${GENERATED_HEADER}${importBlock}import {
+    return `${GENERATED_HEADER}import {
     action as actionBase,
     internalAction as internalActionBase,
     internalMutation as internalMutationBase,
@@ -876,7 +799,7 @@ import type {
     RegisteredQuery,
 } from "@cirrus/server";
 
-import type { DatabaseReaderFacade, DatabaseWriterFacade${dataModelImportTail}, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
+import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
 
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
@@ -952,7 +875,107 @@ export const internalAction = internalActionBase as unknown as <A extends ArgsVa
 export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
     id: <T extends TableName>(table: T) => ColumnValidator<IdOfTable<T>, IdOfTable<T>>;
 };
+`;
+    /* eslint-enable no-secrets/no-secrets */
+};
 
+/**
+ * Emit `_generated/functions.ts` — a static dispatch table that maps
+ * `${namespace}:${fnName}` keys to the registered handler objects (and a
+ * `CIRRUS_MIGRATIONS` registry keyed by migration id), plus the typed
+ * server-to-server `createCaller`. A `ShardDO` subclass and the worker entry
+ * plug these straight into `handleRpc(functionPath, args)` / the data-migration
+ * runner.
+ *
+ * This is the file that imports every user function module — kept separate from
+ * `server.ts` (which user code imports for `v`/`query`/`mutation`) so the two
+ * never form an initialization cycle. See {@link emitServer}.
+ */
+const emitFunctions = (functions: ReadonlyArray<FunctionIR>, migrations: ReadonlyArray<MigrationIR> = []): string => {
+    // One import alias per distinct source file. Functions are registered
+    // first (preserving the prior alias numbering), then migration-only files
+    // pick up the next indices — deterministic across runs.
+    const aliasByPath = new Map<string, string>();
+
+    const registerPath = (filePath: string): void => {
+        if (!aliasByPath.has(filePath)) {
+            aliasByPath.set(filePath, moduleAlias(filePath, aliasByPath.size));
+        }
+    };
+
+    for (const definition of functions) {
+        registerPath(definition.filePath);
+    }
+
+    for (const migration of migrations) {
+        registerPath(migration.filePath);
+    }
+
+    const importLines = [...aliasByPath.entries()]
+        .map(([filePath, alias]) => {
+            if (!IMPORT_PATH_RE.test(filePath)) {
+                throw new Error(`@cirrus/codegen: refusing to emit import for unsafe file path: ${JSON.stringify(filePath)}`);
+            }
+
+            return `import * as ${alias} from "../${filePath}.js";`;
+        })
+        .join("\n");
+
+    // Functions arrive pre-sorted by `${filePath}:${exportName}`, so same-file
+    // entries stay contiguous and the alias lookup is always populated.
+    const dispatchEntries = functions
+        .map(
+            (definition) =>
+                `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": ${aliasByPath.get(definition.filePath) ?? ""}.${definition.exportName} as unknown as RegisteredCirrusFunction,`,
+        )
+        .join("\n");
+
+    const migrationEntries = migrations
+        .map(
+            (migration) =>
+                `    ${JSON.stringify(migration.id)}: ${aliasByPath.get(migration.filePath) ?? ""}.${migration.exportName} as unknown as RegisteredDataMigration,`,
+        )
+        .join("\n");
+
+    const dispatchBody = dispatchEntries.length > 0 ? `\n${dispatchEntries}\n` : "";
+    const migrationBody = migrationEntries.length > 0 ? `\n${migrationEntries}\n` : "";
+    const importBlock = importLines.length > 0 ? `${importLines}\n\n` : "";
+
+    const caller = renderCaller(functions);
+    const callerTypes = caller.types ? `\n${caller.types}\n` : "";
+    const callerImpl = caller.implementation ? `\n${caller.implementation}\n` : "";
+
+    // Pull the `Doc`/`Id` aliases the caller's arg/return types actually
+    // reference into a type-only dataModel import (importing an unused one
+    // trips noUnusedLocals; omitting the import entirely when neither is
+    // referenced keeps the file dependency-light).
+    const callerDataModelImports = (["Doc", "Id"] as const).filter((name) => new RegExp(String.raw`\b${name}<`, "u").test(caller.types));
+    const dataModelImport = callerDataModelImports.length > 0 ? `import type { ${callerDataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
+
+    // `callRegistered` (and thus `context`) is only referenced when at least one
+    // function exists; otherwise it would be an unused local / parameter.
+    const callerParameter = functions.length > 0 ? "context" : "_context";
+    const callRegisteredHelper =
+        functions.length > 0
+            ? `const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
+    const registered = CIRRUS_FUNCTIONS[functionPath];
+
+    if (!registered) {
+        throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
+            name: "CirrusError",
+            code: "FUNCTION_NOT_FOUND",
+            status: 404,
+        });
+    }
+
+    return (await registered.handler(context, args ?? {})) as R;
+};
+
+`
+            : "";
+
+    return `${GENERATED_HEADER}${importBlock}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
+${dataModelImport}
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
  * The real argument validators / return types are checked elsewhere — at
@@ -1034,13 +1057,12 @@ export interface RegisteredDataMigration {
  */
 export const CIRRUS_MIGRATIONS: Record<string, RegisteredDataMigration> = {${migrationBody}};
 `;
-    /* eslint-enable no-secrets/no-secrets */
 };
 
 /**
  * Emit `_generated/shard.ts` — a `createShardDO(config)` factory returning a
  * concrete `ShardDO` subclass. Dispatch runs through `CIRRUS_FUNCTIONS` from
- * `./server.js`; the live schema is imported from `../schema.js`.
+ * `./functions.js`; the live schema is imported from `../schema.js`.
  *
  * The file stays dependency-light: it always imports `@cirrus/do`, and only
  * imports `@cirrus/vectors` when the schema declares at least one vector index.
@@ -1165,7 +1187,7 @@ const emitShard = (schema: SchemaIR): string => {
         );
     }
 
-    importLines.push(``, `import schema from "../schema.js";`, `import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./server.js";`);
+    importLines.push(``, `import schema from "../schema.js";`, `import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./functions.js";`);
 
     const vectorsConfigField = hasVectors ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
 
@@ -2013,4 +2035,4 @@ const emitWranglerCronTriggers = (crons: ReadonlyArray<CronJobIR>): string[] => 
     return triggers;
 };
 
-export { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitServer, emitShard, emitWranglerCronTriggers, GENERATED_HEADER };
+export { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers, GENERATED_HEADER };

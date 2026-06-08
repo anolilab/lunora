@@ -5,6 +5,7 @@ import type { Plugin } from "vite";
 import codegenPlugin from "./codegen-plugin.js";
 import { studioPlugin } from "./studio-plugin.js";
 import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
+import { withWorkerStartupHint } from "./worker-startup-hint.js";
 import wranglerValidatorPlugin from "./wrangler-validator-plugin.js";
 
 const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirrusPluginOptions => {
@@ -73,7 +74,10 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
     }
 
     if (resolved.cloudflare !== false) {
-        plugins.push(...cloudflare(resolved.cloudflare));
+        // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
+        // failure (e.g. a circular import in `cirrus/`) surfaces an actionable
+        // hint instead of a bare, file-less `runner-worker` TypeError.
+        plugins.push(...withWorkerStartupHint(cloudflare(resolved.cloudflare)));
     }
 
     return plugins;
@@ -86,5 +90,6 @@ export type { ReconcileResult } from "./cron-sync.js";
 export { reconcileWranglerCrons } from "./cron-sync.js";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin.js";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
+export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint.js";
 export { default as wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";
 export { cirrus, VERSION };
