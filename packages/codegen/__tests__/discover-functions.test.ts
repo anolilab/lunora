@@ -659,5 +659,24 @@ describe("discoverFunctions", () => {
             expect(() => discoverFunctions(project, workdir)).not.toThrow();
             expect(discoverFunctions(project, workdir).filter((f) => f.filePath === "ratelimit")).toEqual([]);
         });
+
+        it("bails (no entry, no hang) on a cyclic re-export — exercises the depth bound", () => {
+            expect.hasAssertions();
+
+            // `a → b → a` never reaches a call literal; the resolver's depth bound
+            // must terminate it instead of looping forever.
+            writeFunction(
+                "ratelimit.ts",
+                `
+                export const a = b;
+                export const b = a;
+            `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+            expect(() => discoverFunctions(project, workdir)).not.toThrow();
+            expect(discoverFunctions(project, workdir).filter((f) => f.filePath === "ratelimit")).toEqual([]);
+        });
     });
 });

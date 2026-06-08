@@ -7,17 +7,12 @@ import { getAuthTables } from "better-auth/db";
 import type { CirrusAuthOptions } from "./create-auth.js";
 
 /**
- * The better-auth field-attribute shape we read. Mirrors `DBFieldAttribute`
- * from `@better-auth/core` structurally so this module needs no value import of
- * better-auth's types (which aren't re-exported from a stable path).
+ * The better-auth field-attribute shape we read, derived from `getAuthTables`'s
+ * own return type rather than hand-mirrored — so if better-auth renames a field
+ * we depend on (`references.model`, `type`, …) this module fails to compile
+ * instead of silently mis-mapping every column.
  */
-interface AuthFieldAttribute {
-    fieldName?: string;
-    references?: { field: string; model: string };
-    required?: boolean;
-    type: ReadonlyArray<string> | string;
-    unique?: boolean;
-}
+type AuthFieldAttribute = ReturnType<typeof getAuthTables>[string]["fields"][string];
 
 /** The validator for a field's `type`, before `nullable`/`unique` modifiers. */
 const baseValidator = (attribute: AuthFieldAttribute): Validator => {
@@ -104,7 +99,11 @@ const fieldValidator = (attribute: AuthFieldAttribute): Validator => {
  *
  * Spread the result into `defineSchema` alongside your app tables (the keys are
  * better-auth's real table names — `user`, `session`, … — left **unprefixed**
- * because better-auth's adapter addresses them by exactly those names):
+ * because better-auth's adapter addresses them by exactly those names). Because
+ * the names are unprefixed, do **not** declare an app table that reuses one of
+ * better-auth's reserved names in the same `defineSchema` — JS spread order
+ * would let the later key win silently (unlike the plugin-extension path, which
+ * throws on collision):
  *
  * ```ts
  * import { authTables } from "@cirrus/auth";

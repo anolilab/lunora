@@ -58,6 +58,7 @@
  *     builder — each consumer decides which plugin middlewares to attach.
  */
 
+import runMiddlewareChain from "./builder/run-middleware.js";
 import type { Middleware, MiddlewareNext } from "./builder/types.js";
 import type {
     AggregateIndexDefinition,
@@ -462,27 +463,17 @@ export const installPlugins = <T extends Record<string, TableDefinition>, const 
 export const composePluginMiddleware = <ContextIn = unknown, const Plugins extends ReadonlyArray<Plugin<any, any, any>> = ReadonlyArray<Plugin<any, any, any>>>(
     plugins: Plugins,
 ): Middleware<ContextIn, ComposedOut<Plugins> & ContextIn> => {
-    const middlewares = plugins.map((plugin) => plugin.middleware).filter(Boolean);
+    const middlewares = plugins.map((plugin) => plugin.middleware).filter((middleware): middleware is Middleware<unknown, unknown> => middleware !== undefined);
 
-    return (async ({ ctx, next }) => {
-        // Onion the sub-middlewares: each link advances to the next plugin's
-        // middleware; the innermost link hands the fully widened context to the
-        // builder's own `next` so downstream `.use()`s and the handler see it.
-        const run = async (index: number, context: unknown): Promise<unknown> => {
-            const middleware = middlewares[index];
-
-            if (!middleware) {
-                return (next as MiddlewareNext<unknown>)({ ctx: context as Record<string, unknown> });
-            }
-
-            const advance = ((options?: { ctx: Record<string, unknown> }) =>
-                run(index + 1, options?.ctx ? { ...(context as Record<string, unknown>), ...options.ctx } : context)) as MiddlewareNext<unknown>;
-
-            return middleware({ ctx: context, next: advance });
-        };
-
-        return run(0, ctx);
-    }) as Middleware<ContextIn, ComposedOut<Plugins> & ContextIn>;
+    // Reuse the builder's own onion executor so composing N plugin middlewares is
+    // behaviourally identical to chaining N `.use()`s — same shallow-merge, same
+    // double-`next()` guard. The terminal hands the fully widened context to the
+    // surrounding builder's `next`, making the composed unit transparent.
+    return (async ({ ctx, next }) =>
+        runMiddlewareChain(middlewares, ctx, (context) => (next as MiddlewareNext<unknown>)({ ctx: context as Record<string, unknown> }))) as Middleware<
+        ContextIn,
+        ComposedOut<Plugins> & ContextIn
+    >;
 };
 
 /* eslint-enable @typescript-eslint/no-explicit-any */

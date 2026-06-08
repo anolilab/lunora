@@ -1,14 +1,7 @@
 import type { Plugin } from "@cirrus/server";
 
+import type { LimiterResolver } from "./middleware.js";
 import type { RateLimiter } from "./rate-limiter.js";
-
-/**
- * Either a fixed {@link RateLimiter} or a function that derives one from `ctx`
- * — the latter binds a durable, ORM-backed limiter at request time (e.g.
- * `(ctx) => new RateLimiter({ config, store: createDbStore({ db: ctx.db }) })`).
- * Mirrors the resolver the standalone `rateLimit(...)` middleware accepts.
- */
-type LimiterResolver<Context> = ((context: Context) => Promise<RateLimiter> | RateLimiter) | RateLimiter;
 
 /** Context shape the plugin middleware widens to: a `ratelimit` limiter on `ctx.api`. */
 export interface RatelimitApiContext<Context> {

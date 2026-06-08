@@ -457,6 +457,46 @@ describe("composePluginMiddleware", () => {
         expect(result).toEqual({ first: true, second: true });
         expect(order).toEqual(["first", "second"]);
     });
+
+    it("forwards context unchanged when a plugin calls next() with no ctx", async () => {
+        expect.assertions(1);
+
+        // `passthrough` calls next() with no argument — the composed chain must
+        // forward the upstream context untouched, then `tagging` widens it.
+        const passthrough = definePlugin("pass", { middleware: ({ next }) => next() });
+        const tagging = definePlugin<Record<string, never>, unknown, { tagged: true }>("tag", {
+            middleware: ({ next }) => next({ ctx: { tagged: true } }),
+        });
+
+        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const procedure = c.query
+            .use(async ({ next }) => next({ ctx: { base: 1 } }))
+            .use(composePluginMiddleware([passthrough, tagging]))
+            .query(({ ctx }) => {
+                return { base: ctx.base, tagged: ctx.tagged };
+            });
+
+        await expect(procedure.handler({}, {})).resolves.toEqual({ base: 1, tagged: true });
+    });
+
+    it("inherits the builder's double-next() guard (compose ≡ chained .use())", async () => {
+        expect.assertions(1);
+
+        // A misbehaving plugin that calls next() twice must throw, exactly as it
+        // would in a hand-chained `.use()` — the shared executor's tripwire.
+        const doubleNext = definePlugin("double", {
+            middleware: async ({ next }) => {
+                await next();
+
+                return next();
+            },
+        });
+
+        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const procedure = c.query.use(composePluginMiddleware([doubleNext])).query(() => "ok");
+
+        await expect(procedure.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
+    });
 });
 
 describe("plugin.middleware integration with the builder", () => {

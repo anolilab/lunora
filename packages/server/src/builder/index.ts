@@ -2,6 +2,7 @@ import type { Validator } from "@cirrus/values";
 
 import { validateArgs } from "../functions.js";
 import type { ActionCtx as ActionContext, ArgsValidator, FunctionKind, InferArgs, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../types.js";
+import runMiddlewareChain from "./run-middleware.js";
 import type {
     ActionBuilder,
     CirrusBuilders,
@@ -12,7 +13,6 @@ import type {
     InternalMutationBuilder,
     InternalQueryBuilder,
     Middleware,
-    MiddlewareNext,
     MutationBuilder,
     QueryBuilder,
 } from "./types.js";
@@ -26,35 +26,13 @@ interface BuilderState {
 }
 
 /**
- * Onion executor for the middleware chain. Each middleware receives `next`,
- * which advances to the following link; calling it twice for the same link is
- * a programming error and throws. A `{ ctx }` argument shallow-merges into the
- * context handed to the rest of the chain.
+ * Run the builder's middleware chain and return the fully resolved context. The
+ * onion executor itself lives in {@link runMiddlewareChain} (shared with the
+ * plugin-middleware composer so both honour the same double-`next()` guard); the
+ * builder's terminal simply returns the accumulated context unchanged.
  */
-const runMiddleware = async (middlewares: ReadonlyArray<Middleware<unknown, unknown>>, baseContext: unknown): Promise<unknown> => {
-    let lastIndex = -1;
-
-    const dispatch = async (index: number, context: unknown): Promise<unknown> => {
-        if (index <= lastIndex) {
-            throw new Error("middleware next() called multiple times");
-        }
-
-        lastIndex = index;
-
-        const middleware = middlewares[index];
-
-        if (!middleware) {
-            return context;
-        }
-
-        const next = ((options?: { ctx: Record<string, unknown> }) =>
-            dispatch(index + 1, options?.ctx ? { ...(context as Record<string, unknown>), ...options.ctx } : context)) as MiddlewareNext<unknown>;
-
-        return await middleware({ ctx: context, next });
-    };
-
-    return dispatch(0, baseContext);
-};
+const runMiddleware = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>, baseContext: unknown): Promise<unknown> =>
+    runMiddlewareChain(middlewares, baseContext, (context) => context);
 
 /**
  * Adapt a user handler (`{ args, ctx }`) to the registered dispatch contract
