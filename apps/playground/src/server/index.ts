@@ -5,7 +5,6 @@ import { listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
 import type {
     AuthIntrospector,
     ExecutionContextLike,
-    FunctionRegistryLike,
     GlobalIntrospector,
     ScheduledControllerLike,
     ShardNamespaceLike,
@@ -196,11 +195,9 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         cronJobs: CIRRUS_CRONS,
         d1: env.DB,
         // Exposes /_cirrus/admin/functions so the studio's runner can
-        // auto-discover queries/mutations/actions. The generated registry's
-        // `kind` union also carries `"stream"`, which the discovery endpoint
-        // (queries/mutations/actions only) structurally ignores — narrow to the
-        // registry view the runtime reads.
-        functions: CIRRUS_FUNCTIONS as unknown as FunctionRegistryLike,
+        // auto-discover queries/mutations/actions. `FunctionRegistryLike` accepts
+        // the generated registry directly (the endpoint omits `stream` entries).
+        functions: CIRRUS_FUNCTIONS,
         // Exposes /_cirrus/admin/global/* so the studio can browse `.global()`
         // (D1-backed) tables.
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,

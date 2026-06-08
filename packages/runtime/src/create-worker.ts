@@ -162,7 +162,13 @@ interface FunctionDescriptor {
 interface FunctionRegistryEntry {
     /** The function's `v.*` args validator map; read structurally for the signature view. */
     args?: unknown;
-    kind: "action" | "mutation" | "query";
+    /**
+     * The generated registry carries `"stream"` alongside query/mutation/action;
+     * the discovery endpoint surfaces the latter three only (a `stream` function
+     * isn't runnable from the function runner), but accepting the kind here lets
+     * callers pass the generated `CIRRUS_FUNCTIONS` map without a cast.
+     */
+    kind: "action" | "mutation" | "query" | "stream";
     visibility?: "internal" | "public";
 }
 
@@ -2435,12 +2441,17 @@ const createWorker = (
             message: "functions endpoint requires a `functions` registry on the worker",
         });
 
-        // Internal functions are never exposed — they're unreachable from the
-        // client RPC path, so surfacing them in the runner would only mislead.
+        // Internal functions are never exposed — unreachable from the client RPC
+        // path, so surfacing them in the runner would only mislead. `stream`
+        // functions are likewise omitted: the runner invokes query/mutation/action
+        // only. The early-return narrows `entry.kind` to the runnable three.
         const functions: FunctionDescriptor[] = Object.entries(registry)
-            .filter(([, entry]) => entry.visibility !== "internal")
-            .map(([path, entry]) => {
-                return { args: describeArguments(entry.args), kind: entry.kind, path };
+            .flatMap(([path, entry]) => {
+                if (entry.visibility === "internal" || entry.kind === "stream") {
+                    return [];
+                }
+
+                return [{ args: describeArguments(entry.args), kind: entry.kind, path }];
             })
             .toSorted((a, b) => a.path.localeCompare(b.path));
 

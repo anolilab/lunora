@@ -25,6 +25,9 @@ const REGISTRY: FunctionRegistryLike = {
     "internal:sweep": { kind: "mutation", visibility: "internal" },
     "messages:list": { kind: "query" },
     "messages:send": { kind: "mutation" },
+    // `stream` (subscription) functions are accepted by the registry type but
+    // are not runnable from the function runner, so discovery omits them.
+    "presence:watch": { kind: "stream" },
 };
 
 describe("createWorker — functions admin endpoint", () => {
@@ -56,7 +59,7 @@ describe("createWorker — functions admin endpoint", () => {
         expect(body.error.code).toBe("FUNCTIONS_NOT_CONFIGURED");
     });
 
-    it("returns public functions sorted by path, omitting internal ones", async () => {
+    it("returns public functions sorted by path, omitting internal and stream ones", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, functions: REGISTRY, shardDO: noopNamespace });
@@ -68,6 +71,7 @@ describe("createWorker — functions admin endpoint", () => {
         );
 
         expect(response.status).toBe(200);
+        // `internal:sweep` (internal) and `presence:watch` (stream) are both absent.
         await expect(response.json()).resolves.toEqual({
             functions: [
                 { args: [], kind: "action", path: "billing:sync" },
