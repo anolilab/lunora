@@ -2,12 +2,42 @@ import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
 import { runCodegen } from "@cirrus/codegen";
+import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
 import type { Plugin, ViteDevServer } from "vite";
 
 import { reconcileWranglerCrons } from "./cron-sync.js";
 import type { ResolvedCirrusPluginOptions } from "./types.js";
 
 const DEBOUNCE_MS = 100;
+
+/**
+ * Infer the Cloudflare bindings the project's code implies and reconcile them
+ * into `wrangler.jsonc` (Durable Objects, their migration classes, and the
+ * `DB` D1 binding for `.global()` schemas). Best-effort and idempotent — runs
+ * once at startup so the user never hand-writes binding boilerplate. A failure
+ * here must never abort codegen; the wrangler validator reports real problems.
+ */
+const reconcileBindingsSafely = async (
+    options: Pick<ResolvedCirrusPluginOptions, "projectRoot" | "schemaDir">,
+    logger: { info?: (message: string) => void; warn: (message: string) => void },
+): Promise<void> => {
+    try {
+        const inferred = await inferCirrusBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
+        const reconciled = reconcileWranglerBindings(options.projectRoot, inferred);
+
+        if (reconciled.changed) {
+            logger.info?.(`[cirrus] inferred bindings → ${reconciled.added.join(", ")} (written to ${reconciled.wranglerPath ?? "wrangler.jsonc"})`);
+        }
+
+        for (const warning of reconciled.warnings) {
+            logger.warn(`[cirrus] ${warning}`);
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.warn(`[cirrus] binding inference skipped: ${message}`);
+    }
+};
 
 /**
  * Run codegen, returning the absolute directory codegen actually wrote to
@@ -71,7 +101,7 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
     return {
-        buildStart() {
+        async buildStart() {
             const logger = {
                 error: (message: string): void => {
                     // eslint-disable-next-line no-console
@@ -92,6 +122,11 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
             if (outputDirectory !== undefined) {
                 absoluteGeneratedDirectory = outputDirectory;
             }
+
+            // Auto-provision the bindings the code implies. Done once at startup
+            // (not on every schema edit): bindings change rarely and a restart
+            // picks up a newly-added capability.
+            await reconcileBindingsSafely(options, logger);
         },
         configureServer(server: ViteDevServer) {
             server.watcher.add(absoluteSchemaDirectory);

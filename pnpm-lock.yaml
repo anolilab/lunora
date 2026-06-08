@@ -261,6 +261,9 @@ catalogs:
     '@visulima/vite-overlay':
       specifier: 2.0.0-alpha.33
       version: 2.0.0-alpha.33
+    es-module-lexer:
+      specifier: ^2.1.0
+      version: 2.1.0
     jsonc-parser:
       specifier: ^3.3.1
       version: 3.3.1
@@ -940,6 +943,9 @@ importers:
       '@cirrus/codegen':
         specifier: workspace:*
         version: link:../codegen
+      es-module-lexer:
+        specifier: catalog:vite
+        version: 2.1.0
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1

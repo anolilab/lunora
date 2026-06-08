@@ -11,14 +11,9 @@
  * the project's schema, and returns the existing
  * `{ problems, wranglerPath }` shape kept for backward compatibility.
  */
-import { existsSync, readFileSync } from "node:fs";
-
-import { discoverSchema } from "@cirrus/codegen";
-import type { ParseError } from "jsonc-parser";
-import { parse as parseJsonc } from "jsonc-parser";
-import { Project } from "ts-morph";
-
-import join from "./path.js";
+import type { SchemaInfo } from "./schema-info.js";
+import { discoverSchemaInfo } from "./schema-info.js";
+import { findWranglerFile, readWranglerJsonc } from "./wrangler-path.js";
 
 const REQUIRED_COMPATIBILITY_DATE: string = "2026-04-07";
 
@@ -54,13 +49,6 @@ interface WranglerConfig {
     // otherwise malformed; the validators below guard against that at runtime.
     tail_consumers?: ReadonlyArray<TailConsumer | null | undefined>;
     vectorize?: ReadonlyArray<{ binding?: string; index_name?: string } | null | undefined>;
-}
-
-interface SchemaInfo {
-    /** Whether the cirrus schema declares any `.global()` table. */
-    hasGlobalTable: boolean;
-    /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
-    vectorIndexNames?: ReadonlyArray<string>;
 }
 
 interface WranglerValidationReport {
@@ -210,20 +198,6 @@ interface WranglerProjectValidationResult {
     wranglerPath: string | undefined;
 }
 
-const findWranglerFile = (projectRoot: string): string | undefined => {
-    const candidates = ["wrangler.jsonc", "wrangler.json"];
-
-    for (const candidate of candidates) {
-        const fullPath = join(projectRoot, candidate);
-
-        if (existsSync(fullPath)) {
-            return fullPath;
-        }
-    }
-
-    return undefined;
-};
-
 /**
  * File-system aware variant: reads `wrangler.jsonc`/`wrangler.json` from
  * the given project root, discovers the schema (if any), and delegates to
@@ -244,11 +218,9 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
         };
     }
 
-    const text = readFileSync(wranglerPath, "utf8");
-    const parseErrors: ParseError[] = [];
-    const wrangler = parseJsonc(text, parseErrors, { allowTrailingComma: true }) as WranglerConfig | undefined;
+    const { parsed: wrangler } = readWranglerJsonc<WranglerConfig>(wranglerPath);
 
-    if (parseErrors.length > 0 || !wrangler || typeof wrangler !== "object") {
+    if (wrangler === undefined) {
         const message = `failed to parse ${wranglerPath} as JSONC.`;
 
         return {
@@ -258,33 +230,13 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
         };
     }
 
-    const schemaPath = join(options.projectRoot, schemaDirectory, "schema.ts");
-    const warnings: string[] = [];
-    let schemaInfo: SchemaInfo | undefined;
-
-    if (existsSync(schemaPath)) {
-        try {
-            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-            const schema = discoverSchema(project, schemaPath);
-
-            schemaInfo = {
-                hasGlobalTable: schema.tables.some((table) => table.shardMode === "global"),
-                vectorIndexNames: schema.vectorIndexes.map((index) => index.name),
-            };
-        } catch (schemaError: unknown) {
-            // Surface a warning rather than swallowing silently — codegen
-            // will report the actionable error elsewhere, but a complete
-            // miss here is hard to debug.
-            const message = schemaError instanceof Error ? schemaError.message : String(schemaError);
-
-            warnings.push(`schema parse failed at ${schemaPath}: ${message}`);
-        }
-    }
-
+    // Surface a parse failure as a warning rather than swallowing it — codegen
+    // reports the actionable error elsewhere, but a complete miss is hard to debug.
+    const { error: schemaError, info: schemaInfo } = discoverSchemaInfo(options.projectRoot, schemaDirectory);
     const report = validateWranglerConfig(wrangler, schemaInfo);
 
-    if (warnings.length > 0) {
-        report.warnings.push(...warnings);
+    if (schemaError !== undefined) {
+        report.warnings.push(`schema parse failed in ${schemaDirectory}/schema.ts: ${schemaError}`);
     }
 
     return {
@@ -294,5 +246,5 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     };
 };
 
-export type { SchemaInfo, TailConsumer, WranglerConfig, WranglerProjectValidationOptions, WranglerProjectValidationResult, WranglerValidationReport };
+export type { TailConsumer, WranglerConfig, WranglerProjectValidationOptions, WranglerProjectValidationResult, WranglerValidationReport };
 export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject, withTailConsumer };

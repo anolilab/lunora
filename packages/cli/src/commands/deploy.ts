@@ -1,4 +1,5 @@
 import { runCodegen } from "@cirrus/codegen";
+import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
 import { Spinner } from "@visulima/pail/spinner";
 
 import type { Logger } from "../util/logger.js";
@@ -33,6 +34,32 @@ const isInteractive = (options: DeployCommandOptions): boolean => {
     }
 
     return process.stdout.isTTY && !process.env.CI;
+};
+
+/**
+ * Auto-provision the bindings the project's code implies before validating, so
+ * a first deploy doesn't fail on a SESSION/SCHEDULER/DB binding the user never
+ * had to hand-write. Idempotent — a no-op once the config is in sync — and
+ * best-effort: a failure here must not abort the deploy, since the validator
+ * still reports any genuinely missing requirement.
+ */
+const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => {
+    try {
+        const inferred = await inferCirrusBindings({ projectRoot: cwd });
+        const reconciled = reconcileWranglerBindings(cwd, inferred);
+
+        if (reconciled.changed) {
+            logger.success(`provisioned bindings: ${reconciled.added.join(", ")} → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        }
+
+        for (const warning of reconciled.warnings) {
+            logger.warn(warning);
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.warn(`binding inference skipped: ${message}`);
+    }
 };
 
 const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
@@ -71,6 +98,8 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             };
         }
     }
+
+    await provisionBindings(cwd, options.logger);
 
     const validation = validateWrangler({ projectRoot: cwd });
 

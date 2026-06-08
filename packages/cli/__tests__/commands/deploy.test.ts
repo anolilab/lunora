@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,15 +87,50 @@ describe("cirrus deploy", () => {
             expect(args).toContain("production");
         });
 
-        it("aborts when wrangler.jsonc is missing required bindings", async () => {
-            expect.assertions(3);
+        it("auto-provisions missing bindings from inference, then deploys", async () => {
+            expect.assertions(4);
 
+            // A worker entry that exports ShardDO is the safe signal for binding
+            // the SHARD durable object. Inference + reconcile should add SHARD
+            // (exported) and DB (the fixture schema is global) so validation
+            // passes without the user hand-writing bindings.
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(join(workdir, "src", "server", "index.ts"), "export const ShardDO = class {};\nexport default { fetch() {} };", "utf8");
             writeFileSync(
                 join(workdir, "wrangler.jsonc"),
                 `{
     "name": "x",
+    "main": "src/server/index.ts",
     "compatibility_date": "2026-04-07",
-    "compatibility_flags": ["web_socket_auto_reply_to_close"]
+    "compatibility_flags": ["nodejs_compat"]
+}`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+
+            const written = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+            expect(written).toContain("ShardDO");
+            expect(written).toContain('"DB"');
+        });
+
+        it("aborts when wrangler has a problem inference cannot fix", async () => {
+            expect.assertions(3);
+
+            // A stale compatibility_date is outside what reconcile touches, so
+            // even after binding provisioning the validator must still abort.
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "compatibility_date": "2020-01-01"
 }`,
                 "utf8",
             );
@@ -107,7 +142,7 @@ describe("cirrus deploy", () => {
 
             expect(result.code).toBe(1);
             expect(calls).toHaveLength(0);
-            expect(errors.some((line) => line.includes("SHARD"))).toBe(true);
+            expect(errors.some((line) => line.includes("compatibility_date"))).toBe(true);
         });
     });
 });

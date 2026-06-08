@@ -1,23 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync } from "node:fs";
 
-import type { ParseError } from "jsonc-parser";
-import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
-
-/** Candidate wrangler config filenames, in the order the CLI / validator probe them. */
-const WRANGLER_FILES = ["wrangler.jsonc", "wrangler.json"] as const;
-
-const findWranglerFile = (projectRoot: string): string | undefined => {
-    for (const candidate of WRANGLER_FILES) {
-        const fullPath = join(projectRoot, candidate);
-
-        if (existsSync(fullPath)) {
-            return fullPath;
-        }
-    }
-
-    return undefined;
-};
+import { findWranglerFile, readWranglerJsonc } from "@cirrus/config";
+import { applyEdits, modify } from "jsonc-parser";
 
 /** Shallow structural equality for two string arrays (order-sensitive). */
 const sameTriggers = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean => a.length === b.length && a.every((value, index) => value === b[index]);
@@ -52,11 +36,9 @@ export const reconcileWranglerCrons = (projectRoot: string, cronTriggers: Readon
         return { changed: false, reason: "wrangler.jsonc not found" };
     }
 
-    const text = readFileSync(wranglerPath, "utf8");
-    const parseErrors: ParseError[] = [];
-    const parsed = parseJsonc(text, parseErrors, { allowTrailingComma: true }) as { triggers?: { crons?: unknown } } | undefined;
+    const { parsed, text } = readWranglerJsonc<{ triggers?: { crons?: unknown } }>(wranglerPath);
 
-    if (parseErrors.length > 0 || !parsed || typeof parsed !== "object") {
+    if (parsed === undefined) {
         return { changed: false, reason: `failed to parse ${wranglerPath} as JSONC`, wranglerPath };
     }
 
