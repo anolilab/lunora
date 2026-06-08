@@ -6,7 +6,7 @@ import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations
 import { bindOrm, bindTableFacade } from "@cirrus/server";
 
 import schema from "../schema.js";
-import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./server.js";
+import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./functions.js";
 
 type FunctionKind = "action" | "mutation" | "query";
 

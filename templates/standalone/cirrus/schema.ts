@@ -1,6 +1,6 @@
 import { defineSchema, defineTable, v } from "@cirrus/server";
 
-export const schema = defineSchema({
+export default defineSchema({
     messages: defineTable({
         channelId: v.id("channels"),
         text: v.string(),

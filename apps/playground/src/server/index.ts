@@ -17,7 +17,7 @@ import type { R2BucketLike } from "@cirrus/storage";
 import { buildSignedUrl, createStorage } from "@cirrus/storage";
 
 import { CIRRUS_CRONS } from "../../cirrus/_generated/crons.js";
-import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/server.js";
+import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/functions.js";
 import { createShardDO } from "../../cirrus/_generated/shard.js";
 import schema from "../../cirrus/schema.js";
 

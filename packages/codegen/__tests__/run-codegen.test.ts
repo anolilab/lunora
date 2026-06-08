@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { emitApi, emitDataModel, emitDrizzleSchema, emitServer, emitShard, runCodegen } from "../src/index.js";
+import { emitApi, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, runCodegen } from "../src/index.js";
 import type { FunctionIR, SchemaIR } from "../src/ir.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -72,8 +72,8 @@ describe("run-codegen", () => {
 
             // The dispatch table still registers it (so `ctx.runMutation` can reach it),
             // and the external paths gate on `visibility`.
-            expect(result.generated.server).toContain('"messages:purge": cirrus_messages_0.purge');
-            expect(result.generated.server).toContain('visibility?: "internal" | "public";');
+            expect(result.generated.functions).toContain('"messages:purge": cirrus_messages_0.purge');
+            expect(result.generated.functions).toContain('visibility?: "internal" | "public";');
             expect(result.generated.shard).toContain('registered.visibility === "internal"');
         });
 
@@ -115,7 +115,7 @@ describe("run-codegen", () => {
         });
 
         it("emits server.ts with project-typed query/mutation/action wrappers", () => {
-            expect.assertions(16);
+            expect.assertions(17);
 
             const result = runCodegen({ projectRoot: workdir });
 
@@ -140,11 +140,12 @@ describe("run-codegen", () => {
             expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db">');
             expect(result.generated.server).toContain("readonly db: DatabaseReader & DatabaseReaderFacade;");
             expect(result.generated.server).toContain("readonly db: DatabaseWriter & DatabaseWriterFacade;");
-            // `Id` is pulled into the facade import because the typed `Caller` arg
-            // types reference it (the `messages:*` functions take `Id<"channels">`).
-            // `Id as IdOfTable` + `TableName` back the typed `v.id(...)`.
+            // server.ts is the builder file user code imports, so it must NOT import
+            // the user function modules (that cycle lives in functions.ts). `Id as
+            // IdOfTable` + `TableName` back the typed `v.id(...)`.
+            expect(result.generated.server).not.toContain("import * as cirrus_");
             expect(result.generated.server).toContain(
-                'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js"',
+                'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js"',
             );
             // The typed `v` whose `id(...)` autocompletes the schema's tables.
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
@@ -156,20 +157,20 @@ describe("run-codegen", () => {
 
             const result = runCodegen({ projectRoot: workdir });
 
-            expect(result.generated.server).toContain("export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;");
-            expect(result.generated.server).toContain("export interface Caller {");
-            expect(result.generated.server).toContain("export const createCaller = (context: CallerCtx): Caller =>");
+            expect(result.generated.functions).toContain("export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;");
+            expect(result.generated.functions).toContain("export interface Caller {");
+            expect(result.generated.functions).toContain("export const createCaller = (context: CallerCtx): Caller =>");
 
             // Every leaf dispatches through the shared `callRegistered` helper.
-            expect(result.generated.server).toContain('list: (args) => callRegistered(context, "messages:list", args),');
+            expect(result.generated.functions).toContain('list: (args) => callRegistered(context, "messages:list", args),');
 
             // The caller reaches internal functions (server-to-server), unlike the
             // public `api`: `purge` (an internalMutation) is present here.
-            expect(result.generated.server).toContain('purge: (args: { channelId: Id<"channels"> }) => Promise<unknown>;');
-            expect(result.generated.server).toContain('purge: (args) => callRegistered(context, "messages:purge", args),');
+            expect(result.generated.functions).toContain('purge: (args: { channelId: Id<"channels"> }) => Promise<unknown>;');
+            expect(result.generated.functions).toContain('purge: (args) => callRegistered(context, "messages:purge", args),');
 
             // Args are required when the function declares any, typed against dataModel.
-            expect(result.generated.server).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
+            expect(result.generated.functions).toContain('list: (args: { channelId: Id<"channels">; limit?: number }) => Promise<unknown>;');
         });
 
         it("emits per-table ctx.db facade types in dataModel.ts", () => {
@@ -225,23 +226,23 @@ describe("run-codegen", () => {
             expect(result.generated.shard).toContain("orm: bindOrm(facade),");
         });
 
-        it("emits server.ts dispatch table keyed by `<namespace>:<fnName>`", () => {
+        it("emits functions.ts dispatch table keyed by `<namespace>:<fnName>`", () => {
             expect.assertions(6);
 
             const result = runCodegen({ projectRoot: workdir });
 
             // The namespace must match the sanitized form `emitApi` uses so the
             // client-side `__cirrusRef` and the server-side dispatch key agree.
-            expect(result.generated.server).toContain('import * as cirrus_messages_0 from "../messages.js"');
-            expect(result.generated.server).toContain("export const CIRRUS_FUNCTIONS:");
-            expect(result.generated.server).toContain('"messages:list": cirrus_messages_0.list');
-            expect(result.generated.server).toContain('"messages:send": cirrus_messages_0.send');
-            expect(result.generated.server).toContain("export const dispatchCirrusFunction =");
-            expect(result.generated.server).toContain("FUNCTION_NOT_FOUND");
+            expect(result.generated.functions).toContain('import * as cirrus_messages_0 from "../messages.js"');
+            expect(result.generated.functions).toContain("export const CIRRUS_FUNCTIONS:");
+            expect(result.generated.functions).toContain('"messages:list": cirrus_messages_0.list');
+            expect(result.generated.functions).toContain('"messages:send": cirrus_messages_0.send');
+            expect(result.generated.functions).toContain("export const dispatchCirrusFunction =");
+            expect(result.generated.functions).toContain("FUNCTION_NOT_FOUND");
         });
 
         it("writes all generated files into _generated/", () => {
-            expect.assertions(6);
+            expect.assertions(7);
 
             runCodegen({ projectRoot: workdir });
 
@@ -249,6 +250,7 @@ describe("run-codegen", () => {
 
             expect(existsSync(join(generatedDirectory, "api.ts"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "server.ts"))).toBe(true);
+            expect(existsSync(join(generatedDirectory, "functions.ts"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "dataModel.ts"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "drizzle.global.ts"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "drizzle.shard.ts"))).toBe(true);
@@ -310,12 +312,13 @@ describe("run-codegen", () => {
         });
 
         it("output matches committed expected/ files (snapshot)", () => {
-            expect.assertions(6);
+            expect.assertions(7);
 
             const result = runCodegen({ projectRoot: workdir });
 
             const expectedApi = readFileSync(join(expectedDirectory, "api.ts"), "utf8");
             const expectedServer = readFileSync(join(expectedDirectory, "server.ts"), "utf8");
+            const expectedFunctions = readFileSync(join(expectedDirectory, "functions.ts"), "utf8");
             const expectedDataModel = readFileSync(join(expectedDirectory, "dataModel.ts"), "utf8");
             const expectedDrizzleGlobal = readFileSync(join(expectedDirectory, "drizzle.global.ts"), "utf8");
             const expectedDrizzleShard = readFileSync(join(expectedDirectory, "drizzle.shard.ts"), "utf8");
@@ -323,6 +326,7 @@ describe("run-codegen", () => {
 
             expect(result.generated.api).toBe(expectedApi);
             expect(result.generated.server).toBe(expectedServer);
+            expect(result.generated.functions).toBe(expectedFunctions);
             expect(result.generated.dataModel).toBe(expectedDataModel);
             expect(result.generated.drizzleGlobal).toBe(expectedDrizzleGlobal);
             expect(result.generated.drizzleShard).toBe(expectedDrizzleShard);
@@ -335,7 +339,7 @@ describe("run-codegen", () => {
             const result = runCodegen({ projectRoot: workdir });
 
             expect(result.generated.shard).toContain("export const createShardDO");
-            expect(result.generated.shard).toContain('import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./server.js"');
+            expect(result.generated.shard).toContain('import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./functions.js"');
             expect(result.generated.shard).toContain('import schema from "../schema.js"');
             expect(result.generated.shard).toContain("class extends ShardDOBase");
             expect(result.generated.shard).toContain("runShardMigrations");
@@ -570,6 +574,24 @@ describe("run-codegen", () => {
     });
 
     describe("emitServer", () => {
+        it("re-exports the builders without importing any user function module", () => {
+            expect.assertions(5);
+
+            const output = emitServer();
+
+            // server.ts is the file user code imports for `v`/`query`/`mutation`.
+            // It must never import the user function modules — otherwise the
+            // module-init cycle that crashes dev (`v` reads as undefined) returns.
+            expect(output).not.toContain("import * as cirrus_");
+            expect(output).not.toContain("CIRRUS_FUNCTIONS");
+            expect(output).toContain("export const v = vBase as unknown as");
+            expect(output).toContain("export const mutation = mutationBase as unknown as");
+            // The facade import stays minimal (ORM types are always pulled in).
+            expect(output).toContain('import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";');
+        });
+    });
+
+    describe("emitFunctions", () => {
         const makeFunction = (exportName: string, overrides: Partial<FunctionIR> = {}): FunctionIR => {
             return {
                 args: {},
@@ -581,10 +603,21 @@ describe("run-codegen", () => {
             };
         };
 
+        it("imports ctx types from server.js as type-only (no runtime cycle)", () => {
+            expect.assertions(2);
+
+            const output = emitFunctions([makeFunction("ping")]);
+
+            // functions.ts imports the user modules, so its edge back to server.ts
+            // must be type-only — otherwise the two form a runtime cycle again.
+            expect(output).toContain('import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";');
+            expect(output).toContain('import * as cirrus_posts_0 from "../posts.js";');
+        });
+
         it("renders the caller arg as optional only when the function takes none", () => {
             expect.assertions(2);
 
-            const output = emitServer([makeFunction("ping"), makeFunction("get", { args: { id: { kind: "id", tableName: "posts" } } })]);
+            const output = emitFunctions([makeFunction("ping"), makeFunction("get", { args: { id: { kind: "id", tableName: "posts" } } })]);
 
             expect(output).toContain("ping: (args?: {}) => Promise<unknown>;");
             expect(output).toContain('get: (args: { id: Id<"posts"> }) => Promise<unknown>;');
@@ -593,7 +626,7 @@ describe("run-codegen", () => {
         it("threads a function's concrete return type through the caller", () => {
             expect.assertions(2);
 
-            const output = emitServer([makeFunction("count", { returnType: "number" })]);
+            const output = emitFunctions([makeFunction("count", { returnType: "number" })]);
 
             expect(output).toContain("count: (args?: {}) => Promise<number>;");
             expect(output).toContain('count: (args) => callRegistered(context, "posts:count", args),');
@@ -602,7 +635,7 @@ describe("run-codegen", () => {
         it("emits an empty caller (and no unused locals) when there are no functions", () => {
             expect.assertions(4);
 
-            const output = emitServer([]);
+            const output = emitFunctions([]);
 
             // No functions ⇒ no `callRegistered` helper and the `context` parameter
             // is prefixed so it never trips noUnusedParameters in a real project.
@@ -610,10 +643,8 @@ describe("run-codegen", () => {
             expect(output).toContain("export const createCaller = (_context: CallerCtx): Caller => ({});");
             expect(output).not.toContain("const callRegistered");
 
-            // Nothing references Doc/Id, so the facade import stays minimal (ORM types are always pulled in).
-            expect(output).toContain(
-                'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";',
-            );
+            // Nothing references Doc/Id, so the dataModel import is omitted entirely.
+            expect(output).not.toContain("./dataModel.js");
         });
     });
 

@@ -11,5 +11,5 @@
         "noEmit": true,
         "types": ["@cloudflare/workers-types"]
     },
-    "include": ["cirrus/**/*"]
+    "include": ["src/**/*", "cirrus/**/*"]
 }

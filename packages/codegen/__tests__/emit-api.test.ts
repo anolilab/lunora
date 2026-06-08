@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { emitApi, emitServer } from "../src/emit.js";
+import { emitApi, emitFunctions } from "../src/emit.js";
 import type { FunctionIR } from "../src/ir.js";
 
 describe("emitApi", () => {
@@ -114,7 +114,7 @@ describe("emitApi", () => {
     });
 });
 
-describe("emitServer Caller types", () => {
+describe("emitFunctions Caller types", () => {
     it("types a `stream` leaf as resolving to `AsyncIterable<T>`, not a single element", () => {
         expect.assertions(2);
 
@@ -131,7 +131,7 @@ describe("emitServer Caller types", () => {
             },
         ];
 
-        const rendered = emitServer(functions);
+        const rendered = emitFunctions(functions);
 
         // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated TS type string, not a secret
         expect(rendered).toContain("watch: (args?: {}) => Promise<AsyncIterable<string>>;");
@@ -151,7 +151,7 @@ describe("emitServer Caller types", () => {
             },
         ];
 
-        const rendered = emitServer(functions);
+        const rendered = emitFunctions(functions);
 
         expect(rendered).toContain("list: (args?: {}) => Promise<string>;");
     });
