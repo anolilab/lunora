@@ -7,12 +7,12 @@
     "sideEffects": false,
     "scripts": {
         "build": "vite build",
-        "codegen": "pnpm exec cirrus codegen",
+        "codegen": "node node_modules/@cirrus/cli/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:types": "pnpm exec cirrus codegen && tsc --noEmit",
+        "lint:types": "node node_modules/@cirrus/cli/dist/bin.mjs codegen && tsc --noEmit",
         "test": "vitest run"
     },
     "dependencies": {

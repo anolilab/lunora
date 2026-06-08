@@ -7,7 +7,7 @@
     "sideEffects": false,
     "scripts": {
         "build": "vite build",
-        "codegen": "cirrus codegen",
+        "codegen": "node node_modules/@cirrus/cli/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
         "lint:types": "tsc --noEmit"
