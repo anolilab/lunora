@@ -4,10 +4,12 @@
 import { anyApi } from "@cirrus/server/types";
 import type { FunctionReference } from "@cirrus/client";
 
+import type { Id } from "./dataModel.js";
+
 export interface ApiTypes {
     cursors: {
         joinRoom: FunctionReference<"mutation", { roomId: string; sessionId: string; name: string; color: string }, void>;
-        listCursors: FunctionReference<"query", { roomId: string }, unknown>;
+        listCursors: FunctionReference<"query", { roomId: string }, { _id: Id<"cursors">; color: string; lastSeen: number; name: string; roomId: string; sessionId: string; x: number; y: number }[]>;
         updateCursor: FunctionReference<"mutation", { roomId: string; sessionId: string; x: number; y: number }, void>;
     };
 }

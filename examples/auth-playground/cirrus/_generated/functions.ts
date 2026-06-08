@@ -69,7 +69,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
 export interface Caller {
     documents: {
         create: (args: { organizationId: string; title: string; body: string }) => Promise<Id<"documents">>;
-        list: (args: { organizationId: string }) => Promise<unknown>;
+        list: (args: { organizationId: string }) => Promise<{ _id: Id<"documents">; organizationId: string; ownerId: string; title: string; body: string; createdAt: number }[]>;
     };
 }
 

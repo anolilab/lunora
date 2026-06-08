@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
 
-import type { CallExpression, Identifier, Project, PropertyAccessExpression, SourceFile, Type } from "ts-morph";
+import type { CallExpression, Identifier, Project, PropertyAccessExpression, SourceFile, Symbol as TsSymbol, Type } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { FunctionIR, ValidatorIR } from "./ir.js";
@@ -162,11 +162,30 @@ const childTypes = (type: Type): Type[] => {
 };
 
 /**
- * Type-tree walker: returns true if any reachable symbol's declaration lives
- * in the handler's own source file but isn't exported (so it cannot be
- * referenced by name from anywhere outside that file).
+ * An object type whose members we can faithfully reproduce structurally: a plain
+ * object/interface with no call/construct signatures and no index signatures
+ * (those can't be re-expressed as `{ name: type; … }` without losing meaning).
  */
-const referencesUnreachableLocalType = (type: Type, handlerFilePath: string, seen = new Set<Type>()): boolean => {
+const isExpandableObject = (type: Type): boolean => {
+    if (!type.isObject() || type.isArray() || type.isTuple()) {
+        return false;
+    }
+
+    if (type.getCallSignatures().length > 0 || type.getConstructSignatures().length > 0) {
+        return false;
+    }
+
+    return type.getStringIndexType() === undefined && type.getNumberIndexType() === undefined;
+};
+
+/**
+ * Type-tree walker: returns true if any reachable symbol's declaration lives in
+ * the handler's own source file but isn't exported (so it cannot be referenced
+ * by name from `_generated/`). Descends type arguments, union/intersection
+ * members, **and** object property types — the last so an anonymous object that
+ * embeds an unreachable interface (`{ post: PostDoc }`) isn't mistaken for safe.
+ */
+const referencesUnreachableLocalType = (type: Type, node: Node, handlerFilePath: string, seen = new Set<Type>()): boolean => {
     if (seen.has(type)) {
         return false;
     }
@@ -177,7 +196,108 @@ const referencesUnreachableLocalType = (type: Type, handlerFilePath: string, see
         return true;
     }
 
-    return childTypes(type).some((child) => referencesUnreachableLocalType(child, handlerFilePath, seen));
+    if (childTypes(type).some((child) => referencesUnreachableLocalType(child, node, handlerFilePath, seen))) {
+        return true;
+    }
+
+    if (!isExpandableObject(type)) {
+        return false;
+    }
+
+    return type.getProperties().some((property) => referencesUnreachableLocalType(property.getTypeAtLocation(node), node, handlerFilePath, seen));
+};
+
+/** Is `property` declared optional (`name?: …`)? */
+const isOptionalProperty = (property: TsSymbol, propertyType: Type): boolean => {
+    const declaration = property.getValueDeclaration() ?? property.getDeclarations()[0];
+
+    if (declaration && (Node.isPropertySignature(declaration) || Node.isPropertyDeclaration(declaration)) && declaration.hasQuestionToken()) {
+        return true;
+    }
+
+    return propertyType.isUnion() && propertyType.getUnionTypes().some((member) => member.isUndefined());
+};
+
+/** Depth ceiling so a pathological nested type can't blow the stack — beyond it we bail to `unknown`. */
+const MAX_EXPANSION_DEPTH = 8;
+
+/**
+ * Structurally expand a return type that references a non-exported local type,
+ * so the generated `FunctionReference` carries the real shape (`PostDoc[]` →
+ * `{ _id: Id<"posts">; … }[]`) instead of erasing to `unknown`. Reachable names
+ * (`Id`, `Doc`, primitives, library types) are printed verbatim; anything we
+ * can't faithfully reproduce — recursion, call/index signatures, exotic types —
+ * returns `null` so the caller keeps the `unknown` fallback. The result is thus
+ * never worse than today, only more precise.
+ */
+const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, depth: number, seen: Set<Type>): string | null => {
+    if (depth > MAX_EXPANSION_DEPTH || seen.has(type)) {
+        return null;
+    }
+
+    // Reachable types already print correctly by name — leave them verbatim.
+    if (!referencesUnreachableLocalType(type, node, handlerFilePath)) {
+        return type.getText(node);
+    }
+
+    const nextSeen = new Set(seen).add(type);
+
+    if (type.isArray()) {
+        const element = type.getArrayElementType();
+        const rendered = element ? expandUnreachableType(element, node, handlerFilePath, depth, nextSeen) : null;
+
+        if (rendered === null) {
+            return null;
+        }
+
+        return element?.isUnion() ? `(${rendered})[]` : `${rendered}[]`;
+    }
+
+    if (type.isUnion()) {
+        const parts: string[] = [];
+
+        for (const member of type.getUnionTypes()) {
+            const rendered = expandUnreachableType(member, node, handlerFilePath, depth, nextSeen);
+
+            if (rendered === null) {
+                return null;
+            }
+
+            parts.push(rendered);
+        }
+
+        return parts.join(" | ");
+    }
+
+    if (!isExpandableObject(type)) {
+        return null;
+    }
+
+    const parts: string[] = [];
+
+    for (const property of type.getProperties()) {
+        const propertyType = property.getTypeAtLocation(node);
+        const optional = isOptionalProperty(property, propertyType);
+        // Optionality re-adds `| undefined` to the resolved type; drop it so the
+        // emitted property reads `name?: T`, not `name?: T | undefined`.
+        const valueMembers = optional && propertyType.isUnion() ? propertyType.getUnionTypes().filter((member) => !member.isUndefined()) : [propertyType];
+
+        const rendered: string[] = [];
+
+        for (const member of valueMembers) {
+            const text = expandUnreachableType(member, node, handlerFilePath, depth + 1, nextSeen);
+
+            if (text === null) {
+                return null;
+            }
+
+            rendered.push(text);
+        }
+
+        parts.push(`${property.getName()}${optional ? "?" : ""}: ${rendered.join(" | ")}`);
+    }
+
+    return parts.length > 0 ? `{ ${parts.join("; ")} }` : "{}";
 };
 
 /**
@@ -230,12 +350,14 @@ const unwrapHandlerReturn = (handler: Node): string => {
 
     // ts-morph renders types relative to the handler's enclosing node, so a
     // locally-declared (non-exported) interface like `interface CursorDoc {…}`
-    // inside `cursors.ts` shows up as the bare name `CursorDoc[]` — which is
-    // unreachable from `_generated/api.ts` and produces TS2304 on compile.
-    // Detect that case via the type symbol's declaration and fall back to
-    // `unknown` rather than emitting unresolvable identifiers.
-    if (referencesUnreachableLocalType(returnType, handler.getSourceFile().getFilePath())) {
-        return "unknown";
+    // inside `cursors.ts` shows up as the bare name `CursorDoc[]` — unreachable
+    // from `_generated/api.ts` (TS2304 on compile). Rather than erase to
+    // `unknown`, structurally expand it to the real shape; only fall back when
+    // the type can't be faithfully reproduced.
+    const handlerFilePath = handler.getSourceFile().getFilePath();
+
+    if (referencesUnreachableLocalType(returnType, handler, handlerFilePath)) {
+        return expandUnreachableType(returnType, handler, handlerFilePath, 0, new Set<Type>()) ?? "unknown";
     }
 
     return rendered;

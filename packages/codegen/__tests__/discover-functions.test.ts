@@ -190,15 +190,15 @@ describe("discoverFunctions", () => {
             expect(result[0]?.returnType).toBe("unknown");
         });
 
-        it("falls back to `unknown` when the return type references a non-exported local type", () => {
+        it("structurally expands a return type that references a non-exported local type", () => {
             expect.assertions(1);
 
-            // A handler whose return type names a `interface` declared in the
-            // same file but never exported would emit `CursorDoc[]` (or similar)
-            // into `_generated/api.ts` — an identifier with no reachable import
-            // from anywhere else. That produces TS2304 the moment downstream
-            // code compiles against the generated API. We'd rather surface
-            // `unknown` than wedge the consumer.
+            // A handler whose return type names an `interface` declared in the
+            // same file but never exported would emit `CursorDoc[]` into
+            // `_generated/api.ts` — an identifier with no reachable import, which
+            // produces TS2304 downstream. Rather than erase to `unknown`, codegen
+            // expands the interface to its real shape so callers still get full
+            // type inference without having to export the interface.
             writeFunction(
                 "cursors.ts",
                 `
@@ -220,7 +220,37 @@ describe("discoverFunctions", () => {
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
             const result = discoverFunctions(project, workdir);
 
-            expect(result[0]?.returnType).toBe("unknown");
+            expect(result[0]?.returnType).toBe("{ id: string; x: number; y: number }[]");
+        });
+
+        it("expands optional members and unions, keeping reachable `Id` references by name", () => {
+            expect.assertions(1);
+
+            // `note?` exercises optional-member rendering (`note?: string`, not
+            // `note?: string | undefined`); the `| null` union and the `Id<…>`
+            // reference (reachable from dataModel) must survive verbatim.
+            writeFunction(
+                "cursors.ts",
+                `
+            import type { Id } from "@cirrus/server";
+            import { query } from "@cirrus/server";
+
+            interface CursorDoc {
+                _id: Id<"cursors">;
+                note?: string;
+            }
+
+            export const get = query({
+                args: {},
+                handler: (): Promise<CursorDoc | null> => Promise.resolve(null),
+            });
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+
+            expect(result[0]?.returnType).toBe('null | { _id: Id<"cursors">; note?: string }');
         });
 
         it("preserves return types that reference exported local types", () => {
