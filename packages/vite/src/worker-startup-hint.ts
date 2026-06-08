@@ -99,22 +99,28 @@ export const augmentWorkerStartupError = (error: unknown): unknown => {
 
 type HookFunction = (...arguments_: never[]) => unknown;
 
-/** A Vite hook is either a bare function or an object with a `handler`. Wrap whichever shape it is. */
+/** Wrap a hook function so a thrown Worker-entry eval error gets the Cirrus hint. */
+const wrapHookFunction =
+    (function_: HookFunction): HookFunction =>
+    async (...arguments_: never[]): Promise<unknown> => {
+        try {
+            return await function_(...arguments_);
+        } catch (error) {
+            throw augmentWorkerStartupError(error);
+        }
+    };
+
+/**
+ * A Vite hook is either a bare function or an object `{ handler, order? }`. Wrap
+ * the callable while preserving any sibling metadata (`order`/`sequential`/…).
+ */
 const wrapHook = (hook: unknown): unknown => {
     if (typeof hook === "function") {
-        const original = hook as HookFunction;
-
-        return async (...arguments_: never[]): Promise<unknown> => {
-            try {
-                return await original(...arguments_);
-            } catch (error) {
-                throw augmentWorkerStartupError(error);
-            }
-        };
+        return wrapHookFunction(hook as HookFunction);
     }
 
     if (hook !== null && typeof hook === "object" && "handler" in hook && typeof (hook as { handler: unknown }).handler === "function") {
-        return { ...hook, handler: wrapHook((hook as { handler: unknown }).handler) };
+        return { ...hook, handler: wrapHookFunction((hook as { handler: HookFunction }).handler) };
     }
 
     return hook;
