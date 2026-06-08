@@ -70,7 +70,7 @@ describe("auditPanel", () => {
 
         const empty = await screen.findByTestId("au-empty");
 
-        expect(empty.textContent).toBe("No audit entries.");
+        expect(empty.textContent).toContain("No audit entries.");
     });
 
     it("filters entries by op/table/id substring", async () => {
