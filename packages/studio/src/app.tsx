@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge } from "./components/ui/badge.js";
 import { Button } from "./components/ui/button.js";
 import { Input } from "./components/ui/input.js";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover.js";
 import { TooltipProvider } from "./components/ui/tooltip.js";
 import ConnectionBadge from "./connection-badge.js";
 import type { StudioProps } from "./studio.js";
@@ -112,39 +113,52 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                 </button>
 
                 <div className="ms-auto flex items-center gap-2">
-                    {token !== "" && (
-                        // Compact, contextual warning: only while a token is set, shown as a
-                        // single amber glyph; the full caution is in the tooltip + for SRs.
-                        <span
-                            className="inline-flex items-center text-sm text-amber-500"
-                            data-testid="dash-app-token-warning"
-                            role="note"
-                            title={t("Token rides the WebSocket URL — it can surface in browser DevTools and server logs. Use a dev-only token.")}
-                        >
-                            <span aria-hidden="true">⚠</span>
-                            <span className="sr-only">
-                                {t("Token rides the WebSocket URL — it can surface in browser DevTools and server logs. Use a dev-only token.")}
-                            </span>
-                        </span>
-                    )}
-                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground" htmlFor="dash-app-token">
-                        {t("admin token")}
-                        <Input
-                            className="h-7 w-44"
-                            data-testid="dash-app-token"
-                            id="dash-app-token"
-                            onChange={onTokenChange}
-                            placeholder="CIRRUS_ADMIN_TOKEN"
-                            type="password"
-                            value={token}
-                        />
-                    </label>
-                    {token !== "" && (
-                        <Button data-testid="dash-app-clear-token" onClick={clearToken} size="sm" type="button" variant="ghost">
-                            {t("Clear")}
-                        </Button>
-                    )}
                     <ConnectionBadge />
+
+                    {/* Connection/admin-token disclosure — Studio-style "Connect" button
+                        that opens a popover with the token field; kept mounted so the
+                        field stays scriptable/accessible even while collapsed. */}
+                    <Popover>
+                        <PopoverTrigger
+                            className="flex h-7 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                            data-testid="dash-app-connect"
+                        >
+                            <svg aria-hidden="true" className="size-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} viewBox="0 0 24 24">
+                                <path d="M9 7 5.5 10.5a4 4 0 0 0 0 5.7l.5.5a4 4 0 0 0 5.7 0L15 13M15 17l3.5-3.5a4 4 0 0 0 0-5.7l-.5-.5a4 4 0 0 0-5.7 0L9 11" />
+                            </svg>
+                            {token === "" ? t("Connect") : t("Connected")}
+                            {token !== "" && <span aria-hidden="true" className="size-1.5 rounded-full bg-primary" />}
+                        </PopoverTrigger>
+                        <PopoverContent keepMounted>
+                            <div className="flex flex-col gap-2">
+                                <label className="text-xs font-medium text-foreground" htmlFor="dash-app-token">
+                                    {t("admin token")}
+                                </label>
+                                <Input
+                                    className="h-8"
+                                    data-testid="dash-app-token"
+                                    id="dash-app-token"
+                                    onChange={onTokenChange}
+                                    placeholder="CIRRUS_ADMIN_TOKEN"
+                                    type="password"
+                                    value={token}
+                                />
+                                {token !== "" && (
+                                    <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground" data-testid="dash-app-token-warning" role="note">
+                                        <span aria-hidden="true" className="text-amber-500">
+                                            ⚠
+                                        </span>
+                                        {t("Token rides the WebSocket URL — it can surface in browser DevTools and server logs. Use a dev-only token.")}
+                                    </p>
+                                )}
+                                {token !== "" && (
+                                    <Button className="self-start" data-testid="dash-app-clear-token" onClick={clearToken} size="sm" type="button" variant="outline">
+                                        {t("Clear")}
+                                    </Button>
+                                )}
+                            </div>
+                        </PopoverContent>
+                    </Popover>
 
                     <span aria-hidden="true" className="mx-0.5 h-5 w-px bg-border" />
 

@@ -59,6 +59,7 @@ const MESSAGE_IDS = [
     "Studio sections",
     "Switch to dark theme",
     "Switch to light theme",
+    "Connect",
     "Objects you upload to your R2 buckets will appear here.",
     "Data migrations you run against this shard will be tracked here.",
     "Cirrus surfaces slow functions, error spikes, and cache problems here.",
