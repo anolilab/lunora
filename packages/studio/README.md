@@ -201,7 +201,7 @@ endpoint. Pass the generated `CIRRUS_FUNCTIONS` registry to the worker (internal
 functions are filtered out server-side):
 
 ```ts
-import { CIRRUS_FUNCTIONS } from "./cirrus/_generated/server.js";
+import { CIRRUS_FUNCTIONS } from "./cirrus/_generated/functions.js";
 
 createWorker({
     shardDO: env.SHARD,

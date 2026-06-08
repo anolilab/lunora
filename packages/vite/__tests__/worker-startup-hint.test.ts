@@ -64,6 +64,18 @@ describe("augmentWorkerStartupError", () => {
 
         expect((augmentWorkerStartupError(original) as Error).message).toBe("boom");
     });
+
+    it("does not throw on a frozen error (returns it untouched)", () => {
+        expect.assertions(2);
+
+        const frozen = Object.freeze(makeRunnerWorkerError());
+
+        const result = augmentWorkerStartupError(frozen) as Error;
+
+        expect(result).toBe(frozen);
+        // The hint could not be appended (frozen), so the message is unchanged.
+        expect(result.message).toBe("Cannot read properties of undefined (reading 'string')");
+    });
 });
 
 describe("withWorkerStartupHint", () => {

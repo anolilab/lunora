@@ -168,7 +168,7 @@ interface FunctionRegistryEntry {
 
 /**
  * The generated `CIRRUS_FUNCTIONS` dispatch table, narrowed to what the
- * discovery endpoint reads. Pass the map straight from `_generated/server.ts`.
+ * discovery endpoint reads. Pass the map straight from `_generated/functions.ts`.
  */
 type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
 
@@ -488,7 +488,7 @@ interface WorkerOptions {
     exportGlobals?: GlobalExportFunction;
 
     /**
-     * The generated `CIRRUS_FUNCTIONS` map (from `_generated/server.ts`). When
+     * The generated `CIRRUS_FUNCTIONS` map (from `_generated/functions.ts`). When
      * set, the worker exposes the admin-gated `GET /_cirrus/admin/functions`
      * endpoint the studio uses to auto-discover queries/mutations/actions
      * (internal functions are filtered out). Omit it and the endpoint responds
