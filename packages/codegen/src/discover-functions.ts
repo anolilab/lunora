@@ -221,56 +221,51 @@ const isOptionalProperty = (property: TsSymbol, propertyType: Type): boolean => 
 /** Depth ceiling so a pathological nested type can't blow the stack — beyond it we bail to `unknown`. */
 const MAX_EXPANSION_DEPTH = 8;
 
+/** Shared type alias for the recursive expand callback passed to branch helpers. */
+type ExpandFunction = (type: Type, node: Node, handlerFilePath: string, depth: number, seen: Set<Type>) => string | undefined;
+
 /**
- * Structurally expand a return type that references a non-exported local type,
- * so the generated `FunctionReference` carries the real shape (`PostDoc[]` →
- * `{ _id: Id<"posts">; … }[]`) instead of erasing to `unknown`. Reachable names
- * (`Id`, `Doc`, primitives, library types) are printed verbatim; anything we
- * can't faithfully reproduce — recursion, call/index signatures, exotic types —
- * returns `null` so the caller keeps the `unknown` fallback. The result is thus
- * never worse than today, only more precise.
+ * Expand an array type; returns `undefined` when the element can't be reproduced.
+ * Receives `expand` as a parameter to avoid a forward-reference cycle.
  */
-const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, depth: number, seen: Set<Type>): string | null => {
-    if (depth > MAX_EXPANSION_DEPTH || seen.has(type)) {
-        return null;
+const expandArrayType = (type: Type, node: Node, handlerFilePath: string, depth: number, nextSeen: Set<Type>, expand: ExpandFunction): string | undefined => {
+    const element = type.getArrayElementType();
+    const rendered = element ? expand(element, node, handlerFilePath, depth, nextSeen) : undefined;
+
+    if (rendered === undefined) {
+        return undefined;
     }
 
-    // Reachable types already print correctly by name — leave them verbatim.
-    if (!referencesUnreachableLocalType(type, node, handlerFilePath)) {
-        return type.getText(node);
-    }
+    return element?.isUnion() ? `(${rendered})[]` : `${rendered}[]`;
+};
 
-    const nextSeen = new Set(seen).add(type);
+/**
+ * Expand a union type; returns `undefined` when any member can't be reproduced.
+ * Receives `expand` as a parameter to avoid a forward-reference cycle.
+ */
+const expandUnionType = (type: Type, node: Node, handlerFilePath: string, depth: number, nextSeen: Set<Type>, expand: ExpandFunction): string | undefined => {
+    const parts: string[] = [];
 
-    if (type.isArray()) {
-        const element = type.getArrayElementType();
-        const rendered = element ? expandUnreachableType(element, node, handlerFilePath, depth, nextSeen) : null;
+    for (const member of type.getUnionTypes()) {
+        const rendered = expand(member, node, handlerFilePath, depth, nextSeen);
 
-        if (rendered === null) {
-            return null;
+        if (rendered === undefined) {
+            return undefined;
         }
 
-        return element?.isUnion() ? `(${rendered})[]` : `${rendered}[]`;
+        parts.push(rendered);
     }
 
-    if (type.isUnion()) {
-        const parts: string[] = [];
+    return parts.join(" | ");
+};
 
-        for (const member of type.getUnionTypes()) {
-            const rendered = expandUnreachableType(member, node, handlerFilePath, depth, nextSeen);
-
-            if (rendered === null) {
-                return null;
-            }
-
-            parts.push(rendered);
-        }
-
-        return parts.join(" | ");
-    }
-
+/**
+ * Expand an object type's properties; returns `undefined` when any property can't be reproduced.
+ * Receives `expand` as a parameter to avoid a forward-reference cycle.
+ */
+const expandObjectType = (type: Type, node: Node, handlerFilePath: string, depth: number, nextSeen: Set<Type>, expand: ExpandFunction): string | undefined => {
     if (!isExpandableObject(type)) {
-        return null;
+        return undefined;
     }
 
     const parts: string[] = [];
@@ -285,10 +280,10 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
         const rendered: string[] = [];
 
         for (const member of valueMembers) {
-            const text = expandUnreachableType(member, node, handlerFilePath, depth + 1, nextSeen);
+            const text = expand(member, node, handlerFilePath, depth + 1, nextSeen);
 
-            if (text === null) {
-                return null;
+            if (text === undefined) {
+                return undefined;
             }
 
             rendered.push(text);
@@ -298,6 +293,38 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
     }
 
     return parts.length > 0 ? `{ ${parts.join("; ")} }` : "{}";
+};
+
+/**
+ * Structurally expand a return type that references a non-exported local type,
+ * so the generated `FunctionReference` carries the real shape (`PostDoc[]` →
+ * `{ _id: Id&lt;"posts"&gt;; … }[]`) instead of erasing to `unknown`. Reachable names
+ * (`Id`, `Doc`, primitives, library types) are printed verbatim; anything we
+ * can't faithfully reproduce — recursion, call/index signatures, exotic types —
+ * returns `undefined` so the caller keeps the `unknown` fallback. The result is
+ * thus never worse than today, only more precise.
+ */
+const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, depth: number, seen: Set<Type>): string | undefined => {
+    if (depth > MAX_EXPANSION_DEPTH || seen.has(type)) {
+        return undefined;
+    }
+
+    // Reachable types already print correctly by name — leave them verbatim.
+    if (!referencesUnreachableLocalType(type, node, handlerFilePath)) {
+        return type.getText(node);
+    }
+
+    const nextSeen = new Set(seen).add(type);
+
+    if (type.isArray()) {
+        return expandArrayType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
+    }
+
+    if (type.isUnion()) {
+        return expandUnionType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
+    }
+
+    return expandObjectType(type, node, handlerFilePath, depth, nextSeen, expandUnreachableType);
 };
 
 /**

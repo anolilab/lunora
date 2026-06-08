@@ -162,6 +162,7 @@ interface FunctionDescriptor {
 interface FunctionRegistryEntry {
     /** The function's `v.*` args validator map; read structurally for the signature view. */
     args?: unknown;
+
     /**
      * The generated registry carries `"stream"` alongside query/mutation/action;
      * the discovery endpoint surfaces the latter three only (a `stream` function

@@ -15,8 +15,6 @@ export type OverlayPluginOptions = NonNullable<Parameters<typeof errorOverlayPlu
 export interface CirrusPluginOptions {
     /** Pass through to `@cloudflare/vite-plugin`. Pass `false` to opt out. Defaults to `true`. */
     cloudflare?: boolean | CloudflarePluginOptions;
-    /** Serve the Cirrus studio at `/__cirrus` during dev. Pass `false` to opt out. Defaults to `true`. */
-    studio?: boolean;
     /** Directory name (relative to `projectRoot`) where generated files are written. Defaults to `"cirrus/_generated"`. */
     generatedDir?: string;
 
@@ -30,6 +28,8 @@ export interface CirrusPluginOptions {
     projectRoot?: string;
     /** Directory name (relative to `projectRoot`) containing `schema.ts` and function files. Defaults to `"cirrus"`. */
     schemaDir?: string;
+    /** Serve the Cirrus studio at `/__cirrus` during dev. Pass `false` to opt out. Defaults to `true`. */
+    studio?: boolean;
     /** Validate that `wrangler.jsonc` declares the bindings the schema implies. Defaults to `true`. */
     validateWrangler?: boolean;
 }
@@ -37,11 +37,11 @@ export interface CirrusPluginOptions {
 /** Resolved options after merging defaults. */
 export interface ResolvedCirrusPluginOptions {
     cloudflare: false | CloudflarePluginOptions;
-    studio: boolean;
     generatedDir: string;
     overlay: false | OverlayPluginOptions;
     projectRoot: string;
     schemaDir: string;
+    studio: boolean;
     validateWrangler: boolean;
 }
 

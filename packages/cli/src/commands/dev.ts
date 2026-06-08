@@ -3,11 +3,11 @@ import { spawn as nodeSpawn } from "node:child_process";
 
 import type { CodegenWatcherHandle } from "../util/codegen-watch.js";
 import { startCodegenWatch } from "../util/codegen-watch.js";
-import type { StudioServerHandle } from "../util/studio-server.js";
-import { startStudioServer } from "../util/studio-server.js";
 import { detectPackageManager, execArgsFor } from "../util/detect-package-manager.js";
 import type { Logger } from "../util/logger.js";
 import type { SpawnDescriptor } from "../util/spawn.js";
+import type { StudioServerHandle } from "../util/studio-server.js";
+import { startStudioServer } from "../util/studio-server.js";
 
 /** Default port the embedded studio server listens on (the URL you open). */
 const DEFAULT_STUDIO_PORT = 6173;
@@ -30,8 +30,6 @@ interface DevCommandOptions {
     /** Disable the codegen watch loop. */
     codegen?: boolean;
     cwd?: string;
-    /** Disable the embedded studio server. */
-    studio?: boolean;
     logger: Logger;
     /** Studio server port. */
     port?: number;
@@ -41,6 +39,8 @@ interface DevCommandOptions {
     startStudio?: typeof startStudioServer;
     /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
     startWorker?: WorkerSpawner;
+    /** Disable the embedded studio server. */
+    studio?: boolean;
     /** `wrangler dev` port. */
     workerPort?: number;
 }

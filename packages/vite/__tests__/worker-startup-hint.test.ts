@@ -94,7 +94,9 @@ describe("withWorkerStartupHint", () => {
 
         await expect(hook()).rejects.toThrow("circular import");
         // The original plugin object is not mutated.
-        expect(() => (plugin.configureServer as () => void)()).toThrow(/^Cannot read properties of undefined \(reading 'string'\)$/u);
+        expect(() => {
+            (plugin.configureServer as () => void)();
+        }).toThrow(/^Cannot read properties of undefined \(reading 'string'\)$/u);
     });
 
     it("wraps the object-form `{ handler }` hook shape", async () => {
@@ -111,7 +113,7 @@ describe("withWorkerStartupHint", () => {
         } as unknown as Plugin;
 
         const [wrapped] = withWorkerStartupHint([plugin]);
-        const handler = (wrapped?.buildStart as { handler: () => Promise<void> }).handler;
+        const { handler } = wrapped?.buildStart as { handler: () => Promise<void> };
 
         await expect(handler()).rejects.toThrow("cirrus codegen");
     });

@@ -280,7 +280,9 @@ describe("ctx-db relations", () => {
                 },
                 async findMany(_table: string, query?: { where?: { _id?: { in?: unknown[] } } }) {
                     const inList = query?.where?._id?.in;
-                    const page = Array.isArray(inList) ? (inList.map((id) => byId.get(id as string)).filter(Boolean) as Record<string, unknown>[]) : [...byId.values()];
+                    const page = Array.isArray(inList)
+                        ? (inList.map((id) => byId.get(id as string)).filter(Boolean) as Record<string, unknown>[])
+                        : [...byId.values()];
 
                     return { continueCursor: null, isDone: true, page };
                 },
@@ -378,7 +380,6 @@ describe("ctx-db relations", () => {
                 async get(id: string) {
                     calls.push(`get:${id}`);
 
-                    // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.get returns null for a missing row
                     return rows.get(id) ?? null;
                 },
                 async insert(table: string, document: Record<string, unknown>) {
@@ -392,7 +393,6 @@ describe("ctx-db relations", () => {
                 async rank(table: string) {
                     calls.push(`rank:${table}`);
 
-                    // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.rank returns null when the value isn't ranked
                     return null;
                 },
                 async rankPage(table: string) {
@@ -470,7 +470,9 @@ describe("ctx-db relations", () => {
 
             // `rankBefore` has no D1 twin — global tables must fail clearly, not
             // route into a non-existent `globalDb.rankBefore`.
-            await expect(writer.rankBefore!("globals", "byValue", { partitionKey: "", rowId: "g1", sortValues: [] })).rejects.toThrow(/not supported on the global/u);
+            await expect(writer.rankBefore!("globals", "byValue", { partitionKey: "", rowId: "g1", sortValues: [] })).rejects.toThrow(
+                /not supported on the global/u,
+            );
         });
 
         it("throws a wiring error for a generic global insert when no globalDb is supplied", async () => {

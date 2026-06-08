@@ -1606,14 +1606,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     /**
      * Route a *table-name-addressed* op (`insert`/`query`/`findMany`/`count`/…)
      * to the backend that owns the table. A `.global()` table lives in D1, so
-     * its generic `ctx.db.<op>("<table>", …)` call must reach the D1-backed
+     * its generic `ctx.db.&lt;op&gt;("&lt;table&gt;", …)` call must reach the D1-backed
      * `globalDb` writer — where the table is provisioned and read-your-writes
      * apply — instead of this DO's local SQLite, which has no such table.
      *
      * Returns `undefined` for shard-local tables so the caller runs its normal
      * local path; throws a clear wiring error if a global table is reached
      * without a `globalDb` (mirroring {@link routeBackend}). This is the generic
-     * twin of the property-style `ctx.db.<globalTable>` facade: both land global
+     * twin of the property-style `ctx.db.&lt;globalTable&gt;` facade: both land global
      * access on D1, so `ctx.db.insert("t", …)` and `ctx.db.t.insert(…)` agree.
      */
     const globalWriterFor = (tableName: string, op: string): DatabaseWriterLike | undefined => {
@@ -1643,8 +1643,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * `IN (...)` read. The unsupported direction (global parent → shard-local
      * child) is rejected upstream in `resolveWith`'s `requireRelation`.
      */
-    const relationFetcher = (relationTable: string, relationArgs: QueryArgs): Promise<QueryPage> => routeBackend(relationTable, "relation load").findMany(relationTable, relationArgs);
-    const relationCounter = (relationTable: string, relationWhere?: WhereInput): Promise<number> => routeBackend(relationTable, "relation load").count(relationTable, relationWhere);
+    const relationFetcher = (relationTable: string, relationArgs: QueryArgs): Promise<QueryPage> =>
+        routeBackend(relationTable, "relation load").findMany(relationTable, relationArgs);
+    const relationCounter = (relationTable: string, relationWhere?: WhereInput): Promise<number> =>
+        routeBackend(relationTable, "relation load").count(relationTable, relationWhere);
 
     let triggerDepth = 0;
 
@@ -2278,7 +2280,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return value;
         },
 
-        // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async count(tableName, whereOrOptions) {
             const global = globalWriterFor(tableName, "count");
 
@@ -2540,7 +2541,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             };
         },
 
-        // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async get(id) {
             const located = lookupById(id);
 
@@ -2561,7 +2561,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return located.row;
         },
 
-        // eslint-disable-next-line @typescript-eslint/require-await, sonarjs/cognitive-complexity -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
+        // eslint-disable-next-line sonarjs/cognitive-complexity -- the indexed/scan branching is closed over the writer ctx and reads worse when split
         async groupBy(tableName, groupOptions) {
             const global = globalWriterFor(tableName, "groupBy");
 
@@ -2776,7 +2776,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = globalFallback();
 
                 if (global) {
-                    return global.patch(id, patch);
+                    await global.patch(id, patch);
+                    return;
                 }
 
                 throw new Error(`document not found: ${id}`);
@@ -2859,7 +2860,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return buildReader(sql, schema, tableName);
         },
 
-        // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
         async rank(tableName, indexName, rankOptions) {
             const global = globalWriterFor(tableName, "rank");
 
@@ -2952,7 +2952,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // with a clear message instead of routing into a non-existent
             // `globalDb.rankBefore` (which would throw an opaque TypeError).
             if (isGlobalTable(tableName)) {
-                throw new Error(`rankBefore is not supported on the global (.global()) table '${tableName}' — cross-shard rank cursors apply only to sharded tables`);
+                throw new Error(
+                    `rankBefore is not supported on the global (.global()) table '${tableName}' — cross-shard rank cursors apply only to sharded tables`,
+                );
             }
 
             const definition = schema.tables[tableName];
@@ -2996,7 +2998,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return countRankBefore(sql, rankTable, sortColumns, index.sortBy, rankBeforeOptions.partitionKey, serialized, rankBeforeOptions.rowId);
         },
 
-        // eslint-disable-next-line @typescript-eslint/require-await, sonarjs/cognitive-complexity -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
+        // eslint-disable-next-line sonarjs/cognitive-complexity -- the indexed/scan branching is closed over the writer ctx and reads worse when split
         async rankPage(tableName, indexName, rankPageOptions = {}) {
             const global = globalWriterFor(tableName, "rankPage");
 
@@ -3170,7 +3172,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = globalFallback();
 
                 if (global) {
-                    return global.replace(id, document);
+                    await global.replace(id, document);
+                    return;
                 }
 
                 throw new Error(`document not found: ${id}`);
