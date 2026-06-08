@@ -317,8 +317,12 @@ export const cirrusAuthAdapter = (store: AuthStore): ReturnType<typeof createAda
         config: {
             adapterId: "cirrus",
             adapterName: "Cirrus Adapter",
-            supportsBooleans: true,
-            supportsDates: true,
+            // Conservative flags so the adapter is store-agnostic: better-auth
+            // serializes dates/booleans/json to primitives (string/number) before a
+            // write and parses them back after a read, so a store — in-memory or
+            // SQL — only ever handles primitives, never schema-aware codecs.
+            supportsBooleans: false,
+            supportsDates: false,
             supportsJSON: false,
             supportsNumericIds: false,
         },

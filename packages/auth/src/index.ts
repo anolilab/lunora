@@ -9,3 +9,5 @@ export { compileMigrationsSql, ensureMigrated } from "./migrate.js";
 export { default as authTables } from "./schema.js";
 export type { SessionPolicy } from "./session.js";
 export { sessionPresets, validateSessionPolicy } from "./session.js";
+export type { SqlExecutor } from "./sql-store.js";
+export { createSqlAuthStore, d1Executor } from "./sql-store.js";
