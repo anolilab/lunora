@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "./components/ui/empty-state.js";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
 import { errorMessage, fireAndForget, formatCell } from "./internal.js";
 import { StorageTierHeader } from "./storage-tier.js";
 
@@ -167,24 +168,24 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
 
             {page !== null && (
                 <div data-testid="gdb-page">
-                    <table data-testid="gdb-rows">
-                        <thead>
-                            <tr>
+                    <Table data-testid="gdb-rows">
+                        <TableHeader>
+                            <TableRow>
                                 {page.columns.map((column) => (
-                                    <th key={column}>{column}</th>
+                                    <TableHead key={column}>{column}</TableHead>
                                 ))}
-                            </tr>
-                        </thead>
-                        <tbody>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
                             {page.rows.map((row, rowIndex) => (
-                                <tr data-testid="gdb-row" key={rowKey(row, rowIndex)}>
+                                <TableRow data-testid="gdb-row" key={rowKey(row, rowIndex)}>
                                     {page.columns.map((column) => (
-                                        <td key={column}>{formatCell(row[column])}</td>
+                                        <TableCell key={column}>{formatCell(row[column])}</TableCell>
                                     ))}
-                                </tr>
+                                </TableRow>
                             ))}
-                        </tbody>
-                    </table>
+                        </TableBody>
+                    </Table>
 
                     <div>
                         <button data-testid="gdb-prev" disabled={!hasPrevious} onClick={goPrevious} type="button">
