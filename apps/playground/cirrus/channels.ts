@@ -12,7 +12,7 @@ import { mutation, query, v } from "./_generated/server.js";
 export const list = query({
     args: {},
     handler: async (context): Promise<Doc<"channels">[]> => {
-        const { page } = await context.db.findMany("channels");
+        const { page } = await context.db.channels.findMany();
 
         return page as unknown as Doc<"channels">[];
     },
