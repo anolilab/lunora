@@ -180,8 +180,9 @@ describe("discoverSchema", () => {
         // Per-table union: declared name for `scores`, `never` for `users`.
         expect(dataModel).toContain('scores: "by_points";');
         expect(dataModel).toContain("export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];");
-        // The method signatures are constrained to the per-table union, not `string`.
-        expect(dataModel).toContain("rank: (indexName: RankIndexName<T>, options: TableRankOptions<Doc<T>>) => Promise<null | RankResult>;");
+        // The per-table rank-index map is threaded into the facade binding (the
+        // `RANK` generic), which constrains `rank`/`rankPage` to declared names.
+        expect(dataModel).toContain("= TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T>;");
     });
 
     it("carries a rankIndex declared on an extension table onto the prefixed table", () => {
@@ -484,12 +485,13 @@ describe("discoverSchema", () => {
         expect(dataModel).toContain('posts: ManyRelation<"posts">;');
         expect(dataModel).toContain('author: OneRelation<"users">;');
 
-        // The with-inference machinery + generic facades.
-        expect(dataModel).toContain("export type WithArg<T extends keyof DataModel>");
-        expect(dataModel).toContain("export type LoadWith<T extends keyof DataModel, W> = Doc<T> & LoadedRelations<T, W> & LoadedCount<W>;");
-        // eslint-disable-next-line no-secrets/no-secrets -- asserts an emitted TS type signature, not a credential
-        expect(dataModel).toContain("findMany: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<QueryPage<LoadWith<T, W>>>;");
-        expect(dataModel).toContain("findFirst: <W extends WithArg<T> = {}>(args?: QueryArgs<Doc<T>> & { with?: W }) => Promise<LoadWith<T, W> | null>;");
+        // The with-inference machinery binds the shipped generics to this
+        // project's DataModel + Relations (the bodies live in
+        // `@cirrus/server/data-model`, so they never regenerate here).
+        expect(dataModel).toContain("export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations, T>;");
+        expect(dataModel).toContain("export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;");
+        expect(dataModel).toContain("import type {\n    DatabaseReaderFacade as DatabaseReaderFacadeOf,");
+        expect(dataModel).toContain('} from "@cirrus/server/data-model";');
     });
 
     it("emits an empty Relations entry for tables that declare none", () => {
