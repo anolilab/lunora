@@ -88,5 +88,6 @@ export { default as STUDIO_ROOT_CLASS } from "./theme-constants.js";
 export type { FunctionDescriptor, FunctionKind, RunStatus } from "./types.js";
 export { DEFAULT_AUTO_REFRESH_MS, useAutoRefresh } from "./use-auto-refresh.js";
 export { default as useDebounced } from "./use-debounced.js";
+export type { CirrusClient } from "@cirrus/client";
 export type { StorageObject } from "@cirrus/client";
 export type { ScheduleRecord } from "@cirrus/client";

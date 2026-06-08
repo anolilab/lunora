@@ -43,6 +43,14 @@ interface StudioAppProps {
 
     /** UI language for the studio's own strings. Defaults to `en`. */
     readonly locale?: string;
+
+    /**
+     * Inject a pre-built client instead of constructing one from `baseUrl` +
+     * the admin token. Used by the dev mock harness (and embeddings that own
+     * the client) so the chrome renders against a supplied client; when set,
+     * `baseUrl`/`adminToken` are ignored and this client is never closed here.
+     */
+    readonly client?: CirrusClient;
 }
 
 /**
@@ -206,7 +214,7 @@ const resolveBaseUrl = (explicit: string | undefined): string => {
  * yourself. For embedding into an existing admin UI, use the individual panels
  * or `&lt;Studio>` under your own provider instead.
  */
-export const StudioApp = ({ adminToken, basePath, baseUrl, studio, locale }: StudioAppProps = {}): ReactElement => {
+export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, studio, locale }: StudioAppProps = {}): ReactElement => {
     // Seed from the prop, else a token persisted in a prior session (so a reload
     // doesn't force a re-paste). The prop wins when explicitly provided.
     const [token, setToken] = useState<string>(() => adminToken ?? loadToken());
@@ -223,6 +231,12 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, studio, locale }: Stu
     const debouncedToken = useDebounced(token, 300);
 
     const client = useMemo(() => {
+        // A supplied client (dev mock / embedding) wins — render the chrome
+        // against it and don't build or own a real one.
+        if (injectedClient !== undefined) {
+            return injectedClient;
+        }
+
         // The token doubles as the WS credential (`wsToken`) so live admin
         // subscriptions clear the upgrade's admin gate, mirroring the bearer the
         // HTTP admin RPCs already send.
@@ -233,16 +247,20 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, studio, locale }: Stu
         }
 
         return created;
-    }, [baseUrl, debouncedToken]);
+    }, [baseUrl, debouncedToken, injectedClient]);
 
     // Close the previous client when `token`/`baseUrl` changes (and on unmount)
     // so we don't leak sockets, in-flight streams, or reconnect timers each
-    // time the admin pastes a new token.
+    // time the admin pastes a new token. An injected client is owned by the
+    // caller, so it's left alone.
     useEffect(
-        () => (): void => {
-            client.close();
-        },
-        [client],
+        () =>
+            (): void => {
+                if (injectedClient === undefined) {
+                    client.close();
+                }
+            },
+        [client, injectedClient],
     );
 
     const onTokenChange = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
