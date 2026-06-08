@@ -5,14 +5,16 @@ import { mutation, query, v } from "./_generated/server.js";
 
 /**
  * List every channel — `.global()` so the read happens against D1, with
- * `withSession(bookmark)` consistency provided by the runtime adapter.
+ * `withSession(bookmark)` consistency provided by the runtime adapter. Global
+ * (D1) tables use the `findMany` reader rather than the shard-local fluent
+ * `query()` chain (which isn't available on the D1 backend).
  */
 export const list = query({
     args: {},
     handler: async (context): Promise<Doc<"channels">[]> => {
-        const rows = await context.db.query("channels").collect();
+        const { page } = await context.db.findMany("channels");
 
-        return rows as unknown as Doc<"channels">[];
+        return page as unknown as Doc<"channels">[];
     },
 });
 

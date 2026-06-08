@@ -1219,7 +1219,7 @@ const emitShard = (schema: SchemaIR): string => {
     // arrives via an optional `d1` config thunk; when omitted (or for projects
     // with no global tables), reads/writes to a global table hit `globalDbStub`
     // and throw a descriptive error.
-    const d1ConfigField = hasGlobalTables ? `\n    d1?: (env: Record<string, unknown>) => DatabaseWriterLike;` : "";
+    const d1ConfigField = hasGlobalTables ? `\n    d1?: (env: Record<string, unknown>) => DatabaseWriterLike | undefined;` : "";
 
     const globalDatabaseStub = hasGlobalTables
         ? `
@@ -1323,7 +1323,7 @@ const vectorsStub: VectorSearchLike = {
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
-                storage,
+                storage,${hasGlobalTables ? "\n                globalDb," : ""}
             }`
         : `{
                 broadcast: (delta) => {
@@ -1334,7 +1334,7 @@ const vectorsStub: VectorSearchLike = {
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
-                storage,
+                storage,${hasGlobalTables ? "\n                globalDb," : ""}
             }`;
 
     const vectorsContextField = hasVectors ? `\n                vectors,` : "";
@@ -1354,7 +1354,10 @@ const vectorsStub: VectorSearchLike = {
 
     // Build `globalDb` only when a `.global()` table exists; otherwise the
     // binding (and the stub it falls back to) would be unused.
-    const globalDatabaseLine = hasGlobalTables ? `\n            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;` : "";
+    // Declared BEFORE `db` so it can be passed into `createShardCtxDb({ globalDb })`:
+    // the generic `ctx.db.insert("<global>", …)`/`query`/… methods route through
+    // it to D1 (matching the property-style `ctx.db.<global>` facade below).
+    const globalDatabaseLine = hasGlobalTables ? `            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;\n` : "";
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
@@ -1726,7 +1729,7 @@ ${vectorsBuild}
             // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally
             // (its \`list\`/\`getMetadata\` throw the "no storage configured" error).
             const storage = (config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
-            const db: DatabaseWriterLike = createShardCtxDb(${databaseOptions});${globalDatabaseLine}
+${globalDatabaseLine}            const db: DatabaseWriterLike = createShardCtxDb(${databaseOptions});
 ${facadeBlock}
             const ctx: Record<string, unknown> = {
                 auth: {

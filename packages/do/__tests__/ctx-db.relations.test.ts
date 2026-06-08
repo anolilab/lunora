@@ -355,6 +355,98 @@ describe("ctx-db relations", () => {
         });
     });
 
+    describe("generic global-table routing (ctx.db.insert/findMany/get → D1)", () => {
+        const schema: SchemaLike = {
+            tables: {
+                globals: { indexes: [], shape: { value: { kind: "string" } }, shardMode: { kind: "global" } },
+                local: { indexes: [], shape: { value: { kind: "string" } }, shardMode: { kind: "root" } },
+            },
+        };
+
+        /** In-memory "D1" writer that records every call so the test can prove routing. */
+        const buildRecordingGlobalDatabase = () => {
+            const rows = new Map<string, Record<string, unknown>>();
+            const calls: string[] = [];
+
+            return {
+                calls,
+                async findMany(table: string) {
+                    calls.push(`findMany:${table}`);
+
+                    return { continueCursor: null, isDone: true, page: [...rows.values()] };
+                },
+                async get(id: string) {
+                    calls.push(`get:${id}`);
+
+                    // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.get returns null for a missing row
+                    return rows.get(id) ?? null;
+                },
+                async insert(table: string, document: Record<string, unknown>) {
+                    calls.push(`insert:${table}`);
+                    const id = (document["_id"] as string) ?? `g-${rows.size.toString()}`;
+
+                    rows.set(id, { _id: id, ...document });
+
+                    return id;
+                },
+                rows,
+            };
+        };
+
+        it("routes a generic insert + findMany on a global table to the globalDb", async () => {
+            expect.assertions(4);
+
+            runShardMigrations(harness.sql, schema);
+
+            const fake = buildRecordingGlobalDatabase();
+            const writer = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                globalDb: fake as unknown as DatabaseWriterLike,
+                schema,
+                sql: harness.sql,
+            });
+
+            await writer.insert("globals", { _id: "g1", value: "alpha" }, { allowExplicitId: true });
+
+            // The global write landed in the D1 writer, not the DO's local SQLite.
+            expect(fake.calls).toContain("insert:globals");
+            expect(fake.rows.get("g1")).toMatchObject({ value: "alpha" });
+
+            const { page } = await writer.findMany("globals");
+
+            expect(fake.calls).toContain("findMany:globals");
+            expect(page).toHaveLength(1);
+        });
+
+        it("falls back to the globalDb for an id-addressed get when the row isn't local", async () => {
+            expect.assertions(2);
+
+            runShardMigrations(harness.sql, schema);
+
+            const fake = buildRecordingGlobalDatabase();
+            fake.rows.set("g1", { _id: "g1", value: "alpha" });
+            const writer = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                globalDb: fake as unknown as DatabaseWriterLike,
+                schema,
+                sql: harness.sql,
+            });
+
+            const row = await writer.get("g1");
+
+            expect(fake.calls).toContain("get:g1");
+            expect(row).toMatchObject({ value: "alpha" });
+        });
+
+        it("throws a wiring error for a generic global insert when no globalDb is supplied", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter(schema);
+
+            await expect(writer.insert("globals", { value: "alpha" })).rejects.toThrow(/requires a globalDb writer/u);
+        });
+    });
+
     describe("cross-backend onDelete cascade (DO parent → D1 holder)", () => {
         /**
          * Schema: `groups` lives on the DO (root); `memberships` lives on D1

@@ -474,7 +474,7 @@ describe("run-codegen", () => {
         });
 
         it("binds `.global()` tables to the D1 facade and shard tables to the DO writer", () => {
-            expect.assertions(5);
+            expect.assertions(6);
 
             const schema: SchemaIR = {
                 tables: [
@@ -505,9 +505,14 @@ describe("run-codegen", () => {
             const output = emitShard(schema);
 
             // The D1 config thunk + fallback stub appear only because a `.global()` table exists.
-            expect(output).toContain("d1?: (env: Record<string, unknown>) => DatabaseWriterLike;");
+            expect(output).toContain("d1?: (env: Record<string, unknown>) => DatabaseWriterLike | undefined;");
             expect(output).toContain("const globalDbStub: DatabaseWriterLike");
             expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;");
+
+            // `globalDb` is passed into the shard ctx-db so the generic
+            // `ctx.db.insert("<global>", …)`/`query`/… methods route to D1 (not just
+            // the property-style `ctx.db.<global>` facade).
+            expect(output).toContain("\n                globalDb,");
 
             // Backend selection by shardMode: shard table → DO writer, global table → D1 facade.
             expect(output).toContain('facade["messages"] = bindTableFacade(db, "messages");');

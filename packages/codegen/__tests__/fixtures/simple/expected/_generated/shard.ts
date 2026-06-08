@@ -60,7 +60,7 @@ export interface ShardDOConfig {
     cdc?: boolean;
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
-    d1?: (env: Record<string, unknown>) => DatabaseWriterLike;
+    d1?: (env: Record<string, unknown>) => DatabaseWriterLike | undefined;
 }
 
 const schedulerStub = {
@@ -448,6 +448,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
             // (its `list`/`getMetadata` throw the "no storage configured" error).
             const storage = (config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;
             const db: DatabaseWriterLike = createShardCtxDb({
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
@@ -458,8 +459,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
                 storage,
+                globalDb,
             });
-            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;
 
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
             facade["messages"] = bindTableFacade(db, "messages");

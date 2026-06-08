@@ -1604,6 +1604,40 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const routeForHolder = (holderTable: string): DatabaseWriterLike => routeBackend(holderTable, "cascade");
 
     /**
+     * Route a *table-name-addressed* op (`insert`/`query`/`findMany`/`count`/…)
+     * to the backend that owns the table. A `.global()` table lives in D1, so
+     * its generic `ctx.db.<op>("<table>", …)` call must reach the D1-backed
+     * `globalDb` writer — where the table is provisioned and read-your-writes
+     * apply — instead of this DO's local SQLite, which has no such table.
+     *
+     * Returns `undefined` for shard-local tables so the caller runs its normal
+     * local path; throws a clear wiring error if a global table is reached
+     * without a `globalDb` (mirroring {@link routeBackend}). This is the generic
+     * twin of the property-style `ctx.db.<globalTable>` facade: both land global
+     * access on D1, so `ctx.db.insert("t", …)` and `ctx.db.t.insert(…)` agree.
+     */
+    const globalWriterFor = (tableName: string, op: string): DatabaseWriterLike | undefined => {
+        if (!isGlobalTable(tableName)) {
+            return undefined;
+        }
+
+        if (!globalDb) {
+            throw new Error(`${op} on global table '${tableName}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`);
+        }
+
+        return globalDb;
+    };
+
+    /**
+     * Fallback for *id-addressed* ops (`get`/`patch`/`replace`/`delete`): a bare
+     * id carries no table, so they probe this DO's local tables first; a global
+     * row's id never lives here, so on a local miss delegate to `globalDb` (which
+     * probes its D1 tables). Returns `undefined` when there's no global backend
+     * to fall back to, so the caller keeps its existing not-found behaviour.
+     */
+    const globalFallback = (): DatabaseWriterLike | undefined => globalDb;
+
+    /**
      * Backend-routed `fetcher`/`counter` pair handed to {@link resolveWith} so a
      * shard-local parent's `with` can load a global (D1) child in one bounded
      * `IN (...)` read. The unsupported direction (global parent → shard-local
@@ -2166,6 +2200,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         // to query/mutation/action handlers. See {@link SystemDatabaseReader}.
         system,
         async aggregate(tableName, aggOptions) {
+            const global = globalWriterFor(tableName, "aggregate");
+
+            if (global) {
+                return global.aggregate(tableName, aggOptions);
+            }
+
             const definition = schema.tables[tableName];
 
             if (!definition) {
@@ -2240,6 +2280,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async count(tableName, whereOrOptions) {
+            const global = globalWriterFor(tableName, "count");
+
+            if (global) {
+                return global.count(tableName, whereOrOptions);
+            }
+
             const definition = schema.tables[tableName];
 
             if (!definition) {
@@ -2306,6 +2352,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = lookupById(id);
 
             if (!located) {
+                // A global row's id never lives in this DO; fall back to D1
+                // (both backends are silent on a genuinely-absent id).
+                const global = globalFallback();
+
+                if (global) {
+                    await global.delete(id);
+                }
+
                 return;
             }
 
@@ -2391,6 +2445,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         // eslint-disable-next-line sonarjs/cognitive-complexity -- reader method closed over the writer ctx (sql/schema/onRead/strategy/cache/resolveWith); splitting would thread that shared state through every helper and read worse (see data-migration.ts)
         async findMany(tableName, args = {}) {
+            const global = globalWriterFor(tableName, "findMany");
+
+            if (global) {
+                return global.findMany(tableName, args);
+            }
+
             if (!schema.tables[tableName]) {
                 throw new Error(`unknown table: ${tableName}`);
             }
@@ -2485,6 +2545,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = lookupById(id);
 
             if (!located) {
+                // A global row's id never lives in this DO; fall back to D1.
+                const global = globalFallback();
+
+                if (global) {
+                    return global.get(id);
+                }
+
                 // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.get is `Promise<Record | null>`: null is the documented "no such row" result
                 return null;
             }
@@ -2496,6 +2563,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         // eslint-disable-next-line @typescript-eslint/require-await, sonarjs/cognitive-complexity -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
         async groupBy(tableName, groupOptions) {
+            const global = globalWriterFor(tableName, "groupBy");
+
+            if (global) {
+                return global.groupBy(tableName, groupOptions);
+            }
+
             const definition = schema.tables[tableName];
 
             if (!definition) {
@@ -2615,6 +2688,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async insert(tableName, document, insertOptions) {
+            const global = globalWriterFor(tableName, "insert");
+
+            if (global) {
+                return global.insert(tableName, document, insertOptions);
+            }
+
             const definition = schema.tables[tableName];
 
             if (!definition) {
@@ -2693,6 +2772,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = lookupById(id);
 
             if (!located) {
+                // A global row's id never lives in this DO; fall back to D1.
+                const global = globalFallback();
+
+                if (global) {
+                    return global.patch(id, patch);
+                }
+
                 throw new Error(`document not found: ${id}`);
             }
 
@@ -2757,6 +2843,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         query(tableName) {
+            const global = globalWriterFor(tableName, "query");
+
+            if (global) {
+                return global.query(tableName);
+            }
+
             // Fluent reader chain: we can't tell up front whether the caller
             // will end with `.withIndex(...)` or a bare scan, so we stamp the
             // safe upper bound (`*scan`). Future refinement would push the
@@ -3054,6 +3146,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = lookupById(id);
 
             if (!located) {
+                // A global row's id never lives in this DO; fall back to D1.
+                const global = globalFallback();
+
+                if (global) {
+                    return global.replace(id, document);
+                }
+
                 throw new Error(`document not found: ${id}`);
             }
 

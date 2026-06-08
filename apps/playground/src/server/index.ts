@@ -1,7 +1,7 @@
 import type { CirrusAuth } from "@cirrus/auth";
 import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
-import type { D1DatabaseLike, D1Exec } from "@cirrus/d1";
-import { listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
+import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
+import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
 import type {
     AuthIntrospector,
     ExecutionContextLike,
@@ -102,6 +102,8 @@ export { SchedulerDO } from "./scheduler-do.js";
 
 interface ShardEnv {
     CIRRUS_WORKER_ORIGIN?: string;
+    /** D1 binding backing `.global()` tables — wired into the DO so generic `ctx.db.<globalTable>` writes route to it. */
+    DB?: D1DatabaseLike;
     FILES?: R2BucketLike;
     PUBLIC_STORAGE_BASE_URL?: string;
     SCHEDULER?: DurableObjectNamespaceLike;
@@ -109,6 +111,17 @@ interface ShardEnv {
 }
 
 export const ShardDO = createShardDO({
+    // Back `.global()` tables with D1: the DO routes generic `ctx.db.insert("channels", …)`
+    // / `query` / `get` on a global table through this writer (and the per-table
+    // `ctx.db.<global>` facade shares it), so global reads/writes land in D1 — not the
+    // DO's local SQLite. The D1 ctx-db auto-provisions the tables on first use.
+    d1: (env) => {
+        const shardEnv = env as ShardEnv;
+
+        return shardEnv.DB
+            ? createD1CtxDb({ exec: buildExec(shardEnv.DB), schema: schema as unknown as D1CtxDbOptions["schema"] })
+            : undefined;
+    },
     scheduler: (env) => {
         const shardEnv = env as ShardEnv;
 
