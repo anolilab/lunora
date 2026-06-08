@@ -9,7 +9,7 @@ import type { Id } from "./dataModel.js";
 export interface ApiTypes {
     documents: {
         create: FunctionReference<"mutation", { organizationId: string; title: string; body: string }, Id<"documents">>;
-        list: FunctionReference<"query", { organizationId: string }, unknown>;
+        list: FunctionReference<"query", { organizationId: string }, { _id: Id<"documents">; organizationId: string; ownerId: string; title: string; body: string; createdAt: number }[]>;
     };
 }
 

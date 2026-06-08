@@ -71,7 +71,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
 export interface Caller {
     todos: {
         add: (args: { text: string }) => Promise<Id<"todos">>;
-        list: (args?: {}) => Promise<unknown>;
+        list: (args?: {}) => Promise<{ _id: Id<"todos">; createdAt: number; done: boolean; text: string }[]>;
         remove: (args: { id: Id<"todos"> }) => Promise<void>;
         toggle: (args: { id: Id<"todos">; done: boolean }) => Promise<void>;
     };

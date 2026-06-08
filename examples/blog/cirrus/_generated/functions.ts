@@ -79,12 +79,12 @@ export interface Caller {
         purgeStaleDrafts: (args?: {}) => Promise<{ deleted: number; }>;
     };
     drafts: {
-        listMine: (args?: {}) => Promise<unknown>;
+        listMine: (args?: {}) => Promise<{ _id: Id<"drafts">; authorId: Id<"users">; body: string; title: string; updatedAt: number }[]>;
         save: (args: { id?: Id<"drafts">; title: string; body: string }) => Promise<Id<"drafts">>;
     };
     posts: {
-        get: (args: { id: Id<"posts"> }) => Promise<unknown>;
-        list: (args?: {}) => Promise<unknown>;
+        get: (args: { id: Id<"posts"> }) => Promise<null | { _id: Id<"posts">; authorId: Id<"users">; body: string; imageKey?: string; publishedAt: number; title: string }>;
+        list: (args?: {}) => Promise<{ _id: Id<"posts">; authorId: Id<"users">; body: string; imageKey?: string; publishedAt: number; title: string }[]>;
         publish: (args: { title: string; body: string; imageKey?: string }) => Promise<Id<"posts">>;
         requestImageUpload: (args: { contentType: string }) => Promise<{ key: string; url: string; }>;
         search: (args: { text: string; topK?: number }) => Promise<{ id: Id<"posts">; score: number; title: string; }[]>;

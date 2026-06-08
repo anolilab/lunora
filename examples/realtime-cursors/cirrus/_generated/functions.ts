@@ -4,6 +4,7 @@
 import * as cirrus_cursors_0 from "../cursors.js";
 
 import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
+import type { Id } from "./dataModel.js";
 
 /**
  * Single registered function, narrowed to the shape `handleRpc` needs.
@@ -69,7 +70,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
 export interface Caller {
     cursors: {
         joinRoom: (args: { roomId: string; sessionId: string; name: string; color: string }) => Promise<void>;
-        listCursors: (args: { roomId: string }) => Promise<unknown>;
+        listCursors: (args: { roomId: string }) => Promise<{ _id: Id<"cursors">; color: string; lastSeen: number; name: string; roomId: string; sessionId: string; x: number; y: number }[]>;
         updateCursor: (args: { roomId: string; sessionId: string; x: number; y: number }) => Promise<void>;
     };
 }
