@@ -9,29 +9,25 @@
     ],
     "type": "module",
     "sideEffects": false,
-    "main": "./dist/index.cjs",
+    "main": "./dist/index.mjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.mjs",
-            "require": "./dist/index.cjs"
+            "import": "./dist/index.mjs"
         },
         "./types": {
             "types": "./dist/types.d.ts",
-            "import": "./dist/types.mjs",
-            "require": "./dist/types.cjs"
+            "import": "./dist/types.mjs"
         },
         "./drizzle": {
             "types": "./dist/drizzle.d.ts",
-            "import": "./dist/drizzle.mjs",
-            "require": "./dist/drizzle.cjs"
+            "import": "./dist/drizzle.mjs"
         },
         "./data-model": {
             "types": "./dist/data-model.d.ts",
-            "import": "./dist/data-model.mjs",
-            "require": "./dist/data-model.cjs"
+            "import": "./dist/data-model.mjs"
         },
         "./package.json": "./package.json"
     },

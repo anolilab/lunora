@@ -12,11 +12,7 @@ export default defineConfig({
         license: {
             path: "./LICENSE.md",
         },
-        requireCJS: {
-            builtinNodeModules: true,
-        },
     },
     transformer,
-    cjsInterop: true,
     failOnWarn: false,
 }) as BuildConfig;

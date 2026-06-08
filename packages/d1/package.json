@@ -9,19 +9,17 @@
     ],
     "type": "module",
     "sideEffects": false,
-    "main": "./dist/index.cjs",
+    "main": "./dist/index.mjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.mjs",
-            "require": "./dist/index.cjs"
+            "import": "./dist/index.mjs"
         },
         "./dialect": {
             "types": "./dist/dialect.d.ts",
-            "import": "./dist/dialect.mjs",
-            "require": "./dist/dialect.cjs"
+            "import": "./dist/dialect.mjs"
         },
         "./package.json": "./package.json"
     },
