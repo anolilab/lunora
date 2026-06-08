@@ -330,7 +330,7 @@ const StudioLayout = (): ReactElement => {
                 role="tablist"
             >
                 <header className="flex h-12 shrink-0 items-center px-4">
-                    <h2 className="text-sm font-semibold tracking-tight text-foreground">{groupLabel[activeGroup.key]}</h2>
+                    <h2 className="text-[15px] font-semibold tracking-tight text-foreground">{groupLabel[activeGroup.key]}</h2>
                 </header>
                 <div className="flex flex-col gap-px px-2 pb-3">
                     {activeGroup.tabs.map((tab) => (
