@@ -101,8 +101,8 @@ describe("cirrus init", () => {
             expect(pkg).toContain("wrangler");
         });
 
-        it("standalone template has no frontend files", async () => {
-            expect.assertions(5);
+        it("standalone template scaffolds a worker entry but no frontend files", async () => {
+            expect.assertions(6);
 
             const result = await runInitCommand({
                 cwd: workdir,
@@ -116,8 +116,11 @@ describe("cirrus init", () => {
 
             const target = join(workdir, "worker-only");
 
-            expect(existsSync(join(target, "src"))).toBe(false);
+            // The Worker entry (`wrangler.jsonc` `main`) lives in `src/server.ts`.
+            expect(existsSync(join(target, "src", "server.ts"))).toBe(true);
+            // …but nothing frontend: no Vite config, no HTML entry.
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
+            expect(existsSync(join(target, "index.html"))).toBe(false);
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
             expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
         });
