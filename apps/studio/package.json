@@ -12,7 +12,7 @@
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "tsc --noEmit",
         "preview": "vite preview",
-        "test": "vitest run"
+        "test": "vitest run --passWithNoTests"
     },
     "dependencies": {
         "@cirrus/studio": "workspace:*",
