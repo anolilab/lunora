@@ -497,6 +497,36 @@ describe("composePluginMiddleware", () => {
 
         await expect(procedure.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
     });
+
+    it("short-circuits later plugins when one returns without calling next()", async () => {
+        expect.assertions(1);
+
+        // `stop` returns its context without calling next() — the composed chain
+        // must not advance to `after`, matching how a `.use()` link that never
+        // calls next() halts the chain.
+        const ran: string[] = [];
+        const stop = definePlugin("stop", {
+            middleware: ({ ctx }) => {
+                ran.push("stop");
+
+                return ctx;
+            },
+        });
+        const after = definePlugin("after", {
+            middleware: ({ next }) => {
+                ran.push("after");
+
+                return next();
+            },
+        });
+
+        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const procedure = c.query.use(composePluginMiddleware([stop, after])).query(() => "ok");
+
+        await procedure.handler({}, {});
+
+        expect(ran).toEqual(["stop"]);
+    });
 });
 
 describe("plugin.middleware integration with the builder", () => {

@@ -113,6 +113,14 @@ const fieldValidator = (attribute: AuthFieldAttribute): Validator => {
  *     todos: defineTable({ title: v.string() }),
  * });
  * ```
+ *
+ * Scope: this emits the table **shapes** (columns + types + nullability +
+ * uniqueness + FK ids). It deliberately does not carry better-auth's
+ * `defaultValue`/`onUpdate` (filled by better-auth's own write layer), `index`
+ * hints, or `bigint` precision (`bigint` fields map to `v.number()`). Those only
+ * matter once better-auth's writes are routed through Cirrus's ORM — a separate
+ * adapter follow-up; today the auth rows are still written by better-auth's D1
+ * adapter and these tables make them typed + queryable via `ctx.db`.
  */
 const authTables = (options: CirrusAuthOptions): Record<string, TableDefinition> => {
     const tables = getAuthTables(options);

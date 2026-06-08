@@ -584,6 +584,12 @@ const RE_EXPORT_RESOLVE_LIMIT = 8;
  * runs out of resolvable steps (then it bails to `undefined`, i.e. skip). A
  * reference into a published component whose value lives only in a `.d.ts` (no
  * call literal) bails cleanly — same as before this resolver existed.
+ *
+ * Guaranteed shapes are the two documented re-export forms —
+ * `export const check = component.functions.check` (property access) and
+ * `export const { check } = component.functions` (destructure). More indirect
+ * relays (e.g. re-bundling into a fresh object first) may not resolve, but they
+ * always **fail safe**: the function is skipped, never mis-attributed.
  */
 // `resolveExpressionToCall` and `resolveDeclarationToCall` are mutually
 // recursive, so one reference is necessarily forward whatever the order — the
