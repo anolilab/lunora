@@ -5,10 +5,21 @@
  * additionally validates the set (duplicate detection). The runtime work happens
  * in {@link ./middleware}.
  */
-import type { DefinePolicyInput, Policy, Role } from "./types.js";
+import type { DefinePolicyInput, Permission, Policy, Role } from "./types.js";
 
 export const definePolicy = <Context = unknown>(input: DefinePolicyInput<Context>): Policy<Context> => {
     return { on: input.on, table: input.table, when: input.when };
+};
+
+/**
+ * Declare a named permission a policy can check with `ctx.auth.can(...)`. Grant
+ * it to a role through `defineRole`'s `permissions`, register those roles with
+ * the middleware via `rls(policies, { roles })`, then check it in a policy with
+ * `when: ({ auth }) => auth.can(permission)`. See the `./index` JSDoc for a
+ * worked example.
+ */
+export const definePermission = (name: string, options: Omit<Permission, "name"> = {}): Permission => {
+    return { name, ...options };
 };
 
 /**

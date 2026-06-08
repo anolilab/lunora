@@ -24,9 +24,24 @@
  * `CirrusError("COUNT_RLS_UNSUPPORTED")` (422). Document this in any
  * code that wraps `ctx.db.&lt;table>.count`.
  *
- * Permissions (`definePermission`/`grant`) are out of scope for v1; policies
- * branch on `ctx.auth.roles` (string list attached by the identity resolver).
+ * Permissions let a policy check a named capability instead of enumerating
+ * roles. Declare them with `definePermission`, grant them via a role's
+ * `permissions`, register the roles with the middleware, and check with
+ * `ctx.auth.can(...)`:
+ *
+ * ```ts
+ * const deletePosts = definePermission("posts:delete");
+ * const admin = defineRole("admin", { permissions: [deletePosts] });
+ *
+ * const policy = definePolicy&lt;MyCtx>({
+ *     table: "posts",
+ *     on: "delete",
+ *     when: ({ auth }) => auth.can(deletePosts),
+ * });
+ *
+ * builders.mutation.use(rls(definePolicies([policy]), { roles: [admin] }));
+ * ```
  */
-export { definePolicies, definePolicy, defineRole } from "./define.js";
+export { definePermission, definePolicies, definePolicy, defineRole } from "./define.js";
 export { rls } from "./middleware.js";
-export type { DefinePolicyInput, Policy, PolicyContext, PolicyDecision, PolicyOperation, Role, WhereInput } from "./types.js";
+export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./types.js";

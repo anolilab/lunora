@@ -9,8 +9,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { Middleware, Policy } from "../src/index.js";
-import { CirrusError, definePolicies, definePolicy, defineRole, initCirrus, rls } from "../src/index.js";
+import type { Middleware, Policy, Role } from "../src/index.js";
+import { CirrusError, definePermission, definePolicies, definePolicy, defineRole, initCirrus, rls } from "../src/index.js";
 
 /**
  * The procedure builder types `ctx.db` nominally (`DatabaseReader`/
@@ -50,7 +50,11 @@ interface FakeDatabase {
         query: (tableName: string) => never;
         rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
         rankBefore: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;
-        rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
+        rankPage: (
+            tableName: string,
+            indexName: string,
+            options?: unknown,
+        ) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         replace: (id: string, document: Record<string, unknown>) => Promise<void>;
     };
 }
@@ -1036,17 +1040,25 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
                 },
                 query: db,
                 replace: (table: string, id: string) => {
-                    return { with: (values: Record<string, unknown>) => (resolve(table)["replace"] as (id: string, v: Record<string, unknown>) => unknown)(id, values) };
+                    return {
+                        with: (values: Record<string, unknown>) =>
+                            (resolve(table)["replace"] as (id: string, v: Record<string, unknown>) => unknown)(id, values),
+                    };
                 },
                 update: (table: string, id: string) => {
-                    return { set: (values: Record<string, unknown>) => (resolve(table)["patch"] as (id: string, v: Record<string, unknown>) => unknown)(id, values) };
+                    return {
+                        set: (values: Record<string, unknown>) => (resolve(table)["patch"] as (id: string, v: Record<string, unknown>) => unknown)(id, values),
+                    };
                 },
             },
         };
     };
 
     interface FacadeCtx {
-        db: Record<string, { count: (where?: unknown) => Promise<number>; findMany: (args?: unknown) => Promise<unknown>; get: (id: string) => Promise<unknown> }>;
+        db: Record<
+            string,
+            { count: (where?: unknown) => Promise<number>; findMany: (args?: unknown) => Promise<unknown>; get: (id: string) => Promise<unknown> }
+        >;
         orm: { query: Record<string, { findMany: (args?: unknown) => Promise<unknown> }> };
     }
 
@@ -1155,5 +1167,74 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         // events: identical reference (untouched); documents: re-bound (replaced).
         expect(eventsEntry).toBe(originalEvents);
         expect(documentsEntry).not.toBe(originalDocuments);
+    });
+});
+
+describe("rls — permissions / can()", () => {
+    const deletePosts = definePermission("posts:delete");
+    const editor = defineRole("editor", { permissions: [deletePosts] });
+
+    // A write policy gated on a permission rather than a raw role string.
+    const policy = definePolicy<TestContext>({
+        on: "insert",
+        table: "documents",
+        when: ({ auth }) => auth.can(deletePosts),
+    });
+
+    // Like `rlsForTest`, but threads the role→permission grants into the middleware.
+    const rlsWithRoles = (roles: ReadonlyArray<Role>): Middleware<any, any> =>
+        (rls as unknown as (p: ReadonlyArray<Policy<TestContext>>, options: { roles: ReadonlyArray<Role> }) => Middleware<any, any>)([policy], { roles });
+
+    const insertHandler = (roles: ReadonlyArray<Role>) =>
+        cirrus.mutation.use(rlsWithRoles(roles)).mutation(async ({ ctx }) => ctx.db.insert("documents", { _id: "x" }));
+
+    it("allows the write when a request role grants the permission", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([]);
+
+        await insertHandler([editor]).handler(makeContext(database, "u1", ["editor"]), {});
+
+        expect(database.calls.some((call) => call.method === "insert")).toBe(true);
+    });
+
+    it("denies the write when no request role grants the permission", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([]);
+
+        await expect(insertHandler([editor]).handler(makeContext(database, "u1", ["viewer"]), {})).rejects.toThrow(CirrusError);
+    });
+
+    it("fails closed for a granting role the middleware wasn't told about", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([]);
+
+        // The request carries "editor", but `rls()` got no roles — `can()` can't
+        // resolve the grant, so the permission check is false and the write denies.
+        await expect(insertHandler([]).handler(makeContext(database, "u1", ["editor"]), {})).rejects.toThrow(CirrusError);
+    });
+
+    it("accepts a permission checked by its bare name", async () => {
+        expect.assertions(1);
+
+        const namedPolicy = definePolicy<TestContext>({
+            on: "insert",
+            table: "documents",
+            when: ({ auth }) => auth.can("posts:delete"),
+        });
+        const database = createFakeDatabase([]);
+        const handler = cirrus.mutation
+            .use(
+                (rls as unknown as (p: ReadonlyArray<Policy<TestContext>>, options: { roles: ReadonlyArray<Role> }) => Middleware<any, any>)([namedPolicy], {
+                    roles: [editor],
+                }),
+            )
+            .mutation(async ({ ctx }) => ctx.db.insert("documents", { _id: "y" }));
+
+        await handler.handler(makeContext(database, "u1", ["editor"]), {});
+
+        expect(database.calls.some((call) => call.method === "insert")).toBe(true);
     });
 });

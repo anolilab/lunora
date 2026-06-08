@@ -46,7 +46,7 @@ import type { Middleware } from "../builder/types.js";
 import { CirrusError } from "../error.js";
 import type { FacadeEntry } from "../facade.js";
 import { bindOrm, bindTableFacade } from "../facade.js";
-import type { Policy, PolicyContext, WhereInput } from "./types.js";
+import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types.js";
 
 /**
  * Structural mirror of `@cirrus/do`'s `QueryArgs` and `CountArgs`. The
@@ -965,8 +965,28 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
  * chain includes this middleware — opt-in, never global. This is the
  * `PLAN2 §3.2` invariant.
  */
-const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>): Middleware<Context, Context> => {
+/** Normalize a permission (object or bare name) to its name. */
+const permissionName = (permission: Permission | string): string => (typeof permission === "string" ? permission : permission.name);
+
+/**
+ * Build a `roleName → granted-permission-names` index from the registered
+ * roles, so a request's `auth.roles` resolves to its permissions with one Set
+ * per role. An unregistered role contributes nothing — `can(...)` fails closed
+ * for roles the author never declared a grant for.
+ */
+const indexRolePermissions = (roles: ReadonlyArray<Role> | undefined): Map<string, ReadonlySet<string>> => {
+    const map = new Map<string, ReadonlySet<string>>();
+
+    for (const role of roles ?? []) {
+        map.set(role.name, new Set((role.permissions ?? []).map((permission) => permissionName(permission))));
+    }
+
+    return map;
+};
+
+const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options: RlsOptions = {}): Middleware<Context, Context> => {
     const perTable = indexByTable(policies);
+    const rolePermissions = indexRolePermissions(options.roles);
 
     return async ({ ctx, next }) => {
         const auth = ctx.auth ?? {};
@@ -976,10 +996,23 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
         // the anonymous case and the no-resolver case (older auth states).
         // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.identity is a public type carrying `null` for the anonymous/no-resolver case
         const identity = (await auth.getIdentity?.()) ?? null;
+        const roles = auth.roles ?? [];
+
+        // Union the permissions granted by every role the request carries, once
+        // per protected procedure, so `can(...)` inside policies is a Set lookup.
+        const granted = new Set<string>();
+
+        for (const roleName of roles) {
+            for (const name of rolePermissions.get(roleName) ?? []) {
+                granted.add(name);
+            }
+        }
+
         const policyContext: PolicyContext<Context> = {
             auth: {
+                can: (permission) => granted.has(permissionName(permission)),
                 identity,
-                roles: auth.roles ?? [],
+                roles,
                 // eslint-disable-next-line unicorn/no-null -- PolicyContext.auth.userId is a public `null | string` type
                 userId: auth.userId ?? null,
             },

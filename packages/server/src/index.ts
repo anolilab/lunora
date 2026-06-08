@@ -40,8 +40,8 @@ export type { Component, ComponentFunctions, DefineComponentOptions, DefinePlugi
 export { defineComponent, definePlugin, defineSchemaExtension, mergeSchemaExtension } from "./plugin.js";
 export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence.js";
 export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence.js";
-export type { DefinePolicyInput, Policy, PolicyContext, PolicyDecision, PolicyOperation, Role, WhereInput } from "./rls/index.js";
-export { definePolicies, definePolicy, defineRole, rls } from "./rls/index.js";
+export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./rls/index.js";
+export { definePermission, definePolicies, definePolicy, defineRole, rls } from "./rls/index.js";
 export type {
     AggregateIndexOptions,
     ExtendableSchema,

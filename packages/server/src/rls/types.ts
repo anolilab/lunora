@@ -48,13 +48,22 @@ export type PolicyDecision = WhereInput | boolean | undefined;
 
 /**
  * Context handed to a policy. `auth.roles` is the per-request role list,
- * sourced from the identity resolver (better-auth claims today). `row` is
- * present only on write policies (`insert`/`update`/`delete`) — for `update`
- * and `delete` it is the pre-write row; for `insert` it is the candidate
- * document. `ctx` is the full procedure context the middleware closed over.
+ * sourced from the identity resolver (better-auth claims today). `auth.can`
+ * answers whether any of those roles grants a permission (see
+ * {@link Permission} / {@link RlsOptions}). `row` is present only on write
+ * policies (`insert`/`update`/`delete`) — for `update` and `delete` it is the
+ * pre-write row; for `insert` it is the candidate document. `ctx` is the full
+ * procedure context the middleware closed over.
  */
 export interface PolicyContext<Context = unknown> {
     readonly auth: {
+        /**
+         * `true` when any of the request's `roles` grants `permission` (passed
+         * by {@link Permission} object or its `name`). Always `false` when no
+         * roles were handed to the middleware (`rls(policies, { roles })`), or
+         * when none of the request's roles lists the permission.
+         */
+        readonly can: (permission: Permission | string) => boolean;
         readonly identity?: Record<string, unknown> | null;
         readonly roles: ReadonlyArray<string>;
         readonly userId: null | string;
@@ -92,12 +101,36 @@ export interface DefinePolicyInput<Context = unknown> {
 }
 
 /**
- * A minimal role declaration. Roles are string labels attached to the
- * request's identity (via better-auth claims today). `definePermission` /
- * `grant` are deferred to a follow-up layer; this v1 surface lets policies
- * branch on `ctx.auth.roles` and nothing more.
+ * A named, abstract capability a policy can check with `ctx.auth.can(...)`,
+ * instead of branching on raw role strings. Declare one with
+ * `definePermission`; grant it to a role via {@link Role.permissions};
+ * register the roles with the middleware via {@link RlsOptions.roles}.
+ */
+export interface Permission {
+    readonly description?: string;
+    readonly name: string;
+}
+
+/**
+ * A role declaration. Roles are string labels attached to the request's
+ * identity (via better-auth claims today). `permissions` lists the
+ * capabilities the role grants — at request time the middleware unions the
+ * permissions of every role in `ctx.auth.roles` so a policy can ask
+ * `ctx.auth.can(permission)` rather than enumerate roles.
  */
 export interface Role {
     readonly description?: string;
     readonly name: string;
+    /** Permissions this role grants — by {@link Permission} object or bare name. */
+    readonly permissions?: ReadonlyArray<Permission | string>;
+}
+
+/**
+ * Options for the `rls(policies, options)` middleware. `roles` registers the
+ * role→permission grants that back `ctx.auth.can(...)`; a role not listed here
+ * grants no permissions (so `can` is conservative — it fails closed for
+ * unknown roles).
+ */
+export interface RlsOptions {
+    readonly roles?: ReadonlyArray<Role>;
 }
