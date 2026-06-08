@@ -12,7 +12,8 @@
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "fumadocs-mdx && tsc --noEmit",
-        "start": "next start"
+        "start": "next start",
+        "test": "vitest run --passWithNoTests"
     },
     "dependencies": {
         "fumadocs-core": "catalog:docs",
