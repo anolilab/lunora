@@ -32,9 +32,17 @@ const useLiveAdmin = (
     const errorRef = useRef(onError);
     const argsRef = useRef(args);
 
-    callbackRef.current = onValue;
-    errorRef.current = onError;
-    argsRef.current = args;
+    // Keep the latest callbacks + args in refs via an effect rather than
+    // render-phase writes (which trip React Compiler's "no refs during render").
+    // Declared BEFORE the subscribe effect so its synchronous `argsRef.current`
+    // read below sees the value committed this render — effects fire in
+    // declaration order. `callbackRef`/`errorRef` are only read in the async
+    // push, so their timing is irrelevant.
+    useEffect(() => {
+        callbackRef.current = onValue;
+        errorRef.current = onError;
+        argsRef.current = args;
+    });
 
     // Stable-stringify args for the dependency only, so a re-render with an
     // equal-but-new object doesn't tear down and re-open the subscription. The

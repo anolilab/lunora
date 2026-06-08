@@ -18,7 +18,14 @@ export const DEFAULT_AUTO_REFRESH_MS = 5000;
 export const useAutoRefresh = (onTick: () => void, enabled: boolean, intervalMs: number = DEFAULT_AUTO_REFRESH_MS): void => {
     const tickRef = useRef(onTick);
 
-    tickRef.current = onTick;
+    // Keep the latest `onTick` in a ref via an effect rather than a render-phase
+    // write (which trips React Compiler's "no refs during render"). `onTick` is
+    // only read in the async interval below, so the post-commit update is always
+    // current by the time it fires — a fresh closure each render still doesn't
+    // reset the interval.
+    useEffect(() => {
+        tickRef.current = onTick;
+    });
 
     useEffect(() => {
         if (!enabled) {
