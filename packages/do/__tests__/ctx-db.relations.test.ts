@@ -389,6 +389,17 @@ describe("ctx-db relations", () => {
 
                     return id;
                 },
+                async rank(table: string) {
+                    calls.push(`rank:${table}`);
+
+                    // eslint-disable-next-line unicorn/no-null -- DatabaseWriterLike.rank returns null when the value isn't ranked
+                    return null;
+                },
+                async rankPage(table: string) {
+                    calls.push(`rankPage:${table}`);
+
+                    return { entries: [], hasMore: false };
+                },
                 rows,
             };
         };
@@ -436,6 +447,30 @@ describe("ctx-db relations", () => {
 
             expect(fake.calls).toContain("get:g1");
             expect(row).toMatchObject({ value: "alpha" });
+        });
+
+        it("routes rank/rankPage on a global table to globalDb, and rejects rankBefore", async () => {
+            expect.assertions(3);
+
+            runShardMigrations(harness.sql, schema);
+
+            const fake = buildRecordingGlobalDatabase();
+            const writer = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                globalDb: fake as unknown as DatabaseWriterLike,
+                schema,
+                sql: harness.sql,
+            });
+
+            await writer.rank("globals", "byValue", { row: "g1" });
+            await writer.rankPage("globals", "byValue", {});
+
+            expect(fake.calls).toContain("rank:globals");
+            expect(fake.calls).toContain("rankPage:globals");
+
+            // `rankBefore` has no D1 twin — global tables must fail clearly, not
+            // route into a non-existent `globalDb.rankBefore`.
+            await expect(writer.rankBefore!("globals", "byValue", { partitionKey: "", rowId: "g1", sortValues: [] })).rejects.toThrow(/not supported on the global/u);
         });
 
         it("throws a wiring error for a generic global insert when no globalDb is supplied", async () => {

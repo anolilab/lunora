@@ -2861,6 +2861,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
         async rank(tableName, indexName, rankOptions) {
+            const global = globalWriterFor(tableName, "rank");
+
+            if (global) {
+                return global.rank(tableName, indexName, rankOptions);
+            }
+
             const definition = schema.tables[tableName];
 
             if (!definition) {
@@ -2941,6 +2947,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         // eslint-disable-next-line @typescript-eslint/require-await -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the body is synchronous SQLite
         async rankBefore(tableName, indexName, rankBeforeOptions) {
+            // `rankBefore` is the cross-shard rank cursor; the D1 (global) backend
+            // has no such primitive (a `.global()` table isn't sharded), so fail
+            // with a clear message instead of routing into a non-existent
+            // `globalDb.rankBefore` (which would throw an opaque TypeError).
+            if (isGlobalTable(tableName)) {
+                throw new Error(`rankBefore is not supported on the global (.global()) table '${tableName}' — cross-shard rank cursors apply only to sharded tables`);
+            }
+
             const definition = schema.tables[tableName];
 
             if (!definition) {
@@ -2984,6 +2998,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         // eslint-disable-next-line @typescript-eslint/require-await, sonarjs/cognitive-complexity -- DatabaseWriterLike returns Promises (the D1 twin awaits I/O); the indexed/scan branching is closed over the writer ctx and reads worse when split
         async rankPage(tableName, indexName, rankPageOptions = {}) {
+            const global = globalWriterFor(tableName, "rankPage");
+
+            if (global) {
+                return global.rankPage(tableName, indexName, rankPageOptions);
+            }
+
             const definition = schema.tables[tableName];
 
             if (!definition) {
