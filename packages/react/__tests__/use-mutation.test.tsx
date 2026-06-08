@@ -79,7 +79,10 @@ describe("useMutation", () => {
     });
 
     it("forwards optimistic callback to the client", async () => {
-        expect.assertions(1);
+        // hasAssertions (not assertions(1)): the mutation now fires through
+        // TanStack's lifecycle a microtask after mutate(), so the waitFor below
+        // retries once — the forwarded-args assertion itself is unchanged.
+        expect.hasAssertions();
 
         const mock = createMockClient();
 
@@ -117,7 +120,10 @@ describe("useMutation", () => {
     });
 
     it("withOptimisticUpdate forwards the bound callback as optimisticUpdate", async () => {
-        expect.assertions(1);
+        // hasAssertions (not assertions(1)): the mutation now fires through
+        // TanStack's lifecycle a microtask after mutate(), so the waitFor below
+        // retries once — the forwarded-args assertion itself is unchanged.
+        expect.hasAssertions();
 
         const mock = createMockClient();
 
@@ -154,7 +160,10 @@ describe("useMutation", () => {
     });
 
     it("a per-call optimisticUpdate overrides the bound one", async () => {
-        expect.assertions(1);
+        // hasAssertions (not assertions(1)): the mutation now fires through
+        // TanStack's lifecycle a microtask after mutate(), so the waitFor below
+        // retries once — the forwarded-args assertion itself is unchanged.
+        expect.hasAssertions();
 
         const mock = createMockClient();
 

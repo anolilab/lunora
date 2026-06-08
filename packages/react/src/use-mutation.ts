@@ -1,18 +1,31 @@
 "use client";
 
 import type { ArgsOf, FunctionReference, OptimisticUpdate, ReturnOf } from "@cirrus/client";
+import { useMutation as useTanStackMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 
 import { useCirrus } from "./cirrus-provider.js";
 import type { UseMutationCallOptions } from "./types.js";
 
+type CallOptions<F extends FunctionReference> = UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
+type MutateVariables<F extends FunctionReference> = { args: ArgsOf<F>; options?: CallOptions<F> };
+
 interface MutationHook<F extends FunctionReference> {
-    mutate: (args: ArgsOf<F>, options?: UseMutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    /** The latest invocation's resolved value, or `undefined` before the first success. */
+    data: ReturnOf<F> | undefined;
+    /** The latest invocation's error, or `null`. */
+    error: Error | null;
+    /** `true` when the latest invocation rejected. */
+    isError: boolean;
+    mutate: (args: ArgsOf<F>, options?: CallOptions<F>) => Promise<ReturnOf<F>>;
+    /** `true` while ANY invocation from this hook is in flight (ref-counted, so overlapping calls compose). */
     pending: boolean;
+    /** Clear the latest `data`/`error` back to idle. */
+    reset: () => void;
 
     /**
      * Bind a Convex-parity multi-query optimistic update to this mutation.
-     * Returns a `{ mutate, pending }` whose `mutate` forwards `update` as the
+     * Returns a `{ mutate, pending, … }` whose `mutate` forwards `update` as the
      * `optimisticUpdate` for every call — unless a per-call `optimisticUpdate`
      * is supplied in the call options, which overrides the bound one.
      */
@@ -20,47 +33,69 @@ interface MutationHook<F extends FunctionReference> {
 }
 
 /**
- * Returns `{ mutate, pending }` for the given mutation reference. Prefer
- * destructuring at the call site so the React linter can track dependencies
- * on `mutate` and `pending` independently.
+ * Returns `{ mutate, pending, data, error, reset, withOptimisticUpdate }` for the
+ * given mutation reference. Prefer destructuring at the call site so the React
+ * linter can track dependencies on each field independently.
  *
- * `pending` is backed by a ref-counted set of in-flight invocations so
- * overlapping `mutate(...)` calls compose correctly — `pending` only flips
- * back to `false` once every concurrent call has settled.
+ * Built on TanStack Query's mutation cache (the same cache the query hooks use),
+ * so it composes with Query Devtools and exposes the latest call's `data`/`error`
+ * plus `reset()`. `mutate` maps to `mutateAsync`, so it stays an awaitable that
+ * rejects on failure (rather than TanStack's fire-and-forget `mutate`).
+ *
+ * `pending` is ref-counted across overlapping invocations of THIS hook instance
+ * (driven by the mutation's `onMutate`/`onSettled` lifecycle), so it flips back to
+ * `false` only once every concurrent call has settled — and a sibling component
+ * mutating the same function never affects it (TanStack's own `isPending` tracks
+ * just the latest invocation).
+ *
+ * Optimistic updates stay client-owned: the `optimistic` / `optimisticUpdate`
+ * call options pass straight through to `client.mutation`, which applies and
+ * rolls them back against the Cirrus subscription cache (Convex parity) — not
+ * through TanStack's `onMutate`.
  */
 const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F> => {
     const client = useCirrus();
-    const [pending, setPending] = useState(false);
+
+    // Local, ref-counted pending across overlapping calls of this hook instance.
     const pendingCountRef = useRef(0);
+    const [pending, setPending] = useState(false);
+
+    const mutation = useTanStackMutation<ReturnOf<F>, Error, MutateVariables<F>>({
+        mutationFn: ({ args, options }) => client.mutation(function_, args, options),
+        // `onMutate` fires when a call starts, `onSettled` when it resolves or
+        // rejects — so overlapping calls compose and `pending` only clears once
+        // the last one settles.
+        onMutate: () => {
+            pendingCountRef.current += 1;
+            setPending(true);
+        },
+        onSettled: () => {
+            pendingCountRef.current -= 1;
+            setPending(pendingCountRef.current > 0);
+        },
+    });
+
+    // `mutateAsync`/`reset` are referentially stable across renders.
+    const { data, error, isError, mutateAsync, reset } = mutation;
 
     const mutate = useCallback(
-        async (args: ArgsOf<F>, options?: UseMutationCallOptions<unknown, unknown, ArgsOf<F>>): Promise<ReturnOf<F>> => {
-            pendingCountRef.current += 1;
-            setPending(pendingCountRef.current > 0);
-
-            try {
-                return await client.mutation(function_, args, options);
-            } finally {
-                pendingCountRef.current -= 1;
-                setPending(pendingCountRef.current > 0);
-            }
-        },
-        [client, function_],
+        (args: ArgsOf<F>, options?: CallOptions<F>): Promise<ReturnOf<F>> => mutateAsync({ args, options }),
+        [mutateAsync],
     );
 
     const withOptimisticUpdate = useCallback(
         (update: OptimisticUpdate<ArgsOf<F>>): MutationHook<F> => {
-            // Bound callback is the default; a per-call `optimisticUpdate` in
+            // Bound update is the default; a per-call `optimisticUpdate` in
             // `options` overrides it (spread last wins).
-            const boundMutate = async (args: ArgsOf<F>, options?: UseMutationCallOptions<unknown, unknown, ArgsOf<F>>): Promise<ReturnOf<F>> =>
-                mutate(args, { optimisticUpdate: update, ...options });
+            const boundMutate = (args: ArgsOf<F>, options?: CallOptions<F>): Promise<ReturnOf<F>> =>
+                mutateAsync({ args, options: { optimisticUpdate: update, ...options } });
 
-            return { mutate: boundMutate, pending, withOptimisticUpdate };
+            return { data, error, isError, mutate: boundMutate, pending, reset, withOptimisticUpdate };
         },
-        [mutate, pending],
+        [mutateAsync, data, error, isError, pending, reset],
     );
 
-    return { mutate, pending, withOptimisticUpdate };
+    return { data, error, isError, mutate, pending, reset, withOptimisticUpdate };
 };
 
 export type { MutationHook };
