@@ -2,8 +2,8 @@ import { createHash, createHmac } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { buildPresignedUrl } from "../src/presigned-url.js";
-import type { R2S3Credentials } from "../src/types.js";
+import { buildPresignedUrl } from "../src/presigned-url";
+import type { R2S3Credentials } from "../src/types";
 
 const CREDENTIALS: R2S3Credentials = {
     accessKeyId: "AKIAEXAMPLE",

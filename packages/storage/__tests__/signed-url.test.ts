@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildSignedUrl, verifySignedUrl } from "../src/signed-url.js";
+import { buildSignedUrl, verifySignedUrl } from "../src/signed-url";
 
 describe("signedUrl", () => {
     afterEach(() => {

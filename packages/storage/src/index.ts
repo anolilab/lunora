@@ -1,8 +1,8 @@
-export { createStorage, scopeKey } from "./create-storage.js";
-export type { PresignedUrlParams } from "./presigned-url.js";
-export { buildPresignedUrl } from "./presigned-url.js";
-export type { VerifyResult } from "./signed-url.js";
-export { buildSignedUrl, verifySignedUrl } from "./signed-url.js";
+export { createStorage, scopeKey } from "./create-storage";
+export type { PresignedUrlParams } from "./presigned-url";
+export { buildPresignedUrl } from "./presigned-url";
+export type { VerifyResult } from "./signed-url";
+export { buildSignedUrl, verifySignedUrl } from "./signed-url";
 export type {
     CirrusStorageOptions,
     ListOptions,
@@ -18,4 +18,4 @@ export type {
     SignedUrlOptions,
     Storage,
     UploadOptions,
-} from "./types.js";
+} from "./types";

@@ -1,5 +1,5 @@
-import { buildPresignedUrl } from "./presigned-url.js";
-import { buildSignedUrl } from "./signed-url.js";
+import { buildPresignedUrl } from "./presigned-url";
+import { buildSignedUrl } from "./signed-url";
 import type {
     CirrusStorageOptions,
     ListOptions,
@@ -12,7 +12,7 @@ import type {
     SignedUrlOptions,
     Storage,
     UploadOptions,
-} from "./types.js";
+} from "./types";
 
 /** R2's documented key-length ceiling. */
 const MAX_KEY_LENGTH = 1024;

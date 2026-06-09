@@ -15,7 +15,7 @@
  * / `Storage.getPresignedUrl`. For very large objects, `Storage.createMultipartUpload`
  * wraps R2's native multipart API.
  */
-import type { SignedUrlOptions } from "./types.js";
+import type { SignedUrlOptions } from "./types";
 
 const textEncoder = new TextEncoder();
 

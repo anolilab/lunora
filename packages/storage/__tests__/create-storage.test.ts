@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createStorage } from "../src/create-storage.js";
-import type { R2BucketLike, R2MultipartUploadLike, R2ObjectBodyLike, R2ObjectLike } from "../src/types.js";
+import { createStorage } from "../src/create-storage";
+import type { R2BucketLike, R2MultipartUploadLike, R2ObjectBodyLike, R2ObjectLike } from "../src/types";
 
 const BUCKET_RE = /bucket/;
 const PUBLIC_BASE_URL_RE = /publicBaseUrl/;

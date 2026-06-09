@@ -14,7 +14,7 @@
  * credentials (an R2 API token's Access Key ID / Secret Access Key).
  * @see https://developers.cloudflare.com/r2/api/s3/presigned-urls/
  */
-import type { R2S3Credentials } from "./types.js";
+import type { R2S3Credentials } from "./types";
 
 /** R2's S3 region alias — always `auto`. */
 const REGION = "auto";

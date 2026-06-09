@@ -9,7 +9,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { createStorage } from "../../src/create-storage.js";
+import { createStorage } from "../../src/create-storage";
 
 const storage = (): ReturnType<typeof createStorage> => createStorage({ bucket: env.BUCKET });
 

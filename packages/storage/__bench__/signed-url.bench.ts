@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import { buildSignedUrl, verifySignedUrl } from "../src/signed-url.js";
+import { buildSignedUrl, verifySignedUrl } from "../src/signed-url";
 
 /**
  * `verifySignedUrl` sits on the serve-signed-URL hot path: a Worker fronting R2
