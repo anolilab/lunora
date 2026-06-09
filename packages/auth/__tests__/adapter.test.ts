@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { AuthWhereClause } from "../src/adapter.js";
-import { cirrusAuthAdapter, createMemoryAuthStore, matchesWhere } from "../src/adapter.js";
+import cirrusAuthAdapter from "../src/adapter.js";
 import { createAuth } from "../src/create-auth.js";
+import type { AuthWhereClause } from "../src/store.js";
+import { createMemoryAuthStore, matchesWhere } from "../src/store.js";
 
 const clause = (
     field: string,

@@ -33,6 +33,10 @@
             "types": "./dist/adapter.d.ts",
             "import": "./dist/adapter.mjs"
         },
+        "./store": {
+            "types": "./dist/store.d.ts",
+            "import": "./dist/store.mjs"
+        },
         "./sql-store": {
             "types": "./dist/sql-store.d.ts",
             "import": "./dist/sql-store.mjs"

@@ -1,5 +1,4 @@
-export type { AuthQuery, AuthRow, AuthStore, AuthWhereClause } from "./adapter.js";
-export { cirrusAuthAdapter, createMemoryAuthStore, matchesWhere } from "./adapter.js";
+export { default as cirrusAuthAdapter } from "./adapter.js";
 export type { CirrusAuth, CirrusAuthOptions } from "./create-auth.js";
 export { createAuth } from "./create-auth.js";
 export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler.js";
@@ -11,3 +10,5 @@ export type { SessionPolicy } from "./session.js";
 export { sessionPresets, validateSessionPolicy } from "./session.js";
 export type { SqlExecutor } from "./sql-store.js";
 export { createSqlAuthStore, d1Executor } from "./sql-store.js";
+export type { AuthQuery, AuthRow, AuthStore, AuthWhereClause } from "./store.js";
+export { createMemoryAuthStore, matchesWhere } from "./store.js";
