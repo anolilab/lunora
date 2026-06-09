@@ -99,6 +99,8 @@ export {
     recordFunctionMetric,
 } from "./function-metrics";
 export type {
+    AdvisoriesResult,
+    AdvisoryFinding,
     AuditEntry,
     AuditLogResult,
     DeployInfo,
@@ -151,6 +153,8 @@ export type {
 } from "./shard-do";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
+export type { SqlConsoleResult } from "./sql-console";
+export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
 export type {
     ScheduledFunctionDoc,
     SystemDatabaseReader,

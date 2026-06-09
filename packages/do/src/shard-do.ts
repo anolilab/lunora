@@ -15,7 +15,7 @@ import type { DependencyTracker } from "./dependency-tracker";
 import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
 import type { FunctionMetricBucket } from "./function-metrics";
 import { mergeScanAttribution, readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics";
-import type { AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect";
+import type { AdvisoryFinding, AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds } from "./introspect";
 import { LogBuffer } from "./log-buffer";
 import { armRestore, readBookmark } from "./pitr";
@@ -25,6 +25,7 @@ import type { AppendRequestLogEntry, RequestLogResult, RequestLogWriteOptions } 
 import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
+import { runReadonlySql } from "./sql-console";
 import type { TransactionSqlLike } from "./transaction";
 import { ConflictError } from "./transaction";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
@@ -1587,6 +1588,18 @@ abstract class ShardDO {
     }
 
     /**
+     * Static schema advisories for this deployment, surfaced via
+     * `__cirrus_admin__:getAdvisories`. Computed by `@cirrus/advisor` at codegen
+     * time (the only place the schema + query reads are both available) and
+     * emitted into the generated subclass, which overrides this. The base class
+     * can't see the user's `schema.ts`, so it reports none.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated advisory list
+    protected advisories(): AdvisoryFinding[] {
+        return [];
+    }
+
+    /**
      * Export every row this shard owns across the requested tables (or every
      * shard-local user table when none are specified) as `{table, doc}` records.
      * Globals are not the DO's concern; the worker reads those from D1.
@@ -2637,6 +2650,10 @@ abstract class ShardDO {
             return this.readAdminTablePage(sql, args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.runSql) {
+            return this.readAdminRunSql(sql, args);
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.listTableIndexes) {
             const table = typeof args["table"] === "string" ? args["table"] : "";
 
@@ -2690,6 +2707,13 @@ abstract class ShardDO {
             // (admin-token strength, WS gate, request-log redaction) — the
             // Security Advisor's signal. No raw secret crosses the wire.
             return buildSecurityAudit(this.env);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getAdvisories) {
+            // Static schema advisories — deployment-wide (the advisor reasons
+            // over the whole schema), so it carries the wildcard like the other
+            // counter/config reads. The codegen subclass overrides `advisories()`.
+            return { advisories: this.advisories() };
         }
 
         return undefined;
@@ -2781,6 +2805,19 @@ abstract class ShardDO {
         // An empty table name can't bind to a real dependency, so fall back
         // to the wildcard rather than a set that never intersects a write.
         return { result: page, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
+    }
+
+    /**
+     * Resolve a `runSql` admin read: execute a read-only SQL query against the
+     * shard's SQLite via {@link runReadonlySql} (which rejects every mutating
+     * statement). Carries the {@link ADMIN_WILDCARD} since an arbitrary query can
+     * touch any table; it is a one-shot read, never a live subscription.
+     */
+    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other `readAdmin*` resolvers
+    private readAdminRunSql(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        const query = typeof args["sql"] === "string" ? args["sql"] : "";
+
+        return { result: runReadonlySql(sql, query), tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /**

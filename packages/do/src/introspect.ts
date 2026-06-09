@@ -20,6 +20,7 @@ const ADMIN_FUNCTIONS = {
     clearTable: "__cirrus_admin__:clearTable",
     deleteRows: "__cirrus_admin__:deleteRows",
     exportShard: "__cirrus_admin__:exportShard",
+    getAdvisories: "__cirrus_admin__:getAdvisories",
     getAuditLog: "__cirrus_admin__:getAuditLog",
     getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
@@ -38,6 +39,7 @@ const ADMIN_FUNCTIONS = {
     readTablePage: "__cirrus_admin__:readTablePage",
     recordAuthEvent: "__cirrus_admin__:recordAuthEvent",
     runMigration: "__cirrus_admin__:runMigration",
+    runSql: "__cirrus_admin__:runSql",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
@@ -151,6 +153,41 @@ interface TableIndexInfo {
 /** Payload of a `__cirrus_admin__:listTableIndexes` call: every declared index on the table. */
 interface TableIndexesResult {
     indexes: TableIndexInfo[];
+}
+
+/**
+ * One static schema advisory, surfaced by `__cirrus_admin__:getAdvisories`.
+ * Structurally mirrors `@cirrus/advisor`'s `Finding` (splinter-shaped) — the
+ * codegen subclass emits these from the advisor's output, and the DO serves
+ * them without depending on `@cirrus/advisor` itself. Kept in lockstep with that
+ * `Finding` shape; the generated `CIRRUS_ADVISORIES` literal is typed against it.
+ */
+interface AdvisoryFinding {
+    /** Stable id for dedup/dismissal across runs. */
+    cacheKey: string;
+    /** Concern buckets, e.g. `["PERFORMANCE"]`. */
+    categories: string[];
+    /** General description of the rule. */
+    description: string;
+    /** The specific violation message for this occurrence. */
+    detail: string;
+    /** Who the finding concerns. */
+    facing: "EXTERNAL" | "INTERNAL";
+    /** Severity. */
+    level: "ERROR" | "INFO" | "WARN";
+    /** Structured context (table, field, index, …). */
+    metadata: Record<string, unknown>;
+    /** The lint id that produced it, e.g. `unindexed_foreign_key`. */
+    name: string;
+    /** How to fix it. */
+    remediation: string;
+    /** Short headline. */
+    title: string;
+}
+
+/** Payload of a `__cirrus_admin__:getAdvisories` call: the static schema advisories for this deployment. */
+interface AdvisoriesResult {
+    advisories: AdvisoryFinding[];
 }
 
 /** Payload of a `__cirrus_admin__:getFunctionStats` call. */
@@ -584,6 +621,8 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
 
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds };
 export type {
+    AdvisoriesResult,
+    AdvisoryFinding,
     AuditEntry,
     AuditLogResult,
     DeployInfo,
