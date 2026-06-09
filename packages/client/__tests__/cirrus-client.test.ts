@@ -1300,7 +1300,7 @@ describe("cirrusClient", () => {
                 WebSocket: createMockWebSocket(),
             });
 
-            await client.signedStorageUrl("a.png", 900);
+            await client.signedStorageUrl("a.png", { expiresInSeconds: 900 });
 
             const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
             const parsed = new URL(requestUrl);

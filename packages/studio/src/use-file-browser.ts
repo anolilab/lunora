@@ -1,0 +1,376 @@
+import type { StorageObject } from "@cirrus/client";
+import { useCirrus } from "@cirrus/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import { errorMessage, fireAndForget } from "./internal";
+import { DEFAULT_SHARE_LIFETIME, deriveEntries, sortFiles } from "./storage-entries";
+import type { KeySelection } from "./use-key-selection";
+import { useKeySelection } from "./use-key-selection";
+
+/** How the file list is laid out. */
+type FileView = "grid" | "list";
+
+/**
+ * The fixed lifetime (seconds) of the URL the gallery resolves for a thumbnail.
+ * Decoupled from the per-row Copy-URL `expiry` so changing the "Link expiry"
+ * dropdown never re-fetches every thumbnail.
+ */
+const THUMBNAIL_URL_TTL = 3600;
+
+/** The flat view-model the {@link useFileBrowser} controller hands to the panel. */
+interface FileBrowserModel {
+    readonly allSelected: boolean;
+    readonly bulkDelete: () => void;
+    readonly busy: boolean;
+    readonly clearSelection: () => void;
+    readonly copiedKey: string | undefined;
+    /** The draft prefix bound to the input — applied to the listing only on List/navigate. */
+    readonly draftPrefix: string;
+    readonly enterFolder: (name: string) => void;
+    readonly error: string | undefined;
+    readonly expiry: number;
+    readonly files: ReadonlyArray<StorageObject>;
+    readonly folders: ReadonlyArray<string>;
+    /** Whether the loaded listing has any objects (drives empty-state vs. controls). */
+    readonly hasObjects: boolean;
+    readonly listFirst: () => void;
+    /** Whether any rows have loaded (drives the breadcrumbs / empty-state gating). */
+    readonly loaded: boolean;
+    readonly loadMore: () => void;
+    readonly navigate: (target: string) => void;
+    readonly nextCursor: string | undefined;
+    readonly onCopy: (key: string) => void;
+    readonly onDelete: (key: string) => void;
+    readonly onExpiryChange: (seconds: number) => void;
+    readonly onFile: (file: File) => void;
+    readonly onSortKeyChange: (key: string) => void;
+    readonly onThumbSizeChange: (size: number) => void;
+    /** The currently-loaded prefix used to slice names + derive folders. */
+    readonly prefix: string;
+    /** Resolve a thumbnail URL at a fixed TTL (independent of `expiry`). */
+    readonly resolveUrl: (key: string) => Promise<string>;
+    readonly selected: ReadonlySet<string>;
+    readonly setDraftPrefix: (prefix: string) => void;
+    readonly showGrid: () => void;
+    readonly showList: () => void;
+    readonly someSelected: boolean;
+    readonly sortDirection: "asc" | "desc";
+    readonly sortKey: string;
+    readonly tagKeys: ReadonlyArray<string>;
+    readonly thumbSize: number;
+    readonly toggleSelect: (key: string) => void;
+    readonly toggleSelectAll: () => void;
+    readonly toggleSortDirection: () => void;
+    readonly view: FileView;
+}
+
+interface UseFileBrowserOptions {
+    readonly initialPrefix?: string;
+    readonly pageSize: number;
+}
+
+/** Write text to the clipboard, guarded for the non-browser (test/SSR) path. */
+const copyToClipboard = async (text: string): Promise<void> => {
+    // The repo's browser-global pattern: reach globals via `globalThis` behind a
+    // capability check so the module stays import-safe under Node/SSR.
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only, guarded
+    if ("navigator" in globalThis && "clipboard" in globalThis.navigator) {
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only, guarded
+        await globalThis.navigator.clipboard.writeText(text);
+    }
+};
+
+/**
+ * The file browser's controller: owns all listing/pagination, prefix +
+ * folder-navigation, sort, view + thumbnail-size, share-link expiry, selection +
+ * bulk delete, copy, delete and upload state, and composes {@link useKeySelection}.
+ * Returns a flat {@link FileBrowserModel} so the panel + toolbar + list/gallery
+ * stay presentational.
+ */
+const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): FileBrowserModel => {
+    const client = useCirrus();
+
+    // The loaded prefix (drives deriveEntries + name-slicing) vs. the draft the
+    // input edits live — kept apart so typing never garbles the loaded rows.
+    const [prefix, setPrefix] = useState<string>(initialPrefix ?? "");
+    const [draftPrefix, setDraftPrefix] = useState<string>(initialPrefix ?? "");
+    // Share-link lifetime (seconds) applied by the per-row "Copy URL" action.
+    const [expiry, setExpiry] = useState<number>(DEFAULT_SHARE_LIFETIME);
+    // List vs. thumbnail grid; the grid's tile size is resized live by the slider.
+    const [view, setView] = useState<FileView>("list");
+    const [thumbSize, setThumbSize] = useState<number>(128);
+    // Client-side sort over the loaded page.
+    const [sortKey, setSortKey] = useState<string>("name");
+    const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+    const [objects, setObjects] = useState<StorageObject[] | undefined>(undefined);
+    const [error, setError] = useState<string | undefined>(undefined);
+    const [busy, setBusy] = useState<boolean>(false);
+    const [copiedKey, setCopiedKey] = useState<string | undefined>(undefined);
+    // Cursor stack so "Next" walks forward and we can show whether more remain.
+    const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
+
+    const list = useCallback(
+        async (searchPrefix: string, cursor: string | undefined, append: boolean): Promise<void> => {
+            setError(undefined);
+            setBusy(true);
+
+            try {
+                const page = await client.listStorageObjects({ cursor, limit: pageSize, prefix: searchPrefix });
+
+                setObjects((previous) => (append && previous !== undefined ? [...previous, ...page.objects] : page.objects));
+                setNextCursor(page.cursor);
+            } catch (error_) {
+                if (!append) {
+                    setObjects(undefined);
+                }
+
+                setError(errorMessage(error_));
+            } finally {
+                setBusy(false);
+            }
+        },
+        [client, pageSize],
+    );
+
+    useEffect(() => {
+        fireAndForget(list(initialPrefix ?? "", undefined, false));
+    }, [list, initialPrefix]);
+
+    // Split the loaded keys into the immediate folders + files at this prefix.
+    const { files, folders } = useMemo(() => deriveEntries(objects ?? [], prefix), [objects, prefix]);
+
+    // The customMetadata tag keys present across the loaded files — surfaced as
+    // extra sort options ("user-supplied tags").
+    const tagKeys = useMemo<string[]>(() => {
+        const keys = new Set<string>();
+
+        for (const file of files) {
+            for (const key of Object.keys(file.customMetadata ?? {})) {
+                keys.add(key);
+            }
+        }
+
+        return [...keys].toSorted((a, b) => a.localeCompare(b));
+    }, [files]);
+
+    const sortedFiles = useMemo(() => sortFiles(files, sortKey, sortDirection), [files, sortKey, sortDirection]);
+
+    const keyOf = useCallback((object: StorageObject): string => object.key, []);
+    const {
+        allSelected,
+        clear: clearSelection,
+        selected,
+        someSelected,
+        toggle: toggleSelect,
+        toggleAll: toggleSelectAll,
+    }: KeySelection = useKeySelection(sortedFiles, keyOf);
+
+    const listFirst = useCallback((): void => {
+        setPrefix(draftPrefix);
+        fireAndForget(list(draftPrefix, undefined, false));
+    }, [draftPrefix, list]);
+
+    const loadMore = useCallback((): void => {
+        fireAndForget(list(prefix, nextCursor, true));
+    }, [list, prefix, nextCursor]);
+
+    // Navigate to a folder prefix (breadcrumb or folder row) and reload from its
+    // first page. Both the loaded + draft prefix track the new target, and the
+    // selection resets (the loaded rows change underneath it).
+    const navigate = useCallback(
+        (target: string): void => {
+            setPrefix(target);
+            setDraftPrefix(target);
+            clearSelection();
+            fireAndForget(list(target, undefined, false));
+        },
+        [clearSelection, list],
+    );
+
+    const enterFolder = useCallback(
+        (name: string): void => {
+            navigate(`${prefix}${name}`);
+        },
+        [navigate, prefix],
+    );
+
+    // Resolve a viewable (signed) URL for a thumbnail at a FIXED ttl — decoupled
+    // from `expiry` so the Copy-URL dropdown never re-fetches every thumbnail.
+    const resolveUrl = useCallback((key: string): Promise<string> => client.signedStorageUrl(key, { expiresInSeconds: THUMBNAIL_URL_TTL }), [client]);
+
+    const showList = useCallback((): void => {
+        setView("list");
+    }, []);
+
+    const showGrid = useCallback((): void => {
+        setView("grid");
+    }, []);
+
+    const onSortKeyChange = useCallback((key: string): void => {
+        setSortKey(key);
+    }, []);
+
+    const toggleSortDirection = useCallback((): void => {
+        setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+    }, []);
+
+    const onThumbSizeChange = useCallback((size: number): void => {
+        setThumbSize(size);
+    }, []);
+
+    const onExpiryChange = useCallback((seconds: number): void => {
+        setExpiry(seconds);
+    }, []);
+
+    // Delete every selected object (one schema-aware call each) then reload + clear.
+    const bulkDelete = useCallback((): void => {
+        setError(undefined);
+        setBusy(true);
+
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    for (const key of selected) {
+                        // eslint-disable-next-line no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key
+                        await client.deleteStorageObject(key);
+                    }
+
+                    await list(prefix, undefined, false);
+                    clearSelection();
+                } catch (error_) {
+                    setError(errorMessage(error_));
+                } finally {
+                    setBusy(false);
+                }
+            })(),
+        );
+    }, [clearSelection, client, list, prefix, selected]);
+
+    const onCopy = useCallback(
+        (key: string): void => {
+            setError(undefined);
+
+            fireAndForget(
+                (async (): Promise<void> => {
+                    try {
+                        const url = await client.signedStorageUrl(key, { expiresInSeconds: expiry });
+
+                        await copyToClipboard(url);
+                        setCopiedKey(key);
+                    } catch (error_) {
+                        setError(errorMessage(error_));
+                    }
+                })(),
+            );
+        },
+        [client, expiry],
+    );
+
+    // Clear the "Copied" indicator a couple of seconds after a copy, so it reads as
+    // transient feedback rather than a sticky per-row state.
+    useEffect(() => {
+        if (copiedKey === undefined) {
+            return undefined;
+        }
+
+        const timer = globalThis.setTimeout(() => {
+            setCopiedKey(undefined);
+        }, 2000);
+
+        return () => {
+            globalThis.clearTimeout(timer);
+        };
+    }, [copiedKey]);
+
+    const onDelete = useCallback(
+        (key: string): void => {
+            setError(undefined);
+            setBusy(true);
+
+            fireAndForget(
+                (async (): Promise<void> => {
+                    try {
+                        await client.deleteStorageObject(key);
+                        await list(prefix, undefined, false);
+                    } catch (error_) {
+                        setError(errorMessage(error_));
+                    } finally {
+                        setBusy(false);
+                    }
+                })(),
+            );
+        },
+        [client, list, prefix],
+    );
+
+    const onFile = useCallback(
+        (file: File): void => {
+            // Scope the upload key under the active prefix so it lands where the
+            // operator is browsing.
+            const key = `${prefix}${file.name}`;
+
+            setError(undefined);
+            setBusy(true);
+
+            fireAndForget(
+                (async (): Promise<void> => {
+                    try {
+                        const body = await file.arrayBuffer();
+
+                        await client.uploadStorageObject({ body, contentType: file.type === "" ? undefined : file.type, key });
+                        await list(prefix, undefined, false);
+                    } catch (error_) {
+                        setError(errorMessage(error_));
+                    } finally {
+                        setBusy(false);
+                    }
+                })(),
+            );
+        },
+        [client, list, prefix],
+    );
+
+    return {
+        allSelected,
+        bulkDelete,
+        busy,
+        clearSelection,
+        copiedKey,
+        draftPrefix,
+        enterFolder,
+        error,
+        expiry,
+        files: sortedFiles,
+        folders,
+        hasObjects: objects !== undefined && objects.length > 0,
+        listFirst,
+        loaded: objects !== undefined,
+        loadMore,
+        navigate,
+        nextCursor,
+        onCopy,
+        onDelete,
+        onExpiryChange,
+        onFile,
+        onSortKeyChange,
+        onThumbSizeChange,
+        prefix,
+        resolveUrl,
+        selected,
+        setDraftPrefix,
+        showGrid,
+        showList,
+        someSelected,
+        sortDirection,
+        sortKey,
+        tagKeys,
+        thumbSize,
+        toggleSelect,
+        toggleSelectAll,
+        toggleSortDirection,
+        view,
+    };
+};
+
+export { THUMBNAIL_URL_TTL, useFileBrowser };
+export type { FileBrowserModel, FileView };

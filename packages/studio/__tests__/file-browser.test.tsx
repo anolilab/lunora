@@ -1,6 +1,6 @@
 import type { StorageListPage } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -150,6 +150,62 @@ describe("fileBrowser", () => {
         expect(fileRow.textContent).toContain("guide.md");
     });
 
+    it("re-lists at the parent prefix when a breadcrumb is clicked", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            listStorageObjects: (options): StorageListPage => (options.prefix === "docs/" ? DOCS_PAGE : NESTED_PAGE),
+        });
+
+        render(renderBrowser(mock));
+
+        await screen.findByTestId("fb-table");
+
+        // Descend into docs/ (the first, alphabetically-sorted folder).
+        fireEvent.click(screen.getAllByTestId("fb-folder")[0] as HTMLElement);
+        await screen.findByText("guide.md");
+
+        // The breadcrumb bar now shows root + docs; click the root crumb to go back up.
+        const crumbs = within(screen.getByTestId("fb-breadcrumbs"));
+
+        fireEvent.click(crumbs.getByRole("button", { name: "root" }));
+
+        await waitFor(() => {
+            if ((mock.listStorageObjects.mock.calls.at(-1)?.[0] as { prefix?: string }).prefix !== "") {
+                throw new Error("not relisted at root yet");
+            }
+        });
+
+        const lastCall = mock.listStorageObjects.mock.calls.at(-1) as [{ prefix?: string }];
+
+        expect(lastCall[0]).toMatchObject({ prefix: "" });
+        // Back at root we again see the two sub-folders.
+        expect(screen.getAllByTestId("fb-folder")).toHaveLength(2);
+    });
+
+    it("clears the selection when navigating into a folder", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            listStorageObjects: (options): StorageListPage => (options.prefix === "docs/" ? DOCS_PAGE : NESTED_PAGE),
+        });
+
+        render(renderBrowser(mock));
+
+        await screen.findByTestId("fb-table");
+
+        // Select the one root-level file, then descend into a folder.
+        fireEvent.click(screen.getByTestId("storage-select-root.txt"));
+
+        expect(screen.getByTestId("grid-selection-count").textContent).toContain("1 selected");
+
+        fireEvent.click(screen.getAllByTestId("fb-folder")[0] as HTMLElement);
+        await screen.findByText("guide.md");
+
+        // The selection bar is gone — navigate cleared the selection.
+        expect(screen.queryByTestId("grid-selection-bar")).toBeNull();
+    });
+
     it("sorts files by a chosen metadata field", async () => {
         expect.assertions(2);
 
@@ -268,7 +324,7 @@ describe("fileBrowser", () => {
             });
 
             // The copy action requests a link with the toolbar's default 1h lifetime.
-            expect(mock.signedStorageUrl).toHaveBeenCalledWith("a.png", 3600);
+            expect(mock.signedStorageUrl).toHaveBeenCalledWith("a.png", { expiresInSeconds: 3600 });
             expect(writeText).toHaveBeenCalledWith("https://mock.example/a.png?sig=test");
         });
     });

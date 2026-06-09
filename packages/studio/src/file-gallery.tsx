@@ -2,9 +2,8 @@ import type { StorageObject } from "@cirrus/client";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import { Button } from "./components/ui/button";
-import { Checkbox } from "./components/ui/checkbox";
-import { ConfirmButton } from "./confirm-button";
+import type { FileItemHandlers } from "./file-item";
+import { FileActions, FileSelect, useFileItem } from "./file-item";
 import type { TFunction } from "./i18n-context";
 import { fireAndForget, formatBytes } from "./internal";
 
@@ -16,7 +15,16 @@ const isImage = (object: StorageObject): boolean => (object.httpMetadata?.conten
 
 /** A generic file glyph for non-image tiles (and the image loading/error placeholder). */
 const FileGlyph = (): ReactElement => (
-    <svg aria-hidden="true" className="size-8 text-muted-foreground/60" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.4} viewBox="0 0 24 24">
+    <svg
+        aria-hidden="true"
+        className="size-8 text-muted-foreground/60"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.4}
+        viewBox="0 0 24 24"
+    >
         <path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm7 0v5h5" />
     </svg>
 );
@@ -84,11 +92,9 @@ const Thumbnail = ({ object, resolveUrl }: ThumbnailProps): ReactElement => {
 
 interface GalleryTileProps {
     readonly busy: boolean;
-    readonly copiedKey: null | string;
+    readonly copiedKey: string | undefined;
+    readonly handlers: FileItemHandlers;
     readonly object: StorageObject;
-    readonly onCopy: (key: string) => void;
-    readonly onDelete: (key: string) => void;
-    readonly onToggleSelect: (key: string) => void;
     readonly prefix: string;
     readonly resolveUrl: (key: string) => Promise<string>;
     readonly selected: boolean;
@@ -97,30 +103,20 @@ interface GalleryTileProps {
 
 /**
  * One gallery tile: a thumbnail (with a selection checkbox overlay), the name
- * relative to the current folder, its size, and copy/delete actions. Each tile
- * binds its own handlers (react-perf), mirroring the list view's file row.
+ * relative to the current folder, its size, and copy/delete actions. Per-item
+ * bindings + the action/select controls are the shared {@link useFileItem} /
+ * {@link FileActions} / {@link FileSelect}, mirroring the list view's file row
+ * (only the tile layout differs).
  */
-const GalleryTile = ({ busy, copiedKey, object, onCopy, onDelete, onToggleSelect, prefix, resolveUrl, selected, t }: GalleryTileProps): ReactElement => {
-    const copy = useCallback((): void => {
-        onCopy(object.key);
-    }, [onCopy, object.key]);
-
-    const remove = useCallback((): void => {
-        onDelete(object.key);
-    }, [onDelete, object.key]);
-
-    const toggle = useCallback((): void => {
-        onToggleSelect(object.key);
-    }, [onToggleSelect, object.key]);
-
-    const name = object.key.slice(prefix.length);
+const GalleryTile = ({ busy, copiedKey, handlers, object, prefix, resolveUrl, selected, t }: GalleryTileProps): ReactElement => {
+    const { copy, name, remove, toggle } = useFileItem(object, prefix, handlers);
 
     return (
         <div className="flex flex-col gap-1.5" data-testid="fb-tile">
             <div className="relative">
                 <Thumbnail object={object} resolveUrl={resolveUrl} />
                 <span className="absolute left-1.5 top-1.5 rounded bg-background/80 p-0.5">
-                    <Checkbox aria-label={t("Select row")} checked={selected} data-testid={`storage-select-${object.key}`} onCheckedChange={toggle} />
+                    <FileSelect objectKey={object.key} onToggle={toggle} selected={selected} t={t} />
                 </span>
             </div>
             <div className="min-w-0">
@@ -130,12 +126,15 @@ const GalleryTile = ({ busy, copiedKey, object, onCopy, onDelete, onToggleSelect
                 <p className="text-[11px] tabular-nums text-muted-foreground">{formatBytes(object.size)}</p>
             </div>
             <div className="flex items-center gap-1">
-                <Button className="h-7 px-2 text-xs" data-testid={`storage-copy-${object.key}`} disabled={busy} onClick={copy} size="sm" type="button" variant="ghost">
-                    {copiedKey === object.key ? t("Copied") : t("Copy URL")}
-                </Button>
-                <ConfirmButton confirmLabel={t("Delete object?")} disabled={busy} onConfirm={remove} testId={`storage-delete-${object.key}`}>
-                    {t("Delete")}
-                </ConfirmButton>
+                <FileActions
+                    busy={busy}
+                    buttonClassName="h-7 px-2 text-xs"
+                    copied={copiedKey === object.key}
+                    objectKey={object.key}
+                    onCopy={copy}
+                    onDelete={remove}
+                    t={t}
+                />
             </div>
         </div>
     );
@@ -150,7 +149,16 @@ const FolderTile = ({ name, onEnter }: { readonly name: string; readonly onEnter
     return (
         <button className="flex flex-col gap-1.5 text-left outline-none" data-testid="fb-folder" onClick={enter} type="button">
             <span className="flex aspect-square w-full items-center justify-center rounded-md border border-border bg-muted/30 transition-colors hover:bg-accent">
-                <svg aria-hidden="true" className="size-10 text-muted-foreground" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.4} viewBox="0 0 24 24">
+                <svg
+                    aria-hidden="true"
+                    className="size-10 text-muted-foreground"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.4}
+                    viewBox="0 0 24 24"
+                >
                     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
                 </svg>
             </span>
@@ -163,13 +171,11 @@ const FolderTile = ({ name, onEnter }: { readonly name: string; readonly onEnter
 
 interface FileGalleryProps {
     readonly busy: boolean;
-    readonly copiedKey: null | string;
+    readonly copiedKey: string | undefined;
     readonly files: ReadonlyArray<StorageObject>;
     readonly folders: ReadonlyArray<string>;
-    readonly onCopy: (key: string) => void;
-    readonly onDelete: (key: string) => void;
+    readonly handlers: FileItemHandlers;
     readonly onEnterFolder: (name: string) => void;
-    readonly onToggleSelect: (key: string) => void;
     readonly prefix: string;
     readonly resolveUrl: (key: string) => Promise<string>;
     readonly selected: ReadonlySet<string>;
@@ -184,7 +190,7 @@ interface FileGalleryProps {
  * the size control re-flows and resizes every thumbnail on the fly (pure CSS — no
  * re-fetch).
  */
-const FileGallery = ({ busy, copiedKey, files, folders, onCopy, onDelete, onEnterFolder, onToggleSelect, prefix, resolveUrl, selected, size, t }: FileGalleryProps): ReactElement => {
+const FileGallery = ({ busy, copiedKey, files, folders, handlers, onEnterFolder, prefix, resolveUrl, selected, size, t }: FileGalleryProps): ReactElement => {
     // The only dynamic style: the column width tracks the size slider.
     // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- column width is intrinsically dynamic (the size slider)
     const gridStyle: CSSProperties = { gridTemplateColumns: `repeat(auto-fill, minmax(${size.toString()}px, 1fr))` };
@@ -198,11 +204,9 @@ const FileGallery = ({ busy, copiedKey, files, folders, onCopy, onDelete, onEnte
                 <GalleryTile
                     busy={busy}
                     copiedKey={copiedKey}
+                    handlers={handlers}
                     key={object.key}
                     object={object}
-                    onCopy={onCopy}
-                    onDelete={onDelete}
-                    onToggleSelect={onToggleSelect}
                     prefix={prefix}
                     resolveUrl={resolveUrl}
                     selected={selected.has(object.key)}
@@ -213,4 +217,4 @@ const FileGallery = ({ busy, copiedKey, files, folders, onCopy, onDelete, onEnte
     );
 };
 
-export { FileGallery, isImage };
+export default FileGallery;

@@ -289,4 +289,24 @@ describe("createWorker — storage admin signed URL", () => {
         expect(response.status).toBe(200);
         expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { expiresInSeconds: 900 });
     });
+
+    it("clamps an over-max expiresIn to the 7-day ceiling", async () => {
+        expect.assertions(2);
+
+        const storageSignedUrl = vi.fn<StorageSignedUrlFunction>(async (key: string) => `https://cdn.example/${key}?sig=abc`);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageSignedUrl });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage/url?key=a.png&expiresIn=999999999", {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        // The worker clamps to 7 days (604800s) instead of letting the host throw a 500.
+        expect(response.status).toBe(200);
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { expiresInSeconds: 604_800 });
+    });
 });

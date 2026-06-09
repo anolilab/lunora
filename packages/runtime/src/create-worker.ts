@@ -777,6 +777,9 @@ const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
 const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
+// `@cirrus/storage`'s `buildSignedUrl` rejects an `expiresInSeconds` over 7 days;
+// mirror that ceiling here so an over-max request is clamped, not a 500.
+const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
@@ -2584,9 +2587,10 @@ const createWorker = (
         const url = new URL(request.url);
         const key = requireStorageKey(url);
         // Optional share-link lifetime; a non-numeric/absent value leaves the host's
-        // default. The host (`@cirrus/storage`) clamps the value to its allowed range.
+        // default. `@cirrus/storage`'s `buildSignedUrl` THROWS above its 7-day max,
+        // so clamp here to keep an over-max request a valid URL rather than a 500.
         const expiresInRaw = Number(queryParameter(url, "expiresIn") ?? "");
-        const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? expiresInRaw : undefined;
+        const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? Math.min(expiresInRaw, MAX_STORAGE_EXPIRES_IN_SECONDS) : undefined;
         const signedUrl = await storageSignedUrl(key, { expiresInSeconds });
 
         return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
