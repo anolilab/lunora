@@ -1,13 +1,13 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "@cirrus/config";
+import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, isPlaceholderValue, parseDevVariableEntries } from "@cirrus/config";
 
 import type { Logger } from "../util/logger";
 import type { SpawnDescriptor, Spawner } from "../util/spawn";
 import { defaultSpawner } from "../util/spawn";
 
-type EnvSubcommand = "get" | "list" | "push" | "set" | "unset";
+type EnvSubcommand = "doctor" | "get" | "list" | "push" | "set" | "unset";
 
 interface EnvCommandOptions {
     cwd?: string;
@@ -78,6 +78,7 @@ const loadDevVariables = (devVariablesPath: string): Map<string, ParsedLine> => 
 };
 
 interface EnvContext {
+    cwd: string;
     devVariablesPath: string;
     logger: Logger;
     options: EnvCommandOptions;
@@ -239,15 +240,71 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     return { code: 0, descriptors };
 };
 
+/**
+ * Validate `.dev.vars` against `.dev.vars.example`: report keys the example lists
+ * but the file lacks (error), keys whose values still look like placeholders
+ * (error), and keys present locally but absent from the example (info). Exits
+ * non-zero when anything is actionable, so it can gate CI / a pre-dev check.
+ */
+const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
+    const { cwd, devVariablesPath, logger } = context;
+    const examplePath = join(cwd, DEV_VARS_EXAMPLE_FILE);
+
+    if (!existsSync(examplePath)) {
+        logger.info(`env doctor: no ${DEV_VARS_EXAMPLE_FILE} to check against — nothing to validate.`);
+
+        return { code: 0, descriptors: [] };
+    }
+
+    const exampleKeys = parseDevVariableEntries(readFileSync(examplePath, "utf8")).map((entry) => entry.key);
+    const current = loadDevVariables(devVariablesPath);
+
+    if (!existsSync(devVariablesPath)) {
+        logger.error(`env doctor: ${DEV_VARS_FILE} is missing. Run \`cirrus dev\` to scaffold it, or \`cirrus env set <KEY> <VALUE>\`.`);
+        logger.info(`expected (from ${DEV_VARS_EXAMPLE_FILE}): ${exampleKeys.join(", ")}`);
+
+        return { code: 1, descriptors: [] };
+    }
+
+    const missing = exampleKeys.filter((key) => !current.has(key));
+    const placeholders = [...current.values()].filter((entry) => isPlaceholderValue(entry.value)).map((entry) => entry.key);
+    const exampleKeySet = new Set(exampleKeys);
+    const extra = [...current.keys()].filter((key) => !exampleKeySet.has(key));
+
+    for (const key of missing) {
+        logger.error(`missing: ${key} is in ${DEV_VARS_EXAMPLE_FILE} but not ${DEV_VARS_FILE}`);
+    }
+
+    for (const key of placeholders) {
+        logger.error(`unset: ${key} still has a placeholder value`);
+    }
+
+    for (const key of extra) {
+        logger.info(`extra: ${key} is set locally but not listed in ${DEV_VARS_EXAMPLE_FILE}`);
+    }
+
+    if (missing.length === 0 && placeholders.length === 0) {
+        logger.success(`env doctor: ${DEV_VARS_FILE} looks good (${String(current.size)} var(s)).`);
+
+        return { code: 0, descriptors: [] };
+    }
+
+    return { code: 1, descriptors: [] };
+};
+
 const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const context: EnvContext = {
+        cwd,
         devVariablesPath: join(cwd, DEV_VARS_FILE),
         logger: options.logger,
         options,
     };
 
     switch (options.subcommand) {
+        case "doctor": {
+            return runEnvDoctor(context);
+        }
         case "get": {
             return runEnvGet(context);
         }

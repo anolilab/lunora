@@ -46,8 +46,14 @@ STORAGE_SECRET="replace-with-openssl-rand-hex-32"
 When you run `cirrus dev` (or start Vite) without a `.dev.vars`, Cirrus offers
 to generate one from the example — secret-looking placeholders (`*_SECRET`,
 `*_TOKEN`, …) are filled with fresh random values, everything else is copied
-verbatim. Non-interactive runs (CI) skip the prompt. You can also manage keys
-by hand with `cirrus env set <KEY> <VALUE>` / `cirrus env list`.
+verbatim. If `.dev.vars` exists but is missing keys the example lists (e.g. you
+enabled a new addon), it offers to append just those. Non-interactive runs (CI)
+skip the prompt. You can also manage keys by hand with `cirrus env set NAME VALUE`
+/ `cirrus env list`.
+
+To check a `.dev.vars` against its example — missing keys, still-unset
+placeholders, stray extras — run `cirrus env doctor`. It exits non-zero when
+anything is actionable, so it works as a CI gate or a pre-`dev` sanity check.
 
 ### In production
 

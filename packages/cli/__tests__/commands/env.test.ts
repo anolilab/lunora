@@ -1,3 +1,4 @@
+/* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain secret-like strings */
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -221,6 +222,57 @@ describe("cirrus env", () => {
             expect(result.code).toBe(1);
             expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
             expect(recorded.errors.join("\n")).toContain("invalid key");
+        });
+    });
+
+    describe("cirrus env doctor", () => {
+        it("passes when .dev.vars covers the example with real values", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, ".dev.vars.example"), 'AUTH_SECRET="replace-me"\nAUTH_URL="x"\n', "utf8");
+            writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="a-real-secret-value"\nAUTH_URL="http://localhost:5173"\n', "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, logger, subcommand: "doctor" });
+
+            expect(result.code).toBe(0);
+            expect(recorded.successes.join("\n")).toContain("looks good");
+        });
+
+        it("flags missing keys and unset placeholder values, exiting non-zero", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars.example"), 'AUTH_SECRET="replace-me"\nAUTH_URL="x"\n', "utf8");
+            // AUTH_URL missing entirely; AUTH_SECRET present but still a placeholder.
+            writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="replace-me"\n', "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, logger, subcommand: "doctor" });
+
+            expect(result.code).toBe(1);
+            expect(recorded.errors.join("\n")).toContain("AUTH_URL");
+            expect(recorded.errors.join("\n")).toContain("placeholder");
+        });
+
+        it("errors when .dev.vars is missing but an example exists", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, ".dev.vars.example"), 'AUTH_SECRET="replace-me"\n', "utf8");
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, logger, subcommand: "doctor" });
+
+            expect(result.code).toBe(1);
+            expect(recorded.errors.join("\n")).toContain("is missing");
+        });
+
+        it("stays quiet (exit 0) when there is no example to check against", async () => {
+            expect.assertions(1);
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, logger, subcommand: "doctor" });
+
+            expect(result.code).toBe(0);
         });
     });
 });

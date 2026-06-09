@@ -5,33 +5,12 @@
  * `jsonc-parser` is imported lazily — only the deps/bindings paths need it.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
 
+import { DEV_VARS_FILE, parseDevVariableEntries, promptYesNo } from "@cirrus/config";
 import { join } from "@visulima/path";
 
 import type { Logger } from "../../util/logger";
 import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryManifest } from "./types";
-
-/** Splits `.dev.vars` text into lines (CRLF or LF). */
-const NEWLINE_SPLIT = /\r?\n/u;
-
-const promptYesNo = async (prompt: string): Promise<boolean> => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-    try {
-        const answer = await new Promise<string>((resolve) => {
-            rl.question(prompt, (input) => {
-                resolve(input);
-            });
-        });
-
-        const normalised = answer.trim().toLowerCase();
-
-        return normalised === "y" || normalised === "yes";
-    } finally {
-        rl.close();
-    }
-};
 
 /**
  * Add deps to a `package.json` section (`dependencies` or `devDependencies`),
@@ -101,17 +80,10 @@ const applyEnvVariables = (envVariables: ReadonlyArray<RegistryEnvVariable>, pro
         return [];
     }
 
-    const devVariablesPath = join(projectRoot, ".dev.vars");
+    const devVariablesPath = join(projectRoot, DEV_VARS_FILE);
     const existing = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
-    // Keys already present (ignore comments/blank lines).
-    const present = new Set(
-        existing
-            .split(NEWLINE_SPLIT)
-            .map((line) => line.trim())
-            .filter((line) => line !== "" && !line.startsWith("#"))
-            .map((line) => line.slice(0, line.indexOf("=")).trim())
-            .filter((key) => key !== ""),
-    );
+    // Keys already present (the shared grammar ignores comments/blank lines).
+    const present = new Set(parseDevVariableEntries(existing).map((entry) => entry.key));
 
     const appended: string[] = [];
     const secretsToSet: string[] = [];

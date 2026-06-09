@@ -46,7 +46,7 @@ interface RunCliOptions {
 const isTemplate = (value: unknown): value is Template => value === "vite" || value === "standalone" || value === "next" || value === "tanstack-start";
 
 const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
-    value === "list" || value === "get" || value === "set" || value === "unset" || value === "push";
+    value === "list" || value === "get" || value === "set" || value === "unset" || value === "push" || value === "doctor";
 
 const isBackupSubcommand = (value: unknown): value is BackupSubcommand => value === "create" || value === "list" || value === "pitr" || value === "restore";
 
@@ -743,13 +743,13 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     });
 
     cli.addCommand({
-        argument: { description: "list | get <KEY> | set <KEY> <VALUE> | unset <KEY> | push", name: "subcommand", type: String },
-        description: "Manage .dev.vars and push secrets via wrangler (list | get | set | unset | push)",
+        argument: { description: "list | get <KEY> | set <KEY> <VALUE> | unset <KEY> | push | doctor", name: "subcommand", type: String },
+        description: "Manage .dev.vars and push secrets via wrangler (list | get | set | unset | push | doctor)",
         execute: async ({ argument, options: parsed }) => {
             const sub = argument[0];
 
             if (!isEnvSubcommand(sub)) {
-                logger.error(`env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push`);
+                logger.error(`env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push | doctor`);
                 exitCode.value = 1;
 
                 return;

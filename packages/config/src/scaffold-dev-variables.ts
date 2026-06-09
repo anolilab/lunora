@@ -2,7 +2,14 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_NEWLINE, splitDevVariableLine, unquoteDevVariable } from "./dev-variables-format";
+import {
+    DEV_VARS_EXAMPLE_FILE,
+    DEV_VARS_FILE,
+    DEV_VARS_NEWLINE,
+    parseDevVariableEntries,
+    splitDevVariableLine,
+    unquoteDevVariable,
+} from "./dev-variables-format";
 
 /**
  * Scaffolding `.dev.vars` from `.dev.vars.example`.
@@ -54,19 +61,39 @@ const PLACEHOLDER_MARKERS = [
     "xxx",
 ];
 
-const isPlaceholder = (rawValue: string): boolean => {
-    const value = unquoteDevVariable(rawValue.trim()).toLowerCase();
+/**
+ * Whether an (already-unquoted) value looks like a fill-me-in placeholder —
+ * empty, angle-bracketed, or containing a known marker — rather than a real
+ * value. Used both when scaffolding (which values to regenerate) and by
+ * `cirrus env doctor` (which set values are still unfilled).
+ */
+const isPlaceholderValue = (value: string): boolean => {
+    const normalised = value.trim().toLowerCase();
 
-    if (value === "") {
+    if (normalised === "") {
         return true;
     }
 
-    if (value.startsWith("<") && value.endsWith(">")) {
+    if (normalised.startsWith("<") && normalised.endsWith(">")) {
         return true;
     }
 
-    return PLACEHOLDER_MARKERS.some((marker) => value.includes(marker));
+    return PLACEHOLDER_MARKERS.some((marker) => normalised.includes(marker));
 };
+
+const isPlaceholder = (rawValue: string): boolean => isPlaceholderValue(unquoteDevVariable(rawValue.trim()));
+
+/** Default secret generator — 64 hex chars, like `openssl rand -hex 32`. */
+const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
+
+/**
+ * The fresh secret to substitute for an example `key=value` entry, or `undefined`
+ * when the example value should be used as-is (non-secret key, or a value the
+ * example already pins to something real). The single rule both the full-file
+ * generate and the missing-key augment share.
+ */
+const generatedSecretFor = (key: string, rawValue: string, randomHex: (bytes: number) => string): string | undefined =>
+    SECRET_KEY.test(key) && isPlaceholder(rawValue) ? randomHex(SECRET_BYTES) : undefined;
 
 /**
  * The outcome of planning a scaffold — a discriminated union so the orchestrator
@@ -93,22 +120,73 @@ const planDevVariablesScaffold = (input: {
         return { status: "no-example" };
     }
 
-    const randomHex = input.randomHex ?? ((bytes: number): string => randomBytes(bytes).toString("hex"));
+    const randomHex = input.randomHex ?? defaultRandomHex;
     const generatedKeys: string[] = [];
 
     const lines = input.exampleContent.split(DEV_VARS_NEWLINE).map((line) => {
         const parsed = splitDevVariableLine(line);
+        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
 
-        if (!parsed || !SECRET_KEY.test(parsed.key) || !isPlaceholder(parsed.value)) {
+        if (!parsed || secret === undefined) {
             return line;
         }
 
         generatedKeys.push(parsed.key);
 
-        return `${parsed.key}="${randomHex(SECRET_BYTES)}"`;
+        return `${parsed.key}="${secret}"`;
     });
 
     return { content: lines.join("\n"), generatedKeys, status: "generate" };
+};
+
+interface AugmentPlan {
+    /** The `.dev.vars` lines to append, in example order. */
+    additions: string[];
+    /** The subset of `missingKeys` whose values were freshly generated. */
+    generatedKeys: string[];
+    /** Keys present in the example but absent from the current `.dev.vars`. */
+    missingKeys: string[];
+}
+
+/**
+ * Plan how to top up an existing `.dev.vars` from the example: every example key
+ * not already present becomes an appended line (secret placeholders filled with
+ * fresh random hex, other values copied). Pure — no I/O. Empty `missingKeys`
+ * means the file is already complete.
+ */
+const planDevVariablesAugment = (input: {
+    exampleContent: string;
+    existingContent: string;
+    /** Injectable for deterministic tests; defaults to `crypto.randomBytes`. */
+    randomHex?: (bytes: number) => string;
+}): AugmentPlan => {
+    const randomHex = input.randomHex ?? defaultRandomHex;
+    const present = new Set(parseDevVariableEntries(input.existingContent).map((entry) => entry.key));
+
+    const additions: string[] = [];
+    const generatedKeys: string[] = [];
+    const missingKeys: string[] = [];
+
+    for (const line of input.exampleContent.split(DEV_VARS_NEWLINE)) {
+        const parsed = splitDevVariableLine(line);
+
+        if (!parsed || present.has(parsed.key)) {
+            continue;
+        }
+
+        const secret = generatedSecretFor(parsed.key, parsed.value, randomHex);
+
+        missingKeys.push(parsed.key);
+
+        if (secret === undefined) {
+            additions.push(`${parsed.key}="${unquoteDevVariable(parsed.value)}"`);
+        } else {
+            generatedKeys.push(parsed.key);
+            additions.push(`${parsed.key}="${secret}"`);
+        }
+    }
+
+    return { additions, generatedKeys, missingKeys };
 };
 
 interface EnsureDevVariablesDeps {
@@ -127,58 +205,98 @@ interface EnsureDevVariablesDeps {
     yes?: boolean;
 }
 
-// Distinct from `ScaffoldPlan["status"]` on purpose: the plan is pre-prompt
-// (`generate` = "could generate"), the result is post-prompt (`generated` =
-// "did", `declined` = "user said no").
-type EnsureDevVariablesStatus = "declined" | "exists" | "generated" | "no-example";
+// Distinct from `ScaffoldPlan["status"]` on purpose: the plan is pre-prompt,
+// the result is post-prompt. `generated` = wrote a fresh file, `augmented` =
+// topped up an existing one, `declined` = user said no.
+type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example";
 
 interface EnsureDevVariablesResult {
-    /** Keys whose values were freshly generated, when `status` is `"generated"`. */
+    /** Keys appended to an existing file, when `status` is `"augmented"`. */
+    addedKeys: string[];
+    /** Keys whose values were freshly generated, when `status` is `"generated"`/`"augmented"`. */
     generatedKeys: string[];
     status: EnsureDevVariablesStatus;
 }
 
+/** `" (generated A, B)"` for a log line, or `""` when nothing was generated. */
+const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (generated ${keys.join(", ")})` : "");
+
+/** Append lines to an existing `.dev.vars`, inserting a separating newline only if needed. */
+const appendDevVariables = (path: string, additions: string[]): void => {
+    const existing = readFileSync(path, "utf8");
+    const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+
+    writeFileSync(path, `${existing}${separator}${additions.join("\n")}\n`, "utf8");
+};
+
 /**
- * Read the project's `.dev.vars`/`.dev.vars.example`, and — when the former is
- * missing but an example exists — offer to generate it (prompting via `confirm`,
- * unless `yes`). On confirmation, writes `.dev.vars` with secret placeholders
- * filled by fresh random hex and logs which keys were generated. Returns what
- * happened so the caller can tailor any follow-up message.
+ * Reconcile the project's `.dev.vars` with its `.dev.vars.example`:
  *
- * Shared by `cirrus dev` and the `@cirrus/vite` dev server so both behave
- * identically. All side effects funnel through `confirm`/`info`/`randomHex`.
+ * - file missing → offer to generate it (secret placeholders auto-filled);
+ * - file present but missing keys the example lists → offer to append them;
+ * - file present and complete → nothing to do.
+ *
+ * Prompts via `confirm` (skipped when `yes`); never overwrites existing values.
+ * Returns what happened so the caller can tailor any follow-up. Shared by
+ * `cirrus dev` and the `@cirrus/vite` dev server. All side effects funnel
+ * through `confirm`/`info`/`randomHex`.
  */
 const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureDevVariablesResult> => {
     const devVariablesPath = join(deps.cwd, DEV_VARS_FILE);
     const examplePath = join(deps.cwd, DEV_VARS_EXAMPLE_FILE);
 
-    const plan = planDevVariablesScaffold({
-        devVarsExists: existsSync(devVariablesPath),
-        exampleContent: existsSync(examplePath) ? readFileSync(examplePath, "utf8") : undefined,
-        randomHex: deps.randomHex,
-    });
-
-    if (plan.status !== "generate") {
-        // "exists" / "no-example" — nothing to offer, stay quiet.
-        return { generatedKeys: [], status: plan.status };
+    if (!existsSync(examplePath)) {
+        return { addedKeys: [], generatedKeys: [], status: "no-example" };
     }
 
-    const proceed = deps.yes === true || (await deps.confirm(`No ${DEV_VARS_FILE} found. Generate it from ${DEV_VARS_EXAMPLE_FILE} (secrets auto-filled)?`));
+    const exampleContent = readFileSync(examplePath, "utf8");
+
+    // File missing entirely → offer to generate the whole thing.
+    if (!existsSync(devVariablesPath)) {
+        const plan = planDevVariablesScaffold({ devVarsExists: false, exampleContent, randomHex: deps.randomHex });
+
+        if (plan.status !== "generate") {
+            return { addedKeys: [], generatedKeys: [], status: "no-example" };
+        }
+
+        const proceed =
+            deps.yes === true || (await deps.confirm(`No ${DEV_VARS_FILE} found. Generate it from ${DEV_VARS_EXAMPLE_FILE} (secrets auto-filled)?`));
+
+        if (!proceed) {
+            deps.info(`Skipped — copy ${DEV_VARS_EXAMPLE_FILE} to ${DEV_VARS_FILE} and fill it in when you're ready.`);
+
+            return { addedKeys: [], generatedKeys: [], status: "declined" };
+        }
+
+        writeFileSync(devVariablesPath, plan.content, "utf8");
+        deps.info(`Created ${DEV_VARS_FILE}${generatedSuffix(plan.generatedKeys)}.`);
+
+        return { addedKeys: [], generatedKeys: plan.generatedKeys, status: "generated" };
+    }
+
+    // File present → top up any keys the example lists but the file lacks.
+    const augment = planDevVariablesAugment({ existingContent: readFileSync(devVariablesPath, "utf8"), exampleContent, randomHex: deps.randomHex });
+
+    if (augment.missingKeys.length === 0) {
+        return { addedKeys: [], generatedKeys: [], status: "exists" };
+    }
+
+    const list = augment.missingKeys.join(", ");
+    const proceed =
+        deps.yes === true ||
+        (await deps.confirm(`${DEV_VARS_FILE} is missing ${String(augment.missingKeys.length)} key(s) from ${DEV_VARS_EXAMPLE_FILE} (${list}). Add them?`));
 
     if (!proceed) {
-        deps.info(`Skipped — copy ${DEV_VARS_EXAMPLE_FILE} to ${DEV_VARS_FILE} and fill it in when you're ready.`);
+        deps.info(`Skipped — add ${list} to ${DEV_VARS_FILE} when you're ready.`);
 
-        return { generatedKeys: [], status: "declined" };
+        return { addedKeys: [], generatedKeys: [], status: "declined" };
     }
 
-    writeFileSync(devVariablesPath, plan.content, "utf8");
+    appendDevVariables(devVariablesPath, augment.additions);
+    deps.info(`Updated ${DEV_VARS_FILE} — added ${list}${generatedSuffix(augment.generatedKeys)}.`);
 
-    const generated = plan.generatedKeys.length > 0 ? ` (generated ${plan.generatedKeys.join(", ")})` : "";
-
-    deps.info(`Created ${DEV_VARS_FILE}${generated}.`);
-
-    return { generatedKeys: plan.generatedKeys, status: "generated" };
+    return { addedKeys: augment.missingKeys, generatedKeys: augment.generatedKeys, status: "augmented" };
 };
 
-export type { EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan };
-export { ensureDevVariables, planDevVariablesScaffold };
+export type { AugmentPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan };
+export { ensureDevVariables, isPlaceholderValue, planDevVariablesAugment, planDevVariablesScaffold };

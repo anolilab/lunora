@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ensureDevVariables, planDevVariablesScaffold } from "../src/scaffold-dev-variables";
+import { ensureDevVariables, planDevVariablesAugment, planDevVariablesScaffold } from "../src/scaffold-dev-variables";
 
 /** Deterministic stand-in for `crypto.randomBytes(n).toString("hex")`. */
 const fixedHex = (bytes: number): string => "a".repeat(bytes * 2);
@@ -91,6 +91,36 @@ describe("planDevVariablesScaffold", () => {
     });
 });
 
+describe("planDevVariablesAugment", () => {
+    it("reports no missing keys when the file already has them all", () => {
+        expect.assertions(2);
+
+        const plan = planDevVariablesAugment({
+            exampleContent: 'AUTH_SECRET="replace"\nAUTH_URL="x"\n',
+            existingContent: 'AUTH_SECRET="real"\nAUTH_URL="y"\n',
+            randomHex: fixedHex,
+        });
+
+        expect(plan.missingKeys).toStrictEqual([]);
+        expect(plan.additions).toStrictEqual([]);
+    });
+
+    it("renders additions for missing keys: secrets generated, plain values copied", () => {
+        expect.assertions(3);
+
+        const plan = planDevVariablesAugment({
+            exampleContent: 'AUTH_SECRET="real"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SECRET="replace-me"\n',
+            existingContent: 'AUTH_SECRET="real"\n',
+            randomHex: fixedHex,
+        });
+
+        expect(plan.missingKeys).toStrictEqual(["AUTH_URL", "STORAGE_SECRET"]);
+        expect(plan.generatedKeys).toStrictEqual(["STORAGE_SECRET"]);
+        // Non-secret copied verbatim; secret placeholder regenerated.
+        expect(plan.additions).toStrictEqual(['AUTH_URL="http://localhost:5173"', `STORAGE_SECRET="${"a".repeat(64)}"`]);
+    });
+});
+
 describe("ensureDevVariables", () => {
     let dir: string;
 
@@ -102,10 +132,15 @@ describe("ensureDevVariables", () => {
         rmSync(dir, { force: true, recursive: true });
     });
 
-    it("does nothing when .dev.vars already exists", async () => {
+    it("does nothing when .dev.vars already has every example key", async () => {
         expect.assertions(2);
 
-        writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="kept"\n', "utf8");
+        // A complete file — all four example keys present.
+        writeFileSync(
+            join(dir, ".dev.vars"),
+            'AUTH_SECRET="kept"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SECRET="kept"\nCIRRUS_ADMIN_TOKEN="kept"\n',
+            "utf8",
+        );
         writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
 
         const confirm = vi.fn(async () => true);
@@ -113,6 +148,35 @@ describe("ensureDevVariables", () => {
 
         expect(result.status).toBe("exists");
         expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it("appends keys the example lists but .dev.vars is missing", async () => {
+        expect.assertions(4);
+
+        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SECRET, CIRRUS_ADMIN_TOKEN.
+        writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="my-real-secret"\n', "utf8");
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+        const written = readFileSync(join(dir, ".dev.vars"), "utf8");
+
+        expect(result.status).toBe("augmented");
+        expect(result.addedKeys).toStrictEqual(["AUTH_URL", "STORAGE_SECRET", "CIRRUS_ADMIN_TOKEN"]);
+        // Existing value is preserved; missing secret keys are appended with fresh hex.
+        expect(written).toContain('AUTH_SECRET="my-real-secret"');
+        expect(written).toContain(`STORAGE_SECRET="${"a".repeat(64)}"`);
+    });
+
+    it("does not append when the user declines the missing-key prompt", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="my-real-secret"\n', "utf8");
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        const result = await ensureDevVariables({ confirm: async () => false, cwd: dir, info: () => undefined, randomHex: fixedHex });
+
+        expect(result.status).toBe("declined");
+        expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('AUTH_SECRET="my-real-secret"\n');
     });
 
     it("stays silent when there is no example", async () => {
