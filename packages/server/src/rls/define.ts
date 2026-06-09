@@ -5,7 +5,7 @@
  * additionally validates the set (duplicate detection). The runtime work happens
  * in {@link ./middleware}.
  */
-import type { DefinePolicyInput, Permission, Policy, Role } from "./types.js";
+import type { DefinePolicyInput, Permission, Policy, Role } from "./types";
 
 export const definePolicy = <Context = unknown>(input: DefinePolicyInput<Context>): Policy<Context> => {
     return { on: input.on, table: input.table, when: input.when };

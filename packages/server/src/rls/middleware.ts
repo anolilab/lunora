@@ -42,11 +42,11 @@
  * The middleware is signature-compatible with the builder's `Middleware&lt;>`,
  * so `.use(rls(policies))` slots in like any other middleware.
  */
-import type { Middleware } from "../builder/types.js";
-import { CirrusError } from "../error.js";
-import type { FacadeEntry } from "../facade.js";
-import { bindOrm, bindTableFacade } from "../facade.js";
-import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types.js";
+import type { Middleware } from "../builder/types";
+import { CirrusError } from "../error";
+import type { FacadeEntry } from "../facade";
+import { bindOrm, bindTableFacade } from "../facade";
+import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
 
 /**
  * Structural mirror of `@cirrus/do`'s `QueryArgs` and `CountArgs`. The

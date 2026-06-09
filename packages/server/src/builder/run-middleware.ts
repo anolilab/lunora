@@ -1,4 +1,4 @@
-import type { Middleware, MiddlewareNext } from "./types.js";
+import type { Middleware, MiddlewareNext } from "./types";
 
 /**
  * Shared onion executor for a middleware chain. Each middleware receives `next`,

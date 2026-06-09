@@ -1,10 +1,10 @@
 import { v } from "@cirrus/values";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { initCirrus } from "../src/builder/index.js";
-import { mutation, query } from "../src/functions.js";
-import { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "../src/plugin.js";
-import { defineSchema, defineTable, defineVectorIndex } from "../src/schema.js";
+import { initCirrus } from "../src/builder/index";
+import { mutation, query } from "../src/functions";
+import { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "../src/plugin";
+import { defineSchema, defineTable, defineVectorIndex } from "../src/schema";
 
 describe("defineSchemaExtension", () => {
     it("returns the key and tables", () => {

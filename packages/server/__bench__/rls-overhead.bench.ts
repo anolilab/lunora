@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
-import type { Middleware, Policy } from "../src/index.js";
-import { definePolicy, initCirrus, rls } from "../src/index.js";
+import type { Middleware, Policy } from "../src/index";
+import { definePolicy, initCirrus, rls } from "../src/index";
 
 /**
  * What does `.use(rls(policies))` cost per query call? The middleware

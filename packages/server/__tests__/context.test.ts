@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext, ReadOnlyStorage, Storage } from "../src/index.js";
-import { query, v } from "../src/index.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext, ReadOnlyStorage, Storage } from "../src/index";
+import { query, v } from "../src/index";
 
 /**
  * Asserts at compile time that `Lhs` and `Rhs` are mutually assignable.

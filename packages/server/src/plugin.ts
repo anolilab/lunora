@@ -58,8 +58,8 @@
  *     builder — each consumer decides which plugin middlewares to attach.
  */
 
-import runMiddlewareChain from "./builder/run-middleware.js";
-import type { Middleware, MiddlewareNext } from "./builder/types.js";
+import runMiddlewareChain from "./builder/run-middleware";
+import type { Middleware, MiddlewareNext } from "./builder/types";
 import type {
     AggregateIndexDefinition,
     FunctionKind,
@@ -69,7 +69,7 @@ import type {
     Schema,
     TableDefinition,
     VectorIndexDefinition,
-} from "./types.js";
+} from "./types";
 
 /**
  * Apply the extension's `key` prefix to a single bare table name. Centralised

@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
-import type { Middleware } from "../src/index.js";
-import { initCirrus } from "../src/index.js";
+import type { Middleware } from "../src/index";
+import { initCirrus } from "../src/index";
 
 /**
  * The procedure builder's `.use(mw)` chain composes middleware onion-style;

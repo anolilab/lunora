@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, v } from "../src/index.js";
+import { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, v } from "../src/index";
 
 describe("defineTable", () => {
     it("returns a table definition with shape and default __root__ shard mode", () => {

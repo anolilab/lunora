@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
-import type { Middleware, Policy } from "../src/index.js";
-import { definePolicy, initCirrus, rls } from "../src/index.js";
+import type { Middleware, Policy } from "../src/index";
+import { definePolicy, initCirrus, rls } from "../src/index";
 
 /**
  * RLS `get()` / id-keyed write round-trip cost as the number of policy-gated

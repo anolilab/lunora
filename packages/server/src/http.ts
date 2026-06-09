@@ -3,10 +3,10 @@ import { ValidationError } from "@cirrus/values";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
-import type { EmptyArgs } from "./builder/index.js";
-import { CirrusError } from "./error.js";
-import { parseValidatorMap } from "./functions.js";
-import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types.js";
+import type { EmptyArgs } from "./builder/index";
+import { CirrusError } from "./error";
+import { parseValidatorMap } from "./functions";
+import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types";
 
 /** HTTP verbs the typed {@link httpRoute} builder can bind to. */
 type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT";

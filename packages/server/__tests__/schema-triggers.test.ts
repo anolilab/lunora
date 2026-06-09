@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { defineTable, v } from "../src/index.js";
+import { defineTable, v } from "../src/index";
 
 describe("defineTable().triggers", () => {
     it("table without .triggers exposes an empty triggerMap", () => {

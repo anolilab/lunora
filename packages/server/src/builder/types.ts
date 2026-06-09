@@ -11,7 +11,7 @@ import type {
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,
-} from "../types.js";
+} from "../types";
 
 /** Builder discriminator. Codegen reads this kind. */
 export type TerminalKind = FunctionKind;

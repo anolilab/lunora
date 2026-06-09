@@ -2,8 +2,8 @@
  * Compile-time only: this file is included by `tsc --noEmit` to exercise the
  * type surface. It is also imported by a no-op test so vitest counts it.
  */
-import type { ActionCtx, CirrusRouteHandler, EmptyArgs, Id, Infer, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index.js";
-import { defineSchema, defineTable, httpRoute, initCirrus, mutation, query, v } from "../src/index.js";
+import type { ActionCtx, CirrusRouteHandler, EmptyArgs, Id, Infer, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index";
+import { defineSchema, defineTable, httpRoute, initCirrus, mutation, query, v } from "../src/index";
 
 type Assert<T extends true> = T;
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- canonical type-equality idiom; each fresh `T` in the two function signatures is structurally load-bearing (relaxing it breaks the invariance check).

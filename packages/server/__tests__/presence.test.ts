@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "../src/index.js";
-import { v } from "../src/index.js";
-import { definePresence, PRESENCE_TABLE, presenceExtension } from "../src/presence.js";
-import { defineSchema, defineTable } from "../src/schema.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "../src/index";
+import { v } from "../src/index";
+import { definePresence, PRESENCE_TABLE, presenceExtension } from "../src/presence";
+import { defineSchema, defineTable } from "../src/schema";
 
 /**
  * Minimal in-memory `db` matching the slice of `DatabaseWriter` the presence

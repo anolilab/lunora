@@ -12,14 +12,14 @@ export type {
     MutationBuilder,
     QueryBuilder,
     TerminalKind,
-} from "./builder/index.js";
-export { initCirrus } from "./builder/index.js";
-export type { CirrusErrorCode } from "./error.js";
-export { CirrusError } from "./error.js";
-export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade.js";
-export { bindOrm, bindTableFacade } from "./facade.js";
-export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions.js";
-export { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions.js";
+} from "./builder/index";
+export { initCirrus } from "./builder/index";
+export type { CirrusErrorCode } from "./error";
+export { CirrusError } from "./error";
+export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
+export { bindOrm, bindTableFacade } from "./facade";
+export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions";
+export { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 export type {
     CirrusHttpApp,
     CirrusHttpEnv,
@@ -32,16 +32,16 @@ export type {
     HttpRouteFactory,
     HttpRouteHandlerOptions,
     HttpStreamHandlerOptions,
-} from "./http.js";
-export { httpAction, httpRoute, httpRouter, serveStorageObject } from "./http.js";
-export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration.js";
-export { defineMigration } from "./migration.js";
-export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, PrefixedTables, SchemaExtension } from "./plugin.js";
-export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin.js";
-export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence.js";
-export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence.js";
-export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./rls/index.js";
-export { definePermission, definePolicies, definePolicy, defineRole, rls } from "./rls/index.js";
+} from "./http";
+export { httpAction, httpRoute, httpRouter, serveStorageObject } from "./http";
+export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration";
+export { defineMigration } from "./migration";
+export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, PrefixedTables, SchemaExtension } from "./plugin";
+export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin";
+export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence";
+export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence";
+export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./rls/index";
+export { definePermission, definePolicies, definePolicy, defineRole, rls } from "./rls/index";
 export type {
     AggregateIndexOptions,
     ExtendableSchema,
@@ -54,8 +54,8 @@ export type {
     TableBuilder,
     VectorIndexOptions,
     VectorizeOptions,
-} from "./schema.js";
-export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex } from "./schema.js";
+} from "./schema";
+export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex } from "./schema";
 export type {
     ActionCtx,
     AggregateIndexDefinition,
@@ -130,8 +130,8 @@ export type {
     VectorSearch,
     VectorSearchReader,
     VectorUpsertInput,
-} from "./types.js";
-export { anyApi } from "./types.js";
+} from "./types";
+export { anyApi } from "./types";
 // Re-export the code-first cron builder so users declare crons from the main
 // package alongside query/mutation/action (it lives in @cirrus/scheduler).
 export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "@cirrus/scheduler";

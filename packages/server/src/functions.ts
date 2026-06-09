@@ -10,7 +10,7 @@ import type {
     RegisteredAction,
     RegisteredMutation,
     RegisteredQuery,
-} from "./types.js";
+} from "./types";
 
 /**
  * Validate each declared field of `source` through its validator, re-wrapping

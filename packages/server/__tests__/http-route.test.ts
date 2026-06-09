@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { CirrusRouteHandler, HttpActionCtx as HttpActionContext } from "../src/index.js";
-import { httpRoute, httpRouter, v } from "../src/index.js";
+import type { CirrusRouteHandler, HttpActionCtx as HttpActionContext } from "../src/index";
+import { httpRoute, httpRouter, v } from "../src/index";
 
 const context = {} as HttpActionContext;
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { HttpActionCtx as HttpActionContext } from "../src/index.js";
-import { httpAction, httpRouter } from "../src/index.js";
+import type { HttpActionCtx as HttpActionContext } from "../src/index";
+import { httpAction, httpRouter } from "../src/index";
 
 const context = {} as HttpActionContext;
 

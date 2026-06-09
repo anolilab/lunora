@@ -44,11 +44,11 @@
 
 import { v } from "@cirrus/values";
 
-import { mutation, query } from "./functions.js";
-import type { Component, SchemaExtension } from "./plugin.js";
-import { defineComponent, defineSchemaExtension } from "./plugin.js";
-import { defineTable } from "./schema.js";
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext, RegisteredMutation, RegisteredQuery } from "./types.js";
+import { mutation, query } from "./functions";
+import type { Component, SchemaExtension } from "./plugin";
+import { defineComponent, defineSchemaExtension } from "./plugin";
+import { defineTable } from "./schema";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext, RegisteredMutation, RegisteredQuery } from "./types";
 
 /** Default time-to-live for a presence row: a heartbeat keeps a member "present" for this long. */
 const DEFAULT_TTL_MS = 30_000;

@@ -9,8 +9,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { Middleware, Policy, Role } from "../src/index.js";
-import { CirrusError, definePermission, definePolicies, definePolicy, defineRole, initCirrus, rls } from "../src/index.js";
+import type { Middleware, Policy, Role } from "../src/index";
+import { CirrusError, definePermission, definePolicies, definePolicy, defineRole, initCirrus, rls } from "../src/index";
 
 /**
  * The procedure builder types `ctx.db` nominally (`DatabaseReader`/

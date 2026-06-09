@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ActionCtx as ActionContext, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../src/index.js";
-import { action, internalAction, internalMutation, internalQuery, mutation, query, v, ValidationError } from "../src/index.js";
+import type { ActionCtx as ActionContext, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../src/index";
+import { action, internalAction, internalMutation, internalQuery, mutation, query, v, ValidationError } from "../src/index";
 
 const makeQueryContext = (): QueryContext => {
     return {

@@ -1,7 +1,7 @@
 import type { Validator } from "@cirrus/values";
 
-import type { PrefixedTables, SchemaExtension } from "./plugin.js";
-import { mergeSchemaExtension } from "./plugin.js";
+import type { PrefixedTables, SchemaExtension } from "./plugin";
+import { mergeSchemaExtension } from "./plugin";
 import type {
     AggregateIndexDefinition,
     AggregateOp,
@@ -24,7 +24,7 @@ import type {
     VectorEmbedder,
     VectorIndexDefinition,
     VectorMetric,
-} from "./types.js";
+} from "./types";
 
 /** Options for `.vectorize(field, opts)` (DSL Shape A). */
 interface VectorizeOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {

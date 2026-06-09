@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defineTable, v } from "../src/index.js";
+import { defineTable, v } from "../src/index";
 
 describe("defineTable().relations", () => {
     it("table without .relations exposes an empty relationMap", () => {

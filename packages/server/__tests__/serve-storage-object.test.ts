@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { serveStorageObject } from "../src/index.js";
+import { serveStorageObject } from "../src/index";
 
 interface FakeObjectOptions {
     contentType?: string;

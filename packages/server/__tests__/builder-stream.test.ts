@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { initCirrus, v } from "../src/index.js";
+import { initCirrus, v } from "../src/index";
 
 const c = initCirrus.dataModel<Record<string, never>>().create();
 

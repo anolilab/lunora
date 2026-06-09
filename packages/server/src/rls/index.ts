@@ -42,6 +42,6 @@
  * builders.mutation.use(rls(definePolicies([policy]), { roles: [admin] }));
  * ```
  */
-export { definePermission, definePolicies, definePolicy, defineRole } from "./define.js";
-export { rls } from "./middleware.js";
-export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./types.js";
+export { definePermission, definePolicies, definePolicy, defineRole } from "./define";
+export { rls } from "./middleware";
+export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./types";

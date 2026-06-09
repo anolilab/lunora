@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
-import type { HttpActionCtx as HttpActionContext } from "../src/index.js";
-import { httpAction, httpRoute, httpRouter, v } from "../src/index.js";
+import type { HttpActionCtx as HttpActionContext } from "../src/index";
+import { httpAction, httpRoute, httpRouter, v } from "../src/index";
 
 /**
  * The hono migration (§2.2) replaced the hand-rolled router with hono's

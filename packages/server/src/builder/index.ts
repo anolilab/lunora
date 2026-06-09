@@ -1,8 +1,8 @@
 import type { Validator } from "@cirrus/values";
 
-import { validateArgs } from "../functions.js";
-import type { ActionCtx as ActionContext, ArgsValidator, FunctionKind, InferArgs, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../types.js";
-import runMiddlewareChain from "./run-middleware.js";
+import { validateArgs } from "../functions";
+import type { ActionCtx as ActionContext, ArgsValidator, FunctionKind, InferArgs, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../types";
+import runMiddlewareChain from "./run-middleware";
 import type {
     ActionBuilder,
     CirrusBuilders,
@@ -15,7 +15,7 @@ import type {
     Middleware,
     MutationBuilder,
     QueryBuilder,
-} from "./types.js";
+} from "./types";
 
 /** Accumulated builder state threaded through `.input()` / `.use()` / `.output()`. */
 interface BuilderState {
@@ -214,4 +214,4 @@ export type {
     MutationBuilder,
     QueryBuilder,
     TerminalKind,
-} from "./types.js";
+} from "./types";
