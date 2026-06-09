@@ -153,6 +153,16 @@ type BroadcastDelta = (delta: MutationDelta) => void;
  */
 type ReadHook = (table: string, idOrScan?: string) => void;
 
+/**
+ * Telemetry hook fired when a read explicitly names a declared index
+ * (`.withIndex()` / `.withSearchIndex()` / `rank()` / `rankPage()`), so the DO
+ * can accumulate which indexes are actually exercised — the signal behind the
+ * `unused_index` runtime advisory. `kind` mirrors the declared index kind.
+ * No-op by default; called at most once per read (not per row), so it adds no
+ * meaningful hot-path cost.
+ */
+type IndexUseHook = (table: string, indexName: string, kind: "index" | "rank" | "search") => void;
+
 /** Pluggable wall clock — defaults to `Date.now`. */
 type Clock = () => number;
 
@@ -214,6 +224,7 @@ interface CtxDbOptions {
      */
     globalDb?: DatabaseWriterLike;
     idGenerator?: IdGenerator;
+    onIndexUse?: IndexUseHook;
     onRead?: ReadHook;
     onWrite?: WriteHook;
     /** Injected into the trigger context as `ctx.scheduler`; defaults to a throwing stub. */
@@ -993,7 +1004,7 @@ const normalizeIdStructurally = (schema: SchemaLike, tableName: string, id: stri
     return id;
 };
 
-const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): TableReaderLike => {
+const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onIndexUse: IndexUseHook = () => undefined): TableReaderLike => {
     const tableDefinition = schema.tables[tableName];
 
     if (!tableDefinition) {
@@ -1146,6 +1157,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
                 throw new Error(`unknown index "${indexName}" on table "${tableName}"`);
             }
 
+            onIndexUse(tableName, indexName, "index");
             stage.indexName = indexName;
             stage.indexFields = definition.fields;
 
@@ -1161,6 +1173,8 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string): Table
             if (!definition) {
                 throw new Error(`unknown search index "${indexName}" on table "${tableName}"`);
             }
+
+            onIndexUse(tableName, indexName, "search");
 
             const searchStage: SearchStage = {
                 definition,
@@ -1541,6 +1555,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { schema } = options;
     const broadcast = options.broadcast ?? (() => undefined);
     const onRead = options.onRead ?? (() => undefined);
+    const onIndexUse = options.onIndexUse ?? (() => undefined);
     const onWrite = options.onWrite ?? (() => undefined);
     const { cache } = options;
     const clock = options.clock ?? (() => Date.now());
@@ -2857,7 +2872,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // can record per-id deps.
             onRead(tableName, SCAN_DEP);
 
-            return buildReader(sql, schema, tableName);
+            return buildReader(sql, schema, tableName, onIndexUse);
         },
 
         async rank(tableName, indexName, rankOptions) {
@@ -2866,6 +2881,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (global) {
                 return global.rank(tableName, indexName, rankOptions);
             }
+
+            onIndexUse(tableName, indexName, "rank");
 
             const definition = schema.tables[tableName];
 
@@ -3005,6 +3022,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (global) {
                 return global.rankPage(tableName, indexName, rankPageOptions);
             }
+
+            onIndexUse(tableName, indexName, "rank");
 
             const definition = schema.tables[tableName];
 

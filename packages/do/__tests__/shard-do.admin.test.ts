@@ -180,6 +180,60 @@ describe("shardDO admin introspection", () => {
         await expect(response.json()).resolves.toEqual({ result: { advisories: [finding] } });
     });
 
+    it("derives an unused_index runtime advisory for a declared index no query exercised", async () => {
+        expect.assertions(2);
+
+        // A shard that declares two indexes on `posts` and lets a test exercise one.
+        class UnusedIndexShard extends AdminShard {
+            /** Simulate a query exercising `table`'s `index`, the way the ctx-db read hook would. */
+            public exercise(table: string, index: string): void {
+                this.getCtxDbIndexUseHook()(table, index);
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override tableIndexes(table: string): { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[] {
+                return table === "posts"
+                    ? [
+                          { fields: ["authorId"], name: "byAuthor", type: "index" },
+                          { fields: ["createdAt"], name: "byCreated", type: "index" },
+                      ]
+                    : [];
+            }
+        }
+
+        const shard = new UnusedIndexShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // No reads yet → no runtime advisories (a never-queried table never spams).
+        const cold = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN));
+
+        await expect(cold.json()).resolves.toEqual({ result: { advisories: [] } });
+
+        // A query exercises `byAuthor`; `byCreated` is now the unused one. The
+        // exact `toEqual` asserts a single finding — so `byAuthor` is absent.
+        shard.exercise("posts", "byAuthor");
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({
+            result: {
+                advisories: [
+                    {
+                        cacheKey: "unused_index:posts:byCreated",
+                        categories: ["PERFORMANCE"],
+                        description: expect.any(String),
+                        detail: expect.any(String),
+                        facing: "INTERNAL",
+                        level: "INFO",
+                        metadata: { index: "byCreated", indexKind: "index", since: "instance-woke", table: "posts" },
+                        name: "unused_index",
+                        remediation: expect.any(String),
+                        title: "Unused index",
+                    },
+                ],
+            },
+        });
+    });
+
     it("is disabled (403) when no admin token is configured, even with a bearer", async () => {
         expect.assertions(2);
 

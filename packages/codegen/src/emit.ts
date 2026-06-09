@@ -1156,6 +1156,7 @@ const vectorsStub: VectorSearchLike = {
                     this.recordChangedTable(delta.table);
                 },
                 cdc: config.cdc ?? false,
+                onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
                 onWrite,
                 scheduler,
@@ -1168,6 +1169,7 @@ const vectorsStub: VectorSearchLike = {
                     this.recordChangedTable(delta.table);
                 },
                 cdc: config.cdc ?? false,
+                onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,

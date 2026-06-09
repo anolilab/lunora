@@ -15,7 +15,7 @@ import type { DependencyTracker } from "./dependency-tracker";
 import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
 import type { FunctionMetricBucket } from "./function-metrics";
 import { mergeScanAttribution, readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics";
-import type { AdvisoryFinding, AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect";
+import type { AdvisoryFinding, AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, OrderByClause, TableIndexInfo } from "./introspect";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds } from "./introspect";
 import { LogBuffer } from "./log-buffer";
 import { armRestore, readBookmark } from "./pitr";
@@ -555,6 +555,26 @@ const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
 };
 
 /**
+ * Parse the loosely-typed `orderBy` admin arg into a validated {@link OrderByClause}.
+ * Requires a non-empty `column`; `direction` defaults to `asc` and is coerced to
+ * `desc` only on an explicit `"desc"`. Returns `undefined` for anything malformed
+ * so `readTablePage` keeps its natural-order read.
+ */
+const parseTablePageOrderBy = (raw: unknown): OrderByClause | undefined => {
+    if (typeof raw !== "object" || raw === null) {
+        return undefined;
+    }
+
+    const { column, direction } = raw as Record<string, unknown>;
+
+    if (typeof column !== "string" || column === "") {
+        return undefined;
+    }
+
+    return { column, direction: direction === "desc" ? "desc" : "asc" };
+};
+
+/**
  * Validate the `__cirrus_admin__:deleteRows` payload. `table` must be a
  * non-empty string; `filters`/`search` mirror `readTablePage`'s predicate args
  * (so "delete matching" removes exactly the previewed rows) and a numeric
@@ -1026,6 +1046,13 @@ abstract class ShardDO {
      * (durable aggregation would be a separate, heavier feature).
      */
     private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now() };
+
+    /**
+     * Declared indexes (`table:index`) a query has exercised since this instance
+     * woke, stamped by `getCtxDbIndexUseHook`. In-memory and reset on
+     * hibernation/restart — drives the `unused_index` runtime advisory.
+     */
+    private readonly usedIndexes = new Set<string>();
 
     /**
      * Per-function execution counters surfaced by the
@@ -1600,6 +1627,46 @@ abstract class ShardDO {
     }
 
     /**
+     * Runtime advisories derived from observed signal — currently `unused_index`:
+     * a declared index a query has never exercised since this instance woke. To
+     * keep noise down it only inspects tables that have used *some* index (so a
+     * never-queried table never spams findings; a table queried only via full
+     * scan is the `filter_without_index` lint's concern, not this one). The
+     * "since this instance woke" caveat rides in the detail — like the other
+     * in-memory counters, the signal resets on hibernation.
+     */
+    protected runtimeAdvisories(): AdvisoryFinding[] {
+        const usedTables = new Set([...this.usedIndexes].map((key) => key.slice(0, key.indexOf(":"))));
+        const findings: AdvisoryFinding[] = [];
+
+        for (const table of usedTables) {
+            for (const index of this.tableIndexes(table)) {
+                // Only the kinds a query names explicitly (and that this hook
+                // stamps): secondary, search, rank. Vector indexes use a separate
+                // API not tracked here.
+                if (index.type === "vector" || this.usedIndexes.has(`${table}:${index.name}`)) {
+                    continue;
+                }
+
+                findings.push({
+                    cacheKey: `unused_index:${table}:${index.name}`,
+                    categories: ["PERFORMANCE"],
+                    description: "A declared index has not been exercised by any query since this shard instance started. An unused index costs storage and is maintained on every write for no read benefit.",
+                    detail: `Index "${index.name}" on table "${table}" has not been used since this instance woke, though other indexes on "${table}" have — it may be redundant.`,
+                    facing: "INTERNAL",
+                    level: "INFO",
+                    metadata: { index: index.name, indexKind: index.type, since: "instance-woke", table },
+                    name: "unused_index",
+                    remediation: "Confirm over a representative window, then drop the index if no query needs it.",
+                    title: "Unused index",
+                });
+            }
+        }
+
+        return findings;
+    }
+
+    /**
      * Export every row this shard owns across the requested tables (or every
      * shard-local user table when none are specified) as `{table, doc}` records.
      * Globals are not the DO's concern; the worker reads those from D1.
@@ -1969,6 +2036,19 @@ abstract class ShardDO {
             if (idOrScan === SCAN_DEP) {
                 this.currentScannedTables?.add(table);
             }
+        };
+    }
+
+    /**
+     * Read hook recording which declared indexes a query actually exercises —
+     * the signal behind the `unused_index` runtime advisory. Passed as
+     * `onIndexUse` to `createShardCtxDb` by the generated subclass. In-memory and
+     * reset on hibernation/restart (a "since this instance woke" readout, like
+     * the function/scan counters), keyed `table:index`.
+     */
+    protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void {
+        return (table, indexName) => {
+            this.usedIndexes.add(`${table}:${indexName}`);
         };
     }
 
@@ -2710,10 +2790,10 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getAdvisories) {
-            // Static schema advisories — deployment-wide (the advisor reasons
-            // over the whole schema), so it carries the wildcard like the other
-            // counter/config reads. The codegen subclass overrides `advisories()`.
-            return { advisories: this.advisories() };
+            // Static schema advisories (codegen-emitted, via `advisories()`) plus
+            // runtime ones derived from observed signal (`unused_index`).
+            // Deployment-wide, so it carries the wildcard like the other reads.
+            return { advisories: [...this.advisories(), ...this.runtimeAdvisories()] };
         }
 
         return undefined;
@@ -2797,6 +2877,7 @@ abstract class ShardDO {
             filters: parseTablePageFilters(args["filters"]),
             limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
             offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
+            orderBy: parseTablePageOrderBy(args["orderBy"]),
             refs: this.tableRefs(table),
             search: typeof args["search"] === "string" ? args["search"] : undefined,
             table,
