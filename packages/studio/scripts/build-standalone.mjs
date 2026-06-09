@@ -51,6 +51,7 @@ const baseOptions = {
 
 // Some bundled deps (e.g. `@base-ui/react`) compile JSX to `jsxDEV`
 // (`react/jsx-dev-runtime`), which React only *exports* from its DEVELOPMENT
+// eslint-disable-next-line no-secrets/no-secrets -- prose mentioning the prod env flag, not a secret
 // build; under `NODE_ENV=production` that module lacks `jsxDEV`, so the bundle
 // loads to `jsxDEV is not a function`. The marker lives in a transitive dep, not
 // our own dist, so detect it from the actual bundle output rather than guessing:
