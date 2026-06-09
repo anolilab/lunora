@@ -232,11 +232,13 @@ describe("schedulerDO — workpool concurrency", () => {
         expect(status.inFlight).toBe(3);
 
         // Each pool's per-pool /pool view stays consistent with the rollup.
-        const poolA = await (await scheduler.fetch(get("/pool?name=a"))).json<{ queued: number }>();
+        const poolAResponse = await scheduler.fetch(get("/pool?name=a"));
+        const poolA = await poolAResponse.json<{ queued: number }>();
 
         expect(poolA.queued).toBe(2);
 
-        const poolB = await (await scheduler.fetch(get("/pool?name=b"))).json<{ inFlight: number }>();
+        const poolBResponse = await scheduler.fetch(get("/pool?name=b"));
+        const poolB = await poolBResponse.json<{ inFlight: number }>();
 
         expect(poolB.inFlight).toBe(1);
     });
@@ -247,7 +249,8 @@ describe("schedulerDO — workpool concurrency", () => {
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
 
-        const status = await (await scheduler.fetch(get("/status"))).json<{ backlog: number; inFlight: number; pools: unknown[] }>();
+        const statusResponse = await scheduler.fetch(get("/status"));
+        const status = await statusResponse.json<{ backlog: number; inFlight: number; pools: unknown[] }>();
 
         expect(status.pools).toEqual([]);
         expect(status.backlog).toBe(0);

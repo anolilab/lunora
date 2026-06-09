@@ -291,36 +291,37 @@ class SchedulerDO {
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
 
+        // `/ws` gates on the Upgrade header rather than the HTTP method, so it
+        // stays a dedicated check; the rest dispatch on `${method} ${pathname}`.
         if (url.pathname === "/ws" && request.headers.get("Upgrade") === "websocket") {
             return this.handleWebSocketUpgrade();
         }
 
-        if (url.pathname === "/schedule" && request.method === "POST") {
-            return this.handleSchedule(request);
-        }
-
-        if (url.pathname === "/cancel" && request.method === "POST") {
-            return this.handleCancel(request);
-        }
-
-        if (url.pathname === "/complete" && request.method === "POST") {
-            return this.handleComplete(request);
-        }
-
-        if (url.pathname === "/get" && request.method === "GET") {
-            return this.handleGet(url);
-        }
-
-        if (url.pathname === "/list" && request.method === "GET") {
-            return this.handleList();
-        }
-
-        if (url.pathname === "/pool" && request.method === "GET") {
-            return this.handlePoolStatus(url);
-        }
-
-        if (url.pathname === "/status" && request.method === "GET") {
-            return this.handleStatus();
+        switch (`${request.method} ${url.pathname}`) {
+            case "GET /get": {
+                return this.handleGet(url);
+            }
+            case "GET /list": {
+                return this.handleList();
+            }
+            case "GET /pool": {
+                return this.handlePoolStatus(url);
+            }
+            case "GET /status": {
+                return this.handleStatus();
+            }
+            case "POST /cancel": {
+                return this.handleCancel(request);
+            }
+            case "POST /complete": {
+                return this.handleComplete(request);
+            }
+            case "POST /schedule": {
+                return this.handleSchedule(request);
+            }
+            default: {
+                break;
+            }
         }
 
         return Response.json(
