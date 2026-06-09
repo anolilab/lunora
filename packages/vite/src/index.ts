@@ -2,11 +2,11 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
-import codegenPlugin from "./codegen-plugin.js";
-import { studioPlugin } from "./studio-plugin.js";
-import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
-import { withWorkerStartupHint } from "./worker-startup-hint.js";
-import wranglerValidatorPlugin from "./wrangler-validator-plugin.js";
+import codegenPlugin from "./codegen-plugin";
+import { studioPlugin } from "./studio-plugin";
+import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
+import { withWorkerStartupHint } from "./worker-startup-hint";
+import wranglerValidatorPlugin from "./wrangler-validator-plugin";
 
 const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirrusPluginOptions => {
     const input = options ?? {};
@@ -85,11 +85,11 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
 
 const VERSION = "0.0.0";
 
-export { default as codegenPlugin } from "./codegen-plugin.js";
-export type { ReconcileResult } from "./cron-sync.js";
-export { reconcileWranglerCrons } from "./cron-sync.js";
-export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin.js";
-export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types.js";
-export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint.js";
-export { default as wranglerValidatorPlugin } from "./wrangler-validator-plugin.js";
+export { default as codegenPlugin } from "./codegen-plugin";
+export type { ReconcileResult } from "./cron-sync";
+export { reconcileWranglerCrons } from "./cron-sync";
+export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
+export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
+export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
+export { default as wranglerValidatorPlugin } from "./wrangler-validator-plugin";
 export { cirrus, VERSION };

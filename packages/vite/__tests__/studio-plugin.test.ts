@@ -3,7 +3,7 @@ import type { ServerResponse } from "node:http";
 import type { ViteDevServer } from "vite";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { buildStudioUrl, STUDIO_PATH, studioPlugin } from "../src/studio-plugin.js";
+import { buildStudioUrl, STUDIO_PATH, studioPlugin } from "../src/studio-plugin";
 
 describe("buildStudioUrl", () => {
     it("prefers Vite's resolved local URL", () => {

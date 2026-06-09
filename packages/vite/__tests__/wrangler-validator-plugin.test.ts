@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ResolvedCirrusPluginOptions } from "../src/types.js";
-import wranglerValidatorPlugin from "../src/wrangler-validator-plugin.js";
+import type { ResolvedCirrusPluginOptions } from "../src/types";
+import wranglerValidatorPlugin from "../src/wrangler-validator-plugin";
 
 const WRANGLER_NOT_FOUND = /wrangler\.jsonc not found/u;
 const SHARD_SHARDDO = /SHARD.+ShardDO/u;

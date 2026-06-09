@@ -1,7 +1,7 @@
 import type { Plugin } from "vite";
 import { describe, expect, it } from "vitest";
 
-import { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "../src/worker-startup-hint.js";
+import { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "../src/worker-startup-hint";
 
 /** A realistic Worker-entry eval failure as `@cloudflare/vite-plugin` surfaces it. */
 const makeRunnerWorkerError = (): Error => {

@@ -18,7 +18,7 @@ import type { Plugin } from "vite";
 import { resolveConfig } from "vite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { cirrus } from "../src/index.js";
+import { cirrus } from "../src/index";
 
 const CIRRUS_WRANGLER_ERROR = /\[cirrus\] wrangler/;
 

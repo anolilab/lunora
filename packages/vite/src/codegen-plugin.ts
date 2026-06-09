@@ -5,8 +5,8 @@ import { runCodegen } from "@cirrus/codegen";
 import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
 import type { Plugin, ViteDevServer } from "vite";
 
-import { reconcileWranglerCrons } from "./cron-sync.js";
-import type { ResolvedCirrusPluginOptions } from "./types.js";
+import { reconcileWranglerCrons } from "./cron-sync";
+import type { ResolvedCirrusPluginOptions } from "./types";
 
 const DEBOUNCE_MS = 100;
 

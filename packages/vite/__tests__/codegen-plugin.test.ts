@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
-import codegenPlugin from "../src/codegen-plugin.js";
-import type { ResolvedCirrusPluginOptions } from "../src/types.js";
+import codegenPlugin from "../src/codegen-plugin";
+import type { ResolvedCirrusPluginOptions } from "../src/types";
 
 const CRONS_SOURCE = `import { cronJobs } from "@cirrus/scheduler";
 import { internal } from "./_generated/api.js";

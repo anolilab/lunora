@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { cirrus } from "../src/index.js";
+import { cirrus } from "../src/index";
 
 let workdir: string;
 

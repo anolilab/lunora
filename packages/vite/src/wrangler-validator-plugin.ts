@@ -1,7 +1,7 @@
 import { validateWranglerProject } from "@cirrus/config";
 import type { Plugin } from "vite";
 
-import type { ResolvedCirrusPluginOptions } from "./types.js";
+import type { ResolvedCirrusPluginOptions } from "./types";
 
 const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Error => {
     const lines = [
