@@ -1,4 +1,4 @@
-export { createVectors } from "./create-vectors.js";
+export { createVectors } from "./create-vectors";
 export type {
     SchemaLike,
     TableDefinitionLike,
@@ -13,8 +13,8 @@ export type {
     VectorUpsertInputLike,
     WriteEvent,
     WriteHook,
-} from "./ctx.js";
-export { createCtxVectors, createVectorSyncHook } from "./ctx.js";
+} from "./ctx";
+export { createCtxVectors, createVectorSyncHook } from "./ctx";
 export type {
     CirrusVectors,
     CirrusVectorsOptions,
@@ -30,4 +30,4 @@ export type {
     VectorizeUpsertMutation,
     VectorizeVector,
     VectorMetric,
-} from "./types.js";
+} from "./types";

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createVectors } from "../src/create-vectors.js";
-import type { SchemaLike, VectorSearchLike } from "../src/ctx.js";
-import { createCtxVectors as createContextVectors, createVectorSyncHook } from "../src/ctx.js";
-import type { VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types.js";
+import { createVectors } from "../src/create-vectors";
+import type { SchemaLike, VectorSearchLike } from "../src/ctx";
+import { createCtxVectors as createContextVectors, createVectorSyncHook } from "../src/ctx";
+import type { VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types";
 
 const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => {
     return {

@@ -1,5 +1,5 @@
-import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent.js";
-import type { CirrusVectors } from "./types.js";
+import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent";
+import type { CirrusVectors } from "./types";
 
 /**
  * `(input: string) => vector`. Matches `@cirrus/server`'s `VectorEmbedder` so
@@ -250,7 +250,7 @@ export const createVectorSyncHook = (options: { namespace?: string; schema: Sche
         // the fan-out with the same cap as `upsertMany`: a table with many
         // vector indexes (or a bulk apply reusing this hook) must not spawn an
         // unbounded number of concurrent embedder + Vectorize subrequests.
-        const operations: Array<() => Promise<void>> = [
+        const operations: (() => Promise<void>)[] = [
             ...inlineToClear.map((entry) => async (): Promise<void> => {
                 await vectors.deleteByIds(entry.index.name, [event.id]);
             }),

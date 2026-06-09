@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createVectors } from "../src/create-vectors.js";
+import { createVectors } from "../src/create-vectors";
 import type {
     EmbedFn as EmbedFunction,
     VectorizeDeleteMutation,
@@ -8,7 +8,7 @@ import type {
     VectorizeMatches,
     VectorizeUpsertMutation,
     VectorizeVector,
-} from "../src/types.js";
+} from "../src/types";
 
 const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => {
     return {

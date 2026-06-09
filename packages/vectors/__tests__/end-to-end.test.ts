@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createVectors } from "../src/create-vectors.js";
-import { createCtxVectors as createContextVectors } from "../src/ctx.js";
+import { createVectors } from "../src/create-vectors";
+import { createCtxVectors as createContextVectors } from "../src/ctx";
 import type {
     VectorizeDeleteMutation,
     VectorizeIndexLike,
@@ -10,7 +10,7 @@ import type {
     VectorizeQueryOptions,
     VectorizeUpsertMutation,
     VectorizeVector,
-} from "../src/types.js";
+} from "../src/types";
 
 /**
  * Stateful structural fake of `VectorizeIndexLike` — mirrors the spirit of

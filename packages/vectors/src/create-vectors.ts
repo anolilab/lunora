@@ -1,3 +1,4 @@
+import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent";
 import type {
     CirrusVectors,
     CirrusVectorsOptions,
@@ -9,9 +10,7 @@ import type {
     VectorizeMatches,
     VectorizeUpsertMutation,
     VectorizeVector,
-} from "./types.js";
-
-import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent.js";
+} from "./types";
 
 const resolveIndex = (indexes: Record<string, VectorizeIndexLike>, name: string): VectorizeIndexLike => {
     const index = indexes[name];
