@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 import { discoverSchema } from "@cirrus/codegen";
 import { Project } from "ts-morph";
 
-import join from "./path.js";
+import join from "./path";
 
 interface SchemaInfo {
     /** Whether the cirrus schema declares any `.global()` table. */

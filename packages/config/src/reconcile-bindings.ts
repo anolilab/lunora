@@ -18,8 +18,8 @@ import { writeFileSync } from "node:fs";
 
 import { applyEdits, modify } from "jsonc-parser";
 
-import type { DurableObjectSpec, InferredBindings } from "./infer-bindings.js";
-import { findWranglerFile, readWranglerJsonc } from "./wrangler-path.js";
+import type { DurableObjectSpec, InferredBindings } from "./infer-bindings";
+import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
 

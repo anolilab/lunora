@@ -20,9 +20,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import { init as initLexer, parse as lexModule } from "es-module-lexer";
 
-import join from "./path.js";
-import { discoverSchemaInfo } from "./schema-info.js";
-import { readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path.js";
+import join from "./path";
+import { discoverSchemaInfo } from "./schema-info";
+import { readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
 
 /** Source file extensions worth scanning for capability signals. */
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);

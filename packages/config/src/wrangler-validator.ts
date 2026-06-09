@@ -11,9 +11,9 @@
  * the project's schema, and returns the existing
  * `{ problems, wranglerPath }` shape kept for backward compatibility.
  */
-import type { SchemaInfo } from "./schema-info.js";
-import { discoverSchemaInfo } from "./schema-info.js";
-import { findWranglerFile, readWranglerJsonc } from "./wrangler-path.js";
+import type { SchemaInfo } from "./schema-info";
+import { discoverSchemaInfo } from "./schema-info";
+import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 const REQUIRED_COMPATIBILITY_DATE: string = "2026-04-07";
 
