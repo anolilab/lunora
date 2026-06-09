@@ -87,7 +87,7 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
     const fields: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(row)) {
-        if (key !== "id" && key !== "__id__" && key !== "_id" && key !== "_creationTime" && key !== "__doc__") {
+        if (!META_COLUMNS.has(key)) {
             fields[key] = value;
         }
     }
@@ -633,7 +633,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     // Headless table model + virtualizer for the loaded page. The page-local
     // `sorting` state stays here (table switches reset it via `setSorting`); the
     // hook owns only the derived react-table/virtualizer wiring.
-    const table = useDataBrowserTable(page, navigateToRef, sorting, setSorting);
+    const table = useDataBrowserTable(page, sorting, setSorting);
 
     const total = page?.total ?? 0;
     const hasPrevious = offset > 0;

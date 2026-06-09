@@ -531,18 +531,12 @@ interface DataBrowserTableModel {
 
 /**
  * The headless table model + virtualizer for the loaded page. Column defs derive
- * from `page.columns` (foreign-key columns in `page.refs` render as links via
- * `onNavigateToRef`), the supplied page-local `sorting` runs over the loaded
- * rows, and the rendered rows are virtualized so a large page never inflates the
- * DOM. Column order (drag-to-reorder) and sizing (drag-to-resize) are managed
+ * from `page.columns`; the page-local `sorting` runs over the loaded rows, and
+ * the rendered rows are virtualized so a large page never inflates the DOM.
+ * Column order (drag-to-reorder) and sizing (drag-to-resize) are managed
  * internally by TanStack; the `sorting` state stays owned by the caller.
  */
-const useDataBrowserTable = (
-    page: TablePage | null,
-    onNavigateToRef: (target: string, id: string) => void,
-    sorting: SortingState,
-    onSortingChange: OnChangeFn<SortingState>,
-): DataBrowserTableModel => {
+const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSortingChange: OnChangeFn<SortingState>): DataBrowserTableModel => {
     const columns = page?.columns;
     const rows = page?.rows;
     const references = page?.refs;
@@ -556,25 +550,17 @@ const useDataBrowserTable = (
             return [];
         }
 
+        // No `cell` renderer: every body cell is rendered by EditableCell (see
+        // renderRow), which owns the foreign-key/value/edit branching. The column
+        // def only needs the accessor (for sorting), the header, and the id.
         return columns.map((column) => {
-            const target = references?.[column];
-
             return {
                 accessorFn: (row: TableRow) => row[column],
-                cell: (info): ReactElement => {
-                    const value = info.getValue();
-
-                    if (target !== undefined && (typeof value === "string" || typeof value === "number") && String(value) !== "") {
-                        return <RefCell column={column} id={String(value)} onNavigate={onNavigateToRef} target={target} />;
-                    }
-
-                    return <CellValue value={value} />;
-                },
                 header: references?.[column] === undefined ? column : `${column} →`,
                 id: column,
             };
         });
-    }, [columns, references, onNavigateToRef]);
+    }, [columns, references]);
 
     const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 
