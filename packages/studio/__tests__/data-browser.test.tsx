@@ -576,6 +576,8 @@ describe("dataBrowser — editable", () => {
         await openMessages(mock);
 
         fireEvent.click(screen.getByTestId("db-add-row"));
+        // Switch the editor to raw-JSON mode to set the whole document at once.
+        fireEvent.click(screen.getByTestId("db-editor-json"));
         fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: '{ "text": "fresh" }' } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
@@ -588,6 +590,34 @@ describe("dataBrowser — editable", () => {
         const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ doc: { text: "fresh" }, op: "insert", table: "messages" });
+    });
+
+    it("inserts a new row from the type-aware form fields", async () => {
+        expect.assertions(2);
+
+        const mock = createEditableClient();
+
+        await openMessages(mock);
+
+        fireEvent.click(screen.getByTestId("db-add-row"));
+
+        // The form seeds an input per editable column (the `text` field here).
+        const field = await screen.findByTestId<HTMLInputElement>("db-field-text");
+
+        expect(field).toBeDefined();
+
+        fireEvent.change(field, { target: { value: "from-form" } });
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        await waitFor(() => {
+            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+                throw new Error("writeRow not called yet");
+            }
+        });
+
+        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+
+        expect(call[1]).toMatchObject({ doc: { text: "from-form" }, op: "insert", table: "messages" });
     });
 
     it("stages an inline cell edit and commits it as a patch of just that field", async () => {
@@ -633,6 +663,7 @@ describe("dataBrowser — editable", () => {
         await openMessages(mock);
 
         fireEvent.click(screen.getByTestId("db-add-row"));
+        fireEvent.click(screen.getByTestId("db-editor-json"));
         fireEvent.change(screen.getByTestId("db-editor-doc"), { target: { value: "{ not json" } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
@@ -650,6 +681,7 @@ describe("dataBrowser — editable", () => {
         await openMessages(mock);
 
         fireEvent.click(screen.getByTestId("db-edit-m1"));
+        fireEvent.click(screen.getByTestId("db-editor-json"));
 
         // The editor prefills the row's editable fields (id/meta stripped).
         const editor = screen.getByTestId<HTMLTextAreaElement>("db-editor-doc");
@@ -699,6 +731,7 @@ describe("dataBrowser — editable", () => {
 
         // The editor prefills from the ORIGINAL row, not a sorted/filtered copy.
         fireEvent.click(screen.getByTestId("db-edit-m2"));
+        fireEvent.click(screen.getByTestId("db-editor-json"));
 
         const editor = screen.getByTestId<HTMLTextAreaElement>("db-editor-doc");
 

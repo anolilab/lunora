@@ -302,6 +302,8 @@ const MESSAGE_IDS = [
     "Copied",
     "Cell value",
     "Close",
+    "Form",
+    "Invalid JSON",
     // Command palette.
     "Command palette",
     "No results.",

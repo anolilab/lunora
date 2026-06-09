@@ -16,6 +16,7 @@ import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import { adminRef, callOptions, fireAndForget } from "./internal";
 import { LiveToggle } from "./live-toggle";
 import { RowDetailDrawer } from "./row-detail";
+import RowFormEditor from "./row-form";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
 import type { StagedChange, StagedEditsModel } from "./staged-edits";
@@ -197,40 +198,6 @@ const DataBrowserViewControls = ({
     </div>
 );
 
-/**
- * The JSON-doc row editor (textarea + Save/Cancel). The parent owns the draft
- * text and the save/cancel handlers.
- */
-const DataBrowserRowEditor = ({
-    docText,
-    onCancel,
-    onDocumentChange,
-    onSave,
-}: {
-    docText: string;
-    onCancel: () => void;
-    onDocumentChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
-    onSave: () => void;
-}): ReactElement => (
-    <div className="flex flex-col gap-2 rounded-md border border-border bg-muted/30 p-3" data-testid="db-editor">
-        <textarea
-            aria-label="Row document JSON"
-            className="min-h-28 w-full rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none focus-visible:border-ring"
-            data-testid="db-editor-doc"
-            onChange={onDocumentChange}
-            value={docText}
-        />
-        <div className="flex items-center gap-1.5">
-            <button className={CONTROL_BTN} data-testid="db-editor-save" onClick={onSave} type="button">
-                Save
-            </button>
-            <button className={CONTROL_BTN} data-testid="db-editor-cancel" onClick={onCancel} type="button">
-                Cancel
-            </button>
-        </div>
-    </div>
-);
-
 /** Everything {@link useDataBrowser} exposes to the {@link DataBrowser} render. */
 interface DataBrowserModel {
     addRow: () => void;
@@ -258,7 +225,6 @@ interface DataBrowserModel {
     navigateToRef: (target: string, id: string) => void;
     onBulkDeleteSelected: (ids: ReadonlyArray<string>) => void;
     onCommitStaged: () => void;
-    onEditorDocumentChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
     onRowDelete: (id: null | string) => void;
@@ -272,6 +238,7 @@ interface DataBrowserModel {
     saveEdit: () => void;
     selectedTable: null | string;
     selectTable: (table: string) => void;
+    setEditorDocumentText: (text: string) => void;
     setShardKey: (value: string) => void;
     shardKey: string;
     showJson: () => void;
@@ -744,11 +711,23 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
 
     const addRow = useCallback((): void => {
         setWriteError(null);
-        setEditing({ docText: "{}", id: "" });
-    }, []);
 
-    const onEditorDocumentChange = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>): void => {
-        setEditing((current) => (current === null ? current : { docText: event.target.value, id: current.id }));
+        // Seed the insert form with the table's editable columns (blank values) so
+        // the form has fields to fill — instead of an empty `{}` the user must type
+        // into. Meta columns (id / _creationTime / __doc__) are server-managed.
+        const seed: Record<string, unknown> = {};
+
+        for (const column of page?.columns ?? []) {
+            if (!META_COLUMNS.has(column)) {
+                seed[column] = "";
+            }
+        }
+
+        setEditing({ docText: JSON.stringify(seed, null, 2), id: "" });
+    }, [page?.columns]);
+
+    const setEditorDocumentText = useCallback((text: string): void => {
+        setEditing((current) => (current === null ? current : { docText: text, id: current.id }));
     }, []);
 
     const saveEdit = useCallback((): void => {
@@ -864,7 +843,6 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
         navigateToRef,
         onBulkDeleteSelected,
         onCommitStaged,
-        onEditorDocumentChange,
         onFilterChange,
         onFiltersChange: setFilters,
         onRowDelete,
@@ -878,6 +856,7 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
         saveEdit,
         selectedTable,
         selectTable,
+        setEditorDocumentText,
         setShardKey,
         shardKey,
         showJson,
@@ -940,7 +919,6 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
         navigateToRef,
         onBulkDeleteSelected,
         onCommitStaged,
-        onEditorDocumentChange,
         onFilterChange,
         onFiltersChange,
         onRowDelete,
@@ -954,6 +932,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
         saveEdit,
         selectedTable,
         selectTable,
+        setEditorDocumentText,
         setShardKey,
         shardKey,
         showJson,
@@ -1069,11 +1048,12 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
                             )}
 
                             {editable && editing !== null && (
-                                <DataBrowserRowEditor
-                                    docText={editing.docText}
+                                <RowFormEditor
+                                    documentText={editing.docText}
                                     onCancel={cancelEdit}
-                                    onDocumentChange={onEditorDocumentChange}
+                                    onDocumentTextChange={setEditorDocumentText}
                                     onSave={saveEdit}
+                                    refs={page.refs}
                                 />
                             )}
 
