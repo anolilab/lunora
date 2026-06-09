@@ -20,8 +20,8 @@
  */
 import type { SchemaLike } from "@cirrus/do";
 
-import type { D1Exec } from "./d1-ctx-db.js";
-import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db.js";
+import type { D1Exec } from "./d1-ctx-db";
+import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
 
 /**
  * Provision the schema's `.global()` tables before the browser reads them, so a

@@ -1,8 +1,8 @@
 import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { bench, describe } from "vitest";
 
-import createD1Exec from "../__tests__/_helpers/node-sqlite-d1.js";
-import { createD1CtxDb as createD1ContextDatabase, runD1RankMigrations } from "../src/d1-ctx-db.js";
+import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
+import { createD1CtxDb as createD1ContextDatabase, runD1RankMigrations } from "../src/d1-ctx-db";
 
 /**
  * D1 column-dialect twin of `@cirrus/do/rank-position`. `rank()` over a

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { D1DatabaseLike, D1PreparedStatementLike } from "../src/d1-client.js";
-import { MigrationRunner } from "../src/migration-runner.js";
+import type { D1DatabaseLike, D1PreparedStatementLike } from "../src/d1-client";
+import { MigrationRunner } from "../src/migration-runner";
 
 interface FakeDatabase extends D1DatabaseLike {
     appliedHashes: string[];

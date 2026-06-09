@@ -1,8 +1,8 @@
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db.js";
-import createD1Exec from "./_helpers/node-sqlite-d1.js";
+import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db";
+import createD1Exec from "./_helpers/node-sqlite-d1";
 
 /**
  * Mirror of `@cirrus/do`'s ctx-db.aggregates suite against the D1 column

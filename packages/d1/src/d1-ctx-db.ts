@@ -75,7 +75,7 @@ import {
     tokenizeSearch,
 } from "@cirrus/do";
 
-import { columnRef, frameworkColumnDdl, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "./dialect.js";
+import { columnRef, frameworkColumnDdl, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "./dialect";
 
 /**
  * Async SQL surface the D1 ORM needs: `all` for reads, `run` for writes.

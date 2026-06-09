@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-import type { D1Exec } from "../../src/d1-ctx-db.js";
+import type { D1Exec } from "../../src/d1-ctx-db";
 
 /**
  * Adapts Node's built-in `node:sqlite` engine to the async {@link D1Exec}

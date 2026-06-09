@@ -7,8 +7,8 @@
  */
 import type { DatabaseWriterLike, SchemaLike } from "@cirrus/do";
 
-import type { D1Exec } from "./d1-ctx-db.js";
-import { decodeGlobalRow } from "./d1-ctx-db.js";
+import type { D1Exec } from "./d1-ctx-db";
+import { decodeGlobalRow } from "./d1-ctx-db";
 
 /** One exported row: `doc` is reconstructed from the column tuple. */
 interface ExportRow {

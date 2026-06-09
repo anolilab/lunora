@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "../src/d1-client.js";
-import { D1Client } from "../src/d1-client.js";
+import type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "../src/d1-client";
+import { D1Client } from "../src/d1-client";
 
 const createStmt = (returnValueInput?: { results: unknown[]; success: boolean }): D1PreparedStatementLike => {
     const returnValue = returnValueInput ?? { results: [], success: true };

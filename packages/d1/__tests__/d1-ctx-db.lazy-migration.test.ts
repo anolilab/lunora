@@ -1,9 +1,9 @@
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { D1Exec } from "../src/d1-ctx-db.js";
-import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db.js";
-import createD1Exec from "./_helpers/node-sqlite-d1.js";
+import type { D1Exec } from "../src/d1-ctx-db";
+import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
+import createD1Exec from "./_helpers/node-sqlite-d1";
 
 /**
  * Audit-fix coverage for the D1 column dialect.

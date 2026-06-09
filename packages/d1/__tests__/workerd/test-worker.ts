@@ -6,9 +6,9 @@
  * exercise the Sessions API (`env.DB.withSession(bookmark)`), prepared
  * statements, and the `MigrationRunner` against a real D1 database.
  */
-import type { D1DatabaseLike } from "../../src/d1-client.js";
-import { D1Client } from "../../src/d1-client.js";
-import { MigrationRunner } from "../../src/migration-runner.js";
+import type { D1DatabaseLike } from "../../src/d1-client";
+import { D1Client } from "../../src/d1-client";
+import { MigrationRunner } from "../../src/migration-runner";
 
 interface Env {
     DB: D1Database;

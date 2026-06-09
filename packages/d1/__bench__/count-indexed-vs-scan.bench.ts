@@ -1,8 +1,8 @@
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { bench, describe } from "vitest";
 
-import createD1Exec from "../__tests__/_helpers/node-sqlite-d1.js";
-import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db.js";
+import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
+import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db";
 
 /**
  * D1 column-dialect mirror of `@cirrus/do/count-indexed-vs-scan`. The

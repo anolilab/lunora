@@ -3,8 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { bench, describe } from "vitest";
 
-import type { D1Exec } from "../src/d1-ctx-db.js";
-import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations, runD1RankMigrations } from "../src/d1-ctx-db.js";
+import type { D1Exec } from "../src/d1-ctx-db";
+import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations, runD1RankMigrations } from "../src/d1-ctx-db";
 
 /**
  * Demonstrates the syncAggregates/syncRanks existence-cache win: on every

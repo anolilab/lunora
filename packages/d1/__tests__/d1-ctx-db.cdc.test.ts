@@ -1,8 +1,8 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createD1CtxDb as createD1ContextDatabase, readD1CdcChanges, trimD1CdcChanges } from "../src/d1-ctx-db.js";
-import createD1Exec from "./_helpers/node-sqlite-d1.js";
+import { createD1CtxDb as createD1ContextDatabase, readD1CdcChanges, trimD1CdcChanges } from "../src/d1-ctx-db";
+import createD1Exec from "./_helpers/node-sqlite-d1";
 
 /**
  * Change-data-capture changelog for global (D1) tables, against a real

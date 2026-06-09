@@ -1,8 +1,8 @@
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { listGlobalTables, readGlobalTablePage } from "../src/introspect.js";
-import createD1Exec from "./_helpers/node-sqlite-d1.js";
+import { listGlobalTables, readGlobalTablePage } from "../src/introspect";
+import createD1Exec from "./_helpers/node-sqlite-d1";
 
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
     return {

@@ -2,8 +2,8 @@ import type { ColumnMetaLike, DatabaseWriterLike, SchedulerLike, SchemaLike, Tri
 import { ConflictError } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db.js";
-import createD1Exec from "./_helpers/node-sqlite-d1.js";
+import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
+import createD1Exec from "./_helpers/node-sqlite-d1";
 
 /**
  * Exercises the D1 column-dialect ctx-db against a real `node:sqlite` engine

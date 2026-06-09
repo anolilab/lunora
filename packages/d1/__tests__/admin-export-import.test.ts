@@ -1,9 +1,9 @@
 import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { exportGlobalRows, importGlobalRows, selectGlobalTables } from "../src/admin-export-import.js";
-import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db.js";
-import createD1Exec from "./_helpers/node-sqlite-d1.js";
+import { exportGlobalRows, importGlobalRows, selectGlobalTables } from "../src/admin-export-import";
+import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
+import createD1Exec from "./_helpers/node-sqlite-d1";
 
 const FIXED_CLOCK = 1_700_000_000_000;
 

@@ -1,8 +1,8 @@
 import type { SchemaLike, ValidatorLike } from "@cirrus/do";
 import { describe, expect, it } from "vitest";
 
-import type { D1Exec } from "../src/d1-ctx-db.js";
-import { createD1CtxDb as createD1ContextDatabase, runD1SearchMigrations } from "../src/d1-ctx-db.js";
+import type { D1Exec } from "../src/d1-ctx-db";
+import { createD1CtxDb as createD1ContextDatabase, runD1SearchMigrations } from "../src/d1-ctx-db";
 
 /**
  * The FTS5 production path can't run under `node:sqlite` (no fts5 module), so

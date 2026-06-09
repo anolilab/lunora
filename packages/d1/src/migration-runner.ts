@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
-import type { D1DatabaseLike } from "./d1-client.js";
-import { D1Client } from "./d1-client.js";
+import type { D1DatabaseLike } from "./d1-client";
+import { D1Client } from "./d1-client";
 
 interface Migration {
     /** Human-readable name, e.g. `001_init` (used in logs). */
