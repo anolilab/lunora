@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { SCAN_DEP } from "../src/dependency-tracker.js";
+import { SCAN_DEP } from "../src/dependency-tracker";
 import {
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKETS_TABLE,
@@ -11,11 +11,11 @@ import {
     readFunctionMetricScans,
     readFunctionMetricsTotals,
     recordFunctionMetric,
-} from "../src/function-metrics.js";
-import type { FunctionCallStat } from "../src/introspect.js";
-import type { ShardDOState } from "../src/shard-do.js";
-import { ShardDO } from "../src/shard-do.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+} from "../src/function-metrics";
+import type { FunctionCallStat } from "../src/introspect";
+import type { ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 const ADMIN_TOKEN = "metrics-admin";
 

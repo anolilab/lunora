@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import type { DataMigrationLike } from "../src/data-migration.js";
-import { DATA_MIGRATION_STATE_TABLE, runDataMigration } from "../src/data-migration.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import type { DataMigrationLike } from "../src/data-migration";
+import { DATA_MIGRATION_STATE_TABLE, runDataMigration } from "../src/data-migration";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * Exercises the online data-migration runner against a real SQLite engine (per

@@ -1,9 +1,9 @@
 import { bench, describe } from "vitest";
 
-import createSqliteExec from "../__tests__/_helpers/node-sqlite.js";
-import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
+import createSqliteExec from "../__tests__/_helpers/node-sqlite";
+import type { AggregateIndexDefinitionLike } from "../src/aggregates";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 
 /**
  * `aggregate({ op: "sum"|"max"|"min" })` and `groupBy({ by })` are §3.1's

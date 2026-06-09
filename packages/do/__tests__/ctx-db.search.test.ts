@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * Behavioral coverage of `.withSearchIndex().search()` against a real SQLite

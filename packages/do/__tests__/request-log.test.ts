@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, redactArgs, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE } from "../src/request-log.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, redactArgs, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE } from "../src/request-log";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /** One minimal `ok` entry, overridable per case. */
 const entry = (overrides: Partial<Parameters<typeof appendRequestLogEntry>[1]> = {}): Parameters<typeof appendRequestLogEntry>[1] => {

@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
-import { createDependencyTracker } from "../src/dependency-tracker.js";
-import { ReactiveCache, reactiveCacheKey } from "../src/reactive-cache.js";
+import { createDependencyTracker } from "../src/dependency-tracker";
+import { ReactiveCache, reactiveCacheKey } from "../src/reactive-cache";
 
 /**
  * The reactive cache earns its keep when query handlers are non-trivial: a

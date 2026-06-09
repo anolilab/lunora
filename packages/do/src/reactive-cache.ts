@@ -46,7 +46,7 @@
  * surface (see `ctx-db.ts`).
  */
 
-import { depKey, SCAN_DEP } from "./dependency-tracker.js";
+import { depKey, SCAN_DEP } from "./dependency-tracker";
 
 /** Code-point-stable key comparator (no locale dependence) for deterministic JSON encoding. */
 const compareKeys = (a: string, b: string): number => {

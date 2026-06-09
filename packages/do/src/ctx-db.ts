@@ -29,29 +29,29 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @cirrus/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
-import type { AggregateTally } from "./aggregate-tally.js";
-import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally.js";
-import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates.js";
-import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates.js";
-import { SCAN_DEP } from "./dependency-tracker.js";
-import NotFoundError from "./not-found-error.js";
-import type { OrderKey, QueryArgs, QueryPage } from "./query-args.js";
-import { buildSeekBeforeWhere, buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
-import type { RankBeforeOptions, RankBeforeResult, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult } from "./rank.js";
-import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank.js";
-import type { ReactiveCache } from "./reactive-cache.js";
-import type { RelationDefinitionLike } from "./relations.js";
-import { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
-import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text.js";
-import serializeSqlValue from "./serialize-sql.js";
-import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader.js";
-import { createSystemReader } from "./system-reader.js";
-import { ConflictError } from "./transaction.js";
-import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
-import { runTriggers } from "./triggers.js";
-import type { MutationDelta } from "./types.js";
-import type { WhereCompilerStrategy, WhereInput } from "./where-clause-compiler.js";
-import { compileWhere } from "./where-clause-compiler.js";
+import type { AggregateTally } from "./aggregate-tally";
+import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
+import type { AggregateIndexDefinitionLike, AggregateOptions, AggregateResult, GroupByEntry, GroupByOptions, RestrictableQueryOptions } from "./aggregates";
+import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
+import { SCAN_DEP } from "./dependency-tracker";
+import NotFoundError from "./not-found-error";
+import type { OrderKey, QueryArgs, QueryPage } from "./query-args";
+import { buildSeekBeforeWhere, buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args";
+import type { RankBeforeOptions, RankBeforeResult, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult } from "./rank";
+import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
+import type { ReactiveCache } from "./reactive-cache";
+import type { RelationDefinitionLike } from "./relations";
+import { applyOnDelete, resolveWith, runRowValidators } from "./relations";
+import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
+import serializeSqlValue from "./serialize-sql";
+import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
+import { createSystemReader } from "./system-reader";
+import { ConflictError } from "./transaction";
+import type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
+import { runTriggers } from "./triggers";
+import type { MutationDelta } from "./types";
+import type { WhereCompilerStrategy, WhereInput } from "./where-clause-compiler";
+import { compileWhere } from "./where-clause-compiler";
 
 /**
  * Structural projection of `state.storage.sql` (workerd's SqlStorage). We
@@ -3507,7 +3507,7 @@ export {
     runShardMigrations,
     trimCdcChanges,
 };
-export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers.js";
+export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
 export type {
     BroadcastDelta,
     CdcChange,

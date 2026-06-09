@@ -14,7 +14,7 @@
  * recent `AUDIT_LOG_RETENTION` rows, so the log can't grow unbounded.
  */
 
-import type { SqlCursor, SqlExec } from "./ctx-db.js";
+import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved append-only table backing the studio Audit tab. Auto-hidden from the data browser by the `__cirrus` prefix. */
 const AUDIT_LOG_TABLE = "__cirrus_audit__";

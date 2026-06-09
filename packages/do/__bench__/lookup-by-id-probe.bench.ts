@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import createSqliteExec from "../__tests__/_helpers/node-sqlite.js";
+import createSqliteExec from "../__tests__/_helpers/node-sqlite";
 
 /**
  * `lookupById` locates a row by id on every get/patch/delete/replace. Ids are

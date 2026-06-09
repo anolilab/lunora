@@ -28,7 +28,7 @@
  * them automatically.
  */
 
-import type { SqlCursor, SqlExec } from "./ctx-db.js";
+import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved single-row auth accumulator table. Auto-hidden from the data browser by the `__cirrus` prefix. */
 const AUTH_METRICS_TABLE = "__cirrus_auth_metrics";

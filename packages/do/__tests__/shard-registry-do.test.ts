@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ShardRegistryDO } from "../src/shard-registry-do.js";
+import { ShardRegistryDO } from "../src/shard-registry-do";
 
 /** In-memory `DurableObjectState` substitute — same shape SessionDO tests use. */
 const createFakeState = (initial: Record<string, unknown> = {}) => {

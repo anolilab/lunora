@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { WhereCompilerStrategy, WhereInput } from "../src/where-clause-compiler.js";
-import { compileWhere } from "../src/where-clause-compiler.js";
+import type { WhereCompilerStrategy, WhereInput } from "../src/where-clause-compiler";
+import { compileWhere } from "../src/where-clause-compiler";
 
 const DOC_COLUMN = "__doc__";
 

@@ -1,4 +1,4 @@
-import type { SchemaLike, SqlCursor, SqlExec } from "../../src/ctx-db.js";
+import type { SchemaLike, SqlCursor, SqlExec } from "../../src/ctx-db";
 
 /**
  * In-memory stand-in for the workerd `SqlStorage` surface used by the

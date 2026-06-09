@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BroadcastDelta, DatabaseWriterLike, WriteHook } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import { createFakeSql, messagesSchema } from "./_helpers/fake-sql.js";
+import type { BroadcastDelta, DatabaseWriterLike, WriteHook } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { createFakeSql, messagesSchema } from "./_helpers/fake-sql";
 
 const fixedTime = 1_700_000_000_000;
 

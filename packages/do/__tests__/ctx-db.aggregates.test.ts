@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { backfillAggregateIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { AggregateIndexDefinitionLike } from "../src/aggregates";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import { backfillAggregateIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * Exercises the aggregate-index runtime — trigger-maintained counters, indexed

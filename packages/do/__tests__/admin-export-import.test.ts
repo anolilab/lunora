@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ExportRow } from "../src/admin-export-import.js";
-import { exportShardRows, importShardRows, selectExportTables, validateImportRow } from "../src/admin-export-import.js";
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import { ADMIN_FUNCTIONS } from "../src/introspect.js";
-import type { RunShardExportArgs, RunShardImportArgs, ShardDOState } from "../src/shard-do.js";
-import { ShardDO } from "../src/shard-do.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { ExportRow } from "../src/admin-export-import";
+import { exportShardRows, importShardRows, selectExportTables, validateImportRow } from "../src/admin-export-import";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { ADMIN_FUNCTIONS } from "../src/introspect";
+import type { RunShardExportArgs, RunShardImportArgs, ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 const ADMIN_TOKEN = "s3cret-admin";
 

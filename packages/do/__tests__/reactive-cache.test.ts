@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createDependencyTracker, depKey, SCAN_DEP } from "../src/dependency-tracker.js";
-import { ReactiveCache, reactiveCacheKey, stableStringify } from "../src/reactive-cache.js";
+import { createDependencyTracker, depKey, SCAN_DEP } from "../src/dependency-tracker";
+import { ReactiveCache, reactiveCacheKey, stableStringify } from "../src/reactive-cache";
 
 /**
  * Standalone tests for the reactive-cache primitive — kept framework-agnostic

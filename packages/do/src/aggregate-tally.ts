@@ -10,7 +10,7 @@
  * identically.
  */
 
-import type { AggregateIndexDefinitionLike } from "./aggregates.js";
+import type { AggregateIndexDefinitionLike } from "./aggregates";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
 const compareStrings = (a: string, b: string): number => {

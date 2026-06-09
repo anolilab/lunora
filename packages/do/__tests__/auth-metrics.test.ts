@@ -7,8 +7,8 @@ import {
     ensureAuthMetricsTables,
     readAuthMetrics,
     recordAuthEvent,
-} from "../src/auth-metrics.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+} from "../src/auth-metrics";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 describe("auth-metrics module", () => {
     it("creates the tables and accumulates attempts and failures in one row", () => {

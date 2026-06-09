@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ShardDOState } from "../src/shard-do.js";
-import { ShardDO } from "../src/shard-do.js";
-import type { SocketAttachment, SubscriptionEnvelope } from "../src/types.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
+import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 interface FakeWebSocket {
     attachment: SocketAttachment | undefined;

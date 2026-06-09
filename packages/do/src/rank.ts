@@ -35,8 +35,8 @@
  * `backfillRankIndexes`.
  */
 
-import type { RestrictableQueryOptions } from "./aggregates.js";
-import serializeSqlValue from "./serialize-sql.js";
+import type { RestrictableQueryOptions } from "./aggregates";
+import serializeSqlValue from "./serialize-sql";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. */
 const compareStrings = (a: string, b: string): number => {

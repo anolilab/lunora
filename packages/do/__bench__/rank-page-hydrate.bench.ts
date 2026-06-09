@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import createSqliteExec from "../__tests__/_helpers/node-sqlite.js";
+import createSqliteExec from "../__tests__/_helpers/node-sqlite";
 
 /**
  * `rankPage` selects a page of ids from the rank companion table, then has to

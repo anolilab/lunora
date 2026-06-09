@@ -15,8 +15,8 @@
  * produced by an injected {@link FieldRef}, and the seek predicate is emitted
  * as a {@link WhereInput} so the shared compiler renders it per dialect.
  */
-import type { WithInput } from "./relations.js";
-import type { FieldRef, WhereInput } from "./where-clause-compiler.js";
+import type { WithInput } from "./relations";
+import type { FieldRef, WhereInput } from "./where-clause-compiler";
 
 type SortDirection = "asc" | "desc";
 

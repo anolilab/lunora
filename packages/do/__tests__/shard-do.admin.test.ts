@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { AggregateIndexDefinitionLike } from "../src/aggregates.js";
-import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db.js";
-import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration.js";
-import { runDataMigration } from "../src/data-migration.js";
-import { ADMIN_FUNCTIONS } from "../src/introspect.js";
-import type { RankIndexDefinitionLike } from "../src/rank.js";
-import { rankKeyFromDoc } from "../src/rank.js";
+import type { AggregateIndexDefinitionLike } from "../src/aggregates";
+import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
+import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
+import { runDataMigration } from "../src/data-migration";
+import { ADMIN_FUNCTIONS } from "../src/introspect";
+import type { RankIndexDefinitionLike } from "../src/rank";
+import { rankKeyFromDoc } from "../src/rank";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
@@ -16,9 +16,9 @@ import type {
     RunShardWriteArgs,
     RunShardWriteResult,
     ShardDOState,
-} from "../src/shard-do.js";
-import { ShardDO } from "../src/shard-do.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+} from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * A real-SQLite-backed ShardDO whose `handleRpc` throws — proving the admin

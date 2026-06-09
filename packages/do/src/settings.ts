@@ -1,4 +1,4 @@
-import type { DeployInfo, SettingEntry, SettingsResult } from "./introspect.js";
+import type { DeployInfo, SettingEntry, SettingsResult } from "./introspect";
 
 /**
  * Names that, by convention, hold a secret regardless of the value's shape. A

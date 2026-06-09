@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { SchemaLike, SqlCursor, SqlExec } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
+import type { SchemaLike, SqlCursor, SqlExec } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 
 /**
  * The FTS5 production path can't run under `node:sqlite` (no fts5 module), so

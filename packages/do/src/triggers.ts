@@ -19,7 +19,7 @@
  * **not** transactional.
  */
 
-import type { DatabaseWriterLike, TableDefinitionLike } from "./ctx-db.js";
+import type { DatabaseWriterLike, TableDefinitionLike } from "./ctx-db";
 
 /** Lifecycle phase relative to the SQL write. */
 export type TriggerTimingLike = "after" | "before";

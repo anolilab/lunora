@@ -15,7 +15,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import type { TestShardDO } from "./test-worker.js";
+import type { TestShardDO } from "./test-worker";
 
 // `env` is typed via the `Cloudflare.Env` augmentation in `./env.d.ts`.
 

@@ -29,7 +29,7 @@
  * via `backfillAggregateIndexes` from a one-shot in `runShardMigrations`.
  */
 
-import type { WhereInput } from "./where-clause-compiler.js";
+import type { WhereInput } from "./where-clause-compiler";
 
 /** Reducer applied by an aggregate index. */
 type AggregateOp = "avg" | "count" | "max" | "min" | "sum";

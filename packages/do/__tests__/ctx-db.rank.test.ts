@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { backfillRankIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import type { RankIndexDefinitionLike } from "../src/rank.js";
-import { rankKeyFromDoc } from "../src/rank.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import { backfillRankIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import type { RankIndexDefinitionLike } from "../src/rank";
+import { rankKeyFromDoc } from "../src/rank";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * Exercises the rank-index runtime — trigger-maintained sorted companions,

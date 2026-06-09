@@ -24,7 +24,7 @@
  * rows or the state table.
  */
 
-import type { DatabaseWriterLike, SqlCursor, SqlExec } from "./ctx-db.js";
+import type { DatabaseWriterLike, SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved table the per-shard runner tracks migration progress in. Auto-hidden from the data browser by the `__cirrus` prefix. */
 const DATA_MIGRATION_STATE_TABLE = "__cirrus_migrations";

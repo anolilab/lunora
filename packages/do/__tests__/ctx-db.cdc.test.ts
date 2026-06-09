@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { CdcChange, DatabaseWriterLike } from "../src/ctx-db.js";
-import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations, trimCdcChanges } from "../src/ctx-db.js";
-import { messagesSchema } from "./_helpers/fake-sql.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { CdcChange, DatabaseWriterLike } from "../src/ctx-db";
+import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations, trimCdcChanges } from "../src/ctx-db";
+import { messagesSchema } from "./_helpers/fake-sql";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * Change-data-capture changelog, driven through a real SQLite engine. CDC is

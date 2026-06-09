@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ADMIN_FUNCTIONS } from "../src/introspect.js";
-import type { PitrStorage } from "../src/pitr.js";
-import { armRestore, readBookmark } from "../src/pitr.js";
-import type { ShardDOState } from "../src/shard-do.js";
-import { ShardDO } from "../src/shard-do.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import { ADMIN_FUNCTIONS } from "../src/introspect";
+import type { PitrStorage } from "../src/pitr";
+import { armRestore, readBookmark } from "../src/pitr";
+import type { ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 const ADMIN_TOKEN = "s3cret-admin";
 

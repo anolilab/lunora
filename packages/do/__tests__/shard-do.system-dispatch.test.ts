@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ShardDOState } from "../src/shard-do.js";
-import { ShardDO } from "../src/shard-do.js";
+import type { ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
 
 interface FakeState extends ShardDOState {
     storage: { sql: { databaseSize?: number; exec: (query: string) => unknown } };

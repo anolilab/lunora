@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ScheduledFunctionDoc, StorageMetadata, SystemReaderSchedulerLike, SystemReaderStorageLike } from "../src/system-reader.js";
-import { createSystemReader } from "../src/system-reader.js";
+import type { ScheduledFunctionDoc, StorageMetadata, SystemReaderSchedulerLike, SystemReaderStorageLike } from "../src/system-reader";
+import { createSystemReader } from "../src/system-reader";
 
 const scheduledRecord = (overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> => {
     return {

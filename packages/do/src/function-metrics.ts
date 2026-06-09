@@ -37,8 +37,8 @@
  * hides them automatically.
  */
 
-import type { SqlCursor, SqlExec } from "./ctx-db.js";
-import type { FunctionCallStat, FunctionScanAttribution } from "./introspect.js";
+import type { SqlCursor, SqlExec } from "./ctx-db";
+import type { FunctionCallStat, FunctionScanAttribution } from "./introspect";
 
 /** Reserved per-function accumulator table. Auto-hidden from the data browser by the `__cirrus` prefix. */
 const FUNCTION_METRICS_TABLE = "__cirrus_metrics";

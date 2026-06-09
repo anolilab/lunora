@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { ShardDOState } from "../src/shard-do.js";
-import { ShardDO } from "../src/shard-do.js";
+import type { ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
 
 /** Minimal concrete ShardDO — the keepalive registration runs in the base constructor. */
 class TestShard extends ShardDO {

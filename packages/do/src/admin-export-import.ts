@@ -11,7 +11,7 @@
  * deliberately skips them — the worker reads them through `@cirrus/d1`'s
  * sibling helpers and concatenates the two streams.
  */
-import type { DatabaseWriterLike, SchemaLike } from "./ctx-db.js";
+import type { DatabaseWriterLike, SchemaLike } from "./ctx-db";
 
 /** One NDJSON line: a row from `table` shaped per its schema. */
 interface ExportRow {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { SESSION_DO_TTL_DEFAULT, SessionDO } from "../src/session-do.js";
+import { SESSION_DO_TTL_DEFAULT, SessionDO } from "../src/session-do";
 
 const TEST_SECRET = "test-session-do-secret-value";
 const TEST_ENV = { SESSION_DO_SECRET: TEST_SECRET };

@@ -23,7 +23,7 @@
 
 import { redact, standardRules } from "@visulima/redact";
 
-import type { SqlCursor, SqlExec } from "./ctx-db.js";
+import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved append-only table backing the studio Logs tab. Auto-hidden from the data browser by the `__cirrus` prefix. */
 const REQUEST_LOG_TABLE = "__cirrus_reqlog__";

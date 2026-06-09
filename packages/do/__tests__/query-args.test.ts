@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args.js";
-import type { WhereCompilerStrategy } from "../src/where-clause-compiler.js";
-import { compileWhere } from "../src/where-clause-compiler.js";
+import { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args";
+import type { WhereCompilerStrategy } from "../src/where-clause-compiler";
+import { compileWhere } from "../src/where-clause-compiler";
 
 const DOC_COLUMN = "__doc__";
 

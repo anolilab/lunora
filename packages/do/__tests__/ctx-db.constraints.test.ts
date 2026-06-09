@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import { ConflictError } from "../src/transaction.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { ConflictError } from "../src/transaction";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * Exercises the write-layer constraint enforcement (column defaults,

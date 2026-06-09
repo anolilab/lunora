@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import { resolveWith } from "../src/relations.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { resolveWith } from "../src/relations";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * Exercises `with`-loading, `_count`, and `onDelete` against a real SQLite

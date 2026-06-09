@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { BroadcastDelta, DatabaseWriterLike } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import { messagesSchema } from "./_helpers/fake-sql.js";
-import createSqliteExec from "./_helpers/node-sqlite.js";
+import type { BroadcastDelta, DatabaseWriterLike } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { messagesSchema } from "./_helpers/fake-sql";
+import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
  * The same surface as `ctx-db.test.ts`, but driven through a real SQLite

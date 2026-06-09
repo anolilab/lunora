@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { LogEntry } from "../src/log-buffer.js";
-import { LogBuffer } from "../src/log-buffer.js";
+import type { LogEntry } from "../src/log-buffer";
+import { LogBuffer } from "../src/log-buffer";
 
 const entry = (message: string, timestamp: number): LogEntry => {
     return { level: "error", message, timestamp };

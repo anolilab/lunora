@@ -22,9 +22,9 @@
  * route straight back to the local writer.
  */
 
-import type { TableDefinitionLike } from "./ctx-db.js";
-import type { OrderByInput, QueryArgs, QueryPage } from "./query-args.js";
-import type { WhereInput } from "./where-clause-compiler.js";
+import type { TableDefinitionLike } from "./ctx-db";
+import type { OrderByInput, QueryArgs, QueryPage } from "./query-args";
+import type { WhereInput } from "./where-clause-compiler";
 
 /** FK behaviour when a referenced parent row is deleted (mirrors SQL `ON DELETE`). */
 type OnDeleteActionLike = "cascade" | "restrict" | "set null";

@@ -1,9 +1,9 @@
 import { bench, describe } from "vitest";
 
-import createSqliteExec from "../__tests__/_helpers/node-sqlite.js";
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db.js";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db.js";
-import type { RankIndexDefinitionLike } from "../src/rank.js";
+import createSqliteExec from "../__tests__/_helpers/node-sqlite";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import type { RankIndexDefinitionLike } from "../src/rank";
 
 /**
  * `rank()` is "where does this row stand in its partition?" — a hot question

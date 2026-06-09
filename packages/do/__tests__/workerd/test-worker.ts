@@ -14,10 +14,10 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
-import { SessionDO } from "../../src/session-do.js";
-import type { ShardDOState } from "../../src/shard-do.js";
-import { ShardDO } from "../../src/shard-do.js";
-import type { MutationDelta } from "../../src/types.js";
+import { SessionDO } from "../../src/session-do";
+import type { ShardDOState } from "../../src/shard-do";
+import { ShardDO } from "../../src/shard-do";
+import type { MutationDelta } from "../../src/types";
 
 interface Env {
     CIRRUS_ALLOWED_ORIGINS?: string;

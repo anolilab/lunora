@@ -1,8 +1,8 @@
 import { bench, describe } from "vitest";
 
-import type { ShardDOState } from "../src/shard-do.js";
-import { ShardDO } from "../src/shard-do.js";
-import type { MutationDelta, SocketAttachment, SubscriptionQuery } from "../src/types.js";
+import type { ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
+import type { MutationDelta, SocketAttachment, SubscriptionQuery } from "../src/types";
 
 /**
  * `broadcastDelta` runs O(sockets × subscriptions) for every mutation. That
