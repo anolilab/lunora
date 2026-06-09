@@ -329,7 +329,11 @@ describe("introspect", () => {
         it("reports no more when the match count equals `limit` exactly", () => {
             expect.assertions(2);
 
-            const { hasMore, ids } = selectMatchingIds(database.sql, { filters: [{ column: "authorId", operator: "eq", value: "u1" }], limit: 2, table: "posts" });
+            const { hasMore, ids } = selectMatchingIds(database.sql, {
+                filters: [{ column: "authorId", operator: "eq", value: "u1" }],
+                limit: 2,
+                table: "posts",
+            });
 
             expect(ids).toHaveLength(2);
             expect(hasMore).toBe(false);

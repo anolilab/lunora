@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, redactArgs, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE } from "../src/request-log";
+import {
+    appendRequestLogEntry,
+    emitRequestLogEvent,
+    ensureRequestLogTable,
+    readRequestLog,
+    redactArgs,
+    REQUEST_LOG_RETENTION,
+    REQUEST_LOG_TABLE,
+} from "../src/request-log";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /** One minimal `ok` entry, overridable per case. */
@@ -54,10 +62,7 @@ describe("request-log module", () => {
         const database = createSqliteExec();
 
         try {
-            appendRequestLogEntry(
-                database.sql,
-                entry({ redactedArgs: { message: "hello world", password: "hunter2", nested: { token: "abc-123" } } }),
-            );
+            appendRequestLogEntry(database.sql, entry({ redactedArgs: { message: "hello world", password: "hunter2", nested: { token: "abc-123" } } }));
 
             const [row] = readRequestLog(database.sql);
             const args = row!.redactedArgs as Record<string, unknown>;

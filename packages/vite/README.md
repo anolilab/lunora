@@ -73,13 +73,13 @@ The `cirrus(options)` factory composes up to four plugins in order:
 
 ## API
 
-| Export                              | Description                                                                                              |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `cirrus(options?)`                  | Factory. Returns `Plugin[]` — drop it into `plugins` (Vite flattens it).                                 |
-| `codegenPlugin(resolved)`           | The codegen-on-save plugin in isolation.                                                                 |
-| `studioPlugin()`                 | The `/__cirrus` studio dev-server plugin in isolation.                                                |
-| `wranglerValidatorPlugin(resolved)` | The wrangler.jsonc validator plugin in isolation.                                                        |
-| `VERSION`                           | Plugin version string.                                                                                   |
+| Export                              | Description                                                              |
+| ----------------------------------- | ------------------------------------------------------------------------ |
+| `cirrus(options?)`                  | Factory. Returns `Plugin[]` — drop it into `plugins` (Vite flattens it). |
+| `codegenPlugin(resolved)`           | The codegen-on-save plugin in isolation.                                 |
+| `studioPlugin()`                    | The `/__cirrus` studio dev-server plugin in isolation.                   |
+| `wranglerValidatorPlugin(resolved)` | The wrangler.jsonc validator plugin in isolation.                        |
+| `VERSION`                           | Plugin version string.                                                   |
 
 Types: `CirrusPluginOptions`, `ResolvedCirrusPluginOptions`, `CloudflarePluginOptions`, `OverlayPluginOptions`, `CirrusPlugins`.
 
