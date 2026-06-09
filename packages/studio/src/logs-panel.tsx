@@ -214,6 +214,156 @@ const buildRequestQuery = (filters: {
     return query;
 };
 
+/** The four log severities, in ascending order, for the multi-select control. */
+const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
+
+/** A relative time-range window over the Errors buffer, or `all` (no bound). */
+type TimeRange = "15m" | "1h" | "5m" | "all";
+
+/** Window length in ms for each bounded {@link TimeRange}; `all` is unbounded. */
+const TIME_RANGE_MS: Record<Exclude<TimeRange, "all">, number> = {
+    "5m": 5 * 60 * 1000,
+    "15m": 15 * 60 * 1000,
+    "1h": 60 * 60 * 1000,
+};
+
+/**
+ * Composed, AND-ed client-side filter criteria over the in-memory Errors buffer.
+ * `levels` is an allow-set (empty = no level constraint); `path` and `search`
+ * are case-insensitive substrings; `range` is bounded relative to `now`.
+ */
+interface LogFilterCriteria {
+    readonly levels: ReadonlySet<LogLevel>;
+    /** Reference instant the time window is measured back from (epoch-ms). */
+    readonly now: number;
+    /** Case-insensitive substring over `functionPath`. */
+    readonly path: string;
+    readonly range: TimeRange;
+    /** Case-insensitive substring over `message`. */
+    readonly search: string;
+}
+
+/**
+ * Pure, AND-composed filter over the loaded log entries. Cirrus's `getLogs` is
+ * an in-memory ring buffer, not a queryable store, so there is no SQL to run —
+ * this is the client-side equivalent: level allow-set, function-path substring,
+ * message substring, and a relative time window, all combined. Extracted to
+ * module scope so it is unit-testable in isolation.
+ */
+const filterLogs = (entries: ReadonlyArray<LogEntry>, criteria: LogFilterCriteria): LogEntry[] => {
+    const needle = criteria.search.trim().toLowerCase();
+    const pathNeedle = criteria.path.trim().toLowerCase();
+    const floor = criteria.range === "all" ? Number.NEGATIVE_INFINITY : criteria.now - TIME_RANGE_MS[criteria.range];
+
+    return entries.filter((entry) => {
+        if (criteria.levels.size > 0 && !criteria.levels.has(entry.level)) {
+            return false;
+        }
+
+        if (entry.timestamp < floor) {
+            return false;
+        }
+
+        if (pathNeedle !== "" && !(entry.functionPath ?? "").toLowerCase().includes(pathNeedle)) {
+            return false;
+        }
+
+        return needle === "" || entry.message.toLowerCase().includes(needle);
+    });
+};
+
+/** One `{ key, count }` bucket of a grouped summary, used for level and path rollups. */
+interface SummaryBucket {
+    readonly count: number;
+    readonly key: string;
+}
+
+/** Grouped counts over a set of entries: by level (severity order) and by function path. */
+interface LogSummary {
+    readonly byLevel: SummaryBucket[];
+    readonly byPath: SummaryBucket[];
+    readonly total: number;
+}
+
+/** Em-dash stand-in for entries without a `functionPath`, so they still group. */
+const NO_PATH_KEY = "—";
+
+/**
+ * Pure aggregation over the (already-filtered) entries: counts per level (in
+ * severity order, omitting levels with no hits) and per function path (sorted
+ * by count desc, then key asc). This is the "query your logs" rollup without a
+ * SQL engine. Module-scope so it is unit-testable.
+ */
+const summarizeLogs = (entries: ReadonlyArray<LogEntry>): LogSummary => {
+    const levelCounts = new Map<LogLevel, number>();
+    const pathCounts = new Map<string, number>();
+
+    for (const entry of entries) {
+        levelCounts.set(entry.level, (levelCounts.get(entry.level) ?? 0) + 1);
+
+        const pathKey = entry.functionPath ?? NO_PATH_KEY;
+
+        pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
+    }
+
+    const byLevel: SummaryBucket[] = LOG_LEVELS.filter((level) => levelCounts.has(level)).map((level) => {
+        return { count: levelCounts.get(level) ?? 0, key: level };
+    });
+
+    const byPath: SummaryBucket[] = [...pathCounts.entries()]
+        .map(([key, count]) => {
+            return { count, key };
+        })
+        .toSorted((a, b) => (b.count === a.count ? a.key.localeCompare(b.key) : b.count - a.count));
+
+    return { byLevel, byPath, total: entries.length };
+};
+
+interface LevelToggleProps {
+    readonly level: LogLevel;
+    /** Lifts the per-item click out of the map so the row carries no inline closure. */
+    readonly onToggle: (level: LogLevel) => void;
+    readonly selected: boolean;
+}
+
+/**
+ * One level chip in the multi-select. Extracted so each chip owns a stable,
+ * `useCallback`-bound click handler (no fresh closure per render of the map).
+ */
+const LevelToggle = ({ level, onToggle, selected }: LevelToggleProps): ReactElement => {
+    const onClick = useCallback((): void => {
+        onToggle(level);
+    }, [level, onToggle]);
+
+    return (
+        <button
+            aria-pressed={selected}
+            className={`rounded-md border px-2 py-1 text-xs ${selected ? "border-border bg-muted font-medium" : "border-input text-muted-foreground"}`}
+            data-testid={`logs-level-${level}`}
+            onClick={onClick}
+            type="button"
+        >
+            {level}
+        </button>
+    );
+};
+
+interface SummaryBucketRowProps {
+    readonly bucket: SummaryBucket;
+}
+
+/** One `key → count` row in a summary group. */
+const SummaryBucketRow = ({ bucket }: SummaryBucketRowProps): ReactElement => (
+    <div className="flex items-center justify-between gap-4 px-3 py-1 font-mono text-xs" data-testid="logs-summary-row" role="row">
+        <span className="truncate text-muted-foreground" role="gridcell">
+            {bucket.key}
+        </span>
+        <span className="shrink-0 tabular-nums" role="gridcell">
+            {bucket.count}
+        </span>
+    </div>
+);
+
 /**
  * The shard's log feed, newest first, over the gated `__cirrus_admin__:*` RPC
  * layer (gated by the server's `CIRRUS_ADMIN_TOKEN`). Two views.
@@ -248,7 +398,13 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const [requests, setRequests] = useState<RequestLogEntry[]>([]);
     const [error, setError] = useState<null | string>(null);
     const [search, setSearch] = useState<string>("");
-    const [levelFilter, setLevelFilter] = useState<string>("all");
+    // Errors-view client-side filters: a level allow-set (empty = all levels), a
+    // function-path substring, and a relative time window. AND-composed.
+    const [levelFilter, setLevelFilter] = useState<ReadonlySet<LogLevel>>(() => new Set());
+    const [pathFilter, setPathFilter] = useState<string>("");
+    const [timeRange, setTimeRange] = useState<TimeRange>("all");
+    // Toggle between the entry list and the grouped Summary rollup.
+    const [showSummary, setShowSummary] = useState<boolean>(false);
 
     // Server-side correlation filters for the Requests view.
     const [pathPrefix, setPathPrefix] = useState<string>("");
@@ -329,29 +485,23 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         setLiveError,
     );
 
-    // Distinct levels present in the fetched buffer, in a stable severity order,
-    // so the dropdown only offers levels that can actually match something.
-    const levels = useMemo<LogLevel[]>(() => {
-        const present = new Set(entries.map((entry) => entry.level));
+    // AND-composed client-side filter for the Errors view (level allow-set,
+    // function-path substring, message substring, relative time window), derived
+    // from the already-fetched entries via the pure `filterLogs` helper. `now` is
+    // sampled per recompute so the relative time window tracks wall-clock.
+    const filtered = useMemo<LogEntry[]>(
+        () => filterLogs(entries, { levels: levelFilter, now: Date.now(), path: pathFilter, range: timeRange, search }),
+        [entries, search, levelFilter, pathFilter, timeRange],
+    );
 
-        return (["debug", "info", "warn", "error"] as const).filter((level) => present.has(level));
-    }, [entries]);
-
-    // Client-side search (message substring, case-insensitive) AND level filter
-    // for the Errors view, derived from the already-fetched entries.
-    const filtered = useMemo<LogEntry[]>(() => {
-        const needle = search.trim().toLowerCase();
-
-        return entries.filter((entry) => {
-            if (levelFilter !== "all" && entry.level !== levelFilter) {
-                return false;
-            }
-
-            return needle === "" || entry.message.toLowerCase().includes(needle);
-        });
-    }, [entries, search, levelFilter]);
+    // Grouped rollup over the filtered entries — the "query your logs" view.
+    const summary = useMemo<LogSummary>(() => summarizeLogs(filtered), [filtered]);
 
     const activeCount = view === "requests" ? requests.length : filtered.length;
+
+    // The grouped Summary replaces the row list (Errors view only). When it is
+    // up the virtualized table is suppressed so only one readout is mounted.
+    const summaryVisible = view === "errors" && showSummary;
 
     // Row virtualization over the active list: only the rows intersecting the
     // 400px viewport (+ overscan) are mounted, so a full buffer never renders
@@ -381,8 +531,31 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         setSearch(event.target.value);
     }, []);
 
-    const onLevelChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
-        setLevelFilter(event.target.value);
+    // Toggle one level in/out of the allow-set without mutating the prior set.
+    const toggleLevel = useCallback((level: LogLevel): void => {
+        setLevelFilter((previous) => {
+            const next = new Set(previous);
+
+            if (next.has(level)) {
+                next.delete(level);
+            } else {
+                next.add(level);
+            }
+
+            return next;
+        });
+    }, []);
+
+    const onLogPathChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+        setPathFilter(event.target.value);
+    }, []);
+
+    const onTimeRangeChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
+        setTimeRange(event.target.value as TimeRange);
+    }, []);
+
+    const toggleSummary = useCallback((): void => {
+        setShowSummary((previous) => !previous);
     }, []);
 
     const onPathChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
@@ -460,20 +633,40 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                         placeholder={t("search message")}
                         value={search}
                     />
-                    <select
-                        aria-label={t("Level filter")}
-                        className="h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-                        data-testid="lg-level-filter"
-                        onChange={onLevelChange}
-                        value={levelFilter}
-                    >
-                        <option value="all">{t("all")}</option>
-                        {levels.map((level) => (
-                            <option key={level} value={level}>
-                                {level}
-                            </option>
+                    <Input
+                        aria-label={t("Function path")}
+                        className="h-8 w-40"
+                        data-testid="logs-path-filter"
+                        onChange={onLogPathChange}
+                        placeholder={t("filter path")}
+                        value={pathFilter}
+                    />
+                    <div aria-label={t("Level filter")} className="inline-flex items-center gap-1" data-testid="logs-level-filter" role="group">
+                        {LOG_LEVELS.map((level) => (
+                            <LevelToggle key={level} level={level} onToggle={toggleLevel} selected={levelFilter.has(level)} />
                         ))}
+                    </div>
+                    <select
+                        aria-label={t("Time range")}
+                        className="h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                        data-testid="logs-time-range"
+                        onChange={onTimeRangeChange}
+                        value={timeRange}
+                    >
+                        <option value="all">{t("All time")}</option>
+                        <option value="5m">{t("Last 5m")}</option>
+                        <option value="15m">{t("Last 15m")}</option>
+                        <option value="1h">{t("Last hour")}</option>
                     </select>
+                    <button
+                        aria-pressed={showSummary}
+                        className={`h-8 rounded-md border px-3 text-sm ${showSummary ? "border-border bg-muted font-medium" : "border-input text-muted-foreground"}`}
+                        data-testid="logs-summary-toggle"
+                        onClick={toggleSummary}
+                        type="button"
+                    >
+                        {showSummary ? t("List") : t("Summary")}
+                    </button>
                 </div>
             )}
 
@@ -529,7 +722,31 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 </p>
             )}
 
-            {activeCount > 0 && (
+            {summaryVisible && error === null && activeCount > 0 && (
+                <div className="flex flex-col gap-4 rounded-md border border-border p-3" data-testid="logs-summary">
+                    <p className="text-xs text-muted-foreground" data-testid="logs-summary-total">
+                        {t("{count} entries", { count: summary.total })}
+                    </p>
+                    <div>
+                        <h4 className="mb-1 text-xs font-medium text-muted-foreground">{t("By level")}</h4>
+                        <div className="rounded-md border border-border" data-testid="logs-summary-levels" role="grid">
+                            {summary.byLevel.map((bucket) => (
+                                <SummaryBucketRow bucket={bucket} key={bucket.key} />
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <h4 className="mb-1 text-xs font-medium text-muted-foreground">{t("By function")}</h4>
+                        <div className="rounded-md border border-border" data-testid="logs-summary-paths" role="grid">
+                            {summary.byPath.map((bucket) => (
+                                <SummaryBucketRow bucket={bucket} key={bucket.key} />
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {!summaryVisible && activeCount > 0 && (
                 <div className="rounded-md border border-border" data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
                     <div aria-label={t("Recent logs")} data-testid="lg-table" role="grid" style={gridStyle}>
                         {virtualRows.map((virtualRow) =>
@@ -558,4 +775,5 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     );
 };
 
-export type { LogsPanelProps };
+export { filterLogs, summarizeLogs };
+export type { LogFilterCriteria, LogsPanelProps, LogSummary, SummaryBucket, TimeRange };

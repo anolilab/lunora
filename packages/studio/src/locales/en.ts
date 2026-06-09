@@ -470,6 +470,18 @@ const MESSAGE_IDS = [
     "Delete object?",
     "Uploaded {key}",
     "Deleted {key}",
+    // Logs explorer panel.
+    "Summary",
+    "Time range",
+    "All time",
+    "Last 5m",
+    "Last 15m",
+    "Last hour",
+    "filter path",
+    "By level",
+    "By function",
+    "Count",
+    "{count} entries",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

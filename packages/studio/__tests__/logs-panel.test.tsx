@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import type { LogEntry, RequestLogEntry } from "../src/admin";
 import { ADMIN_FUNCTIONS } from "../src/admin";
-import { LogsPanel } from "../src/logs-panel";
+import type { LogFilterCriteria } from "../src/logs-panel";
+import { filterLogs, LogsPanel, summarizeLogs } from "../src/logs-panel";
 import type { MockClientHooks } from "./mock-client";
 import { createMockClient } from "./mock-client";
 
@@ -279,7 +280,7 @@ describe("logsPanel — errors view", () => {
         switchToErrors();
         await screen.findAllByTestId("lg-row");
 
-        fireEvent.change(screen.getByTestId("lg-level-filter"), { target: { value: "info" } });
+        fireEvent.click(screen.getByTestId("logs-level-info"));
 
         const rows = await screen.findAllByTestId("lg-row");
 
@@ -297,7 +298,7 @@ describe("logsPanel — errors view", () => {
         await screen.findAllByTestId("lg-row");
 
         fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "boom" } });
-        fireEvent.change(screen.getByTestId("lg-level-filter"), { target: { value: "info" } });
+        fireEvent.click(screen.getByTestId("logs-level-info"));
 
         const rows = await screen.findAllByTestId("lg-row");
 
@@ -359,5 +360,193 @@ describe("logsPanel — errors view", () => {
         const rows = await screen.findAllByTestId("lg-row");
 
         expect(rows[0]?.textContent).toContain("live boom");
+    });
+});
+
+// A fixed "now" so the relative time-range arithmetic in filterLogs is
+// deterministic: 1_700_000_004_000 is the newest MIXED_ENTRIES timestamp.
+const NOW = 1_700_000_004_000;
+
+/** Build a full filter-criteria object, overriding only the fields a case cares about. */
+const criteria = (overrides: Partial<LogFilterCriteria> = {}): LogFilterCriteria => {
+    return {
+        levels: new Set(),
+        now: NOW,
+        path: "",
+        range: "all",
+        search: "",
+        ...overrides,
+    };
+};
+
+describe("filterLogs", () => {
+    it("returns every entry when no criteria narrow the set", () => {
+        expect.assertions(1);
+
+        expect(filterLogs(MIXED_ENTRIES, criteria())).toHaveLength(MIXED_ENTRIES.length);
+    });
+
+    it("keeps only entries whose level is in the allow-set", () => {
+        expect.assertions(2);
+
+        const result = filterLogs(MIXED_ENTRIES, criteria({ levels: new Set(["info"]) }));
+
+        expect(result).toHaveLength(2);
+        expect(result.every((entry) => entry.level === "info")).toBe(true);
+    });
+
+    it("treats a multi-level allow-set as a union", () => {
+        expect.assertions(1);
+
+        const result = filterLogs(MIXED_ENTRIES, criteria({ levels: new Set(["error", "warn"]) }));
+
+        expect(result).toHaveLength(2);
+    });
+
+    it("matches the function path case-insensitively as a substring", () => {
+        expect.assertions(2);
+
+        const result = filterLogs(MIXED_ENTRIES, criteria({ path: "AUTH:" }));
+
+        expect(result).toHaveLength(2);
+        expect(result.every((entry) => entry.functionPath?.startsWith("auth:"))).toBe(true);
+    });
+
+    it("matches the message case-insensitively as a substring", () => {
+        expect.assertions(1);
+
+        expect(filterLogs(MIXED_ENTRIES, criteria({ search: "BOOM" }))).toHaveLength(2);
+    });
+
+    it("drops entries older than the relative time window", () => {
+        expect.assertions(2);
+
+        // One entry inside the 5m window (NOW), one well outside it (10m back).
+        const spanning: LogEntry[] = [
+            { functionPath: "fresh:fn", level: "error", message: "fresh", timestamp: NOW },
+            { functionPath: "stale:fn", level: "error", message: "stale", timestamp: NOW - 10 * 60 * 1000 },
+        ];
+
+        const result = filterLogs(spanning, criteria({ range: "5m" }));
+
+        expect(result).toHaveLength(1);
+        expect(result[0]?.message).toBe("fresh");
+    });
+
+    it("includes all timestamps for the unbounded `all` range", () => {
+        expect.assertions(1);
+
+        const spanning: LogEntry[] = [
+            { level: "error", message: "fresh", timestamp: NOW },
+            { level: "error", message: "ancient", timestamp: NOW - 24 * 60 * 60 * 1000 },
+        ];
+
+        expect(filterLogs(spanning, criteria({ range: "all" }))).toHaveLength(2);
+    });
+
+    it("aND-composes level, path, search, and time-range", () => {
+        expect.assertions(2);
+
+        const result = filterLogs(MIXED_ENTRIES, criteria({ levels: new Set(["info"]), path: "auth:login", range: "1h", search: "boom" }));
+
+        expect(result).toHaveLength(1);
+        expect(result[0]?.message).toBe("BOOM recovered");
+    });
+});
+
+describe("summarizeLogs", () => {
+    it("counts entries per level in severity order, omitting absent levels", () => {
+        expect.assertions(2);
+
+        const { byLevel, total } = summarizeLogs(MIXED_ENTRIES);
+
+        expect(total).toBe(4);
+        expect(byLevel).toEqual([
+            { count: 2, key: "info" },
+            { count: 1, key: "warn" },
+            { count: 1, key: "error" },
+        ]);
+    });
+
+    it("counts entries per function path, sorted by count desc then key asc", () => {
+        expect.assertions(1);
+
+        const entries: LogEntry[] = [
+            { functionPath: "b:fn", level: "error", message: "1", timestamp: 1 },
+            { functionPath: "a:fn", level: "error", message: "2", timestamp: 2 },
+            { functionPath: "a:fn", level: "error", message: "3", timestamp: 3 },
+        ];
+
+        expect(summarizeLogs(entries).byPath).toEqual([
+            { count: 2, key: "a:fn" },
+            { count: 1, key: "b:fn" },
+        ]);
+    });
+
+    it("buckets entries without a function path under an em-dash", () => {
+        expect.assertions(1);
+
+        const entries: LogEntry[] = [{ level: "info", message: "no path", timestamp: 1 }];
+
+        expect(summarizeLogs(entries).byPath).toEqual([{ count: 1, key: "—" }]);
+    });
+});
+
+describe("logsPanel — advanced explorer (errors view)", () => {
+    it("narrows the rendered rows when a level chip is toggled", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient(MIXED_ENTRIES)));
+
+        await screen.findByTestId("lg-table");
+        switchToErrors();
+        await screen.findAllByTestId("lg-row");
+
+        fireEvent.click(screen.getByTestId("logs-level-info"));
+
+        const rows = await screen.findAllByTestId("lg-row");
+
+        expect(rows).toHaveLength(2);
+        expect(rows.every((row) => row.textContent?.includes("info"))).toBe(true);
+    });
+
+    it("narrows the rendered rows by function-path substring", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient(MIXED_ENTRIES)));
+
+        await screen.findByTestId("lg-table");
+        switchToErrors();
+        await screen.findAllByTestId("lg-row");
+
+        fireEvent.change(screen.getByTestId("logs-path-filter"), { target: { value: "auth:" } });
+
+        const rows = await screen.findAllByTestId("lg-row");
+
+        expect(rows).toHaveLength(2);
+        expect(rows.every((row) => row.textContent?.includes("auth:"))).toBe(true);
+    });
+
+    it("toggles the Summary view to show grouped level and path counts", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createClient(MIXED_ENTRIES)));
+
+        await screen.findByTestId("lg-table");
+        switchToErrors();
+        await screen.findAllByTestId("lg-row");
+
+        fireEvent.click(screen.getByTestId("logs-summary-toggle"));
+
+        const summary = await screen.findByTestId("logs-summary-total");
+
+        expect(summary.textContent).toContain("4 entries");
+        // The list is suppressed while the grouped rollup is up.
+        expect(screen.queryByTestId("lg-table")).toBeNull();
+
+        // Two info entries roll up into a single info bucket with a count of 2.
+        const levels = screen.getByTestId("logs-summary-levels");
+
+        expect(levels.textContent).toContain("info");
     });
 });
