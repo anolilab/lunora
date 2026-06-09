@@ -346,12 +346,19 @@ export const createDevMockClient = (): CirrusClient =>
             { id: "job_1", name: "clear presence", runAt: now + 60_000 },
             { id: "job_2", name: "digest email", runAt: now + 3_600_000 },
         ],
-        listStorageObjects: async (): Promise<unknown> => ({
-            objects: [
+        listStorageObjects: async (options: { prefix?: string }): Promise<unknown> => {
+            // A small nested bucket so the studio's folder navigation has something to
+            // walk. Filtered by prefix to mimic R2's prefix listing.
+            const all = [
                 { key: "uploads/avatar-ada.png", size: 20_480, uploaded: now - 86_400_000 },
                 { key: "uploads/cover.jpg", size: 153_600, uploaded: now - 172_800_000 },
-            ],
-        }),
+                { key: "exports/2026/report.csv", size: 8192, uploaded: now - 3_600_000 },
+                { key: "exports/2026/summary.pdf", size: 51_200, uploaded: now - 7_200_000 },
+                { key: "readme.txt", size: 512, uploaded: now - 600_000 },
+            ];
+
+            return { objects: all.filter((object) => object.key.startsWith(options.prefix ?? "")) };
+        },
         deleteStorageObject: async (key: string): Promise<unknown> => ({ deleted: true, key }),
         signedStorageUrl: async (key: string): Promise<string> => `https://mock.cdn.example/${key}?sig=dev`,
         uploadStorageObject: async (options: { key: string }): Promise<unknown> => ({ etag: "dev-etag", key: options.key }),

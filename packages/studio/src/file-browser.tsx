@@ -1,7 +1,7 @@
 import type { StorageObject } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "./components/ui/button";
 import { EmptyState } from "./components/ui/empty-state";
@@ -11,6 +11,96 @@ import { ConfirmButton } from "./confirm-button";
 import type { TFunction } from "./i18n-context";
 import { useT } from "./i18n-context";
 import { errorMessage, fireAndForget, formatBytes } from "./internal";
+
+/**
+ * Split a flat object listing into the immediate folders and files at `prefix` —
+ * R2-Explorer-style navigation derived client-side (the list is recursive, so a
+ * key's first remaining `/`-segment is a sub-folder; a remainder with no slash is
+ * a file at this level). Folders are de-duped and sorted; files keep list order.
+ * Note: this reflects only the rows loaded so far — paginate (Load more) to surface
+ * folders whose first key is further down the listing.
+ */
+const deriveEntries = (objects: ReadonlyArray<StorageObject>, prefix: string): { files: StorageObject[]; folders: string[] } => {
+    const folders = new Set<string>();
+    const files: StorageObject[] = [];
+
+    for (const object of objects) {
+        const rest = object.key.slice(prefix.length);
+        const slash = rest.indexOf("/");
+
+        if (slash === -1) {
+            files.push(object);
+        } else {
+            folders.add(rest.slice(0, slash + 1));
+        }
+    }
+
+    return { files, folders: [...folders].toSorted((a, b) => a.localeCompare(b)) };
+};
+
+interface BreadcrumbsProps {
+    readonly onNavigate: (prefix: string) => void;
+    readonly prefix: string;
+    readonly t: TFunction;
+}
+
+/** One breadcrumb segment — extracted so each binds its own navigate target. */
+const Crumb = ({ label, onNavigate, target }: { readonly label: string; readonly onNavigate: (prefix: string) => void; readonly target: string }): ReactElement => {
+    const go = useCallback((): void => {
+        onNavigate(target);
+    }, [onNavigate, target]);
+
+    return (
+        <button className="rounded px-1 text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground" onClick={go} type="button">
+            {label}
+        </button>
+    );
+};
+
+/**
+ * The folder path as clickable breadcrumbs — a root crumb plus one per `/`-segment
+ * of the current prefix, each navigating back up to that level.
+ */
+const Breadcrumbs = ({ onNavigate, prefix, t }: BreadcrumbsProps): ReactElement => {
+    const segments = prefix.split("/").filter((segment) => segment !== "");
+
+    return (
+        <nav aria-label={t("Folder path")} className="flex flex-wrap items-center gap-0.5 text-xs" data-testid="fb-breadcrumbs">
+            <Crumb label={t("root")} onNavigate={onNavigate} target="" />
+            {segments.map((segment, index) => (
+                <span className="flex items-center gap-0.5" key={`${segment}-${index.toString()}`}>
+                    <span className="text-muted-foreground/50">/</span>
+                    <Crumb label={segment} onNavigate={onNavigate} target={`${segments.slice(0, index + 1).join("/")}/`} />
+                </span>
+            ))}
+        </nav>
+    );
+};
+
+interface FolderRowProps {
+    readonly name: string;
+    readonly onEnter: (name: string) => void;
+}
+
+/** One folder row — a folder glyph + name; clicking descends into it. */
+const FolderRow = ({ name, onEnter }: FolderRowProps): ReactElement => {
+    const enter = useCallback((): void => {
+        onEnter(name);
+    }, [name, onEnter]);
+
+    return (
+        <TableRow>
+            <TableCell colSpan={4}>
+                <button className="inline-flex items-center gap-2 font-mono text-xs outline-none hover:text-foreground focus-visible:text-foreground" data-testid="fb-folder" onClick={enter} type="button">
+                    <svg aria-hidden="true" className="size-4 text-muted-foreground" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+                    </svg>
+                    {name}
+                </button>
+            </TableCell>
+        </TableRow>
+    );
+};
 
 interface FileBrowserProps {
     /** Object-key prefix the browser filters by on first load. */
@@ -38,15 +128,18 @@ interface FileRowProps {
     readonly object: StorageObject;
     readonly onCopy: (key: string) => void;
     readonly onDelete: (key: string) => void;
+    /** Current folder prefix, stripped from the displayed name (the full key still drives actions). */
+    readonly prefix: string;
     readonly t: TFunction;
 }
 
 /**
  * One object row. Extracted so each row binds its own copy/delete handlers via
  * `useCallback` rather than allocating a fresh closure per render in the parent
- * `.map(...)` (react-perf).
+ * `.map(...)` (react-perf). Shows the name relative to the current folder; the
+ * full key still scopes the action testids and the copy/delete calls.
  */
-const FileRow = ({ busy, copiedKey, object, onCopy, onDelete, t }: FileRowProps): ReactElement => {
+const FileRow = ({ busy, copiedKey, object, onCopy, onDelete, prefix, t }: FileRowProps): ReactElement => {
     const copy = useCallback((): void => {
         onCopy(object.key);
     }, [onCopy, object.key]);
@@ -57,7 +150,7 @@ const FileRow = ({ busy, copiedKey, object, onCopy, onDelete, t }: FileRowProps)
 
     return (
         <TableRow data-testid="fb-row">
-            <TableCell className="font-mono text-xs">{object.key}</TableCell>
+            <TableCell className="font-mono text-xs">{object.key.slice(prefix.length)}</TableCell>
             <TableCell className="tabular-nums text-muted-foreground">{formatBytes(object.size)}</TableCell>
             <TableCell>{object.httpMetadata?.contentType ?? ""}</TableCell>
             <TableCell className="text-right">
@@ -138,6 +231,26 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     const loadMore = useCallback((): void => {
         fireAndForget(list(prefix, nextCursor, true));
     }, [list, prefix, nextCursor]);
+
+    // Navigate to a folder prefix (breadcrumb or folder row) and reload from its
+    // first page.
+    const navigate = useCallback(
+        (target: string): void => {
+            setPrefix(target);
+            fireAndForget(list(target, undefined, false));
+        },
+        [list],
+    );
+
+    const enterFolder = useCallback(
+        (name: string): void => {
+            navigate(`${prefix}${name}`);
+        },
+        [navigate, prefix],
+    );
+
+    // Split the loaded keys into the immediate folders + files at this prefix.
+    const { files, folders } = useMemo(() => deriveEntries(objects ?? [], prefix), [objects, prefix]);
 
     const onCopy = useCallback(
         (key: string): void => {
@@ -257,6 +370,8 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                 <input className="hidden" data-testid="storage-file-input" onChange={onFileChange} ref={fileInputRef} type="file" />
             </div>
 
+            {objects !== null && <Breadcrumbs onNavigate={navigate} prefix={prefix} t={t} />}
+
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="storage-error" role="alert">
                     {error}
@@ -297,8 +412,11 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {objects.map((object) => (
-                                <FileRow busy={busy} copiedKey={copiedKey} key={object.key} object={object} onCopy={onCopy} onDelete={onDelete} t={t} />
+                            {folders.map((folder) => (
+                                <FolderRow key={folder} name={folder} onEnter={enterFolder} />
+                            ))}
+                            {files.map((object) => (
+                                <FileRow busy={busy} copiedKey={copiedKey} key={object.key} object={object} onCopy={onCopy} onDelete={onDelete} prefix={prefix} t={t} />
                             ))}
                         </TableBody>
                     </Table>

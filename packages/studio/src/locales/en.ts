@@ -451,6 +451,7 @@ const MESSAGE_IDS = [
     "Connection",
     "admin",
     // File browser actions.
+    "Folder path",
     "Upload",
     "Uploading…",
     "Copy URL",
