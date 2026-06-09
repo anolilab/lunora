@@ -188,6 +188,31 @@ type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
  */
 type StorageListFunction = (prefix?: string, options?: { cursor?: string; limit?: number }) => Promise<{ cursor?: string; objects: StorageObject[] }>;
 
+/**
+ * Deletes one object from the storage bucket for the admin file browser.
+ * Structurally compatible with `@cirrus/storage`'s `Storage["delete"]`, so
+ * passing `createStorage(...).delete` satisfies it.
+ */
+type StorageDeleteFunction = (key: string) => Promise<void> | void;
+
+/**
+ * Uploads one object to the storage bucket for the admin file browser. Mirrors
+ * `@cirrus/storage`'s `Storage["upload"]` (only the bits the admin endpoint
+ * needs): the key, the raw bytes, and an optional content-type.
+ */
+type StorageUploadFunction = (
+    key: string,
+    body: ArrayBuffer,
+    options?: { contentType?: string },
+) => Promise<{ etag?: string; key: string }> | { etag?: string; key: string };
+
+/**
+ * Mints a (signed or public) URL for one object so the admin file browser can
+ * offer a "copy URL" action. Structurally compatible with `@cirrus/storage`'s
+ * `Storage["getSignedUrl"]` / `Storage["getUrl"]`.
+ */
+type StorageSignedUrlFunction = (key: string) => Promise<string> | string;
+
 /** One `.global()` table plus its row count. Mirrors `@cirrus/d1`'s `GlobalTableInfo`. */
 interface GlobalTableInfo {
     name: string;
@@ -569,6 +594,14 @@ interface WorkerOptions {
     shardDO: ShardNamespaceLike;
 
     /**
+     * Deletes one object, backing the admin-gated `DELETE /_cirrus/admin/storage`
+     * endpoint the studio's file browser calls. Passing
+     * `createStorage(...).delete` satisfies it. Omit it and the endpoint responds
+     * `STORAGE_DELETE_NOT_CONFIGURED` — the studio surfaces a clear inline error.
+     */
+    storageDelete?: StorageDeleteFunction;
+
+    /**
      * Storage lister backing the admin-gated `GET /_cirrus/admin/storage`
      * endpoint the studio's file browser calls. The structural shape matches
      * `@cirrus/storage`'s `Storage["list"]`, so passing `createStorage(...).list`
@@ -576,6 +609,23 @@ interface WorkerOptions {
      * responds `STORAGE_NOT_CONFIGURED`.
      */
     storageList?: StorageListFunction;
+
+    /**
+     * Mints a (signed or public) URL for one object, backing the admin-gated
+     * `GET /_cirrus/admin/storage/url` endpoint the studio's "copy URL" action
+     * calls. Passing `createStorage(...).getSignedUrl` (or `.getUrl`) satisfies
+     * it. Omit it and the endpoint responds `STORAGE_URL_NOT_CONFIGURED` — the
+     * studio surfaces a clear inline error.
+     */
+    storageSignedUrl?: StorageSignedUrlFunction;
+
+    /**
+     * Uploads one object, backing the admin-gated `PUT /_cirrus/admin/storage`
+     * endpoint the studio's file browser calls. Passing `createStorage(...).upload`
+     * satisfies it. Omit it and the endpoint responds
+     * `STORAGE_UPLOAD_NOT_CONFIGURED` — the studio surfaces a clear inline error.
+     */
+    storageUpload?: StorageUploadFunction;
 
     /**
      * Page the `.global()` (D1) change-data-capture log for the admin sync
@@ -658,6 +708,57 @@ const readBodyTextWithLimit = async (request: Request, limit: number = MAX_BODY_
     return text;
 };
 
+/**
+ * Read a request body fully into an `ArrayBuffer` while enforcing the same hard
+ * byte budget {@link readBodyTextWithLimit} applies — used by the admin storage
+ * upload path, which carries arbitrary binary bytes rather than text. Aborts
+ * with a 413 the moment cumulative bytes exceed {@link MAX_BODY_BYTES}. A `null`
+ * body (no payload) decodes to an empty buffer.
+ */
+const readBodyBytesWithLimit = async (request: Request, limit: number = MAX_BODY_BYTES): Promise<ArrayBuffer> => {
+    if (!request.body) {
+        return new ArrayBuffer(0);
+    }
+
+    const reader = request.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- drain the body stream until the reader signals `done`
+    while (true) {
+        // eslint-disable-next-line no-await-in-loop -- stream reads are inherently sequential; each chunk depends on the prior read
+        const { done, value } = await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- a stream read can yield `done: false` with an undefined `value`; guard before reading byteLength
+        if (value) {
+            total += value.byteLength;
+
+            if (total > limit) {
+                // eslint-disable-next-line no-await-in-loop -- one-shot cleanup on the over-budget abort path before throwing
+                await reader.cancel().catch(() => {});
+
+                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+            }
+
+            chunks.push(value);
+        }
+    }
+
+    const out = new Uint8Array(total);
+    let offset = 0;
+
+    for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+
+    return out.buffer;
+};
+
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 const MIGRATE_PATH = "/_cirrus/migrate";
@@ -674,6 +775,7 @@ const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
+const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
@@ -2387,10 +2489,6 @@ const createWorker = (
     };
 
     const handleStorageList = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Storage endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
         const storageList = requireAdminOption(request, options.storageList, {
             code: "STORAGE_NOT_CONFIGURED",
             message: "storage endpoint requires a `storageList` function on the worker",
@@ -2403,6 +2501,89 @@ const createWorker = (
         });
 
         return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    /** Read a required `key` off the request URL or throw a 400. */
+    const requireStorageKey = (url: URL): string => {
+        const key = queryParameter(url, "key");
+
+        if (key === undefined) {
+            throw new CirrusError("Storage endpoint requires a `key` query parameter", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return key;
+    };
+
+    const handleStorageDelete = async (request: Request): Promise<Response> => {
+        const storageDelete = requireAdminOption(request, options.storageDelete, {
+            code: "STORAGE_DELETE_NOT_CONFIGURED",
+            message: "storage delete requires a `storageDelete` function on the worker",
+        });
+
+        const key = requireStorageKey(new URL(request.url));
+
+        await storageDelete(key);
+
+        return Response.json({ deleted: true, key }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleStorageUpload = async (request: Request): Promise<Response> => {
+        const storageUpload = requireAdminOption(request, options.storageUpload, {
+            code: "STORAGE_UPLOAD_NOT_CONFIGURED",
+            message: "storage upload requires a `storageUpload` function on the worker",
+        });
+
+        const url = new URL(request.url);
+        const key = requireStorageKey(url);
+        // The entry-point `Content-Length` guard already rejects an oversized
+        // declared length for PUT; reading the buffer here is the authoritative
+        // size check the runtime owns (R2 enforces its own ceilings downstream).
+        const body = await readBodyBytesWithLimit(request);
+        const headerContentType = request.headers.get("content-type");
+        const contentType = headerContentType === null || headerContentType === "" ? undefined : headerContentType;
+
+        const result = await storageUpload(key, body, { contentType });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    /**
+     * Dispatch the storage endpoint by method so `GET` (list), `PUT`/`POST`
+     * (upload), and `DELETE` (delete) share one pathname. Keeps the write paths
+     * additive and self-contained alongside the read path.
+     */
+    const handleStorage = async (request: Request): Promise<Response> => {
+        switch (request.method) {
+            case "DELETE": {
+                return handleStorageDelete(request);
+            }
+            case "GET": {
+                return handleStorageList(request);
+            }
+            case "POST":
+            case "PUT": {
+                return handleStorageUpload(request);
+            }
+            default: {
+                throw new CirrusError("Storage endpoint requires GET, PUT, POST, or DELETE", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            }
+        }
+    };
+
+    const handleStorageSignedUrl = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Storage URL endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const storageSignedUrl = requireAdminOption(request, options.storageSignedUrl, {
+            code: "STORAGE_URL_NOT_CONFIGURED",
+            message: "storage URL endpoint requires a `storageSignedUrl` function on the worker",
+        });
+
+        const key = requireStorageKey(new URL(request.url));
+        const signedUrl = await storageSignedUrl(key);
+
+        return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     const handleFunctionsList = (request: Request): Response => {
@@ -2993,7 +3174,8 @@ const createWorker = (
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
         [SCHEDULED_STATUS_PATH]: (request) => handleSchedulerStatus(request),
         [SCHEDULED_PATH]: (request) => handleScheduledList(request),
-        [STORAGE_PATH]: (request) => handleStorageList(request),
+        [STORAGE_PATH]: (request) => handleStorage(request),
+        [STORAGE_URL_PATH]: (request) => handleStorageSignedUrl(request),
         [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
         [GLOBAL_TABLES_PATH]: (request) => handleGlobalTables(request),
         [GLOBAL_TABLE_PATH]: (request) => handleGlobalTablePage(request),
@@ -3113,8 +3295,11 @@ export type {
     RpcEnvelope,
     ScheduledControllerLike,
     ShardingInfo,
+    StorageDeleteFunction as StorageDeleteFn,
     StorageListFunction as StorageListFn,
     StorageObject,
+    StorageSignedUrlFunction as StorageSignedUrlFn,
+    StorageUploadFunction as StorageUploadFn,
     WorkerOptions,
 };
 

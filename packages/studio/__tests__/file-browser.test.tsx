@@ -2,7 +2,7 @@ import type { StorageListPage } from "@cirrus/client";
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileBrowser } from "../src/file-browser";
 import type { MockClientHooks } from "./mock-client";
@@ -98,8 +98,72 @@ describe("fileBrowser", () => {
 
         render(renderBrowser(mock));
 
-        const error = await screen.findByTestId("fb-error");
+        const error = await screen.findByTestId("storage-error");
 
         expect(error.textContent).toBe("STORAGE_NOT_CONFIGURED");
+    });
+
+    describe("mutations", () => {
+        beforeEach(() => {
+            Object.defineProperty(globalThis.navigator, "clipboard", {
+                configurable: true,
+                value: { writeText: vi.fn<(text: string) => Promise<void>>(async () => undefined) },
+            });
+        });
+
+        it("deletes a row after confirming and refreshes the listing", async () => {
+            expect.assertions(2);
+
+            const mock = createClient();
+
+            render(renderBrowser(mock));
+
+            await screen.findByTestId("fb-table");
+
+            // First click arms the ConfirmButton; the confirm step fires the delete.
+            fireEvent.click(screen.getByTestId("storage-delete-avatars/a.png"));
+            fireEvent.click(screen.getByTestId("storage-delete-avatars/a.png-confirm"));
+
+            await waitFor(() => {
+                if (mock.deleteStorageObject.mock.calls.length === 0) {
+                    throw new Error("not deleted yet");
+                }
+            });
+
+            expect(mock.deleteStorageObject).toHaveBeenCalledWith("avatars/a.png");
+
+            // The post-delete re-list re-calls listStorageObjects (mount + refresh).
+            await waitFor(() => {
+                if (mock.listStorageObjects.mock.calls.length < 2) {
+                    throw new Error("not relisted yet");
+                }
+            });
+
+            expect(mock.listStorageObjects.mock.calls.length).toBeGreaterThanOrEqual(2);
+        });
+
+        it("copies a signed URL to the clipboard", async () => {
+            expect.assertions(2);
+
+            const mock = createClient();
+            const writeText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
+
+            Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: { writeText } });
+
+            render(renderBrowser(mock));
+
+            await screen.findByTestId("fb-table");
+
+            fireEvent.click(screen.getByTestId("storage-copy-avatars/a.png"));
+
+            await waitFor(() => {
+                if (writeText.mock.calls.length === 0) {
+                    throw new Error("not copied yet");
+                }
+            });
+
+            expect(mock.signedStorageUrl).toHaveBeenCalledWith("avatars/a.png");
+            expect(writeText).toHaveBeenCalledWith("https://mock.example/avatars/a.png?sig=test");
+        });
     });
 });

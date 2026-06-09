@@ -20,6 +20,7 @@ interface MockClientHooks {
     cancelScheduledJob: ReturnType<typeof vi.fn>;
     createAuthUser: ReturnType<typeof vi.fn>;
     deleteAuthPasskey: ReturnType<typeof vi.fn>;
+    deleteStorageObject: ReturnType<typeof vi.fn>;
     disableAuthTwoFactor: ReturnType<typeof vi.fn>;
     /** Push a value to every live subscriber registered for `reference`. */
     emit: (reference: string, value: unknown) => void;
@@ -49,11 +50,13 @@ interface MockClientHooks {
     revokeAuthUserSessions: ReturnType<typeof vi.fn>;
     setAuthUserPassword: ReturnType<typeof vi.fn>;
     setAuthUserRole: ReturnType<typeof vi.fn>;
+    signedStorageUrl: ReturnType<typeof vi.fn>;
     subscribe: ReturnType<typeof vi.fn>;
     subscribeScheduledJobs: ReturnType<typeof vi.fn>;
     unbanAuthUser: ReturnType<typeof vi.fn>;
     unlinkAuthAccount: ReturnType<typeof vi.fn>;
     updateAuthUser: ReturnType<typeof vi.fn>;
+    uploadStorageObject: ReturnType<typeof vi.fn>;
 }
 
 interface ListAuthUsersOptions {
@@ -86,6 +89,7 @@ interface MockClientImpls {
     mutation?: Impl;
     query?: Impl;
     readGlobalTablePage?: (options: { limit?: number; offset?: number; table: string }) => GlobalTablePage;
+    signedStorageUrl?: (key: string) => string;
 }
 
 export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks => {
@@ -99,6 +103,17 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     );
     const listStorageObjects = vi.fn<(options?: { cursor?: string; limit?: number; prefix?: string }) => Promise<StorageListPage>>(
         async (options: { cursor?: string; limit?: number; prefix?: string } = {}) => impls.listStorageObjects?.(options) ?? { objects: [] },
+    );
+    const deleteStorageObject = vi.fn<(key: string) => Promise<{ deleted: boolean; key: string }>>(async (key: string) => {
+        return { deleted: true, key };
+    });
+    const uploadStorageObject = vi.fn<(options: { body: ArrayBuffer | Blob; contentType?: string; key: string }) => Promise<{ etag?: string; key: string }>>(
+        async (options: { body: ArrayBuffer | Blob; contentType?: string; key: string }) => {
+            return { etag: "mock-etag", key: options.key };
+        },
+    );
+    const signedStorageUrl = vi.fn<(key: string) => Promise<string>>(
+        async (key: string) => impls.signedStorageUrl?.(key) ?? `https://mock.example/${key}?sig=test`,
     );
     const listGlobalTables = vi.fn<() => Promise<GlobalTableInfo[]>>(async () => impls.listGlobalTables?.() ?? []);
     const readGlobalTablePage = vi.fn<(options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>>(
@@ -234,6 +249,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const asClient = {
         action,
         cancelScheduledJob,
+        deleteStorageObject,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
@@ -243,8 +259,10 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         mutation,
         query,
         readGlobalTablePage,
+        signedStorageUrl,
         subscribe,
         subscribeScheduledJobs,
+        uploadStorageObject,
         ...authAdminMethods,
     } as unknown as CirrusClient;
 
@@ -252,6 +270,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         action,
         asClient,
         cancelScheduledJob,
+        deleteStorageObject,
         emit,
         emitError,
         emitJobs,
@@ -264,8 +283,10 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         mutation,
         query,
         readGlobalTablePage,
+        signedStorageUrl,
         subscribe,
         subscribeScheduledJobs,
+        uploadStorageObject,
         ...authAdminMethods,
     };
 };

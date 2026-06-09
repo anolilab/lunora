@@ -1219,6 +1219,87 @@ describe("cirrusClient", () => {
 
             await expect(client.listStorageObjects()).resolves.toEqual({ cursor: undefined, objects: [] });
         });
+
+        it("deleteStorageObject DELETEs the key and normalises the result", async () => {
+            expect.assertions(4);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ deleted: true, key: "avatars/a.png" }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const result = await client.deleteStorageObject("avatars/a.png");
+
+            expect(result).toEqual({ deleted: true, key: "avatars/a.png" });
+
+            const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+            const parsed = new URL(requestUrl);
+
+            expect(parsed.pathname).toBe("/_cirrus/admin/storage");
+            expect(parsed.searchParams.get("key")).toBe("avatars/a.png");
+            expect(init.method).toBe("DELETE");
+        });
+
+        it("uploadStorageObject PUTs the body with the content-type header", async () => {
+            expect.assertions(4);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ etag: "e9", key: "docs/r.txt" }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const bytes = new TextEncoder().encode("hello").buffer;
+            const result = await client.uploadStorageObject({ body: bytes, contentType: "text/plain", key: "docs/r.txt" });
+
+            expect(result).toEqual({ etag: "e9", key: "docs/r.txt" });
+
+            const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+            const parsed = new URL(requestUrl);
+
+            expect(parsed.searchParams.get("key")).toBe("docs/r.txt");
+            expect(init.method).toBe("PUT");
+            expect((init.headers as Record<string, string>)["content-type"]).toBe("text/plain");
+        });
+
+        it("signedStorageUrl GETs the URL endpoint and unwraps the url", async () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ key: "a.png", url: "https://cdn.example/a.png?sig=x" }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const result = await client.signedStorageUrl("a.png");
+
+            expect(result).toBe("https://cdn.example/a.png?sig=x");
+
+            const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+            const parsed = new URL(requestUrl);
+
+            expect(parsed.pathname).toBe("/_cirrus/admin/storage/url");
+            expect(init.method).toBe("GET");
+        });
+
+        it("signedStorageUrl throws when the endpoint returns no url", async () => {
+            expect.assertions(1);
+
+            const client = new CirrusClient({
+                fetch: async () => jsonResponse({ key: "a.png" }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.signedStorageUrl("a.png")).rejects.toThrow("no `url`");
+        });
     });
 
     // --- Functions admin --------------------------------------------------------

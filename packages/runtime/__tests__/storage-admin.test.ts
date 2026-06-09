@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ExecutionContextLike, StorageListFn as StorageListFunction } from "../src/create-worker";
+import type {
+    ExecutionContextLike,
+    StorageDeleteFn as StorageDeleteFunction,
+    StorageListFn as StorageListFunction,
+    StorageSignedUrlFn as StorageSignedUrlFunction,
+    StorageUploadFn as StorageUploadFunction,
+} from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -71,17 +77,172 @@ describe("createWorker — storage admin endpoint", () => {
         expect(storageList).toHaveBeenCalledWith("avatars/", { cursor: "z", limit: 25 });
     });
 
-    it("rejects non-GET (405)", async () => {
+    it("rejects an unsupported method (405)", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList: async () => PAGE });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            new Request("https://app.example/_cirrus/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "PATCH" }),
             {},
             fakeContext,
         );
 
         expect(response.status).toBe(405);
+    });
+});
+
+describe("createWorker — storage admin delete", () => {
+    it("rejects without a valid admin bearer (403)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDelete: async () => undefined });
+
+        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/storage?key=a.png", { method: "DELETE" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+
+    it("reports STORAGE_DELETE_NOT_CONFIGURED when no deleter is bound (400)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage?key=a.png", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "DELETE" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_DELETE_NOT_CONFIGURED");
+    });
+
+    it("requires a key query parameter (400)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDelete: async () => undefined });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "DELETE" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+    });
+
+    it("forwards the key to the deleter and confirms", async () => {
+        expect.assertions(3);
+
+        const storageDelete = vi.fn<StorageDeleteFunction>(async () => undefined);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDelete });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage?key=avatars/a.png", {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "DELETE",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ deleted: true, key: "avatars/a.png" });
+        expect(storageDelete).toHaveBeenCalledWith("avatars/a.png");
+    });
+});
+
+describe("createWorker — storage admin upload", () => {
+    it("reports STORAGE_UPLOAD_NOT_CONFIGURED when no uploader is bound (400)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage?key=a.txt", {
+                body: "hi",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "PUT",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_UPLOAD_NOT_CONFIGURED");
+    });
+
+    it("forwards key, bytes, and content-type to the uploader", async () => {
+        expect.assertions(4);
+
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string) => {
+            return { etag: "e9", key };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage?key=docs/readme.txt", {
+                body: "hello",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "text/plain" },
+                method: "PUT",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ etag: "e9", key: "docs/readme.txt" });
+
+        const [key, body, uploadOptions] = storageUpload.mock.calls[0] as unknown as [string, ArrayBuffer, { contentType?: string }];
+
+        expect(key).toBe("docs/readme.txt");
+        expect({ bytes: new TextDecoder().decode(body), contentType: uploadOptions.contentType }).toEqual({ bytes: "hello", contentType: "text/plain" });
+    });
+});
+
+describe("createWorker — storage admin signed URL", () => {
+    it("reports STORAGE_URL_NOT_CONFIGURED when no signer is bound (400)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage/url?key=a.png", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_URL_NOT_CONFIGURED");
+    });
+
+    it("returns the signed URL for the key", async () => {
+        expect.assertions(3);
+
+        const storageSignedUrl = vi.fn<StorageSignedUrlFunction>(async (key: string) => `https://cdn.example/${key}?sig=abc`);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageSignedUrl });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage/url?key=avatars/a.png", {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ key: "avatars/a.png", url: "https://cdn.example/avatars/a.png?sig=abc" });
+        expect(storageSignedUrl).toHaveBeenCalledWith("avatars/a.png");
     });
 });

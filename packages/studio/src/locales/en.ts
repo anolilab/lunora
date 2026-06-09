@@ -450,6 +450,13 @@ const MESSAGE_IDS = [
     "No active subscriptions.",
     "Connection",
     "admin",
+    // File browser actions.
+    "Upload",
+    "Uploading…",
+    "Copy URL",
+    "Delete object?",
+    "Uploaded {key}",
+    "Deleted {key}",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

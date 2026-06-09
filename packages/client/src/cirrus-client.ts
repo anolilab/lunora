@@ -66,6 +66,7 @@ const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
+const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
@@ -875,6 +876,62 @@ class CirrusClient {
         return { cursor: body.cursor, objects: body.objects ?? [] };
     }
 
+    /**
+     * Delete one object from the storage bucket by key. Hits the admin-gated
+     * `DELETE /_cirrus/admin/storage?key=…` endpoint — the worker must be built
+     * with a `storageDelete` function and `adminToken`. Powers the studio file
+     * browser's per-row delete; resolves `{ deleted, key }`.
+     */
+    public async deleteStorageObject(key: string): Promise<{ deleted: boolean; key: string }> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const path = `${STORAGE_PATH}?key=${encodeURIComponent(key)}`;
+        const body = (await this.adminFetch(path, "DELETE")) as { deleted?: boolean; key?: string };
+
+        return { deleted: body.deleted ?? true, key: body.key ?? key };
+    }
+
+    /**
+     * Upload one object to the storage bucket. Hits the admin-gated
+     * `PUT /_cirrus/admin/storage?key=…` endpoint with the raw body and an
+     * optional `contentType` header — the worker must be built with a
+     * `storageUpload` function and `adminToken`. Powers the studio file
+     * browser's upload control; resolves `{ etag?, key }`.
+     */
+    public async uploadStorageObject(options: { body: ArrayBuffer | Blob; contentType?: string; key: string }): Promise<{ etag?: string; key: string }> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const path = `${STORAGE_PATH}?key=${encodeURIComponent(options.key)}`;
+        const body = (await this.adminFetch(path, "PUT", options.body, options.contentType)) as { etag?: string; key?: string };
+
+        return { etag: body.etag, key: body.key ?? options.key };
+    }
+
+    /**
+     * Build a (signed or public) URL for one object. Hits the admin-gated
+     * `GET /_cirrus/admin/storage/url?key=…` endpoint — the worker must be built
+     * with a `storageSignedUrl` function and `adminToken`. Powers the studio
+     * file browser's copy-URL action; resolves the URL string.
+     */
+    public async signedStorageUrl(key: string): Promise<string> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const path = `${STORAGE_URL_PATH}?key=${encodeURIComponent(key)}`;
+        const body = (await this.adminFetch(path, "GET")) as { url?: string };
+
+        if (typeof body.url !== "string") {
+            throw new TypeError("CirrusClient: storage URL endpoint returned no `url`");
+        }
+
+        return body.url;
+    }
+
     // --- Global (D1) tables admin -------------------------------------------
 
     /**
@@ -1609,7 +1666,12 @@ class CirrusClient {
      * worker's `{ error: { code, message } }` envelope as a coded `Error` —
      * mirroring {@link rpc} so callers see the same failure shape.
      */
-    private async adminFetch(path: string, method: "GET" | "POST", payload?: Record<string, unknown>): Promise<unknown> {
+    private async adminFetch(
+        path: string,
+        method: "DELETE" | "GET" | "POST" | "PUT",
+        payload?: ArrayBuffer | Blob | Record<string, unknown>,
+        contentType?: string,
+    ): Promise<unknown> {
         if (!this.fetchImpl) {
             throw new Error("CirrusClient: no `fetch` implementation available");
         }
@@ -1620,12 +1682,27 @@ class CirrusClient {
             headers["authorization"] = `Bearer ${this.authToken}`;
         }
 
-        if (payload !== undefined) {
+        // A raw binary payload (storage upload) rides as-is with the caller's
+        // content-type; a plain-object payload is JSON-encoded. `undefined`
+        // sends no body at all (GET/DELETE without a payload).
+        const isBinary = payload instanceof ArrayBuffer || payload instanceof Blob;
+        let requestBody: ArrayBuffer | Blob | string | undefined;
+
+        if (payload === undefined) {
+            requestBody = undefined;
+        } else if (isBinary) {
+            requestBody = payload;
+
+            if (contentType !== undefined) {
+                headers["content-type"] = contentType;
+            }
+        } else {
+            requestBody = JSON.stringify(payload);
             headers["content-type"] = "application/json";
         }
 
         const response = await this.fetchImpl(joinUrl(this.url, path), {
-            body: payload === undefined ? undefined : JSON.stringify(payload),
+            body: requestBody,
             headers,
             method,
         });

@@ -189,8 +189,21 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         schedulerDO: env.SCHEDULER,
         shardDO: env.SHARD,
         // Exposes /_cirrus/admin/storage so the studio's file browser can
-        // page through R2 objects. Omitted when no bucket is bound.
-        storageList: env.FILES ? createStorage({ bucket: env.FILES }).list : undefined,
+        // page through R2 objects, delete, and upload. Omitted when no bucket is
+        // bound. The signed-URL action additionally needs a public base URL +
+        // signing secret, so it's wired only when both are configured.
+        ...(env.FILES
+            ? (() => {
+                  const storage = createStorage({ bucket: env.FILES, publicBaseUrl: env.PUBLIC_STORAGE_BASE_URL, signingSecret: env.STORAGE_SECRET });
+
+                  return {
+                      storageDelete: storage.delete,
+                      storageList: storage.list,
+                      storageSignedUrl: env.PUBLIC_STORAGE_BASE_URL && env.STORAGE_SECRET ? (key: string) => storage.getSignedUrl(key) : undefined,
+                      storageUpload: (key: string, body: ArrayBuffer, options?: { contentType?: string }) => storage.upload(key, body, options),
+                  };
+              })()
+            : {}),
     });
 
 const handleTestReset = async (env: Env): Promise<Response> => {
