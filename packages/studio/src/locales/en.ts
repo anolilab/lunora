@@ -196,6 +196,7 @@ const MESSAGE_IDS = [
     "status",
     "Storage",
     "Table",
+    "Tables",
     "Table list",
     "Table touched",
     "Token rides the WebSocket URL — it can surface in browser DevTools and server logs. Use a dev-only token.",
@@ -230,6 +231,8 @@ const MESSAGE_IDS = [
     "Run registered queries, mutations, and actions.",
     "Global tables (D1)",
     "Shard tables",
+    "Tables marked .global() (D1-backed, region-replicated) will appear here.",
+    "Select a table to browse its rows.",
     "Shared across every tenant, stored once in D1. Includes auth tables.",
     "Partitioned per shard key into separate Durable Objects — scoped to the shard above.",
     // Function stats panel.

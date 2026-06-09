@@ -47,8 +47,9 @@ describe("globalDataBrowser", () => {
 
         await screen.findByTestId("gdb-table-list");
 
-        expect(screen.getByTestId("gdb-table-organizations").textContent).toBe("organizations (2)");
-        expect(screen.getByTestId("gdb-table-plans").textContent).toBe("plans (5)");
+        // The sidebar renders the table name and its row-count badge separately.
+        expect(screen.getByTestId("gdb-table-organizations").textContent).toBe("organizations2");
+        expect(screen.getByTestId("gdb-table-plans").textContent).toBe("plans5");
     });
 
     it("pages through a selected table's rows", async () => {

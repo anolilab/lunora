@@ -5,7 +5,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import { EmptyState } from "./components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
-import { errorMessage, fireAndForget, formatCell } from "./internal";
+import { CellValue, GridContainer, GridPagination, TableListSidebar } from "./data-grid";
+import { useT } from "./i18n-context";
+import { errorMessage, fireAndForget } from "./internal";
 import { StorageTierHeader } from "./storage-tier";
 
 interface GlobalDataBrowserProps {
@@ -26,14 +28,15 @@ const rowKey = (row: Record<string, unknown>, index: number): string => {
 };
 
 /**
- * Read-only browser for `.global()` (D1-backed) tables. Twin of
- * `DataBrowser`, but the global counterpart isn't shard-scoped: it lists
- * tables via the client's `listGlobalTables()` (the `/_cirrus/admin/global/tables`
- * endpoint) and pages rows via `readGlobalTablePage()`. Gated by the server's
- * `CIRRUS_ADMIN_TOKEN`, and only surfaces tables declared `.global()`.
+ * Read-only browser for `.global()` (D1-backed) tables. Twin of `DataBrowser`,
+ * but not shard-scoped: it lists tables via `listGlobalTables()` and pages rows
+ * via `readGlobalTablePage()`. Laid out like Supabase's Table Editor — a left
+ * table sidebar + a bordered grid with a paginated footer — and gated by the
+ * server's `CIRRUS_ADMIN_TOKEN`.
  */
 export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBrowserProps = {}): ReactElement => {
     const client = useCirrus();
+    const t = useT();
 
     const [tables, setTables] = useState<GlobalTableInfo[] | null>(null);
     const [tablesError, setTablesError] = useState<null | string>(null);
@@ -113,22 +116,18 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
     }, [goToPage, offset, pageSize]);
 
     return (
-        <div data-testid="cirrus-global-data-browser">
+        <div className="flex flex-col gap-4" data-testid="cirrus-global-data-browser">
             <StorageTierHeader tier="global" />
 
-            <button data-testid="gdb-load-tables" onClick={reloadTables} type="button">
-                Reload tables
-            </button>
-
             {tablesError !== null && (
-                <p data-testid="gdb-tables-error" role="alert">
+                <p className="text-sm text-destructive" data-testid="gdb-tables-error" role="alert">
                     {tablesError}
                 </p>
             )}
 
             {tables !== null && tables.length === 0 && (
                 <EmptyState
-                    description="Tables marked .global() (D1-backed, region-replicated) will appear here."
+                    description={t("Tables marked .global() (D1-backed, region-replicated) will appear here.")}
                     icon={
                         <svg
                             aria-hidden="true"
@@ -144,67 +143,60 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
                         </svg>
                     }
                     testId="gdb-empty"
-                    title="No global tables."
+                    title={t("No global tables.")}
                 />
             )}
 
             {tables !== null && tables.length > 0 && (
-                <ul data-testid="gdb-table-list">
-                    {tables.map((table) => (
-                        <li key={table.name}>
-                            <button
-                                aria-pressed={selectedTable === table.name}
-                                data-testid={`gdb-table-${table.name}`}
-                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over table.name; admin dev-tool render path
-                                onClick={() => {
-                                    selectTable(table.name);
-                                }}
-                                type="button"
-                            >
-                                {table.name} ({table.rowCount})
-                            </button>
-                        </li>
-                    ))}
-                </ul>
-            )}
+                <div className="flex min-w-0 gap-4">
+                    <TableListSidebar onReload={reloadTables} onSelect={selectTable} prefix="gdb" selected={selectedTable} tables={tables} />
 
-            {pageError !== null && (
-                <p data-testid="gdb-page-error" role="alert">
-                    {pageError}
-                </p>
-            )}
+                    <div className="flex min-w-0 flex-1 flex-col gap-3">
+                        {pageError !== null && (
+                            <p className="text-sm text-destructive" data-testid="gdb-page-error" role="alert">
+                                {pageError}
+                            </p>
+                        )}
 
-            {page !== null && (
-                <div data-testid="gdb-page">
-                    <Table data-testid="gdb-rows">
-                        <TableHeader>
-                            <TableRow>
-                                {page.columns.map((column) => (
-                                    <TableHead key={column}>{column}</TableHead>
-                                ))}
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {page.rows.map((row, rowIndex) => (
-                                <TableRow data-testid="gdb-row" key={rowKey(row, rowIndex)}>
-                                    {page.columns.map((column) => (
-                                        <TableCell key={column}>{formatCell(row[column])}</TableCell>
-                                    ))}
-                                </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
+                        {page === null && pageError === null && <p className="text-sm text-muted-foreground">{t("Select a table to browse its rows.")}</p>}
 
-                    <div>
-                        <button data-testid="gdb-prev" disabled={!hasPrevious} onClick={goPrevious} type="button">
-                            Previous
-                        </button>
-                        <span data-testid="gdb-page-info">
-                            {rangeStart}-{rangeEnd} of {total}
-                        </span>
-                        <button data-testid="gdb-next" disabled={!hasNext} onClick={goNext} type="button">
-                            Next
-                        </button>
+                        {page !== null && (
+                            <div className="flex flex-col gap-3" data-testid="gdb-page">
+                                <GridContainer>
+                                    <Table data-testid="gdb-rows">
+                                        <TableHeader>
+                                            <TableRow>
+                                                {page.columns.map((column) => (
+                                                    <TableHead key={column}>{column}</TableHead>
+                                                ))}
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {page.rows.map((row, rowIndex) => (
+                                                <TableRow data-testid="gdb-row" key={rowKey(row, rowIndex)}>
+                                                    {page.columns.map((column) => (
+                                                        <TableCell className="max-w-xs truncate font-mono text-xs" key={column}>
+                                                            <CellValue value={row[column]} />
+                                                        </TableCell>
+                                                    ))}
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </GridContainer>
+
+                                <GridPagination
+                                    hasNext={hasNext}
+                                    hasPrevious={hasPrevious}
+                                    onNext={goNext}
+                                    onPrevious={goPrevious}
+                                    prefix="gdb"
+                                    rangeEnd={rangeEnd}
+                                    rangeStart={rangeStart}
+                                    total={total}
+                                />
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

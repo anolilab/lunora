@@ -66,8 +66,9 @@ describe("dataBrowser", () => {
 
         await screen.findByTestId("db-table-list");
 
-        expect(screen.getByTestId("db-table-messages").textContent).toBe("messages (3)");
-        expect(screen.getByTestId("db-table-users").textContent).toBe("users (1)");
+        // The sidebar renders the table name and its row-count badge separately.
+        expect(screen.getByTestId("db-table-messages").textContent).toBe("messages3");
+        expect(screen.getByTestId("db-table-users").textContent).toBe("users1");
     });
 
     it("loads the first page of a table when selected", async () => {
