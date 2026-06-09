@@ -72,6 +72,24 @@ describe("createMemoryAuthStore", () => {
         await expect(store.remove("user", [clause("id", "u1")])).resolves.toBe(1);
         await expect(store.count("user", [])).resolves.toBe(1);
     });
+
+    it("consumeOne atomically removes and returns a single row, then nothing", async () => {
+        expect.assertions(4);
+
+        const store = createMemoryAuthStore();
+        await store.create("verification", { id: "v1", identifier: "otp", value: "123" });
+        await store.create("verification", { id: "v2", identifier: "otp", value: "456" });
+
+        // First consume returns one of the two matching rows and removes it.
+        const first = await store.consumeOne("verification", [clause("identifier", "otp")]);
+
+        expect(first?.value).toBeDefined();
+        await expect(store.count("verification", [])).resolves.toBe(1);
+
+        // Second consume takes the remaining row; a third finds nothing.
+        await expect(store.consumeOne("verification", [clause("identifier", "otp")])).resolves.toBeDefined();
+        await expect(store.consumeOne("verification", [clause("identifier", "otp")])).resolves.toBeUndefined();
+    });
 });
 
 describe("cirrusAuthAdapter — better-auth end to end", () => {

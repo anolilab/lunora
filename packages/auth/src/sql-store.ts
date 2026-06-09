@@ -153,6 +153,21 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
     };
 
     return {
+        consumeOne: async (model, where) => {
+            const fragment = compileWhere(where);
+            const table = quoteId(model);
+
+            // One statement that finds and deletes a single row: the subquery
+            // pins exactly one `rowid` (SQLite/D1 lack `DELETE … LIMIT`), the
+            // DELETE removes it, and RETURNING hands it back — atomic consume, no
+            // read-then-delete race.
+            const [row] = await executor.all(
+                `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table}${whereSuffix(fragment)} LIMIT 1) RETURNING *`,
+                fragment.params,
+            );
+
+            return row;
+        },
         count: async (model, where) => {
             const fragment = compileWhere(where);
             const [row] = await executor.all(`SELECT COUNT(*) AS count FROM ${quoteId(model)}${whereSuffix(fragment)}`, fragment.params);

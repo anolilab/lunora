@@ -150,6 +150,15 @@ export interface AuthQuery {
  * what the tests run better-auth against).
  */
 export interface AuthStore {
+    /**
+     * Atomically delete **at most one** row in `model` matching `where` and
+     * return it (or `undefined` if none matched). Backs better-auth's
+     * single-use-token consume (OTP / magic-link / email-verification /
+     * password-reset): implementing it natively — one round trip that finds and
+     * deletes in a single statement — closes the read-then-delete race the
+     * factory's `findMany` + `deleteMany` fallback would otherwise leave open.
+     */
+    consumeOne: (model: string, where: ReadonlyArray<AuthWhereClause>) => Promise<AuthRow | undefined>;
     /** Count rows in `model` matching `where` (empty `where` = all rows). */
     count: (model: string, where: ReadonlyArray<AuthWhereClause>) => Promise<number>;
     /** Insert `data` into `model`; return the stored row (the adapter pre-fills `id`). */
@@ -208,6 +217,20 @@ export const createMemoryAuthStore = (): AuthStore => {
     };
 
     return {
+        consumeOne: (model, where) => {
+            const table = tableOf(model);
+            const index = table.findIndex((row) => matchesWhere(row, where));
+
+            if (index === -1) {
+                return Promise.resolve(undefined);
+            }
+
+            // Synchronous find-and-splice: no `await` interleaves, so this is an
+            // atomic single-row consume even under concurrent callers.
+            const [row] = table.splice(index, 1);
+
+            return Promise.resolve(row ? { ...row } : undefined);
+        },
         count: (model, where) => Promise.resolve(tableOf(model).filter((row) => matchesWhere(row, where)).length),
         create: (model, data) => {
             const row = { ...data };
@@ -288,6 +311,12 @@ export const cirrusAuthAdapter = (store: AuthStore): ReturnType<typeof createAda
     createAdapterFactory({
         adapter: (): CustomAdapter => {
             return {
+                consumeOne: async ({ model, where }) => {
+                    const row = await store.consumeOne(model, where);
+
+                    // eslint-disable-next-line unicorn/no-null -- better-auth's consumeOne contract returns null when nothing matched
+                    return (row ?? null) as never;
+                },
                 count: async ({ model, where }) => store.count(model, where ?? []),
                 create: async ({ data, model }) => (await store.create(model, data)) as never,
                 delete: async ({ model, where }) => {

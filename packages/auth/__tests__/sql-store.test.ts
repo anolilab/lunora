@@ -74,6 +74,45 @@ describe("createSqlAuthStore — CRUD over node:sqlite", () => {
         await expect(store.count("users", [clause("age", 25, "gt")])).resolves.toBe(1);
     });
 
+    it("folds an OR connector across clauses", async () => {
+        expect.assertions(1);
+
+        const store = createSqlAuthStore(executor);
+        await store.create("users", { age: 30, email: "ada@example.com", id: "u1" });
+        await store.create("users", { age: 20, email: "bob@example.com", id: "u2" });
+
+        // id = u1 OR age = 20 → both rows.
+        await expect(store.count("users", [clause("id", "u1"), clause("age", 20, "eq", "OR")])).resolves.toBe(2);
+    });
+
+    it("honours case-insensitive equality via LOWER()", async () => {
+        expect.assertions(2);
+
+        const store = createSqlAuthStore(executor);
+        await store.create("users", { age: 30, email: "Ada@Example.com", id: "u1" });
+
+        await expect(store.count("users", [{ ...clause("email", "ada@example.com"), mode: "insensitive" }])).resolves.toBe(1);
+        await expect(store.count("users", [clause("email", "ada@example.com")])).resolves.toBe(0);
+    });
+
+    it("consumeOne atomically deletes and returns a single matching row", async () => {
+        expect.hasAssertions();
+
+        const store = createSqlAuthStore(executor);
+        await store.create("users", { age: 30, email: "ada@example.com", id: "u1" });
+        await store.create("users", { age: 30, email: "bob@example.com", id: "u2" });
+
+        // Both share age 30; consumeOne removes exactly one and returns it.
+        const consumed = await store.consumeOne("users", [clause("age", 30)]);
+
+        expect(consumed?.email).toBeDefined();
+        await expect(store.count("users", [])).resolves.toBe(1);
+
+        // Consume the last one, then a third call finds nothing.
+        await expect(store.consumeOne("users", [clause("age", 30)])).resolves.toBeDefined();
+        await expect(store.consumeOne("users", [clause("age", 30)])).resolves.toBeUndefined();
+    });
+
     it("applies sortBy / limit / offset", async () => {
         expect.hasAssertions();
 
