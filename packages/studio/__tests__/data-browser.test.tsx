@@ -1,7 +1,7 @@
 import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ADMIN_FUNCTIONS } from "../src/admin";
 import type { DataBrowserProps } from "../src/data-browser";
@@ -224,7 +224,8 @@ describe("dataBrowser", () => {
     });
 
     /** The first cell of every `db-row` in document order. */
-    const rowTexts = (): string[] => screen.getAllByTestId("db-row").map((row) => within(row).getAllByRole("cell")[1]?.textContent ?? "");
+    // Cell 0 is the row-select checkbox, cell 1 the `__id__` column, cell 2 the `text` value.
+    const rowTexts = (): string[] => screen.getAllByTestId("db-row").map((row) => within(row).getAllByRole("cell")[2]?.textContent ?? "");
 
     it("sorts a column ascending then descending on repeated clicks", async () => {
         expect.assertions(3);
@@ -981,5 +982,115 @@ describe("dataBrowser — structured filters and bulk delete", () => {
 
         expect(clears).toHaveLength(1);
         expect((clears[0]?.[1] as { table: string }).table).toBe("messages");
+    });
+
+    it("selects all rows and surfaces the selection bar with a count", async () => {
+        expect.assertions(2);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-rows");
+
+        // No selection → no bar.
+        expect(screen.queryByTestId("grid-selection-bar")).toBeNull();
+
+        fireEvent.click(screen.getByTestId("db-select-all"));
+
+        // All three fixture rows selected.
+        const countBar = await screen.findByTestId("grid-selection-count");
+
+        expect(countBar.textContent).toContain("3 selected");
+    });
+
+    it("bulk-deletes the selected rows through the writer", async () => {
+        expect.assertions(2);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-rows");
+
+        fireEvent.click(screen.getByTestId("db-select-all"));
+        await screen.findByTestId("grid-selection-count");
+
+        fireEvent.click(screen.getByTestId("grid-selection-delete"));
+        fireEvent.click(screen.getByTestId("grid-selection-delete-confirm"));
+
+        await waitFor(() => {
+            const deletes = mock.query.mock.calls.filter(
+                (call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete",
+            );
+
+            if (deletes.length !== 3) {
+                throw new Error(`expected 3 deletes, saw ${deletes.length.toString()}`);
+            }
+        });
+
+        const deletes = mock.query.mock.calls.filter(
+            (call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete",
+        );
+
+        // One delete per selected row, each addressing a fixture id.
+        expect(deletes).toHaveLength(3);
+        expect((deletes[0]?.[1] as { id: string }).id).toMatch(/^m\d$/u);
+    });
+
+    it("expands a cell to show its full value and copies it", async () => {
+        expect.assertions(3);
+
+        const writeText = vi.fn().mockResolvedValue(undefined);
+
+        Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: { writeText } });
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-rows");
+
+        fireEvent.click(screen.getAllByTestId("db-expand-text")[0] as HTMLElement);
+
+        const value = await screen.findByTestId("grid-cell-value");
+
+        expect(value.textContent).toBe("hello");
+
+        fireEvent.click(screen.getByTestId("grid-cell-copy"));
+
+        expect(writeText).toHaveBeenCalledWith("hello");
+
+        fireEvent.click(screen.getByTestId("grid-cell-close"));
+
+        expect(screen.queryByTestId("grid-cell-dialog")).toBeNull();
+    });
+
+    it("hides a column via the Columns menu", async () => {
+        expect.assertions(2);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-rows");
+
+        // The `text` column header is present to start.
+        expect(screen.getByTestId("db-sort-text")).toBeDefined();
+
+        fireEvent.click(screen.getByTestId("grid-columns"));
+        fireEvent.click(await screen.findByTestId("grid-column-text"));
+
+        await waitFor(() => {
+            if (screen.queryByTestId("db-sort-text") !== null) {
+                throw new Error("column not hidden yet");
+            }
+        });
+
+        expect(screen.queryByTestId("db-sort-text")).toBeNull();
     });
 });

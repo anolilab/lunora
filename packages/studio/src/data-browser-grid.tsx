@@ -1,12 +1,14 @@
-import type { Cell, ColumnDef, Header, OnChangeFn, Row, SortingState, Table } from "@tanstack/react-table";
+import type { Cell, ColumnDef, Header, OnChangeFn, Row, RowSelectionState, SortingState, Table, VisibilityState } from "@tanstack/react-table";
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { TablePage } from "./admin";
+import { Checkbox } from "./components/ui/checkbox";
 import { ConfirmButton } from "./confirm-button";
 import { CellValue, GridContainer } from "./data-grid";
+import { useT } from "./i18n-context";
 import { formatCell } from "./internal";
 import type { StagedEditsModel } from "./staged-edits";
 import { coerceCellValue } from "./staged-edits";
@@ -35,6 +37,8 @@ const ROWS_STYLE: CSSProperties = { width: "100%" };
 const ROW_BASE_STYLE: CSSProperties = { alignItems: "center", display: "flex", left: 0, position: "absolute", top: 0, width: "100%" };
 const HEAD_ROW_STYLE: CSSProperties = { display: "flex", width: "100%" };
 const ACTION_CELL_STYLE: CSSProperties = { flex: "0 0 8.5rem", padding: "0.375rem 0.75rem" };
+/** Fixed-width leading cell holding the row-select checkbox. */
+const SELECT_CELL_STYLE: CSSProperties = { alignItems: "center", display: "flex", flex: "0 0 2.5rem", justifyContent: "center", padding: "0.375rem 0" };
 
 /** A grid cell/header sized to its column's current width (drag-to-resize), out of flex flow. */
 const sizedCellStyle = (width: number): CSSProperties => {
@@ -131,12 +135,54 @@ interface GridEdit {
     editable: boolean;
     editableColumn: (column: string) => boolean;
     editingCell: null | { column: string; rowId: string };
+    onExpandCell: (column: string, value: unknown) => void;
     onNavigateRef: (target: string, id: string) => void;
     refs: Record<string, string> | undefined;
     stage: StagedEditsModel["stage"];
     stagedValue: StagedEditsModel["stagedValue"];
     startEdit: (rowId: string, column: string) => void;
 }
+
+/** Borderless expand affordance shown on cell hover — opens the full value + copy. */
+const EXPAND_BTN =
+    "absolute end-1 top-1/2 hidden -translate-y-1/2 items-center justify-center rounded text-muted-foreground outline-none group-hover/cell:flex hover:text-foreground focus-visible:flex";
+
+/**
+ * The hover "expand" button injected into a cell: opens the cell-detail dialog
+ * with the cell's full value (the parent owns the dialog via `onExpandCell`).
+ * Extracted so it binds its own `useCallback` closing over the column + value
+ * rather than a fresh inline arrow per cell.
+ */
+const CellExpandButton = ({
+    column,
+    onExpand,
+    value,
+}: {
+    column: string;
+    onExpand: (column: string, value: unknown) => void;
+    value: unknown;
+}): ReactElement => {
+    const onClick = useCallback((): void => {
+        onExpand(column, value);
+    }, [column, onExpand, value]);
+
+    return (
+        <button aria-label="Expand cell" className={EXPAND_BTN} data-testid={`db-expand-${column}`} onClick={onClick} type="button">
+            <svg
+                aria-hidden="true"
+                className="size-3"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.8}
+                viewBox="0 0 24 24"
+            >
+                <path d="M9 21H5a2 2 0 0 1-2-2v-4m18 0v4a2 2 0 0 1-2 2h-4M3 9V5a2 2 0 0 1 2-2h4m6 0h4a2 2 0 0 1 2 2v4" />
+            </svg>
+        </button>
+    );
+};
 
 /**
  * The text input shown while a cell is being edited. Commits on Enter or blur
@@ -214,7 +260,12 @@ const EditableCell = ({ cell, edit }: { cell: Cell<TableRow, unknown>; edit: Gri
     // An idless row can't be addressed for a patch, so its cells are read-only.
     // Returning early also narrows `id` to a string for the editable path below.
     if (id === null) {
-        return <CellValue value={rawValue} />;
+        return (
+            <>
+                <CellValue value={rawValue} />
+                <CellExpandButton column={column} onExpand={edit.onExpandCell} value={rawValue} />
+            </>
+        );
     }
 
     const staged = edit.stagedValue(id, column);
@@ -253,9 +304,12 @@ const EditableCell = ({ cell, edit }: { cell: Cell<TableRow, unknown>; edit: Gri
         : undefined;
 
     return (
-        <span className={cellClass} data-testid={`db-cell-${id}-${column}`} onDoubleClick={onDoubleClick}>
-            <CellValue value={display} />
-        </span>
+        <>
+            <span className={cellClass} data-testid={`db-cell-${id}-${column}`} onDoubleClick={onDoubleClick}>
+                <CellValue value={display} />
+            </span>
+            <CellExpandButton column={column} onExpand={edit.onExpandCell} value={display} />
+        </>
     );
 };
 
@@ -336,11 +390,68 @@ const GridHeaderCell = ({
 };
 
 /**
- * The virtualized table: a sortable, resizable, reorderable header derived from
- * react-table's flat headers, plus the windowed rows positioned absolutely inside
- * a full-height tbody. All model state (`table`, `tableRows`, `virtualRows`,
- * `tbodyStyle`, `scrollRef`) is owned by the parent; edit/delete are surfaced as
- * callbacks so this stays a pure render of the page's rows.
+ * The leading select-all checkbox in the header. Toggles every row on the loaded
+ * page; shows an indeterminate state when only some rows are selected.
+ */
+const SelectAllHeaderCell = ({ table }: { table: Table<TableRow> }): ReactElement => {
+    const t = useT();
+
+    const onCheckedChange = useCallback(
+        (checked: boolean): void => {
+            table.toggleAllRowsSelected(checked);
+        },
+        [table],
+    );
+
+    return (
+        <th style={SELECT_CELL_STYLE}>
+            <Checkbox
+                aria-label={t("Select all rows")}
+                checked={table.getIsAllRowsSelected()}
+                data-testid="db-select-all"
+                indeterminate={table.getIsSomeRowsSelected() && !table.getIsAllRowsSelected()}
+                onCheckedChange={onCheckedChange}
+            />
+        </th>
+    );
+};
+
+/**
+ * The leading per-row select checkbox. Disabled for an idless row (it can't be
+ * addressed for a bulk delete). Binds its own toggle so the row map stays free of
+ * inline closures.
+ */
+const RowSelectCell = ({ row }: { row: Row<TableRow> }): ReactElement => {
+    const t = useT();
+    const id = rowId(row.original);
+
+    const onCheckedChange = useCallback(
+        (checked: boolean): void => {
+            row.toggleSelected(checked);
+        },
+        [row],
+    );
+
+    return (
+        <td style={SELECT_CELL_STYLE}>
+            <Checkbox
+                aria-label={t("Select row")}
+                checked={row.getIsSelected()}
+                data-testid={`db-select-${rowKey(row.original, row.index)}`}
+                disabled={id === null}
+                onCheckedChange={onCheckedChange}
+            />
+        </td>
+    );
+};
+
+/**
+ * The virtualized table: a leading select column, a sortable, resizable,
+ * reorderable header derived from react-table's flat headers, plus the windowed
+ * rows positioned absolutely inside a full-height tbody. All model state (`table`,
+ * `tableRows`, `virtualRows`, `tbodyStyle`, `scrollRef`) is owned by the parent;
+ * edit/delete are surfaced as callbacks so this stays a pure render of the page's
+ * rows.
  */
 const DataBrowserTableView = ({
     edit,
@@ -456,9 +567,10 @@ const DataBrowserTableView = ({
 
         return (
             <tr className="border-b border-border text-xs transition-colors hover:bg-muted/50" data-testid="db-row" key={tableRow.id} style={rowStyle}>
+                <RowSelectCell row={tableRow} />
                 {tableRow.getVisibleCells().map((cell, colIndex) => (
                     <td
-                        className={`truncate font-mono text-muted-foreground${active !== null && active.row === virtualRow.index && active.col === colIndex ? " ring-1 ring-ring ring-inset" : ""}`}
+                        className={`group/cell truncate font-mono text-muted-foreground${active !== null && active.row === virtualRow.index && active.col === colIndex ? " ring-1 ring-ring ring-inset" : ""}`}
                         key={cell.id}
                         style={sizedCellStyle(cell.column.getSize())}
                     >
@@ -515,6 +627,7 @@ const DataBrowserTableView = ({
                 <table className="w-full text-xs" data-testid="db-rows" style={ROWS_STYLE}>
                     <thead className="bg-muted/50">
                         <tr className="border-b border-border" style={HEAD_ROW_STYLE}>
+                            <SelectAllHeaderCell table={table} />
                             {table.getFlatHeaders().map((header) => (
                                 <GridHeaderCell draggedRef={draggedColumn} header={header} key={header.id} table={table} />
                             ))}
@@ -573,6 +686,16 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
 
     const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 
+    // Row selection (for bulk delete / export-of-selected) and column visibility
+    // are page-local view state owned by the table model. Selection is keyed by
+    // the row's primary key (see `getRowId`), so a stale id left over after
+    // paginating simply matches no visible row — `getSelectedRowModel()` only ever
+    // returns rows present on the loaded page. Column visibility is keyed by column
+    // name, so it persists across pages and harmlessly ignores names from a table
+    // that's since been switched away from.
+    const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+    const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+
     // Search is server-side (see the debounced `search` effect); the table model
     // owns page-local sorting over the already-filtered page. Column order
     // (drag-to-reorder) and sizing (drag-to-resize) are managed internally by
@@ -584,10 +707,14 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
         data,
         defaultColumn: { minSize: 80, size: 200 },
         enableColumnResizing: true,
+        enableRowSelection: (row) => rowId(row.original) !== null,
         getCoreRowModel: getCoreRowModel(),
+        getRowId: (row, index) => rowId(row) ?? `row-${index.toString()}`,
         getSortedRowModel: getSortedRowModel(),
+        onColumnVisibilityChange: setColumnVisibility,
+        onRowSelectionChange: setRowSelection,
         onSortingChange,
-        state: { sorting },
+        state: { columnVisibility, rowSelection, sorting },
     });
 
     // The post-sort/filter rows for this page. We keep react-table's `Row`

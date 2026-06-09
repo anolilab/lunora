@@ -12,6 +12,7 @@ import { DataBrowserTableView, rowId, useDataBrowserTable } from "./data-browser
 import type { EditableFilter } from "./data-filters";
 import { DataFilters, toFilterClauses } from "./data-filters";
 import { GridPagination, TableListSidebar } from "./data-grid";
+import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import { adminRef, callOptions, fireAndForget } from "./internal";
 import { LiveToggle } from "./live-toggle";
 import { RowDetailDrawer } from "./row-detail";
@@ -251,6 +252,7 @@ interface DataBrowserModel {
     liveError: string | undefined;
     loadTables: () => void;
     navigateToRef: (target: string, id: string) => void;
+    onBulkDeleteSelected: (ids: ReadonlyArray<string>) => void;
     onCommitStaged: () => void;
     onEditorDocumentChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -716,6 +718,40 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         [writeRow],
     );
 
+    // Delete an explicit set of selected row ids (the checkbox selection), each
+    // through the schema-aware writer so FTS / aggregate / rank shadow tables stay
+    // in sync, then reload the page. Sequential so a failure pins the offending
+    // row; the selection is page-bounded (≤ pageSize), so this never fans out
+    // unboundedly the way a predicate delete could.
+    const deleteSelected = useCallback(
+        async (ids: ReadonlyArray<string>): Promise<void> => {
+            if (selectedTable === null || ids.length === 0) {
+                return;
+            }
+
+            setWriteError(null);
+
+            try {
+                for (const id of ids) {
+                    // eslint-disable-next-line no-await-in-loop -- one delete per selected row; sequential so a failure pins the offending row
+                    (await client.query(WRITE_ROW, { id, op: "delete", table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
+                }
+
+                await fetchPage(shardKey, selectedTable, offset, search);
+            } catch (error) {
+                setWriteError((error as Error).message);
+            }
+        },
+        [client, fetchPage, offset, search, selectedTable, shardKey],
+    );
+
+    const onBulkDeleteSelected = useCallback(
+        (ids: ReadonlyArray<string>): void => {
+            fireAndForget(deleteSelected(ids));
+        },
+        [deleteSelected],
+    );
+
     const onCommitStaged = useCallback((): void => {
         fireAndForget(commitStaged());
     }, [commitStaged]);
@@ -742,6 +778,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         liveError,
         loadTables,
         navigateToRef,
+        onBulkDeleteSelected,
         onCommitStaged,
         onEditorDocumentChange,
         onFilterChange,
@@ -814,6 +851,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         liveError,
         loadTables,
         navigateToRef,
+        onBulkDeleteSelected,
         onCommitStaged,
         onEditorDocumentChange,
         onFilterChange,
@@ -852,6 +890,16 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         setInspecting(null);
     }, []);
 
+    // The cell whose full value the expand dialog is showing, if any. Opened from
+    // the per-cell expand affordance; pure view state like `inspecting`.
+    const [expandedCell, setExpandedCell] = useState<null | { column: string; value: unknown }>(null);
+    const onExpandCell = useCallback((column: string, value: unknown): void => {
+        setExpandedCell({ column, value });
+    }, []);
+    const closeExpandedCell = useCallback((): void => {
+        setExpandedCell(null);
+    }, []);
+
     // The inline-edit context passed down to every grid cell.
     const edit = useMemo<GridEdit>(() => {
         return {
@@ -859,13 +907,14 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
             editable,
             editableColumn,
             editingCell,
+            onExpandCell,
             onNavigateRef: navigateToRef,
             refs: page?.refs,
             stage,
             stagedValue,
             startEdit: startCellEdit,
         };
-    }, [cancelCellEdit, editable, editableColumn, editingCell, navigateToRef, page?.refs, stage, stagedValue, startCellEdit]);
+    }, [cancelCellEdit, editable, editableColumn, editingCell, onExpandCell, navigateToRef, page?.refs, stage, stagedValue, startCellEdit]);
 
     return (
         <div className="flex h-full min-w-0" data-testid="cirrus-data-browser">
@@ -918,6 +967,17 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                                 total={total}
                                 viewMode={viewMode}
                             />
+
+                            {viewMode === "table" && page.rows.length > 0 && (
+                                <GridActionsBar
+                                    columns={page.columns}
+                                    editable={editable}
+                                    name={selectedTable ?? "export"}
+                                    onBulkDelete={onBulkDeleteSelected}
+                                    rows={page.rows}
+                                    table={table.table}
+                                />
+                            )}
 
                             {editable && editing !== null && (
                                 <DataBrowserRowEditor
@@ -1003,6 +1063,8 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
             {inspecting !== null && page !== null && (
                 <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={navigateToRef} refs={page.refs} row={inspecting} />
             )}
+
+            {expandedCell !== null && <CellDetailDialog column={expandedCell.column} onClose={closeExpandedCell} value={expandedCell.value} />}
         </div>
     );
 };

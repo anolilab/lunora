@@ -289,6 +289,16 @@ const MESSAGE_IDS = [
     "Results",
     "Explain",
     "Click Run to execute your query.",
+    // Data-grid features (export, columns, selection, cell expand).
+    "Columns",
+    "CSV",
+    "{count} selected",
+    "Delete {count}",
+    "Delete {count} rows?",
+    "Copy",
+    "Copied",
+    "Cell value",
+    "Close",
     // Command palette.
     "Command palette",
     "No results.",
