@@ -2,15 +2,15 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import type { PitrBookmarkResult, PitrRestoreResult } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Badge } from "./components/ui/badge.js";
-import { Button } from "./components/ui/button.js";
-import { Input } from "./components/ui/input.js";
-import { Label } from "./components/ui/label.js";
-import { ConfirmButton } from "./confirm-button.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
+import type { PitrBookmarkResult, PitrRestoreResult } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
+import { ConfirmButton } from "./confirm-button";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
 
 interface PitrPanelProps {
     /** Shard key the PITR ops target. Defaults to the root shard. */

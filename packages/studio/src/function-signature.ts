@@ -1,4 +1,4 @@
-import type { FunctionArgumentDescriptor } from "./types.js";
+import type { FunctionArgumentDescriptor } from "./types";
 
 /**
  * The display type of one argument: `id&lt;table>` for foreign keys, `kind[]`

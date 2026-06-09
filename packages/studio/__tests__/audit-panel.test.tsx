@@ -2,11 +2,11 @@ import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { AuditEntry } from "../src/admin.js";
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { AuditPanel } from "../src/audit-panel.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import type { AuditEntry } from "../src/admin";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { AuditPanel } from "../src/audit-panel";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const ENTRIES: AuditEntry[] = [
     { detail: { changed: 3, userId: "admin-1" }, id: undefined, op: "runMigration", seq: 2, table: undefined, ts: 1_700_000_002_000 },

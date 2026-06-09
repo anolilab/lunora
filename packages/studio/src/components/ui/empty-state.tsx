@@ -22,10 +22,7 @@ interface EmptyStateProps {
  */
 export const EmptyState = ({ action, className, description, icon, testId, title }: EmptyStateProps): ReactElement => (
     <div
-        className={cn(
-            "flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border px-6 py-14 text-center",
-            className,
-        )}
+        className={cn("flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border px-6 py-14 text-center", className)}
         data-testid={testId}
     >
         {icon !== undefined && (

@@ -2,21 +2,21 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { ShardMetrics } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Button } from "./components/ui/button.js";
-import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "./internal.js";
-import { LiveToggle } from "./live-toggle.js";
-import type { ShardMetricsResult } from "./metrics-aggregate.js";
-import { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate.js";
-import { loadRecentShards, recordShard } from "./shard-history.js";
-import { ShardInput } from "./shard-input.js";
-import { SPARK_HEIGHT, SPARK_WIDTH, sparklinePoints } from "./sparkline.js";
-import useLiveAdmin from "./use-live-admin.js";
-import { useLiveToggle } from "./use-live-toggle.js";
+import type { ShardMetrics } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Button } from "./components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "./internal";
+import { LiveToggle } from "./live-toggle";
+import type { ShardMetricsResult } from "./metrics-aggregate";
+import { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate";
+import { loadRecentShards, recordShard } from "./shard-history";
+import { ShardInput } from "./shard-input";
+import { SPARK_HEIGHT, SPARK_WIDTH, sparklinePoints } from "./sparkline";
+import useLiveAdmin from "./use-live-admin";
+import { useLiveToggle } from "./use-live-toggle";
 
 interface MetricsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */

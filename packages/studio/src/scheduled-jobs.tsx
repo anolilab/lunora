@@ -3,14 +3,14 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Badge } from "./components/ui/badge.js";
-import { EmptyState } from "./components/ui/empty-state.js";
-import { Button } from "./components/ui/button.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { ConfirmButton } from "./confirm-button.js";
-import { useT } from "./i18n-context.js";
-import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
-import { useAutoRefresh } from "./use-auto-refresh.js";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { EmptyState } from "./components/ui/empty-state";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { ConfirmButton } from "./confirm-button";
+import { useT } from "./i18n-context";
+import { errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { useAutoRefresh } from "./use-auto-refresh";
 
 interface ScheduledJobsProps {
     /**
@@ -166,7 +166,15 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                 <EmptyState
                     description={t("Jobs queued with runAfter / runAt will appear here.")}
                     icon={
-                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
                             <circle cx="12" cy="12" r="9" />
                             <path d="M12 7.5V12l4 2" />
                         </svg>

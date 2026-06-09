@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useAutoRefresh } from "../src/use-auto-refresh.js";
+import { useAutoRefresh } from "../src/use-auto-refresh";
 
 const Harness = ({ enabled, intervalMs, onTick }: { enabled: boolean; intervalMs?: number; onTick: () => void }): ReactElement => {
     useAutoRefresh(onTick, enabled, intervalMs);

@@ -4,9 +4,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { FileBrowser } from "../src/file-browser.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import { FileBrowser } from "../src/file-browser";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const PAGE_ONE: StorageListPage = {
     cursor: "c1",

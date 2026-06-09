@@ -3,17 +3,17 @@ import { useCirrus } from "@cirrus/react";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Badge } from "./components/ui/badge.js";
-import { Button } from "./components/ui/button.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
-import type { SchemaEdge } from "./schema-graph.js";
-import { SchemaGraph } from "./schema-graph.js";
-import { recordShard } from "./shard-history.js";
-import { ShardInput } from "./shard-input.js";
-import { StorageTierBadge, StorageTierHint } from "./storage-tier.js";
+import type { TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import type { SchemaEdge } from "./schema-graph";
+import { SchemaGraph } from "./schema-graph";
+import { recordShard } from "./shard-history";
+import { ShardInput } from "./shard-input";
+import { StorageTierBadge, StorageTierHint } from "./storage-tier";
 
 interface SchemaViewerProps {
     /** Shard key the viewer targets. Defaults to the root shard. */

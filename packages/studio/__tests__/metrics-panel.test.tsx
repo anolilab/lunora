@@ -2,11 +2,11 @@ import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ShardMetrics } from "../src/admin.js";
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { MetricsPanel } from "../src/metrics-panel.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import type { ShardMetrics } from "../src/admin";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { MetricsPanel } from "../src/metrics-panel";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const METRICS: ShardMetrics = {
     cache: { bytes: 2048, entries: 3, evictions: 1, hits: 8, misses: 2 },

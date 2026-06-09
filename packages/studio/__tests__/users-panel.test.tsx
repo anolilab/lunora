@@ -4,9 +4,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { UsersPanel } from "../src/users-panel.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import { UsersPanel } from "../src/users-panel";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const USERS: AuthUser[] = [
     { createdAt: 1, email: "a@example.com", emailVerified: true, id: "u1", name: "Ann" },

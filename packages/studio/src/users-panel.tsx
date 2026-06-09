@@ -3,13 +3,13 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import { Badge } from "./components/ui/badge.js";
-import { EmptyState } from "./components/ui/empty-state.js";
-import { Button } from "./components/ui/button.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { useT } from "./i18n-context.js";
-import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
-import { useAutoRefresh } from "./use-auto-refresh.js";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { EmptyState } from "./components/ui/empty-state";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { useT } from "./i18n-context";
+import { errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { useAutoRefresh } from "./use-auto-refresh";
 
 interface UsersPanelProps {
     /** Users (and sessions) requested per page. */
@@ -111,7 +111,15 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                 <EmptyState
                     description={t("Users who sign up to your app will appear here.")}
                     icon={
-                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
                             <path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm11.5 10v-2a4 4 0 0 0-3-3.85" />
                         </svg>
                     }

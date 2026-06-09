@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { StorageTierBadge, StorageTierHeader, StorageTierHint, TIER_META } from "../src/storage-tier.js";
+import { StorageTierBadge, StorageTierHeader, StorageTierHint, TIER_META } from "../src/storage-tier";
 
 describe("storageTier", () => {
     it("renders the shard badge with its label, accent colour, and tooltip", () => {

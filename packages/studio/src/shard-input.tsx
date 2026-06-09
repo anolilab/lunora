@@ -1,9 +1,9 @@
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useId, useState } from "react";
 
-import { Input } from "./components/ui/input.js";
-import { useT } from "./i18n-context.js";
-import { loadRecentShards } from "./shard-history.js";
+import { Input } from "./components/ui/input";
+import { useT } from "./i18n-context";
+import { loadRecentShards } from "./shard-history";
 
 export interface ShardInputProps {
     readonly onChange: (value: string) => void;

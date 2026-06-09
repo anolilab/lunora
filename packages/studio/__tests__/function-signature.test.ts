@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { argumentsTemplate, formatSignature } from "../src/function-signature.js";
-import type { FunctionArgumentDescriptor } from "../src/types.js";
+import { argumentsTemplate, formatSignature } from "../src/function-signature";
+import type { FunctionArgumentDescriptor } from "../src/types";
 
 const ARGS: FunctionArgumentDescriptor[] = [
     { kind: "id", name: "channelId", optional: false, table: "channels" },

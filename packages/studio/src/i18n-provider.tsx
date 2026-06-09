@@ -2,8 +2,8 @@ import type { I18n } from "@lingui/core";
 import type { ReactElement, ReactNode } from "react";
 import { useMemo } from "react";
 
-import type { StudioCatalogs } from "./i18n-context.js";
-import { createStudioI18n, studioI18n, StudioI18nContext } from "./i18n-context.js";
+import type { StudioCatalogs } from "./i18n-context";
+import { createStudioI18n, studioI18n, StudioI18nContext } from "./i18n-context";
 
 interface StudioI18nProviderProps {
     /** Catalogs to register in addition to the built-in English one. */

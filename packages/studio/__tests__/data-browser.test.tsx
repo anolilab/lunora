@@ -3,11 +3,11 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import type { DataBrowserProps } from "../src/data-browser.js";
-import { DataBrowser } from "../src/data-browser.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import type { DataBrowserProps } from "../src/data-browser";
+import { DataBrowser } from "../src/data-browser";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const TABLES = [
     { name: "messages", rowCount: 3 },

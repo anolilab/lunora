@@ -3,11 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import type { AuthMetrics, FunctionCallStat, LogEntry, MetricsSnapshot, MigrationStatusRow, ShardMetrics } from "../src/admin.js";
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { HealthPanel } from "../src/health-panel.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import type { AuthMetrics, FunctionCallStat, LogEntry, MetricsSnapshot, MigrationStatusRow, ShardMetrics } from "../src/admin";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { HealthPanel } from "../src/health-panel";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const ENTRIES: LogEntry[] = [
     { functionPath: "messages:send", level: "error", message: "boom", timestamp: 1_700_000_002_000 },

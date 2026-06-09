@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { ShardMetrics } from "../src/admin.js";
-import type { ShardMetricsResult } from "../src/metrics-aggregate.js";
-import { aggregateMetrics, shardsToAggregate } from "../src/metrics-aggregate.js";
+import type { ShardMetrics } from "../src/admin";
+import type { ShardMetricsResult } from "../src/metrics-aggregate";
+import { aggregateMetrics, shardsToAggregate } from "../src/metrics-aggregate";
 
 const snapshot = (over: Partial<ShardMetrics> = {}): ShardMetrics => {
     return {

@@ -3,10 +3,10 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import { EmptyState } from "./components/ui/empty-state.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { errorMessage, fireAndForget, formatCell } from "./internal.js";
-import { StorageTierHeader } from "./storage-tier.js";
+import { EmptyState } from "./components/ui/empty-state";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { errorMessage, fireAndForget, formatCell } from "./internal";
+import { StorageTierHeader } from "./storage-tier";
 
 interface GlobalDataBrowserProps {
     /** Rows requested per page. Clamped server-side to `[1, 500]`. */
@@ -130,7 +130,15 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
                 <EmptyState
                     description="Tables marked .global() (D1-backed, region-replicated) will appear here."
                     icon={
-                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
                             <circle cx="12" cy="12" r="9" />
                             <path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18Z" />
                         </svg>

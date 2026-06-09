@@ -4,8 +4,8 @@ import { compileMessage } from "@lingui/message-utils/compileMessage";
 import type { Context } from "react";
 import { createContext, use, useCallback } from "react";
 
-import type { MessageId } from "./locales/en.js";
-import { messages as enMessages } from "./locales/en.js";
+import type { MessageId } from "./locales/en";
+import { messages as enMessages } from "./locales/en";
 
 /** The locale the studio ships with and falls back to. */
 const DEFAULT_LOCALE = "en";
@@ -85,7 +85,7 @@ const useT = (): TFunction => {
     return useCallback<TFunction>((id, values) => i18n._(id, values), [i18n]);
 };
 
-export { createStudioI18n, studioI18n, StudioI18nContext, DEFAULT_LOCALE, useT };
+export { createStudioI18n, DEFAULT_LOCALE, studioI18n, StudioI18nContext, useT };
 export type { StudioCatalogs, TFunction };
 
-export { type MessageId } from "./locales/en.js";
+export { type MessageId } from "./locales/en";

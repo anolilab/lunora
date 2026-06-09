@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { StudioApp } from "../src/app.js";
+import { StudioApp } from "../src/app";
 
 const TOKEN_KEY = "cirrus-studio-admin-token";
 
@@ -26,7 +26,7 @@ describe("studioApp", () => {
 
         // The shell renders inside the router's root route, which resolves its
         // first match a tick after mount — await it rather than querying sync.
-        expect(await screen.findByTestId("cirrus-studio")).toBeDefined();
+        await expect(screen.findByTestId("cirrus-studio")).resolves.toBeDefined();
     });
 
     it("shows the connection badge (idle without a live socket)", () => {

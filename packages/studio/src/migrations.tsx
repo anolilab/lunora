@@ -2,22 +2,22 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Badge } from "./components/ui/badge.js";
-import { Button } from "./components/ui/button.js";
-import { EmptyState } from "./components/ui/empty-state.js";
-import { Input } from "./components/ui/input.js";
-import { Label } from "./components/ui/label.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { ConfirmButton } from "./confirm-button.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
-import { LiveToggle } from "./live-toggle.js";
-import { recordShard } from "./shard-history.js";
-import { ShardInput } from "./shard-input.js";
-import useLiveAdmin from "./use-live-admin.js";
-import { useLiveToggle } from "./use-live-toggle.js";
+import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { EmptyState } from "./components/ui/empty-state";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { ConfirmButton } from "./confirm-button";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { LiveToggle } from "./live-toggle";
+import { recordShard } from "./shard-history";
+import { ShardInput } from "./shard-input";
+import useLiveAdmin from "./use-live-admin";
+import { useLiveToggle } from "./use-live-toggle";
 
 interface MigrationsPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
@@ -161,7 +161,15 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
                 <EmptyState
                     description={t("Data migrations you run against this shard will be tracked here.")}
                     icon={
-                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
                             <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />
                         </svg>
                     }

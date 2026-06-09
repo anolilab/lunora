@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
-import { Button } from "./components/ui/button.js";
-import { useT } from "./i18n-context.js";
+import { Button } from "./components/ui/button";
+import { useT } from "./i18n-context";
 
 export interface LiveToggleProps {
     readonly live: boolean;

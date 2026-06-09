@@ -2,16 +2,16 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useState } from "react";
 
-import type { ExportRow, ImportShardResult } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Button } from "./components/ui/button.js";
-import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card.js";
-import { Textarea } from "./components/ui/textarea.js";
-import { ConfirmButton } from "./confirm-button.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
-import { recordShard } from "./shard-history.js";
-import { ShardInput } from "./shard-input.js";
+import type { ExportRow, ImportShardResult } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Button } from "./components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import { Textarea } from "./components/ui/textarea";
+import { ConfirmButton } from "./confirm-button";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import { recordShard } from "./shard-history";
+import { ShardInput } from "./shard-input";
 
 interface ExportImportPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */

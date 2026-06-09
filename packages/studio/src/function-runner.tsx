@@ -3,16 +3,16 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Badge } from "./components/ui/badge.js";
-import { Button } from "./components/ui/button.js";
-import { Label } from "./components/ui/label.js";
-import { Textarea } from "./components/ui/textarea.js";
-import { argumentsTemplate, formatSignature } from "./function-signature.js";
-import { useT } from "./i18n-context.js";
-import { errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
-import { recordShard } from "./shard-history.js";
-import { ShardInput } from "./shard-input.js";
-import type { FunctionDescriptor, FunctionKind, RunStatus } from "./types.js";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Label } from "./components/ui/label";
+import { Textarea } from "./components/ui/textarea";
+import { argumentsTemplate, formatSignature } from "./function-signature";
+import { useT } from "./i18n-context";
+import { errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { recordShard } from "./shard-history";
+import { ShardInput } from "./shard-input";
+import type { FunctionDescriptor, FunctionKind, RunStatus } from "./types";
 
 /** A single recorded invocation, kept purely in component state. */
 interface RunHistoryEntry {

@@ -2,13 +2,13 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { SettingEntry, SettingsResult } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Badge } from "./components/ui/badge.js";
-import { Button } from "./components/ui/button.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
+import type { SettingEntry, SettingsResult } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
 
 interface SettingsPanelProps {
     /** Shard key the settings read targets on first load. Defaults to the root shard. */

@@ -2,11 +2,11 @@ import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { LogEntry, RequestLogEntry } from "../src/admin.js";
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { LogsPanel } from "../src/logs-panel.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import type { LogEntry, RequestLogEntry } from "../src/admin";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { LogsPanel } from "../src/logs-panel";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const WINDOWED_ENTRY = /entry-\d+/;
 

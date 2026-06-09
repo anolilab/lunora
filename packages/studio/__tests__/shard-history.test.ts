@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadRecentShards, recordShard } from "../src/shard-history.js";
+import { loadRecentShards, recordShard } from "../src/shard-history";
 
 describe("shardHistory", () => {
     afterEach(() => {

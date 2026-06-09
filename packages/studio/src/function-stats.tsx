@@ -2,18 +2,18 @@ import { useCirrus } from "@cirrus/react";
 import type { MouseEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { FunctionCallStat, FunctionStatsResult } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Badge } from "./components/ui/badge.js";
-import { Button } from "./components/ui/button.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
-import { LiveToggle } from "./live-toggle.js";
-import { ShardInput } from "./shard-input.js";
-import type { FunctionDescriptor, FunctionKind } from "./types.js";
-import useLiveAdmin from "./use-live-admin.js";
-import { useLiveToggle } from "./use-live-toggle.js";
+import type { FunctionCallStat, FunctionStatsResult } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { LiveToggle } from "./live-toggle";
+import { ShardInput } from "./shard-input";
+import type { FunctionDescriptor, FunctionKind } from "./types";
+import useLiveAdmin from "./use-live-admin";
+import { useLiveToggle } from "./use-live-toggle";
 
 interface FunctionStatsPanelProps {
     /** Descriptors from codegen, used to annotate each row with the function's `kind`. */

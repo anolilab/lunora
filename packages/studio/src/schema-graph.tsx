@@ -1,8 +1,8 @@
 import type { ReactElement } from "react";
 
-import { useT } from "./i18n-context.js";
-import type { StorageTier } from "./storage-tier.js";
-import { StorageTierBadge, StorageTierHint } from "./storage-tier.js";
+import { useT } from "./i18n-context";
+import type { StorageTier } from "./storage-tier";
+import { StorageTierBadge, StorageTierHint } from "./storage-tier";
 
 /** A directed foreign-key edge: `from`'s `column` references table `to`. */
 interface SchemaEdge {

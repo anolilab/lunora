@@ -2,10 +2,10 @@ import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { SchemaViewer } from "../src/schema-viewer.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { SchemaViewer } from "../src/schema-viewer";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const TABLES = [
     { name: "messages", rowCount: 3 },

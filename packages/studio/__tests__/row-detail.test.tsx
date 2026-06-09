@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { RowDetailDrawer } from "../src/row-detail.js";
+import { RowDetailDrawer } from "../src/row-detail";
 
 const COLUMNS = ["_id", "_creationTime", "authorId", "title", "meta", "deleted"];
 const ROW: Record<string, unknown> = {

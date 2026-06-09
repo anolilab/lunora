@@ -1,7 +1,7 @@
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useCallback } from "react";
 
-import type { FilterClause, FilterOperator } from "./admin.js";
+import type { FilterClause, FilterOperator } from "./admin";
 
 /** A filter row as edited in the UI — the value is always a string until coerced for the wire. */
 interface EditableFilter {

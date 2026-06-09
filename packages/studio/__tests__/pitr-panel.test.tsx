@@ -3,11 +3,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import type { PitrBookmarkResult, PitrRestoreResult } from "../src/admin.js";
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { PitrPanel } from "../src/pitr-panel.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import type { PitrBookmarkResult, PitrRestoreResult } from "../src/admin";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { PitrPanel } from "../src/pitr-panel";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
     <CirrusProvider client={mock.asClient}>

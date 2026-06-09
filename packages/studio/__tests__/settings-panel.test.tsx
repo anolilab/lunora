@@ -3,11 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import type { SettingsResult } from "../src/admin.js";
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { SettingsPanel } from "../src/settings-panel.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import type { SettingsResult } from "../src/admin";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { SettingsPanel } from "../src/settings-panel";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const SETTINGS: SettingsResult = {
     deploy: { environment: "production", workerUrl: "https://app.example.workers.dev" },

@@ -1,7 +1,7 @@
 import type { CSSProperties, KeyboardEvent, MouseEvent, ReactElement } from "react";
 import { useCallback } from "react";
 
-import { formatCell, formatTimestamp } from "./internal.js";
+import { formatCell, formatTimestamp } from "./internal";
 
 interface RowDetailDrawerProps {
     /** Column order to display fields in (mirrors the table's columns). */

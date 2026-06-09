@@ -1,4 +1,4 @@
-import type { FunctionCallStat, MetricsHistoryBucket, MetricsSnapshot, MigrationStatus, MigrationStatusRow } from "./admin.js";
+import type { FunctionCallStat, MetricsHistoryBucket, MetricsSnapshot, MigrationStatus, MigrationStatusRow } from "./admin";
 
 /** Severity order so a dedupe across shards surfaces the worst state of a shared migration id. */
 const STATUS_RANK: Record<MigrationStatus, number> = { completed: 0, failed: 2, in_progress: 1 };

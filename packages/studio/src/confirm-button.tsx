@@ -1,8 +1,8 @@
 import type { ReactElement } from "react";
 import { useCallback, useState } from "react";
 
-import { Button } from "./components/ui/button.js";
-import { useT } from "./i18n-context.js";
+import { Button } from "./components/ui/button";
+import { useT } from "./i18n-context";
 
 export interface ConfirmButtonProps {
     /** Label for the initial trigger (e.g. `Delete`). */

@@ -2,8 +2,8 @@ import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { createStudioI18n, DEFAULT_LOCALE, useT } from "../src/i18n-context.js";
-import { StudioI18nProvider } from "../src/i18n-provider.js";
+import { createStudioI18n, DEFAULT_LOCALE, useT } from "../src/i18n-context";
+import { StudioI18nProvider } from "../src/i18n-provider";
 
 /** Exercises `useT` for both the source string and a named interpolation. */
 const Probe = (): ReactElement => {

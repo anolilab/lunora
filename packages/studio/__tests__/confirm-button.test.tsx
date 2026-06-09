@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ConfirmButton } from "../src/confirm-button.js";
+import { ConfirmButton } from "../src/confirm-button";
 
 describe("confirmButton", () => {
     it("does not fire onConfirm until the confirm step is clicked", () => {

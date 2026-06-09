@@ -3,10 +3,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { FunctionRunner } from "../src/function-runner.js";
-import type { FunctionDescriptor } from "../src/index.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import { FunctionRunner } from "../src/function-runner";
+import type { FunctionDescriptor } from "../src/index";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const functions: FunctionDescriptor[] = [
     { kind: "query", path: "messages:list" },

@@ -2,19 +2,19 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { AuditEntry, AuditLogResult } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Badge } from "./components/ui/badge.js";
-import { EmptyState } from "./components/ui/empty-state.js";
-import { Button } from "./components/ui/button.js";
-import { Input } from "./components/ui/input.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal.js";
-import { LiveToggle } from "./live-toggle.js";
-import { ShardInput } from "./shard-input.js";
-import useLiveAdmin from "./use-live-admin.js";
-import { useLiveToggle } from "./use-live-toggle.js";
+import type { AuditEntry, AuditLogResult } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { EmptyState } from "./components/ui/empty-state";
+import { Input } from "./components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { LiveToggle } from "./live-toggle";
+import { ShardInput } from "./shard-input";
+import useLiveAdmin from "./use-live-admin";
+import { useLiveToggle } from "./use-live-toggle";
 
 interface AuditPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -152,7 +152,15 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
                 <EmptyState
                     description={t("State-changing admin operations are recorded here.")}
                     icon={
-                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
                             <path d="M8 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2M9 3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1V3Zm-1 9h8m-8 4h5" />
                         </svg>
                     }

@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { EditableFilter } from "../src/data-filters.js";
-import { DataFilters, toFilterClauses } from "../src/data-filters.js";
+import type { EditableFilter } from "../src/data-filters";
+import { DataFilters, toFilterClauses } from "../src/data-filters";
 
 // Hoisted to module scope so they're stable identities across renders (react-perf).
 const COLUMNS: ReadonlyArray<string> = ["__id__", "status", "age"];

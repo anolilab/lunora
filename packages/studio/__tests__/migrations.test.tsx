@@ -2,11 +2,11 @@ import { CirrusProvider } from "@cirrus/react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { MigrationStatusRow } from "../src/admin.js";
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { MigrationsPanel } from "../src/migrations.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import type { MigrationStatusRow } from "../src/admin";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { MigrationsPanel } from "../src/migrations";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const ROWS: MigrationStatusRow[] = [
     { changed: 5, cursor: null, direction: "up", error: null, id: "0001_backfill", processed: 10, startedAt: 1, status: "completed", updatedAt: 2 },

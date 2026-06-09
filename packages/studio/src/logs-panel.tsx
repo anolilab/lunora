@@ -4,18 +4,18 @@ import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { LogEntry, LogLevel, LogsResult, RequestLogEntry, RequestLogQuery, RequestLogResult, RequestOutcome } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Badge } from "./components/ui/badge.js";
-import { Button } from "./components/ui/button.js";
-import { Input } from "./components/ui/input.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
-import { LiveToggle } from "./live-toggle.js";
-import { recordShard } from "./shard-history.js";
-import { ShardInput } from "./shard-input.js";
-import useLiveAdmin from "./use-live-admin.js";
-import { useLiveToggle } from "./use-live-toggle.js";
+import type { LogEntry, LogLevel, LogsResult, RequestLogEntry, RequestLogQuery, RequestLogResult, RequestOutcome } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import { LiveToggle } from "./live-toggle";
+import { recordShard } from "./shard-history";
+import { ShardInput } from "./shard-input";
+import useLiveAdmin from "./use-live-admin";
+import { useLiveToggle } from "./use-live-toggle";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;

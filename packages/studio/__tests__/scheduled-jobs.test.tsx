@@ -4,9 +4,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ScheduledJobs } from "../src/scheduled-jobs.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import { ScheduledJobs } from "../src/scheduled-jobs";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const SJ_ROW = /^sj-row-/;
 

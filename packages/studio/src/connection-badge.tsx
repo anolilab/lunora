@@ -2,7 +2,7 @@ import { useConnectionStatus } from "@cirrus/react";
 import type { CSSProperties, ReactElement } from "react";
 import { useMemo } from "react";
 
-import { useT } from "./i18n-context.js";
+import { useT } from "./i18n-context";
 
 /** Dot colour per connection status; the label is localised in the component. */
 const STATUS_COLORS = {

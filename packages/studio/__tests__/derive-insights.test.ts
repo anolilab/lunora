@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { FunctionCallStat, ShardMetrics } from "../src/admin.js";
-import { deriveInsights } from "../src/derive-insights.js";
+import type { FunctionCallStat, ShardMetrics } from "../src/admin";
+import { deriveInsights } from "../src/derive-insights";
 
 const metrics = (cache: ShardMetrics["cache"]): ShardMetrics => {
     return {

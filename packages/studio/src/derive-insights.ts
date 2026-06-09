@@ -1,4 +1,4 @@
-import type { FunctionCallStat, ShardMetrics } from "./admin.js";
+import type { FunctionCallStat, ShardMetrics } from "./admin";
 
 /** Visual + ordering weight of a detected issue. */
 type InsightSeverity = "error" | "info" | "warning";

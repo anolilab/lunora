@@ -3,12 +3,12 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import { Button } from "./components/ui/button.js";
-import { EmptyState } from "./components/ui/empty-state.js";
-import { Input } from "./components/ui/input.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { useT } from "./i18n-context.js";
-import { errorMessage, fireAndForget, formatBytes } from "./internal.js";
+import { Button } from "./components/ui/button";
+import { EmptyState } from "./components/ui/empty-state";
+import { Input } from "./components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { useT } from "./i18n-context";
+import { errorMessage, fireAndForget, formatBytes } from "./internal";
 
 interface FileBrowserProps {
     /** Object-key prefix the browser filters by on first load. */
@@ -104,7 +104,15 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                 <EmptyState
                     description={t("Objects you upload to your R2 buckets will appear here.")}
                     icon={
-                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
                             <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
                             <path d="M12 11v5m-2.5-2.5h5" />
                         </svg>

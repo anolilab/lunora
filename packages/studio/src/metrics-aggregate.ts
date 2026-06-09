@@ -1,4 +1,4 @@
-import type { ShardMetrics } from "./admin.js";
+import type { ShardMetrics } from "./admin";
 
 /** One shard's metrics fetch outcome: the snapshot, or the error that shard returned. */
 export interface ShardMetricsResult {

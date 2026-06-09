@@ -1,7 +1,7 @@
 import { useCirrus } from "@cirrus/react";
 import { useEffect, useRef } from "react";
 
-import { adminRef, callOptions } from "./internal.js";
+import { adminRef, callOptions } from "./internal";
 
 /**
  * Subscribe to a reserved admin RPC over the live WebSocket for the lifetime of

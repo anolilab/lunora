@@ -5,21 +5,21 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { BulkDeleteResult, TableInfo, TablePage, WriteRowResult } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { ConfirmButton } from "./confirm-button.js";
-import { EmptyState } from "./components/ui/empty-state.js";
-import type { EditableFilter } from "./data-filters.js";
-import { DataFilters, toFilterClauses } from "./data-filters.js";
-import { adminRef, callOptions, fireAndForget, formatCell } from "./internal.js";
-import { LiveToggle } from "./live-toggle.js";
-import { RowDetailDrawer } from "./row-detail.js";
-import { recordShard } from "./shard-history.js";
-import { ShardInput } from "./shard-input.js";
-import { StorageTierHeader } from "./storage-tier.js";
-import useDebounced from "./use-debounced.js";
-import useLiveAdmin from "./use-live-admin.js";
-import { useLiveToggle } from "./use-live-toggle.js";
+import type { BulkDeleteResult, TableInfo, TablePage, WriteRowResult } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { EmptyState } from "./components/ui/empty-state";
+import { ConfirmButton } from "./confirm-button";
+import type { EditableFilter } from "./data-filters";
+import { DataFilters, toFilterClauses } from "./data-filters";
+import { adminRef, callOptions, fireAndForget, formatCell } from "./internal";
+import { LiveToggle } from "./live-toggle";
+import { RowDetailDrawer } from "./row-detail";
+import { recordShard } from "./shard-history";
+import { ShardInput } from "./shard-input";
+import { StorageTierHeader } from "./storage-tier";
+import useDebounced from "./use-debounced";
+import useLiveAdmin from "./use-live-admin";
+import { useLiveToggle } from "./use-live-toggle";
 
 interface DataBrowserProps {
     /**
@@ -58,7 +58,14 @@ const ROWS_STYLE: CSSProperties = { width: "100%" };
 // model so columns stay aligned.
 const ROW_BASE_STYLE: CSSProperties = { alignItems: "center", display: "flex", left: 0, position: "absolute", top: 0, width: "100%" };
 const HEAD_ROW_STYLE: CSSProperties = { display: "flex", width: "100%" };
-const CELL_STYLE: CSSProperties = { flex: "1 1 0", minWidth: 0, overflow: "hidden", padding: "0.375rem 0.75rem", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const CELL_STYLE: CSSProperties = {
+    flex: "1 1 0",
+    minWidth: 0,
+    overflow: "hidden",
+    padding: "0.375rem 0.75rem",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+};
 const ACTION_CELL_STYLE: CSSProperties = { flex: "0 0 7rem", padding: "0.375rem 0.75rem" };
 
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
@@ -1154,7 +1161,15 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                         <EmptyState
                             description="Rows you insert into this table will show up here."
                             icon={
-                                <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                                <svg
+                                    aria-hidden="true"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={1.6}
+                                    viewBox="0 0 24 24"
+                                >
                                     <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />
                                 </svg>
                             }

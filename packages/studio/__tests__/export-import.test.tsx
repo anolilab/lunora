@@ -2,11 +2,11 @@ import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { ExportRow } from "../src/admin.js";
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { ExportImportPanel } from "../src/export-import.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import type { ExportRow } from "../src/admin";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { ExportImportPanel } from "../src/export-import";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const EXPORT_ROWS: ExportRow[] = [
     { doc: { __id__: "m1", text: "hello" }, table: "messages" },

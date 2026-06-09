@@ -2,8 +2,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { recordShard } from "../src/shard-history.js";
-import { ShardInput } from "../src/shard-input.js";
+import { recordShard } from "../src/shard-history";
+import { ShardInput } from "../src/shard-input";
 
 const Harness = (): React.ReactElement => {
     const [value, setValue] = useState("");

@@ -1,8 +1,8 @@
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 
-import type { StudioAppProps } from "./app.js";
-import { StudioApp } from "./app.js";
+import type { StudioAppProps } from "./app";
+import { StudioApp } from "./app";
 
 export interface MountStudioOptions extends StudioAppProps {
     /**
@@ -35,8 +35,8 @@ export const mountStudio = (options: MountStudioOptions = {}): Root => {
             adminToken={appProps.adminToken}
             basePath={appProps.basePath}
             baseUrl={appProps.baseUrl}
-            studio={appProps.studio}
             locale={appProps.locale}
+            studio={appProps.studio}
         />,
     );
 

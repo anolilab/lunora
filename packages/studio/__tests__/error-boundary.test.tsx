@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ErrorBoundary } from "../src/error-boundary.js";
+import { ErrorBoundary } from "../src/error-boundary";
 
 const Boom = (): ReactElement => {
     throw new Error("kaboom");

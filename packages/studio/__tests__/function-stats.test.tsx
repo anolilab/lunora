@@ -2,12 +2,12 @@ import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { FunctionStatsResult } from "../src/admin.js";
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { FunctionStatsPanel } from "../src/function-stats.js";
-import type { FunctionDescriptor } from "../src/types.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import type { FunctionStatsResult } from "../src/admin";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { FunctionStatsPanel } from "../src/function-stats";
+import type { FunctionDescriptor } from "../src/types";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const STATS: FunctionStatsResult = {
     functions: [

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { FunctionCallStat, MetricsSnapshot, MigrationStatusRow } from "../src/admin.js";
-import type { ShardSloResult } from "../src/slo-aggregate.js";
-import { dedupeMigrations, mergeFunctionStats, sumShardMetrics } from "../src/slo-aggregate.js";
+import type { FunctionCallStat, MetricsSnapshot, MigrationStatusRow } from "../src/admin";
+import type { ShardSloResult } from "../src/slo-aggregate";
+import { dedupeMigrations, mergeFunctionStats, sumShardMetrics } from "../src/slo-aggregate";
 
 const snapshot = (requests: number, errors: number, history: MetricsSnapshot["history"] = []): MetricsSnapshot => {
     return { cache: null, databaseSize: null, errors, history, requests, shard: "", sinceMs: 0, uptimeMs: 0 };

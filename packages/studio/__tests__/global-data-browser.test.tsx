@@ -4,9 +4,9 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { GlobalDataBrowser } from "../src/global-data-browser.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import { GlobalDataBrowser } from "../src/global-data-browser";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const TABLES = [
     { name: "organizations", rowCount: 2 },
