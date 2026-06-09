@@ -14,4 +14,6 @@ if (element === null) {
     throw new Error("main.mock: #root not found");
 }
 
-createRoot(element).render(<StudioApp client={createDevMockClient()} />);
+// `dataEditable` is on so the harness exercises the inline cell editor + staged
+// commit flow during design iteration; the mock records writes without a backend.
+createRoot(element).render(<StudioApp client={createDevMockClient()} studio={{ dataEditable: true }} />);
