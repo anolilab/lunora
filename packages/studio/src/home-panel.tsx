@@ -8,6 +8,7 @@ import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import { EmptyState } from "./components/ui/empty-state";
 import { deriveInsights } from "./derive-insights";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, fireAndForget, formatBytes } from "./internal";
@@ -27,6 +28,16 @@ const StatCard = ({ label, value }: { readonly label: string; readonly value: Re
         <CardContent className="flex flex-col gap-1 py-4">
             <span className="text-xs tracking-wide text-muted-foreground uppercase">{label}</span>
             <span className="text-2xl font-semibold tabular-nums text-foreground">{value}</span>
+        </CardContent>
+    </Card>
+);
+
+/** One "get connected" card: a method label + the command/import that wires it up. */
+const ConnectCard = ({ command, label }: { readonly command: string; readonly label: string }): ReactElement => (
+    <Card className="rounded-md">
+        <CardContent className="flex flex-col gap-2 py-4">
+            <span className="text-sm font-medium text-foreground">{label}</span>
+            <code className="rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">{command}</code>
         </CardContent>
     </Card>
 );
@@ -127,12 +138,45 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
                 <StatCard label={t("Database size")} value={formatBytes(metrics?.databaseSize ?? null)} />
             </div>
 
-            {/* Advisors summary. */}
+            {/* Advisors summary. When both advisors are loaded and clean, collapse
+                to a single "no issues" state (mirrors Supabase's Home advisor block). */}
             <section className="space-y-3" data-testid="home-advisors">
                 <h2 className="text-sm font-semibold tracking-tight text-foreground">{t("Advisors")}</h2>
-                <div className="grid gap-3 sm:grid-cols-2">
-                    <AdvisorCard count={securityCount} onView={viewSecurity} testId="home-security" title={t("Security findings")} />
-                    <AdvisorCard count={performanceCount} onView={viewPerformance} testId="home-performance" title={t("Performance issues")} />
+                {securityCount === 0 && performanceCount === 0 ? (
+                    <EmptyState
+                        description={t("No security or performance issues detected.")}
+                        icon={
+                            <svg
+                                aria-hidden="true"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={1.6}
+                                viewBox="0 0 24 24"
+                            >
+                                <path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z" />
+                                <path d="m9 12 2 2 4-4" />
+                            </svg>
+                        }
+                        testId="home-advisors-clear"
+                        title={t("No issues found")}
+                    />
+                ) : (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        <AdvisorCard count={securityCount} onView={viewSecurity} testId="home-security" title={t("Security findings")} />
+                        <AdvisorCard count={performanceCount} onView={viewPerformance} testId="home-performance" title={t("Performance issues")} />
+                    </div>
+                )}
+            </section>
+
+            {/* Get connected — point an app at this deployment (Supabase-style). */}
+            <section className="space-y-3" data-testid="home-get-connected">
+                <h2 className="text-sm font-semibold tracking-tight text-foreground">{t("Get connected")}</h2>
+                <div className="grid gap-3 sm:grid-cols-3">
+                    <ConnectCard command="npm i @cirrus/client" label={t("Client SDK")} />
+                    <ConnectCard command="npm i @cirrus/react" label={t("React")} />
+                    <ConnectCard command="cirrus dev" label={t("CLI")} />
                 </div>
             </section>
 

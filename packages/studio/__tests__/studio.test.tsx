@@ -93,4 +93,21 @@ describe("studio", () => {
 
         expect(screen.queryByTestId("cirrus-home")).toBeNull();
     });
+
+    it("collapses and re-expands the secondary nav from the rail toggle", async () => {
+        expect.assertions(2);
+
+        render(renderStudio(createClient()));
+
+        const toggle = await screen.findByTestId("dash-rail-toggle");
+        const secondaryNav = screen.getByTestId("dash-tabs");
+
+        fireEvent.click(toggle);
+
+        expect(secondaryNav.hasAttribute("hidden")).toBe(true);
+
+        fireEvent.click(toggle);
+
+        expect(secondaryNav.hasAttribute("hidden")).toBe(false);
+    });
 });

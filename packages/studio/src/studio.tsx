@@ -12,7 +12,7 @@ import {
     useSearch,
 } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AuditPanel } from "./audit-panel";
 import type { CommandItem } from "./command-palette";
@@ -357,8 +357,18 @@ const StudioLayout = (): ReactElement => {
         [groupLabel, tabLabel],
     );
 
+    // Collapse the 250px secondary nav to just the icon rail (Supabase's bottom
+    // rail toggle). In-memory — a fresh session starts expanded.
+    const [navCollapsed, setNavCollapsed] = useState<boolean>(false);
+    const toggleNav = useCallback((): void => {
+        setNavCollapsed((collapsed) => !collapsed);
+    }, []);
+
     return (
-        <div className="grid min-h-0 flex-1 grid-cols-[3rem_13.5rem_minmax(0,1fr)]" data-testid="cirrus-studio">
+        <div
+            className={`grid min-h-0 flex-1 ${navCollapsed ? "grid-cols-[3rem_minmax(0,1fr)]" : "grid-cols-[3rem_13.5rem_minmax(0,1fr)]"}`}
+            data-testid="cirrus-studio"
+        >
             <CommandPalette items={commandItems} />
             {/* Icon rail — one entry per area, settings pinned to the bottom. */}
             <nav aria-label={t("Studio areas")} className="flex flex-col items-center gap-1 border-e border-border bg-sidebar py-2" data-testid="dash-rail">
@@ -383,13 +393,38 @@ const StudioLayout = (): ReactElement => {
                         </button>
                     );
                 })}
+
+                {/* Collapse/expand the secondary nav — Supabase's bottom rail toggle. */}
+                <button
+                    aria-label={navCollapsed ? t("Expand sidebar") : t("Collapse sidebar")}
+                    aria-pressed={navCollapsed}
+                    className="flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent"
+                    data-testid="dash-rail-toggle"
+                    onClick={toggleNav}
+                    title={navCollapsed ? t("Expand sidebar") : t("Collapse sidebar")}
+                    type="button"
+                >
+                    <svg
+                        aria-hidden="true"
+                        className={`size-4 transition-transform ${navCollapsed ? "rotate-180" : ""}`}
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.6}
+                        viewBox="0 0 24 24"
+                    >
+                        <path d="M15 6 9 12l6 6" />
+                    </svg>
+                </button>
             </nav>
 
-            {/* Secondary nav — the active area's title + its tabs. */}
+            {/* Secondary nav — the active area's title + its tabs. Hidden when collapsed. */}
             <div
                 aria-label={t("Studio sections")}
-                className="flex flex-col overflow-y-auto border-e border-border bg-sidebar"
+                className={`flex flex-col overflow-y-auto border-e border-border bg-sidebar${navCollapsed ? " hidden" : ""}`}
                 data-testid="dash-tabs"
+                hidden={navCollapsed}
                 role="tablist"
             >
                 <header className="flex h-12 shrink-0 items-center px-4">

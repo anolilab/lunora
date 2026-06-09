@@ -262,6 +262,8 @@ const MESSAGE_IDS = [
     "SQL / Functions",
     "Table editor",
     "Connection, health, and advisor summary for your deployment.",
+    "Collapse sidebar",
+    "Expand sidebar",
     // Command palette.
     "Command palette",
     "No results.",
@@ -272,6 +274,12 @@ const MESSAGE_IDS = [
     "View",
     "All clear",
     "No data yet",
+    "Get connected",
+    "No issues found",
+    "No security or performance issues detected.",
+    "Client SDK",
+    "React",
+    "CLI",
     // Advisors section + Security Advisor panel.
     "Advisors",
     "Security",
