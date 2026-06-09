@@ -19,7 +19,7 @@ import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
 import type { StagedChange, StagedEditsModel } from "./staged-edits";
 import { StagedDiffPanel, useStagedEdits } from "./staged-edits";
-import { StorageTierHeader } from "./storage-tier";
+import { StorageTierBadge } from "./storage-tier";
 import useDebounced from "./use-debounced";
 import useLiveAdmin from "./use-live-admin";
 import { useLiveToggle } from "./use-live-toggle";
@@ -38,6 +38,9 @@ interface DataBrowserProps {
 }
 
 const DEFAULT_PAGE_SIZE = 50;
+
+/** Hoisted empty table list — a stable reference for the "no tables yet" sidebar (avoids a fresh `[]` literal in JSX). */
+const NO_TABLES: ReadonlyArray<TableInfo> = [];
 
 /**
  * Hard ceiling on the number of bounded server `deleteRows`/`clearTable` calls
@@ -96,10 +99,11 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
 };
 
 /**
- * Shard-key input + "Load tables" trigger. Presentational: the parent owns the
- * shard-key state and the load handler.
+ * The table-list sidebar header: the storage-tier badge, the shard-key picker,
+ * and the "Load tables" trigger, stacked for the narrow full-height rail.
+ * Presentational — the parent owns the shard-key state and the load handler.
  */
-const DataBrowserToolbar = ({
+const DataBrowserSidebarHeader = ({
     onLoadTables,
     onShardChange,
     shardKey,
@@ -108,9 +112,10 @@ const DataBrowserToolbar = ({
     onShardChange: (value: string) => void;
     shardKey: string;
 }): ReactElement => (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex shrink-0 flex-col items-start gap-2 border-b border-border p-3">
+        <StorageTierBadge tier="shard" />
         <ShardInput onChange={onShardChange} testId="db-shard-input" value={shardKey} />
-        <button className={CONTROL_BTN} data-testid="db-load-tables" onClick={onLoadTables} type="button">
+        <button className={`${CONTROL_BTN} w-full justify-center`} data-testid="db-load-tables" onClick={onLoadTables} type="button">
             Load tables
         </button>
     </div>
@@ -863,129 +868,137 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
     }, [cancelCellEdit, editable, editableColumn, editingCell, navigateToRef, page?.refs, stage, stagedValue, startCellEdit]);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-data-browser">
-            <StorageTierHeader tier="shard" />
+        <div className="flex h-full min-w-0" data-testid="cirrus-data-browser">
+            <TableListSidebar
+                header={<DataBrowserSidebarHeader onLoadTables={loadTables} onShardChange={setShardKey} shardKey={shardKey} />}
+                onSelect={selectTable}
+                prefix="db"
+                selected={selectedTable}
+                tables={tables ?? NO_TABLES}
+            />
 
-            <DataBrowserToolbar onLoadTables={loadTables} onShardChange={setShardKey} shardKey={shardKey} />
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                {tablesError !== null && (
+                    <p className="shrink-0 border-b border-border px-4 py-2 text-sm text-destructive" data-testid="db-tables-error" role="alert">
+                        {tablesError}
+                    </p>
+                )}
 
-            {tablesError !== null && (
-                <p className="text-sm text-destructive" data-testid="db-tables-error" role="alert">
-                    {tablesError}
-                </p>
-            )}
+                {page === null && pageError === null && (
+                    <div className="flex flex-1 items-center justify-center p-6">
+                        <p className="text-sm text-muted-foreground">Select a table to browse its rows.</p>
+                    </div>
+                )}
 
-            {tables !== null && (
-                <div className="flex min-w-0 gap-4">
-                    <TableListSidebar onSelect={selectTable} prefix="db" selected={selectedTable} tables={tables} />
+                {pageError !== null && (
+                    <p className="shrink-0 border-b border-border px-4 py-2 text-sm text-destructive" data-testid="db-page-error" role="alert">
+                        {pageError}
+                    </p>
+                )}
 
-                    <div className="flex min-w-0 flex-1 flex-col gap-3">
-                        {pageError !== null && (
-                            <p className="text-sm text-destructive" data-testid="db-page-error" role="alert">
-                                {pageError}
-                            </p>
-                        )}
+                {page !== null && (
+                    <div className="flex min-h-0 flex-1 flex-col" data-testid="db-page">
+                        <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
+                            <DataBrowserViewControls
+                                columns={columns}
+                                editable={editable}
+                                filter={filter}
+                                filters={filters}
+                                live={live}
+                                liveError={liveError}
+                                onAddRow={addRow}
+                                onBulkDelete={bulkDelete}
+                                onClearTable={clearTable}
+                                onFilterChange={onFilterChange}
+                                onFiltersChange={onFiltersChange}
+                                onRefresh={refreshPage}
+                                onShowJson={showJson}
+                                onShowTable={showTable}
+                                onToggleLive={toggleLive}
+                                total={total}
+                                viewMode={viewMode}
+                            />
 
-                        {page === null && pageError === null && <p className="text-sm text-muted-foreground">Select a table to browse its rows.</p>}
-
-                        {page !== null && (
-                            <div className="flex flex-col gap-3" data-testid="db-page">
-                                <DataBrowserViewControls
-                                    columns={columns}
-                                    editable={editable}
-                                    filter={filter}
-                                    filters={filters}
-                                    live={live}
-                                    liveError={liveError}
-                                    onAddRow={addRow}
-                                    onBulkDelete={bulkDelete}
-                                    onClearTable={clearTable}
-                                    onFilterChange={onFilterChange}
-                                    onFiltersChange={onFiltersChange}
-                                    onRefresh={refreshPage}
-                                    onShowJson={showJson}
-                                    onShowTable={showTable}
-                                    onToggleLive={toggleLive}
-                                    total={total}
-                                    viewMode={viewMode}
+                            {editable && editing !== null && (
+                                <DataBrowserRowEditor
+                                    docText={editing.docText}
+                                    onCancel={cancelEdit}
+                                    onDocumentChange={onEditorDocumentChange}
+                                    onSave={saveEdit}
                                 />
+                            )}
 
-                                {editable && editing !== null && (
-                                    <DataBrowserRowEditor
-                                        docText={editing.docText}
-                                        onCancel={cancelEdit}
-                                        onDocumentChange={onEditorDocumentChange}
-                                        onSave={saveEdit}
-                                    />
-                                )}
+                            {editable && stagedChanges.length > 0 && (
+                                <StagedDiffPanel changes={stagedChanges} committing={committing} onCommit={onCommitStaged} onDiscard={discardStaged} />
+                            )}
 
-                                {editable && stagedChanges.length > 0 && (
-                                    <StagedDiffPanel changes={stagedChanges} committing={committing} onCommit={onCommitStaged} onDiscard={discardStaged} />
-                                )}
+                            {writeError !== null && (
+                                <p className="text-sm text-destructive" data-testid="db-write-error" role="alert">
+                                    {writeError}
+                                </p>
+                            )}
+                        </div>
 
-                                {writeError !== null && (
-                                    <p className="text-sm text-destructive" data-testid="db-write-error" role="alert">
-                                        {writeError}
-                                    </p>
-                                )}
-
-                                {viewMode === "table" && page.rows.length === 0 && (
-                                    <EmptyState
-                                        description="Rows you insert into this table will show up here."
-                                        icon={
-                                            <svg
-                                                aria-hidden="true"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                                strokeWidth={1.6}
-                                                viewBox="0 0 24 24"
-                                            >
-                                                <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />
-                                            </svg>
-                                        }
-                                        testId="db-empty-rows"
-                                        title="This table is empty."
-                                    />
-                                )}
-
-                                {viewMode === "table" && page.rows.length > 0 && (
-                                    <DataBrowserTableView
-                                        edit={edit}
-                                        editable={editable}
-                                        onDelete={onRowDelete}
-                                        onEdit={onRowEdit}
-                                        onInspect={setInspecting}
-                                        scrollRef={table.scrollRef}
-                                        scrollToIndex={table.scrollToIndex}
-                                        table={table.table}
-                                        tableRows={table.tableRows}
-                                        tbodyStyle={table.tbodyStyle}
-                                        virtualRows={table.virtualRows}
-                                    />
-                                )}
-
-                                {viewMode === "json" && (
-                                    <pre className="overflow-auto rounded-md border border-border bg-muted/30 p-3 text-xs" data-testid="db-json">
-                                        {JSON.stringify(page.rows, null, 2)}
-                                    </pre>
-                                )}
-
-                                <GridPagination
-                                    hasNext={hasNext}
-                                    hasPrevious={hasPrevious}
-                                    onNext={goNext}
-                                    onPrevious={goPrevious}
-                                    prefix="db"
-                                    rangeEnd={rangeEnd}
-                                    rangeStart={rangeStart}
-                                    total={total}
+                        {viewMode === "table" && page.rows.length === 0 && (
+                            <div className="flex flex-1 items-center justify-center p-6">
+                                <EmptyState
+                                    description="Rows you insert into this table will show up here."
+                                    icon={
+                                        <svg
+                                            aria-hidden="true"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            strokeWidth={1.6}
+                                            viewBox="0 0 24 24"
+                                        >
+                                            <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />
+                                        </svg>
+                                    }
+                                    testId="db-empty-rows"
+                                    title="This table is empty."
                                 />
                             </div>
                         )}
+
+                        {viewMode === "table" && page.rows.length > 0 && (
+                            <DataBrowserTableView
+                                edit={edit}
+                                editable={editable}
+                                onDelete={onRowDelete}
+                                onEdit={onRowEdit}
+                                onInspect={setInspecting}
+                                scrollRef={table.scrollRef}
+                                scrollToIndex={table.scrollToIndex}
+                                table={table.table}
+                                tableRows={table.tableRows}
+                                tbodyStyle={table.tbodyStyle}
+                                virtualRows={table.virtualRows}
+                            />
+                        )}
+
+                        {viewMode === "json" && (
+                            <pre className="min-h-0 flex-1 overflow-auto border-t border-border bg-muted/30 p-3 text-xs" data-testid="db-json">
+                                {JSON.stringify(page.rows, null, 2)}
+                            </pre>
+                        )}
+
+                        <div className="flex shrink-0 items-center border-t border-border px-4 py-2">
+                            <GridPagination
+                                hasNext={hasNext}
+                                hasPrevious={hasPrevious}
+                                onNext={goNext}
+                                onPrevious={goPrevious}
+                                prefix="db"
+                                rangeEnd={rangeEnd}
+                                rangeStart={rangeStart}
+                                total={total}
+                            />
+                        </div>
                     </div>
-                </div>
-            )}
+                )}
+            </div>
 
             {inspecting !== null && page !== null && (
                 <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={navigateToRef} refs={page.refs} row={inspecting} />

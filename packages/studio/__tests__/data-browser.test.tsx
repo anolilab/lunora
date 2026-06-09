@@ -172,7 +172,9 @@ describe("dataBrowser", () => {
         await screen.findByTestId("db-tables-error");
 
         expect(screen.getByTestId("db-tables-error").textContent).toBe("ADMIN_FORBIDDEN");
-        expect(screen.queryByTestId("db-table-list")).toBeNull();
+        // The sidebar stays mounted (so the shard picker remains usable to retry),
+        // but with no tables it lists no selectable table entries.
+        expect(screen.queryByTestId("db-table-messages")).toBeNull();
     });
 
     it("surfaces a page-read error without dropping the table list", async () => {

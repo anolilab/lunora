@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { useCallback } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { useT } from "./i18n-context";
 import { formatCell } from "./internal";
@@ -57,6 +57,8 @@ const TableListButton = ({ item, onSelect, prefix, selected }: TableListButtonPr
 };
 
 interface TableListSidebarProps {
+    /** Optional content rendered above the list (e.g. a shard-key picker). */
+    readonly header?: ReactNode;
     /** Optional reload control rendered in the sidebar header. */
     readonly onReload?: () => void;
     readonly onSelect: (name: string) => void;
@@ -68,17 +70,31 @@ interface TableListSidebarProps {
 }
 
 /**
- * The Supabase-style table sidebar: a bordered, scrollable list of the tables in
- * the current source, each a selectable row with its name and a row-count badge.
- * The active table is highlighted. Shared by the shard and global data browsers
- * so both read identically.
+ * The Supabase-style table sidebar: a full-height left rail listing the tables in
+ * the current source, with a filter box at the top and each table a selectable row
+ * showing its name and a row-count badge. The active table is highlighted. Shared
+ * by the shard and global data browsers so both read identically. An optional
+ * `header` slot renders above the list (the shard browser puts its shard-key
+ * picker there). Owns the table-filter text locally so the parents stay unchanged.
  */
-const TableListSidebar = ({ onReload, onSelect, prefix, reloadLabel, selected, tables }: TableListSidebarProps): ReactElement => {
+const TableListSidebar = ({ header, onReload, onSelect, prefix, reloadLabel, selected, tables }: TableListSidebarProps): ReactElement => {
     const t = useT();
+    const [query, setQuery] = useState<string>("");
+
+    const onQueryChange = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
+        setQuery(event.target.value);
+    }, []);
+
+    const filtered = useMemo<ReadonlyArray<TableListItem>>(() => {
+        const needle = query.trim().toLowerCase();
+
+        return needle === "" ? tables : tables.filter((item) => item.name.toLowerCase().includes(needle));
+    }, [query, tables]);
 
     return (
-        <div className="flex w-56 shrink-0 flex-col self-start rounded-md border border-border bg-card" data-testid={`${prefix}-table-list`}>
-            <div className="flex h-9 shrink-0 items-center justify-between border-b border-border px-3">
+        <aside className="flex h-full w-60 shrink-0 flex-col border-e border-border bg-sidebar" data-testid={`${prefix}-table-list`}>
+            {header}
+            <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
                 <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{t("Tables")}</span>
                 {onReload !== undefined && (
                     <button
@@ -104,12 +120,22 @@ const TableListSidebar = ({ onReload, onSelect, prefix, reloadLabel, selected, t
                     </button>
                 )}
             </div>
-            <ul className="flex max-h-[28rem] flex-col gap-px overflow-y-auto p-1.5">
-                {tables.map((item) => (
+            <div className="shrink-0 border-b border-border p-2">
+                <input
+                    className="h-7 w-full rounded-md border border-border bg-background px-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring"
+                    data-testid={`${prefix}-table-search`}
+                    onChange={onQueryChange}
+                    placeholder={t("search table…")}
+                    type="search"
+                    value={query}
+                />
+            </div>
+            <ul className="flex flex-1 flex-col gap-px overflow-y-auto p-1.5">
+                {filtered.map((item) => (
                     <TableListButton item={item} key={item.name} onSelect={onSelect} prefix={prefix} selected={selected === item.name} />
                 ))}
             </ul>
-        </div>
+        </aside>
     );
 };
 
@@ -148,13 +174,26 @@ const GridPagination = ({ hasNext, hasPrevious, onNext, onPrevious, prefix, rang
 };
 
 /**
- * Bordered, horizontally-scrolling container that frames a data grid (the table
- * is passed as `children`). Gives every grid the same rounded border + scroll
- * affordance Supabase's Table Editor uses, instead of a bare table bleeding into
- * the page.
+ * Container that frames a data grid (the table is passed as `children`). The
+ * default mode is a bordered, rounded, horizontally-scrolling card — the look
+ * Supabase's Table Editor uses, instead of a bare table bleeding into the page.
+ * In `fill` mode it instead grows to fill its flex parent (`flex-1 min-h-0`) and
+ * lets the child own scrolling, so a full-height table editor's grid stretches to
+ * the bottom of the panel rather than being pinned to a fixed height.
  */
-const GridContainer = ({ children, testId }: { readonly children: ReactNode; readonly testId?: string }): ReactElement => (
-    <div className="overflow-x-auto rounded-md border border-border" data-testid={testId}>
+const GridContainer = ({
+    children,
+    fill = false,
+    testId,
+}: {
+    readonly children: ReactNode;
+    readonly fill?: boolean;
+    readonly testId?: string;
+}): ReactElement => (
+    <div
+        className={fill ? "flex min-h-0 flex-1 flex-col overflow-hidden border-t border-border" : "overflow-x-auto rounded-md border border-border"}
+        data-testid={testId}
+    >
         {children}
     </div>
 );

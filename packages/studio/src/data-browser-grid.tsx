@@ -11,13 +11,22 @@ import { formatCell } from "./internal";
 import type { StagedEditsModel } from "./staged-edits";
 import { coerceCellValue } from "./staged-edits";
 
-/** Height of the virtualized scroll viewport, in px. */
+/**
+ * Fallback viewport height (px) for the virtual list. The grid now fills its flex
+ * parent, so the real viewport height is read from the scroll element at runtime;
+ * this value seeds the first paint and is the height jsdom reports (it measures
+ * every element as 0×0, so the virtualizer would otherwise render no rows).
+ */
 const SCROLL_HEIGHT = 400;
 /** Estimated height of a single row, in px — used to size the virtual list. */
 const ROW_HEIGHT = 36;
 
-/** Static styles, hoisted so they aren't reallocated (and re-flagged) per render. */
-const SCROLL_STYLE: CSSProperties = { height: `${SCROLL_HEIGHT.toString()}px`, overflow: "auto", position: "relative" };
+/**
+ * Static styles, hoisted so they aren't reallocated (and re-flagged) per render.
+ * The scroll viewport flexes to fill the full-height grid container and owns both
+ * axes of scrolling (rows vertically, wide tables horizontally).
+ */
+const SCROLL_STYLE: CSSProperties = { flex: "1 1 0%", minHeight: 0, overflow: "auto", position: "relative" };
 const ROWS_STYLE: CSSProperties = { width: "100%" };
 // Virtualized rows are taken out of table flow (absolute + translateY), so the
 // row lays its cells out with flexbox rather than table-cell sizing — otherwise
@@ -501,7 +510,7 @@ const DataBrowserTableView = ({
     };
 
     return (
-        <GridContainer>
+        <GridContainer fill>
             <div data-testid="db-scroll" onKeyDown={onGridKeyDown} ref={scrollRef} role="grid" style={SCROLL_STYLE} tabIndex={0}>
                 <table className="w-full text-xs" data-testid="db-rows" style={ROWS_STYLE}>
                     <thead className="bg-muted/50">
@@ -604,7 +613,9 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
             const element = instance.scrollElement;
 
             const report = (): void => {
-                callback({ height: SCROLL_HEIGHT, width: element?.clientWidth ?? 0 });
+                // Real viewport height when the element is laid out; SCROLL_HEIGHT
+                // under jsdom (clientHeight 0) so tests still render rows.
+                callback({ height: (element?.clientHeight ?? 0) || SCROLL_HEIGHT, width: element?.clientWidth ?? 0 });
             };
 
             report();

@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { CellValue, GridContainer, GridPagination, TableListSidebar } from "./data-grid";
 import { useT } from "./i18n-context";
 import { errorMessage, fireAndForget } from "./internal";
-import { StorageTierHeader } from "./storage-tier";
+import { StorageTierBadge } from "./storage-tier";
 
 interface GlobalDataBrowserProps {
     /** Rows requested per page. Clamped server-side to `[1, 500]`. */
@@ -16,6 +16,9 @@ interface GlobalDataBrowserProps {
 }
 
 const DEFAULT_PAGE_SIZE = 50;
+
+/** Hoisted empty table list — a stable reference for the "no tables yet" sidebar (avoids a fresh `[]` literal in JSX). */
+const NO_TABLES: ReadonlyArray<GlobalTableInfo> = [];
 
 /**
  * A stable React key for a global-table row. `.global()` docs carry an `_id`
@@ -116,90 +119,105 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
     }, [goToPage, offset, pageSize]);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-global-data-browser">
-            <StorageTierHeader tier="global" />
+        <div className="flex h-full min-w-0" data-testid="cirrus-global-data-browser">
+            <TableListSidebar
+                header={
+                    <div className="flex shrink-0 items-center border-b border-border p-3">
+                        <StorageTierBadge tier="global" />
+                    </div>
+                }
+                onReload={reloadTables}
+                onSelect={selectTable}
+                prefix="gdb"
+                selected={selectedTable}
+                tables={tables ?? NO_TABLES}
+            />
 
-            {tablesError !== null && (
-                <p className="text-sm text-destructive" data-testid="gdb-tables-error" role="alert">
-                    {tablesError}
-                </p>
-            )}
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                {tablesError !== null && (
+                    <p className="shrink-0 border-b border-border px-4 py-2 text-sm text-destructive" data-testid="gdb-tables-error" role="alert">
+                        {tablesError}
+                    </p>
+                )}
 
-            {tables !== null && tables.length === 0 && (
-                <EmptyState
-                    description={t("Tables marked .global() (D1-backed, region-replicated) will appear here.")}
-                    icon={
-                        <svg
-                            aria-hidden="true"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.6}
-                            viewBox="0 0 24 24"
-                        >
-                            <circle cx="12" cy="12" r="9" />
-                            <path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18Z" />
-                        </svg>
-                    }
-                    testId="gdb-empty"
-                    title={t("No global tables.")}
-                />
-            )}
+                {tables !== null && tables.length === 0 && (
+                    <div className="flex flex-1 items-center justify-center p-6">
+                        <EmptyState
+                            description={t("Tables marked .global() (D1-backed, region-replicated) will appear here.")}
+                            icon={
+                                <svg
+                                    aria-hidden="true"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={1.6}
+                                    viewBox="0 0 24 24"
+                                >
+                                    <circle cx="12" cy="12" r="9" />
+                                    <path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18Z" />
+                                </svg>
+                            }
+                            testId="gdb-empty"
+                            title={t("No global tables.")}
+                        />
+                    </div>
+                )}
 
-            {tables !== null && tables.length > 0 && (
-                <div className="flex min-w-0 gap-4">
-                    <TableListSidebar onReload={reloadTables} onSelect={selectTable} prefix="gdb" selected={selectedTable} tables={tables} />
+                {pageError !== null && (
+                    <p className="shrink-0 border-b border-border px-4 py-2 text-sm text-destructive" data-testid="gdb-page-error" role="alert">
+                        {pageError}
+                    </p>
+                )}
 
-                    <div className="flex min-w-0 flex-1 flex-col gap-3">
-                        {pageError !== null && (
-                            <p className="text-sm text-destructive" data-testid="gdb-page-error" role="alert">
-                                {pageError}
-                            </p>
-                        )}
+                {tables !== null && tables.length > 0 && page === null && pageError === null && (
+                    <div className="flex flex-1 items-center justify-center p-6">
+                        <p className="text-sm text-muted-foreground">{t("Select a table to browse its rows.")}</p>
+                    </div>
+                )}
 
-                        {page === null && pageError === null && <p className="text-sm text-muted-foreground">{t("Select a table to browse its rows.")}</p>}
-
-                        {page !== null && (
-                            <div className="flex flex-col gap-3" data-testid="gdb-page">
-                                <GridContainer>
-                                    <Table data-testid="gdb-rows">
-                                        <TableHeader>
-                                            <TableRow>
+                {page !== null && (
+                    <div className="flex min-h-0 flex-1 flex-col" data-testid="gdb-page">
+                        <GridContainer fill>
+                            <div className="min-h-0 flex-1 overflow-auto">
+                                <Table data-testid="gdb-rows">
+                                    <TableHeader>
+                                        <TableRow>
+                                            {page.columns.map((column) => (
+                                                <TableHead key={column}>{column}</TableHead>
+                                            ))}
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {page.rows.map((row, rowIndex) => (
+                                            <TableRow data-testid="gdb-row" key={rowKey(row, rowIndex)}>
                                                 {page.columns.map((column) => (
-                                                    <TableHead key={column}>{column}</TableHead>
+                                                    <TableCell className="max-w-xs truncate font-mono text-xs" key={column}>
+                                                        <CellValue value={row[column]} />
+                                                    </TableCell>
                                                 ))}
                                             </TableRow>
-                                        </TableHeader>
-                                        <TableBody>
-                                            {page.rows.map((row, rowIndex) => (
-                                                <TableRow data-testid="gdb-row" key={rowKey(row, rowIndex)}>
-                                                    {page.columns.map((column) => (
-                                                        <TableCell className="max-w-xs truncate font-mono text-xs" key={column}>
-                                                            <CellValue value={row[column]} />
-                                                        </TableCell>
-                                                    ))}
-                                                </TableRow>
-                                            ))}
-                                        </TableBody>
-                                    </Table>
-                                </GridContainer>
-
-                                <GridPagination
-                                    hasNext={hasNext}
-                                    hasPrevious={hasPrevious}
-                                    onNext={goNext}
-                                    onPrevious={goPrevious}
-                                    prefix="gdb"
-                                    rangeEnd={rangeEnd}
-                                    rangeStart={rangeStart}
-                                    total={total}
-                                />
+                                        ))}
+                                    </TableBody>
+                                </Table>
                             </div>
-                        )}
+                        </GridContainer>
+
+                        <div className="flex shrink-0 items-center border-t border-border px-4 py-2">
+                            <GridPagination
+                                hasNext={hasNext}
+                                hasPrevious={hasPrevious}
+                                onNext={goNext}
+                                onPrevious={goPrevious}
+                                prefix="gdb"
+                                rangeEnd={rangeEnd}
+                                rangeStart={rangeStart}
+                                total={total}
+                            />
+                        </div>
                     </div>
-                </div>
-            )}
+                )}
+            </div>
         </div>
     );
 };
