@@ -1,4 +1,3 @@
-export { createVectors } from "./create-vectors";
 export type {
     SchemaLike,
     TableDefinitionLike,
@@ -13,12 +12,13 @@ export type {
     VectorUpsertInputLike,
     WriteEvent,
     WriteHook,
-} from "./ctx";
-export { createCtxVectors, createVectorSyncHook } from "./ctx";
+} from "./context";
+export { createContextVectors, createVectorSyncHook } from "./context";
+export { default as createVectors } from "./create-vectors";
 export type {
     CirrusVectors,
     CirrusVectorsOptions,
-    EmbedFn,
+    EmbedFunction,
     QueryInput,
     UpsertInput,
     VectorizeDeleteMutation,

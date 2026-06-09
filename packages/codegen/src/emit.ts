@@ -1035,7 +1035,7 @@ const emitShard = (schema: SchemaIR): string => {
     if (hasVectors) {
         importLines.push(
             `import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@cirrus/vectors";`,
-            `import { createCtxVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors";`,
+            `import { createContextVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors";`,
         );
     }
 
@@ -1131,7 +1131,7 @@ const vectorsStub: VectorSearchLike = {
             if (config.vectors) {
                 const cirrus = createVectors({ indexes: config.vectors(env) });
 
-                vectors = createCtxVectors(cirrus);
+                vectors = createContextVectors(cirrus);
                 onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;

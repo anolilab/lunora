@@ -64,7 +64,7 @@ export interface VectorizeIndexDetails {
  * source value (a row, a chunk, an arbitrary string) into a numeric vector.
  * The runtime calls this at upsert time so we don't couple to any provider.
  */
-export type EmbedFn<TInput = unknown> = (input: TInput) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
+export type EmbedFunction<TInput = unknown> = (input: TInput) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
 
 export interface CirrusVectorsOptions {
     /**
@@ -76,7 +76,7 @@ export interface CirrusVectorsOptions {
 }
 
 export interface UpsertInput<TInput = unknown> {
-    embed: EmbedFn<TInput>;
+    embed: EmbedFunction<TInput>;
     id: string;
     input: TInput;
     metadata?: Record<string, unknown>;
@@ -84,7 +84,7 @@ export interface UpsertInput<TInput = unknown> {
 }
 
 export interface QueryInput<TInput = unknown> {
-    embed?: EmbedFn<TInput>;
+    embed?: EmbedFunction<TInput>;
     filter?: Record<string, unknown>;
     input?: TInput;
     namespace?: string;

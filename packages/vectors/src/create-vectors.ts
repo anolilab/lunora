@@ -42,8 +42,8 @@ const MAX_ID_BATCH = 1000;
 /** Vectorize hard ceiling on a single `upsertMany` batch. */
 const MAX_UPSERT_BATCH = 1000;
 
-export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
-    if (!options.indexes || Object.keys(options.indexes).length === 0) {
+const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
+    if (Object.keys(options.indexes).length === 0) {
         throw new Error("@cirrus/vectors: at least one index binding is required");
     }
 
@@ -133,3 +133,5 @@ export const createVectors = (options: CirrusVectorsOptions): CirrusVectors => {
 
     return { deleteByIds, describe, getByIds, query, upsert, upsertMany };
 };
+
+export default createVectors;

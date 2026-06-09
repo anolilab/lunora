@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createVectors } from "../src/create-vectors";
-import { createCtxVectors as createContextVectors } from "../src/ctx";
+import { createContextVectors } from "../src/context";
+import createVectors from "../src/create-vectors";
 import type {
     VectorizeDeleteMutation,
     VectorizeIndexLike,
@@ -25,7 +25,7 @@ const createStatefulVectorizeIndex = (): VectorizeIndexLike => {
             store.set(vector.id, vector);
         }
 
-        return { mutationId: `m_${store.size}` };
+        return { mutationId: `m_${String(store.size)}` };
     };
 
     const dot = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): number => {
@@ -55,7 +55,7 @@ const createStatefulVectorizeIndex = (): VectorizeIndexLike => {
                 }
             }
 
-            return { count, mutationId: `d_${count}` };
+            return { count, mutationId: `d_${String(count)}` };
         },
         getByIds: async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> => {
             const found: VectorizeVector[] = [];
@@ -177,7 +177,7 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         expect(result.matches.map((match) => match.id)).toEqual(["f1"]);
     });
 
-    it("createCtxVectors: server-shape query returns the upserted matches with mapped fields", async () => {
+    it("createContextVectors: server-shape query returns the upserted matches with mapped fields", async () => {
         expect.assertions(3);
 
         const index = createStatefulVectorizeIndex();
@@ -193,7 +193,7 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         expect(matches.matches[0]?.score).toBeGreaterThan(0);
     });
 
-    it("createCtxVectors: deleteByIds removes a row from subsequent query results", async () => {
+    it("createContextVectors: deleteByIds removes a row from subsequent query results", async () => {
         expect.assertions(1);
 
         const index = createStatefulVectorizeIndex();
@@ -209,7 +209,7 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         expect(matches.matches.map((match) => match.id)).toEqual(["row-2"]);
     });
 
-    it("createCtxVectors: a precomputed vector skips embed and returns the same ranked list", async () => {
+    it("createContextVectors: a precomputed vector skips embed and returns the same ranked list", async () => {
         expect.assertions(1);
 
         const index = createStatefulVectorizeIndex();

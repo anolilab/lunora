@@ -21,7 +21,7 @@ export const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number
     let cursor = 0;
 
     const workers = Array.from({ length: effectiveLimit }, async () => {
-        while (true) {
+        for (;;) {
             const index = cursor;
 
             cursor += 1;
@@ -31,7 +31,10 @@ export const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number
             }
 
             // `index < items.length` is guaranteed above, so the indexed read
-            // yields a real element.
+            // yields a real element. Awaiting in-loop is the point: each worker
+            // pulls the next item only after its current task settles, which is
+            // what bounds the fan-out to `effectiveLimit` in flight.
+            // eslint-disable-next-line no-await-in-loop -- sequential by design: bounds concurrency
             results[index] = await function_(items[index] as T, index);
         }
     });

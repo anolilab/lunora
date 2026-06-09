@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createVectors } from "../src/create-vectors";
-import type { SchemaLike, VectorSearchLike } from "../src/ctx";
-import { createCtxVectors as createContextVectors, createVectorSyncHook } from "../src/ctx";
+import type { SchemaLike, VectorSearchLike } from "../src/context";
+import { createContextVectors, createVectorSyncHook } from "../src/context";
+import createVectors from "../src/create-vectors";
 import type { VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types";
 
 const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => {
     return {
         deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => {
-            return { count: ids.length, mutationId: `delete-${ids.length}` };
+            return { count: ids.length, mutationId: `delete-${String(ids.length)}` };
         }),
         getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
             async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
@@ -17,7 +17,7 @@ const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexL
                 }),
         ),
         insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
-            return { mutationId: `insert-${vectors.length}` };
+            return { mutationId: `insert-${String(vectors.length)}` };
         }),
         query: vi.fn<VectorizeIndexLike["query"]>(async (): Promise<VectorizeMatches> => {
             return {
@@ -26,13 +26,13 @@ const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexL
             };
         }),
         upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
-            return { mutationId: `upsert-${vectors.length}` };
+            return { mutationId: `upsert-${String(vectors.length)}` };
         }),
         ...overrides,
     };
 };
 
-describe("createCtxVectors", () => {
+describe("createContextVectors", () => {
     it("upsert + upsertNow both call cirrus.upsert inline and return void", async () => {
         expect.assertions(4);
 
@@ -251,7 +251,7 @@ describe("createVectorSyncHook", () => {
         const vectors = fakeVectorSearch();
 
         // Second upsert (standalone) rejects after the first inline upsert.
-        (vectors.upsert as ReturnType<typeof vi.fn>).mockImplementation(async (indexName: string, input: unknown) => {
+        vi.mocked(vectors.upsert).mockImplementation(async (indexName, input) => {
             vectors.upserts.push([indexName, input]);
 
             if (indexName === "docs-fulltext") {

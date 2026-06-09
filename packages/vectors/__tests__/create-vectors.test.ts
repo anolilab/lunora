@@ -1,19 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createVectors } from "../src/create-vectors";
-import type {
-    EmbedFn as EmbedFunction,
-    VectorizeDeleteMutation,
-    VectorizeIndexLike,
-    VectorizeMatches,
-    VectorizeUpsertMutation,
-    VectorizeVector,
-} from "../src/types";
+import createVectors from "../src/create-vectors";
+import type { EmbedFunction, VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../src/types";
 
 const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => {
     return {
         deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => {
-            return { count: ids.length, mutationId: `delete-${ids.length}` };
+            return { count: ids.length, mutationId: `delete-${String(ids.length)}` };
         }),
         getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
             async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
@@ -22,7 +15,7 @@ const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexL
                 }),
         ),
         insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
-            return { mutationId: `insert-${vectors.length}` };
+            return { mutationId: `insert-${String(vectors.length)}` };
         }),
         query: vi.fn<VectorizeIndexLike["query"]>(async (): Promise<VectorizeMatches> => {
             return {
@@ -31,7 +24,7 @@ const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexL
             };
         }),
         upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
-            return { mutationId: `upsert-${vectors.length}` };
+            return { mutationId: `upsert-${String(vectors.length)}` };
         }),
         ...overrides,
     };

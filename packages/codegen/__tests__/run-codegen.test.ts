@@ -435,7 +435,7 @@ describe("run-codegen", () => {
             const output = emitShard(schema);
 
             // Vectors variant: pull the adapters + the Vectorize binding type.
-            expect(output).toContain('import { createCtxVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors"');
+            expect(output).toContain('import { createContextVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors"');
             expect(output).toContain("VectorizeIndexLike");
             expect(output).toContain("WriteHook");
 

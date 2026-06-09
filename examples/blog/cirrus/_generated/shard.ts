@@ -5,7 +5,7 @@ import type { DatabaseWriterLike, DataMigrationLike, MigrationRunResult, RunShar
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";
 import { bindOrm, bindTableFacade } from "@cirrus/server";
 import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@cirrus/vectors";
-import { createCtxVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors";
+import { createContextVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors";
 
 import schema from "../schema.js";
 import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./functions.js";
@@ -477,7 +477,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             if (config.vectors) {
                 const cirrus = createVectors({ indexes: config.vectors(env) });
 
-                vectors = createCtxVectors(cirrus);
+                vectors = createContextVectors(cirrus);
                 onWrite = createVectorSyncHook({ schema: schema as unknown as VectorSchemaLike, vectors });
             } else {
                 vectors = vectorsStub;

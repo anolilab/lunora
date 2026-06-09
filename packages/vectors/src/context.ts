@@ -5,26 +5,26 @@ import type { CirrusVectors } from "./types";
  * `(input: string) => vector`. Matches `@cirrus/server`'s `VectorEmbedder` so
  * the bridged surface is assignable to the server's `VectorSearch` contract.
  */
-export type VectorEmbedderLike = (input: string) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
+type VectorEmbedderLike = (input: string) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
 
-export interface VectorMatchLike {
+interface VectorMatchLike {
     id: string;
     metadata?: Record<string, unknown>;
     score: number;
 }
 
-export interface VectorMatchesLike {
+interface VectorMatchesLike {
     count: number;
     matches: ReadonlyArray<VectorMatchLike>;
 }
 
-export interface VectorRecordLike {
+interface VectorRecordLike {
     id: string;
     metadata?: Record<string, unknown>;
     values: ReadonlyArray<number>;
 }
 
-export interface VectorQueryInputLike {
+interface VectorQueryInputLike {
     embed?: VectorEmbedderLike;
     filter?: Record<string, unknown>;
     input?: string;
@@ -33,7 +33,7 @@ export interface VectorQueryInputLike {
     vector?: ReadonlyArray<number>;
 }
 
-export interface VectorUpsertInputLike {
+interface VectorUpsertInputLike {
     embed: VectorEmbedderLike;
     id: string;
     input: string;
@@ -46,7 +46,7 @@ export interface VectorUpsertInputLike {
  * adapter never imports `@cirrus/server` (keeps the dependency edge one-way:
  * the generated DO depends on both, neither depends on the other).
  */
-export interface VectorSearchLike {
+interface VectorSearchLike {
     deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<void>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;
@@ -60,7 +60,7 @@ export interface VectorSearchLike {
  * `upsert` and `upsertNow` write inline — this design has no post-commit queue,
  * so "now" and "deferred" collapse to the same synchronous call.
  */
-export const createCtxVectors = (cirrus: CirrusVectors): VectorSearchLike => {
+const createContextVectors = (cirrus: CirrusVectors): VectorSearchLike => {
     const upsert = async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
         await cirrus.upsert(indexName, {
             embed: input.embed,
@@ -110,29 +110,29 @@ export const createCtxVectors = (cirrus: CirrusVectors): VectorSearchLike => {
 };
 
 /** A single row mutation observed by the ctx-db, fed to {@link createVectorSyncHook}. */
-export interface WriteEvent {
+interface WriteEvent {
     doc?: Record<string, unknown>;
     id: string;
     op: "delete" | "insert" | "update";
     table: string;
 }
 
-export type WriteHook = (event: WriteEvent) => Promise<void>;
+type WriteHook = (event: WriteEvent) => Promise<void>;
 
 /** Inline vector index declared via `.vectorize(field, ...)` (DSL Shape A). */
-export interface TableVectorIndexLike {
+interface TableVectorIndexLike {
     embed: VectorEmbedderLike;
     field: string;
     metadata?: ReadonlyArray<string>;
     name: string;
 }
 
-export interface TableDefinitionLike {
+interface TableDefinitionLike {
     vectorIndexes?: ReadonlyArray<TableVectorIndexLike>;
 }
 
 /** Standalone vector index declared via `defineVectorIndex(...)` (DSL Shape B). */
-export interface VectorIndexDefinitionLike {
+interface VectorIndexDefinitionLike {
     embed: VectorEmbedderLike;
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     select: (row: Record<string, unknown>) => string;
@@ -144,7 +144,7 @@ export interface VectorIndexDefinitionLike {
  * sync hook reads. Carries live `embed`/`select` closures, so the hook must be
  * built from the imported `schema` value — never a serialized descriptor.
  */
-export interface SchemaLike {
+interface SchemaLike {
     tables: Record<string, TableDefinitionLike>;
     vectorIndexes: Record<string, VectorIndexDefinitionLike>;
 }
@@ -187,7 +187,7 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * upsert can itself fail — this is best-effort, the authoritative recovery is
  * re-running the (idempotent) write.
  */
-export const createVectorSyncHook = (options: { namespace?: string; schema: SchemaLike; vectors: VectorSearchLike }): WriteHook => {
+const createVectorSyncHook = (options: { namespace?: string; schema: SchemaLike; vectors: VectorSearchLike }): WriteHook => {
     const { namespace, schema, vectors } = options;
 
     return async (event: WriteEvent): Promise<void> => {
@@ -287,3 +287,20 @@ export const createVectorSyncHook = (options: { namespace?: string; schema: Sche
         }
     };
 };
+
+export type {
+    SchemaLike,
+    TableDefinitionLike,
+    TableVectorIndexLike,
+    VectorEmbedderLike,
+    VectorIndexDefinitionLike,
+    VectorMatchesLike,
+    VectorMatchLike,
+    VectorQueryInputLike,
+    VectorRecordLike,
+    VectorSearchLike,
+    VectorUpsertInputLike,
+    WriteEvent,
+    WriteHook,
+};
+export { createContextVectors, createVectorSyncHook };
