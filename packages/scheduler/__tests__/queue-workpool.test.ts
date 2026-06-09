@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "../src/queue-workpool.js";
-import type { FunctionReference, MessageBatchLike, QueueJob, QueueLike, QueueMessageLike, QueueSendOptionsLike } from "../src/types.js";
+import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "../src/queue-workpool";
+import type { FunctionReference, MessageBatchLike, QueueJob, QueueLike, QueueMessageLike, QueueSendOptionsLike } from "../src/types";
 
 const fnRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };

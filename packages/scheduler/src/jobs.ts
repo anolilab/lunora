@@ -19,8 +19,8 @@
  * wrangler.jsonc schedule array and a dispatcher map the runtime's
  * `scheduled()` handler consumes — the user never edits wrangler by hand.
  */
-import type { FunctionReference } from "./types.js";
-import { assertValidCronExpression } from "./validate-cron.js";
+import type { FunctionReference } from "./types";
+import { assertValidCronExpression } from "./validate-cron";
 
 /** Sub-day recurrence. Exactly one unit must be provided. */
 interface IntervalSchedule {

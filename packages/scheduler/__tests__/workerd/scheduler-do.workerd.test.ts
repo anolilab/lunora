@@ -9,7 +9,7 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import type { TestSchedulerDO } from "./test-worker.js";
+import type { TestSchedulerDO } from "./test-worker";
 
 interface ScheduleResponseBody {
     id: string;

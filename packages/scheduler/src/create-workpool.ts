@@ -1,4 +1,4 @@
-import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types.js";
+import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
 
 const callDO = async <T>(options: WorkpoolOptions, path: string, body: unknown): Promise<T> => {
     const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));

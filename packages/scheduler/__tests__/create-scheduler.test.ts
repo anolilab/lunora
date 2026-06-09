@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import createScheduler from "../src/create-scheduler.js";
-import { createCronTrigger } from "../src/cron.js";
-import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord } from "../src/types.js";
+import createScheduler from "../src/create-scheduler";
+import { createCronTrigger } from "../src/cron";
+import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord } from "../src/types";
 
 const NAMESPACE_PATTERN = /namespace/;
 const ORIGIN_URL_PATTERN = /originUrl/;

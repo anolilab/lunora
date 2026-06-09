@@ -1,4 +1,4 @@
-import type { ArgsOf, CirrusSchedulerOptions, FunctionReference, RunOptions, Scheduler, ScheduleRecord } from "./types.js";
+import type { ArgsOf, CirrusSchedulerOptions, FunctionReference, RunOptions, Scheduler, ScheduleRecord } from "./types";
 
 const callDO = async <T>(options: CirrusSchedulerOptions, path: string, body: unknown): Promise<T> => {
     const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));

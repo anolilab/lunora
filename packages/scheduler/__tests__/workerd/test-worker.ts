@@ -7,9 +7,9 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
-import type { SchedulerDOState, SchedulerEnv } from "../../src/scheduler-do.js";
-import { SchedulerDO } from "../../src/scheduler-do.js";
-import type { ScheduleRecord } from "../../src/types.js";
+import type { SchedulerDOState, SchedulerEnv } from "../../src/scheduler-do";
+import { SchedulerDO } from "../../src/scheduler-do";
+import type { ScheduleRecord } from "../../src/types";
 
 interface Env {
     SCHEDULER: DurableObjectNamespace<TestSchedulerDO>;

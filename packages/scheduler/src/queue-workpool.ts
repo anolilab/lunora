@@ -29,7 +29,7 @@ import type {
     QueueSendOptionsLike,
     QueueWorkpool,
     QueueWorkpoolOptions,
-} from "./types.js";
+} from "./types";
 
 /** Strip trailing slashes from an origin so the dispatch path joins cleanly. */
 const trimTrailingSlashes = (value: string): string => {

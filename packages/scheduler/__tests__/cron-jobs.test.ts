@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import type { CronScheduleKind } from "../src/jobs.js";
-import { compileCronSchedule, cronJobs } from "../src/jobs.js";
-import type { FunctionReference } from "../src/types.js";
+import type { CronScheduleKind } from "../src/jobs";
+import { compileCronSchedule, cronJobs } from "../src/jobs";
+import type { FunctionReference } from "../src/types";
 
 interface ParityCase {
     expected: string;

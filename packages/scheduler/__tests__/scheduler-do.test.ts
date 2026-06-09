@@ -1,8 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { SchedulerDO } from "../src/scheduler-do.js";
-import type { ScheduleRecord } from "../src/types.js";
-import { createFakeSocket, createFakeState, createFakeStateWithSockets } from "./fake-state.js";
+import { SchedulerDO } from "../src/scheduler-do";
+import type { ScheduleRecord } from "../src/types";
+import { createFakeSocket, createFakeState, createFakeStateWithSockets } from "./fake-state";
 
 interface ScheduleResponseBody {
     id: string;

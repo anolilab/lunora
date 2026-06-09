@@ -1,4 +1,4 @@
-import type { SchedulerDOState } from "../src/scheduler-do.js";
+import type { SchedulerDOState } from "../src/scheduler-do";
 
 export const createFakeState = (): SchedulerDOState & {
     alarm: number | null;

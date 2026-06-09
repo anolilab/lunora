@@ -1,4 +1,4 @@
-import type { RetryPolicy, ScheduleRecord } from "./types.js";
+import type { RetryPolicy, ScheduleRecord } from "./types";
 
 /**
  * Minimal projection of `DurableObjectState` for the SchedulerDO. Declared

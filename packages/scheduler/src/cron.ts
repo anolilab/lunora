@@ -1,5 +1,5 @@
-import type { FunctionReference } from "./types.js";
-import { assertValidCronExpression } from "./validate-cron.js";
+import type { FunctionReference } from "./types";
+import { assertValidCronExpression } from "./validate-cron";
 
 interface CronTriggerOptions {
     /** Args passed to the function. */

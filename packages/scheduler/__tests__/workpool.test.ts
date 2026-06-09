@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import createWorkpool from "../src/create-workpool.js";
-import { SchedulerDO } from "../src/scheduler-do.js";
-import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord } from "../src/types.js";
-import { createFakeState } from "./fake-state.js";
+import createWorkpool from "../src/create-workpool";
+import { SchedulerDO } from "../src/scheduler-do";
+import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord } from "../src/types";
+import { createFakeState } from "./fake-state";
 
 interface ScheduleResponseBody {
     id: string;
