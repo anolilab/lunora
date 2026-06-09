@@ -1,6 +1,7 @@
 import type { CustomAdapter } from "better-auth/adapters";
 import { createAdapterFactory } from "better-auth/adapters";
 
+import { createSqlAuthStore, d1Executor } from "./sql-store";
 import type { AuthRow, AuthStore } from "./store";
 
 // better-auth's `CustomAdapter` methods are generic over the caller's row type;
@@ -82,4 +83,22 @@ const cirrusAuthAdapter = (store: AuthStore): ReturnType<typeof createAdapterFac
         },
     });
 
-export default cirrusAuthAdapter;
+/**
+ * One-liner for the common case: a better-auth `database` backed by a Cloudflare
+ * D1 binding, via Cirrus's SQL store — equivalent to
+ * `cirrusAuthAdapter(createSqlAuthStore(d1Executor(d1)))`.
+ *
+ * Prefer this over passing the raw `env.DB` as `database`. With raw D1,
+ * better-auth resolves its Kysely adapter through a runtime `await import(...)`
+ * inside `auth.$context`, and that dynamic import never settles under
+ * `@cloudflare/vite-plugin`'s worker runner — so it hangs *every* auth request
+ * in `pnpm dev` (a standalone `wrangler dev` or a deployed worker bundle it
+ * up-front, so they're unaffected — which makes the hang baffling to debug).
+ * This explicit adapter skips that import entirely, so dev and prod behave the
+ * same. The migration instance is the one exception — it wants raw `env.DB` so
+ * `ensureMigrated`'s Kysely migrator can create the tables (its `$context` is
+ * never resolved, so the hang doesn't apply there).
+ */
+const cirrusD1Adapter = (d1: Parameters<typeof d1Executor>[0]): ReturnType<typeof cirrusAuthAdapter> => cirrusAuthAdapter(createSqlAuthStore(d1Executor(d1)));
+
+export { cirrusAuthAdapter, cirrusD1Adapter };

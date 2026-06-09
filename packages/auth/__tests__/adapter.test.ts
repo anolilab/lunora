@@ -1,9 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import cirrusAuthAdapter from "../src/adapter";
+import { cirrusAuthAdapter, cirrusD1Adapter } from "../src/adapter";
 import { createAuth } from "../src/create-auth";
 import type { AuthWhereClause } from "../src/store";
 import { createMemoryAuthStore, matchesWhere } from "../src/store";
+
+/** A minimal D1 binding (no-op reads/writes) — enough to wire the adapter. */
+const fakeD1 = {
+    prepare: () => {
+        return {
+            bind: () => {
+                return {
+                    all: async () => {
+                        return { results: [] };
+                    },
+                    run: async () => undefined,
+                };
+            },
+        };
+    },
+};
 
 const clause = (
     field: string,
@@ -19,6 +35,19 @@ const clause = (
         value,
     };
 };
+
+describe("cirrusD1Adapter", () => {
+    it("wires a D1 binding into a usable better-auth database (no hang-prone raw D1)", () => {
+        expect.assertions(2);
+
+        const adapter = cirrusD1Adapter(fakeD1);
+        const auth = createAuth({ database: adapter, secret: "s".repeat(32) });
+
+        expect(adapter).toBeDefined();
+        // The whole wiring path constructs — `auth.handler` is the request entry.
+        expect(typeof auth.handler).toBe("function");
+    });
+});
 
 describe("matchesWhere", () => {
     const row = { age: 30, email: "Ada@Example.com", name: "Ada" };

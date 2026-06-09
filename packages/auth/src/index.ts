@@ -1,4 +1,4 @@
-export { default as cirrusAuthAdapter } from "./adapter";
+export { cirrusAuthAdapter, cirrusD1Adapter } from "./adapter";
 export type {
     AuthAccount,
     AuthAdmin,

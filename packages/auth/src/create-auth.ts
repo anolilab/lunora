@@ -4,14 +4,17 @@ import { betterAuth } from "better-auth";
 import { validateSessionPolicy } from "./session";
 
 /**
- * Cirrus's options pass straight through to better-auth — the only thing we
- * provide is the convention that `database` defaults to `env.DB` (a Cloudflare
- * D1 binding) and `secret` is required so we surface a clear error if it's
- * missing instead of letting better-auth's runtime check fire later.
+ * Cirrus's options pass straight through to better-auth — the only thing we add
+ * is requiring `secret` up front so a misconfigured deployment fails loudly
+ * instead of at the first sign-in.
  *
- * better-auth's `database` field accepts a D1Database directly (as well as a
- * Kysely instance / dialect), so passing `env.DB` is sufficient — no extra
- * adapter wiring needed.
+ * For `database`, prefer `cirrusD1Adapter` (`database: cirrusD1Adapter(env.DB)`)
+ * over passing the raw `env.DB`. better-auth *does* accept a D1Database directly,
+ * but it then resolves its Kysely adapter via a runtime `await import(...)` inside
+ * `auth.$context` — and that import never settles under `@cloudflare/vite-plugin`'s
+ * worker runner, hanging every auth request in `pnpm dev`. The explicit adapter
+ * skips it, so dev and prod behave the same. (Raw `env.DB` is still correct for
+ * the migration-only instance — see `cirrusD1Adapter`'s note.)
  *
  * Session rotation / richer session policies are configured via the `session`
  * field (a `SessionPolicy`); Cirrus validates it for obviously-broken
@@ -39,7 +42,11 @@ export const createAuth = (options: CirrusAuthOptions): CirrusAuth => {
     // misconfigured, so fail loudly at construction time rather than at the
     // first sign-in attempt.
     if (!options.secret || options.secret.trim() === "") {
-        throw new Error("@cirrus/auth: `secret` is required");
+        throw new Error(
+            "@cirrus/auth: `secret` is required. Set AUTH_SECRET locally in .dev.vars " +
+                '(`cirrus env set AUTH_SECRET "$(openssl rand -hex 32)"`), and in production ' +
+                "with `wrangler secret put AUTH_SECRET`.",
+        );
     }
 
     // Catch obviously-broken session durations (negative / non-finite) at

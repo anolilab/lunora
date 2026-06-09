@@ -23,6 +23,12 @@ describe("createAuth", () => {
         expect(() => createAuth({ secret: "   " })).toThrow(SECRET_PATTERN);
     });
 
+    it("the missing-secret error points at AUTH_SECRET / .dev.vars", () => {
+        expect.assertions(2);
+        expect(() => createAuth({ secret: "" })).toThrow(/AUTH_SECRET/);
+        expect(() => createAuth({ secret: "" })).toThrow(/\.dev\.vars/);
+    });
+
     it("returns an instance with handler + api + options", () => {
         expect.assertions(2);
 

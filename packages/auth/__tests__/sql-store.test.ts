@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import cirrusAuthAdapter from "../src/adapter";
+import { cirrusAuthAdapter } from "../src/adapter";
 import { createAuth } from "../src/create-auth";
 import type { SqlExecutor } from "../src/sql-store";
 import { createSqlAuthStore } from "../src/sql-store";
