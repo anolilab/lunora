@@ -1,0 +1,13 @@
+# Local dev secrets for the blog worker (gitignored as `.dev.vars`).
+# `cirrus dev` / the Vite dev server offer to generate `.dev.vars` from this
+# file on first run — secret placeholders below are auto-filled. Or by hand:
+#
+#   cp .dev.vars.example .dev.vars   # then fill in
+#
+# Generate a strong secret with: openssl rand -hex 32
+
+# Required — the worker throws "AUTH_SECRET is required" without it.
+AUTH_SECRET="replace-with-openssl-rand-hex-32"
+
+# Base URL better-auth resolves callback URLs against — the Vite dev origin.
+AUTH_URL="http://localhost:5173"

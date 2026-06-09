@@ -1,5 +1,5 @@
 import type { CirrusAuth } from "@cirrus/auth";
-import { cirrusAuthAdapter, createAuth, createSqlAuthStore, d1Executor, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
+import { cirrusD1Adapter, createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
@@ -77,7 +77,7 @@ const authOptions = (env: Env): Parameters<typeof createAuth>[0] => {
 // its Kysely adapter through a runtime `await import(...)` in `auth.$context`
 // that hangs under `@cloudflare/vite-plugin`'s worker module runner (`pnpm dev`).
 // An explicit adapter skips that import; dev matches a deployed worker.
-const buildAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions(env), database: cirrusAuthAdapter(createSqlAuthStore(d1Executor(env.DB as never))) });
+const buildAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions(env), database: cirrusD1Adapter(env.DB as never) });
 
 // Raw-D1 instance used only to drive `ensureMigrated` (Kysely migrator → tables).
 const buildMigrationAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions(env), database: env.DB as never });

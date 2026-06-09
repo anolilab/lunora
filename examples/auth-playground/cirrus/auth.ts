@@ -1,5 +1,5 @@
 import type { CirrusAuthOptions } from "@cirrus/auth";
-import { cirrusAuthAdapter, createAuth, createSqlAuthStore, d1Executor } from "@cirrus/auth";
+import { cirrusD1Adapter, createAuth } from "@cirrus/auth";
 import { admin, organization } from "@cirrus/auth/plugins";
 
 /**
@@ -23,15 +23,11 @@ const options = (env: { AUTH_SECRET: string }): CirrusAuthOptions => ({
 
 /**
  * Runtime auth instance, backed by `@cirrus/auth`'s SQL adapter over D1.
- *
- * We pass an explicit adapter rather than the raw `env.DB`: with raw D1,
- * better-auth resolves its Kysely adapter via a runtime `await import(...)`
- * inside `auth.$context`, which never settles under `@cloudflare/vite-plugin`'s
- * worker module runner — hanging every auth request in `pnpm dev`. An explicit
- * adapter skips that import, so dev and a deployed worker behave the same.
+ * `cirrusD1Adapter` wires the adapter explicitly so the better-auth Kysely
+ * dynamic-import doesn't hang `pnpm dev` (see its doc comment).
  */
 export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }): ReturnType<typeof createAuth> =>
-    createAuth({ ...options(env), database: cirrusAuthAdapter(createSqlAuthStore(d1Executor(env.DB as never))) });
+    createAuth({ ...options(env), database: cirrusD1Adapter(env.DB as never) });
 
 /**
  * Migration-only instance wired to raw D1 so `ensureMigrated`'s Kysely migrator

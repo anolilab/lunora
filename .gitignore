@@ -89,6 +89,11 @@ dist/
 # Wrangler local state
 .wrangler/
 
+# Local dev secrets (Cloudflare Workers) — never commit; keep the example.
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
 # Playwright artifacts
 test-results/
 playwright-report/

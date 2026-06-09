@@ -1,5 +1,5 @@
 import type { CirrusAuth, CirrusAuthOptions } from "@cirrus/auth";
-import { cirrusAuthAdapter, createAuth, createAuthAdmin, createSqlAuthStore, d1Executor, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
+import { cirrusD1Adapter, createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import { admin, organization, passkey, twoFactor } from "@cirrus/auth/plugins";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
@@ -145,20 +145,15 @@ const authOptions = (env: Env): CirrusAuthOptions => {
 
 /**
  * The runtime auth instance, backed by `@cirrus/auth`'s SQL adapter over D1.
- *
- * We deliberately do NOT pass the raw `env.DB` (a D1 binding) as `database`:
- * better-auth would then resolve its Kysely adapter via a runtime
- * `await import("better-auth/adapters/kysely-adapter")` inside `auth.$context`,
- * and that dynamic import never settles under `@cloudflare/vite-plugin`'s worker
- * module runner — hanging every auth request in dev. Passing an explicit adapter
- * makes better-auth use it directly and skip that import entirely, so `pnpm dev`
- * (embedded worker) and a deployed worker behave the same. The SQL store issues
- * no DDL; table creation stays on the Kysely migration path ({@link migrateAuth}).
+ * `cirrusD1Adapter` wires the adapter explicitly rather than passing the raw
+ * `env.DB`, so the better-auth Kysely dynamic-import doesn't hang the embedded
+ * worker under `@cloudflare/vite-plugin` (see its doc comment). Table creation
+ * stays on the Kysely migration path ({@link migrateAuth}).
  */
 const buildAuth = (env: Env): CirrusAuth =>
     createAuth({
         ...authOptions(env),
-        database: cirrusAuthAdapter(createSqlAuthStore(d1Executor(env.DB as never))),
+        database: cirrusD1Adapter(env.DB as never),
     });
 
 /**
