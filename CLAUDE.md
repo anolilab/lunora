@@ -100,6 +100,14 @@ Every package follows the same shape:
 - `package.json` — ESM (`"type": "module"`), `"sideEffects": false`, conditional exports
 - `.releaserc.json` — extends `@anolilab/semantic-release-preset/pnpm` (multi-semantic-release picks it up)
 
+### Module imports — no `.js` extensions
+
+Every package compiles with `"moduleResolution": "bundler"` (see `tsconfig.base.json`). Relative imports must therefore be written **without** a file extension — `import { x } from "./foo"`, never `import { x } from "./foo.js"`. Hand-written `.js` extensions are redundant clutter; do not add them and strip any you encounter.
+
+**The one exception is `@cirrus/codegen`.** Its emitter (`packages/codegen/src/emit.ts`) deliberately writes `.js` extensions into the code it _generates_, because the emitted `_generated/*` files are consumed under NodeNext where the extension is mandatory. So `.js` is correct and required inside: codegen template/string literals, the `_generated/` output, golden fixtures, and the test assertions that verify emitted output. Leave those alone — only the codegen package's own real `import`/`export` statements follow the no-extension rule.
+
+When stripping extensions in bulk, use an AST-aware codemod (e.g. ts-morph, already a dependency) rather than a regex — only real import/export/dynamic-`import()`/`require()`/`vi.mock()` specifiers should change, never extension-bearing strings inside comments, assertions, or template-literal code fixtures.
+
 ### Vis Tags on `project.json`
 
 Each package has tags for categorization:
