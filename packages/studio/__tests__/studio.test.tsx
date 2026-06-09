@@ -2,10 +2,10 @@ import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { ADMIN_FUNCTIONS } from "../src/admin.js";
-import { Studio } from "../src/studio.js";
-import type { MockClientHooks } from "./mock-client.js";
-import { createMockClient } from "./mock-client.js";
+import { ADMIN_FUNCTIONS } from "../src/admin";
+import { Studio } from "../src/studio";
+import type { MockClientHooks } from "./mock-client";
+import { createMockClient } from "./mock-client";
 
 const createClient = (): MockClientHooks =>
     createMockClient({
@@ -16,6 +16,14 @@ const createClient = (): MockClientHooks =>
 
             if (reference === ADMIN_FUNCTIONS.migrationStatus) {
                 return { migrations: [] };
+            }
+
+            if (reference === ADMIN_FUNCTIONS.getSecurityAudit) {
+                return { findings: [] };
+            }
+
+            if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
+                return { functions: [], sinceMs: 0 };
             }
 
             return { columns: [], rows: [], total: 0 };
@@ -29,32 +37,32 @@ const renderStudio = (mock: MockClientHooks) => (
 );
 
 describe("studio", () => {
-    it("shows a rail entry per area and the active area's tabs", async () => {
-        expect.assertions(9);
+    it("shows a rail entry per domain and the active domain's sub-pages", async () => {
+        expect.assertions(13);
 
         render(renderStudio(createClient()));
 
         // The two-zone shell renders inside the router's root route (resolved a
         // tick after mount), so await the rail before the synchronous queries.
-        for (const group of ["database", "logic", "storage", "auth", "observability", "deployment"]) {
+        for (const group of ["home", "tableEditor", "sql", "database", "auth", "storage", "reports", "advisors", "logs", "settings"]) {
             // eslint-disable-next-line no-await-in-loop -- after the first resolves the rest are already present.
-            expect(await screen.findByTestId(`dash-rail-${group}`)).toBeDefined();
+            await expect(screen.findByTestId(`dash-rail-${group}`)).resolves.toBeDefined();
         }
 
-        // The default area (database) lists its tabs in the secondary nav; tabs
-        // in other areas aren't rendered until that rail entry is selected.
-        expect(screen.getByTestId("dash-tab-data")).toBeDefined();
-        expect(screen.getByTestId("dash-tab-schema")).toBeDefined();
+        // The default domain (home) lists its sub-page in the secondary nav;
+        // sub-pages in other domains aren't rendered until their rail entry is selected.
+        expect(screen.getByTestId("dash-tab-home")).toBeDefined();
+        expect(screen.queryByTestId("dash-tab-data")).toBeNull();
         expect(screen.queryByTestId("dash-tab-schedule")).toBeNull();
     });
 
-    it("renders the schedule panel via the client when its area + tab are selected", async () => {
+    it("renders the schedule panel via the client when its domain + sub-page are selected", async () => {
         expect.assertions(1);
 
         render(renderStudio(createClient()));
 
-        // schedule lives in the "logic" area — open the rail entry, then the tab.
-        fireEvent.click(await screen.findByTestId("dash-rail-logic"));
+        // schedule lives in the "logs" domain — open the rail entry, then the sub-page.
+        fireEvent.click(await screen.findByTestId("dash-rail-logs"));
         fireEvent.click(await screen.findByTestId("dash-tab-schedule"));
 
         const scheduledJobs = await screen.findByTestId("cirrus-scheduled-jobs");
@@ -62,16 +70,27 @@ describe("studio", () => {
         expect(scheduledJobs).toBeDefined();
     });
 
-    it("switches the active panel when a tab is clicked", async () => {
+    it("renders the Security Advisor when the Advisors domain + Security sub-page are selected", async () => {
         expect.assertions(1);
 
         render(renderStudio(createClient()));
 
-        fireEvent.click(await screen.findByTestId("dash-rail-logic"));
+        fireEvent.click(await screen.findByTestId("dash-rail-advisors"));
+        fireEvent.click(await screen.findByTestId("dash-tab-security"));
+
+        await expect(screen.findByTestId("cirrus-security-advisor")).resolves.toBeDefined();
+    });
+
+    it("switches the active panel when a sub-page is clicked", async () => {
+        expect.assertions(1);
+
+        render(renderStudio(createClient()));
+
+        fireEvent.click(await screen.findByTestId("dash-rail-database"));
         fireEvent.click(await screen.findByTestId("dash-tab-migrations"));
 
         await screen.findByTestId("cirrus-migrations");
 
-        expect(screen.queryByTestId("cirrus-data-browser")).toBeNull();
+        expect(screen.queryByTestId("cirrus-home")).toBeNull();
     });
 });

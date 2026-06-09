@@ -3,20 +3,21 @@ import { CirrusProvider } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Badge } from "./components/ui/badge.js";
-import { Button } from "./components/ui/button.js";
-import { Input } from "./components/ui/input.js";
-import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover.js";
-import { TooltipProvider } from "./components/ui/tooltip.js";
-import ConnectionBadge from "./connection-badge.js";
-import type { StudioProps } from "./studio.js";
-import { Studio } from "./studio.js";
-import { ErrorBoundary } from "./error-boundary.js";
-import { createStudioI18n, useT } from "./i18n-context.js";
-import { StudioI18nProvider } from "./i18n-provider.js";
-import STUDIO_ROOT_CLASS from "./theme-constants.js";
-import { loadToken, saveToken } from "./token-storage.js";
-import useDebounced from "./use-debounced.js";
+import { openCommandPalette } from "./command-palette";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
+import { TooltipProvider } from "./components/ui/tooltip";
+import ConnectionBadge from "./connection-badge";
+import { ErrorBoundary } from "./error-boundary";
+import { createStudioI18n, useT } from "./i18n-context";
+import { StudioI18nProvider } from "./i18n-provider";
+import type { StudioProps } from "./studio";
+import { Studio } from "./studio";
+import STUDIO_ROOT_CLASS from "./theme-constants";
+import { loadToken, saveToken } from "./token-storage";
+import useDebounced from "./use-debounced";
 
 interface StudioAppProps {
     /**
@@ -39,11 +40,6 @@ interface StudioAppProps {
      * same worker (the `@cirrus/vite` dev route) or proxied to it.
      */
     readonly baseUrl?: string;
-    /** Forwarded to the composed {@link Studio} (functions, initialShardKey, scheduled overrides). */
-    readonly studio?: Omit<StudioProps, "children" | "i18n" | "locale">;
-
-    /** UI language for the studio's own strings. Defaults to `en`. */
-    readonly locale?: string;
 
     /**
      * Inject a pre-built client instead of constructing one from `baseUrl` +
@@ -52,6 +48,12 @@ interface StudioAppProps {
      * `baseUrl`/`adminToken` are ignored and this client is never closed here.
      */
     readonly client?: CirrusClient;
+
+    /** UI language for the studio's own strings. Defaults to `en`. */
+    readonly locale?: string;
+
+    /** Forwarded to the composed {@link Studio} (functions, initialShardKey, scheduled overrides). */
+    readonly studio?: Omit<StudioProps, "children" | "i18n" | "locale">;
 }
 
 /**
@@ -70,9 +72,9 @@ const BrandMark = (): ReactElement => (
 interface StudioAppBodyProps {
     readonly basePath?: string;
     readonly clearToken: () => void;
-    readonly studio?: StudioAppProps["studio"];
     readonly onToggleTheme: () => void;
     readonly onTokenChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    readonly studio?: StudioAppProps["studio"];
     readonly theme: "dark" | "light";
     readonly token: string;
 }
@@ -98,10 +100,12 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                     </Badge>
                 </span>
 
-                {/* Center command/search affordance — a Studio-style ⌘K entry. */}
+                {/* Center command/search affordance — opens the ⌘K palette
+                    rendered inside the studio shell (below the router). */}
                 <button
                     className="mx-auto hidden h-7 w-72 items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted md:flex"
                     data-testid="dash-app-search"
+                    onClick={openCommandPalette}
                     type="button"
                 >
                     <svg aria-hidden="true" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
@@ -123,7 +127,16 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                             className="flex h-7 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
                             data-testid="dash-app-connect"
                         >
-                            <svg aria-hidden="true" className="size-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} viewBox="0 0 24 24">
+                            <svg
+                                aria-hidden="true"
+                                className="size-3.5"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={1.7}
+                                viewBox="0 0 24 24"
+                            >
                                 <path d="M9 7 5.5 10.5a4 4 0 0 0 0 5.7l.5.5a4 4 0 0 0 5.7 0L15 13M15 17l3.5-3.5a4 4 0 0 0 0-5.7l-.5-.5a4 4 0 0 0-5.7 0L9 11" />
                             </svg>
                             {token === "" ? t("Connect") : t("Connected")}
@@ -152,7 +165,14 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                                     </p>
                                 )}
                                 {token !== "" && (
-                                    <Button className="self-start" data-testid="dash-app-clear-token" onClick={clearToken} size="sm" type="button" variant="outline">
+                                    <Button
+                                        className="self-start"
+                                        data-testid="dash-app-clear-token"
+                                        onClick={clearToken}
+                                        size="sm"
+                                        type="button"
+                                        variant="outline"
+                                    >
                                         {t("Clear")}
                                     </Button>
                                 )}
@@ -172,12 +192,30 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                         type="button"
                     >
                         {theme === "dark" ? (
-                            <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} viewBox="0 0 24 24">
+                            <svg
+                                aria-hidden="true"
+                                className="size-4"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={1.7}
+                                viewBox="0 0 24 24"
+                            >
                                 <circle cx="12" cy="12" r="4" />
                                 <path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
                             </svg>
                         ) : (
-                            <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} viewBox="0 0 24 24">
+                            <svg
+                                aria-hidden="true"
+                                className="size-4"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={1.7}
+                                viewBox="0 0 24 24"
+                            >
                                 <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
                             </svg>
                         )}
@@ -268,12 +306,11 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
     // time the admin pastes a new token. An injected client is owned by the
     // caller, so it's left alone.
     useEffect(
-        () =>
-            (): void => {
-                if (injectedClient === undefined) {
-                    client.close();
-                }
-            },
+        () => (): void => {
+            if (injectedClient === undefined) {
+                client.close();
+            }
+        },
         [client, injectedClient],
     );
 

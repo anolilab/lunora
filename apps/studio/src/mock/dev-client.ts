@@ -56,9 +56,36 @@ const PAGES: Record<string, { columns: string[]; rows: Record<string, unknown>[]
 };
 
 const FUNCTIONS = [
-    { calls: 1280, errors: 2, lastCalledAt: 1_749_300_120_000, lastErrorAt: null, lastErrorMessage: null, maxDurationMs: 41, path: "messages:list", totalDurationMs: 7100 },
-    { calls: 642, errors: 0, lastCalledAt: 1_749_300_020_000, lastErrorAt: null, lastErrorMessage: null, maxDurationMs: 28, path: "messages:send", totalDurationMs: 3300 },
-    { calls: 87, errors: 5, lastCalledAt: 1_749_299_900_000, lastErrorAt: 1_749_299_700_000, lastErrorMessage: "Rate limited", maxDurationMs: 120, path: "posts:publish", totalDurationMs: 2400 },
+    {
+        calls: 1280,
+        errors: 2,
+        lastCalledAt: 1_749_300_120_000,
+        lastErrorAt: null,
+        lastErrorMessage: null,
+        maxDurationMs: 41,
+        path: "messages:list",
+        totalDurationMs: 7100,
+    },
+    {
+        calls: 642,
+        errors: 0,
+        lastCalledAt: 1_749_300_020_000,
+        lastErrorAt: null,
+        lastErrorMessage: null,
+        maxDurationMs: 28,
+        path: "messages:send",
+        totalDurationMs: 3300,
+    },
+    {
+        calls: 87,
+        errors: 5,
+        lastCalledAt: 1_749_299_900_000,
+        lastErrorAt: 1_749_299_700_000,
+        lastErrorMessage: "Rate limited",
+        maxDurationMs: 120,
+        path: "posts:publish",
+        totalDurationMs: 2400,
+    },
 ];
 
 const now = 1_749_300_120_000;
@@ -106,7 +133,11 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 attempts: 214,
                 failureRate: 0.04,
                 failures: 9,
-                history: Array.from({ length: 30 }, (_, index) => ({ attempts: 6 + (index % 4), bucketMs: now - (30 - index) * 60_000, failures: index % 9 === 0 ? 1 : 0 })),
+                history: Array.from({ length: 30 }, (_, index) => ({
+                    attempts: 6 + (index % 4),
+                    bucketMs: now - (30 - index) * 60_000,
+                    failures: index % 9 === 0 ? 1 : 0,
+                })),
                 sinceMs: now - 3_600_000,
             };
         }
@@ -131,8 +162,27 @@ const dataFor = (reference: string, args: unknown): unknown => {
         case ADMIN_FUNCTIONS.getRequestLog: {
             return {
                 entries: [
-                    { durationMs: 12, functionPath: "messages:list", outcome: "ok", seq: 9001, subscriptionsReRun: 0, tablesRead: ["messages"], tablesWritten: [], ts: now - 4000 },
-                    { durationMs: 120, errorMessage: "Rate limited", functionPath: "posts:publish", outcome: "error", seq: 9000, subscriptionsReRun: 0, tablesRead: ["posts"], tablesWritten: [], ts: now - 9000 },
+                    {
+                        durationMs: 12,
+                        functionPath: "messages:list",
+                        outcome: "ok",
+                        seq: 9001,
+                        subscriptionsReRun: 0,
+                        tablesRead: ["messages"],
+                        tablesWritten: [],
+                        ts: now - 4000,
+                    },
+                    {
+                        durationMs: 120,
+                        errorMessage: "Rate limited",
+                        functionPath: "posts:publish",
+                        outcome: "error",
+                        seq: 9000,
+                        subscriptionsReRun: 0,
+                        tablesRead: ["posts"],
+                        tablesWritten: [],
+                        ts: now - 9000,
+                    },
                 ],
             };
         }
@@ -144,6 +194,17 @@ const dataFor = (reference: string, args: unknown): unknown => {
                     { kind: "secret", name: "AUTH_SECRET", value: "••••••••" },
                     { bindingType: "durable-object", kind: "binding", name: "SHARD_DO", value: null },
                     { bindingType: "r2", kind: "binding", name: "UPLOADS", value: null },
+                ],
+            };
+        }
+        case ADMIN_FUNCTIONS.getSecurityAudit: {
+            // Representative of this mock's dev profile (see getSettings): a short
+            // token, the WS gate open (info in dev), and the dev-mode request log.
+            return {
+                findings: [
+                    { detail: { length: 8, min: 24 }, kind: "admin-token-weak", level: "warning" },
+                    { kind: "dev-args-unredacted", level: "warning" },
+                    { kind: "ws-gate-open", level: "info" },
                 ],
             };
         }

@@ -29,6 +29,7 @@ export const ADMIN_FUNCTIONS = {
     getMetrics: "__cirrus_admin__:getMetrics",
     getPitrBookmark: "__cirrus_admin__:getPitrBookmark",
     getRequestLog: "__cirrus_admin__:getRequestLog",
+    getSecurityAudit: "__cirrus_admin__:getSecurityAudit",
     getSettings: "__cirrus_admin__:getSettings",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
@@ -383,6 +384,38 @@ export interface DeployInfo {
 export interface SettingsResult {
     deploy: DeployInfo;
     settings: SettingEntry[];
+}
+
+/**
+ * Ordering/visual weight of a {@link SecurityFinding}, mirroring `@cirrus/do`'s
+ * `SecurityFindingLevel`. Shares the studio's insight-severity vocabulary so the
+ * Security and Performance advisors render with one badge palette.
+ */
+export type SecurityFindingLevel = "error" | "info" | "warning";
+
+/**
+ * Which deployment-level security heuristic fired, mirroring `@cirrus/do`'s
+ * `SecurityFindingKind`. The studio maps each kind to a localized title,
+ * explanation, and remediation hint; the wire payload carries only the kind,
+ * level, and optional `detail`.
+ */
+export type SecurityFindingKind = "admin-token-weak" | "dev-args-unredacted" | "ws-gate-open";
+
+/**
+ * One detected security issue from `__cirrus_admin__:getSecurityAudit`, mirroring
+ * `@cirrus/do`'s `SecurityFinding`. `detail` carries kind-specific context the
+ * studio interpolates into the localized copy (e.g. `{ length, min }` for a weak
+ * admin token); absent when the kind needs none.
+ */
+export interface SecurityFinding {
+    detail?: Record<string, unknown>;
+    kind: SecurityFindingKind;
+    level: SecurityFindingLevel;
+}
+
+/** Payload of a `__cirrus_admin__:getSecurityAudit` call, mirroring `@cirrus/do`'s `SecurityAuditResult`: every finding, worst-first. */
+export interface SecurityAuditResult {
+    findings: SecurityFinding[];
 }
 
 /**

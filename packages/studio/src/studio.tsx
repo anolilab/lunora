@@ -14,30 +14,34 @@ import {
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo } from "react";
 
-import { AuditPanel } from "./audit-panel.js";
-import { Skeleton } from "./components/ui/skeleton.js";
-import { DataBrowser } from "./data-browser.js";
-import { ErrorBoundary } from "./error-boundary.js";
-import { ExportImportPanel } from "./export-import.js";
-import { FileBrowser } from "./file-browser.js";
-import { FunctionRunner } from "./function-runner.js";
-import { FunctionStatsPanel } from "./function-stats.js";
-import { GlobalDataBrowser } from "./global-data-browser.js";
-import { HealthPanel } from "./health-panel.js";
-import { useT } from "./i18n-context.js";
-import { StudioI18nProvider } from "./i18n-provider.js";
-import { InsightsPanel } from "./insights-panel.js";
-import { fireAndForget } from "./internal.js";
-import { LogsPanel } from "./logs-panel.js";
-import { MetricsPanel } from "./metrics-panel.js";
-import { MigrationsPanel } from "./migrations.js";
-import { PitrPanel } from "./pitr-panel.js";
-import type { ScheduledJobsProps } from "./scheduled-jobs.js";
-import { ScheduledJobs } from "./scheduled-jobs.js";
-import { SchemaViewer } from "./schema-viewer.js";
-import { SettingsPanel } from "./settings-panel.js";
-import type { FunctionDescriptor } from "./types.js";
-import { UsersPanel } from "./users-panel.js";
+import { AuditPanel } from "./audit-panel";
+import type { CommandItem } from "./command-palette";
+import { CommandPalette } from "./command-palette";
+import { Skeleton } from "./components/ui/skeleton";
+import { DataBrowser } from "./data-browser";
+import { ErrorBoundary } from "./error-boundary";
+import { ExportImportPanel } from "./export-import";
+import { FileBrowser } from "./file-browser";
+import { FunctionRunner } from "./function-runner";
+import { FunctionStatsPanel } from "./function-stats";
+import { GlobalDataBrowser } from "./global-data-browser";
+import { HealthPanel } from "./health-panel";
+import { HomePanel } from "./home-panel";
+import { useT } from "./i18n-context";
+import { StudioI18nProvider } from "./i18n-provider";
+import { InsightsPanel } from "./insights-panel";
+import { fireAndForget } from "./internal";
+import { LogsPanel } from "./logs-panel";
+import { MetricsPanel } from "./metrics-panel";
+import { MigrationsPanel } from "./migrations";
+import { PitrPanel } from "./pitr-panel";
+import type { ScheduledJobsProps } from "./scheduled-jobs";
+import { ScheduledJobs } from "./scheduled-jobs";
+import { SchemaViewer } from "./schema-viewer";
+import SecurityAdvisorPanel from "./security-advisor-panel";
+import { SettingsPanel } from "./settings-panel";
+import type { FunctionDescriptor } from "./types";
+import { UsersPanel } from "./users-panel";
 
 /** Identifier for each built-in studio tab. */
 type StudioTab =
@@ -48,6 +52,7 @@ type StudioTab =
     | "functions"
     | "globals"
     | "health"
+    | "home"
     | "insights"
     | "logs"
     | "metrics"
@@ -55,6 +60,7 @@ type StudioTab =
     | "pitr"
     | "schedule"
     | "schema"
+    | "security"
     | "settings"
     | "users";
 
@@ -106,8 +112,13 @@ interface StudioProps {
 /** Props the inner shell renders with — everything except the i18n wiring. */
 type StudioShellProps = Omit<StudioProps, "i18n" | "locale">;
 
-/** Stable identifier for each sidebar section; the display label is localised. */
-type NavGroupKey = "auth" | "database" | "deployment" | "logic" | "observability" | "storage";
+/**
+ * Stable identifier for each icon-rail domain; the display label is localised.
+ * Mirrors the Supabase-Studio section model (Home · Table editor · SQL · Database
+ * · Auth · Storage · Reports · Advisors · Logs · Settings), the target IA in
+ * `STUDIO-REDESIGN-PLAN.md` §2.
+ */
+type NavGroupKey = "advisors" | "auth" | "database" | "home" | "logs" | "reports" | "settings" | "sql" | "storage" | "tableEditor";
 
 /**
  * 16px line glyphs (drawn at a 24-unit grid) keyed by tab. Inline so the
@@ -124,6 +135,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     functions: <path d="m9 8-4 4 4 4m6-8 4 4-4 4" />,
     globals: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0 0c2.5-2 3.8-5.3 3.8-9S14.5 5 12 3M12 21c-2.5-2-3.8-5.3-3.8-9S9.5 5 12 3M3.5 9h17M3.5 15h17" />,
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
+    home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
     metrics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
@@ -131,6 +143,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
+    security: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-2.5 8.5 2 2 4-4" />,
     settings: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6H10.5l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
     ),
@@ -139,15 +152,46 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     ),
 };
 
-/** Sidebar sections — grouped like a studio console, top to bottom. */
-const NAV_GROUPS: ReadonlyArray<{ readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> }> = [
-    { key: "database", tabs: ["data", "globals", "schema"] },
-    { key: "logic", tabs: ["functions", "migrations", "schedule"] },
-    { key: "storage", tabs: ["files", "export"] },
+/** One icon-rail domain and the sub-pages its secondary nav lists. */
+type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> };
+
+/**
+ * Icon-rail domains, top to bottom, each owning the sub-pages its secondary nav
+ * lists — the two-level Supabase model (`STUDIO-REDESIGN-PLAN.md` §2). `settings`
+ * pins to the bottom of the rail (see {@link StudioLayout}). Typed as a non-empty
+ * tuple so the first domain is a guaranteed fallback for the active-domain lookup.
+ */
+const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
+    { key: "home", tabs: ["home"] },
+    { key: "tableEditor", tabs: ["data", "globals"] },
+    { key: "sql", tabs: ["functions"] },
+    { key: "database", tabs: ["schema", "migrations", "export", "pitr"] },
     { key: "auth", tabs: ["users"] },
-    { key: "observability", tabs: ["health", "insights", "metrics", "logs", "audit"] },
-    { key: "deployment", tabs: ["settings", "pitr"] },
+    { key: "storage", tabs: ["files"] },
+    { key: "reports", tabs: ["metrics", "health"] },
+    { key: "advisors", tabs: ["security", "insights"] },
+    { key: "logs", tabs: ["logs", "audit", "schedule"] },
+    { key: "settings", tabs: ["settings"] },
 ];
+
+/**
+ * Which tab's glyph represents each rail domain. The rail shows one icon per
+ * domain (Supabase-style); the secondary nav shows a glyph per sub-page. Most
+ * domains borrow their first sub-page's icon; `database` uses the schema glyph so
+ * it reads distinct from the Table-editor cylinder.
+ */
+const GROUP_ICON_TAB: Record<NavGroupKey, StudioTab> = {
+    advisors: "security",
+    auth: "users",
+    database: "schema",
+    home: "home",
+    logs: "logs",
+    reports: "metrics",
+    settings: "settings",
+    sql: "functions",
+    storage: "files",
+    tableEditor: "data",
+};
 
 const TabIcon = ({ tab }: { readonly tab: StudioTab }): ReactElement => (
     <svg
@@ -166,31 +210,33 @@ const TabIcon = ({ tab }: { readonly tab: StudioTab }): ReactElement => (
 
 /** Flat list of every tab, in sidebar order; drives the route table. */
 const TABS = [
+    "home",
     "data",
     "globals",
-    "schema",
     "functions",
+    "schema",
     "migrations",
     "export",
-    "files",
-    "schedule",
+    "pitr",
     "users",
-    "health",
-    "insights",
+    "files",
     "metrics",
+    "health",
+    "security",
+    "insights",
     "logs",
     "audit",
+    "schedule",
     "settings",
-    "pitr",
 ] as const;
 
-/** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `data`. */
+/** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `home`. */
 const tabFromPathname = (pathname: string): StudioTab => {
     // Use the last non-empty segment so this holds whether or not the router's
     // pathname still carries a basepath prefix (`/__cirrus/logs` → `logs`).
     const slug = pathname.split("/").findLast(Boolean) ?? "";
 
-    return (TABS as ReadonlyArray<string>).includes(slug) ? (slug as StudioTab) : "data";
+    return (TABS as ReadonlyArray<string>).includes(slug) ? (slug as StudioTab) : "home";
 };
 
 /**
@@ -216,13 +262,15 @@ const StudioLayout = (): ReactElement => {
             functions: t("Functions"),
             globals: t("Global Tables"),
             health: t("Health"),
-            insights: t("Insights"),
+            home: t("Home"),
+            insights: t("Performance"),
             logs: t("Logs"),
             metrics: t("Metrics"),
             migrations: t("Migrations"),
             pitr: t("Time Travel"),
             schedule: t("Scheduled"),
             schema: t("Schema"),
+            security: t("Security"),
             settings: t("Settings"),
             users: t("Users"),
         };
@@ -230,12 +278,16 @@ const StudioLayout = (): ReactElement => {
 
     const groupLabel = useMemo<Record<NavGroupKey, string>>(() => {
         return {
+            advisors: t("Advisors"),
             auth: t("Auth"),
             database: t("Database"),
-            deployment: t("Deployment"),
-            logic: t("Logic"),
-            observability: t("Observability"),
+            home: t("Home"),
+            logs: t("Logs"),
+            reports: t("Reports"),
+            settings: t("Settings"),
+            sql: t("SQL / Functions"),
             storage: t("Storage"),
+            tableEditor: t("Table editor"),
         };
     }, [t]);
 
@@ -249,6 +301,7 @@ const StudioLayout = (): ReactElement => {
             functions: t("Run registered queries, mutations, and actions."),
             globals: t("Read-only view of your global D1 tables."),
             health: t("At-a-glance connection, error, and shard signals."),
+            home: t("Connection, health, and advisor summary for your deployment."),
             insights: t("Surface slow functions, error spikes, and cache problems."),
             logs: t("A live stream of recent function logs."),
             metrics: t("Per-shard health and aggregate metrics."),
@@ -256,6 +309,7 @@ const StudioLayout = (): ReactElement => {
             pitr: t("Restore a shard to a point in the last 30 days."),
             schedule: t("Inspect and cancel scheduled jobs."),
             schema: t("Inspect each table and its columns."),
+            security: t("Review admin gates, credentials, and log redaction."),
             settings: t("Read-only deployment config — vars, secrets, and bindings."),
             users: t("Browse auth users and their active sessions."),
         };
@@ -276,14 +330,14 @@ const StudioLayout = (): ReactElement => {
         }
     }, [current, tabLabel]);
 
-    // The active rail area is the group owning the current tab; the secondary
-    // nav lists that group's tabs. Selecting a rail icon jumps to the group's
-    // first tab. This is a two-zone console (48px icon rail + contextual nav),
-    // modelled on Supabase Studio, over the same routes — no IA change.
-    // `current` always belongs to a group, but the lookup is typed as possibly
-    // undefined; fall back to the first group (cast to the non-empty element
+    // The active rail area is the domain owning the current tab; the secondary
+    // nav lists that domain's sub-pages. Selecting a rail icon jumps to the
+    // domain's first sub-page. This is the two-zone console (48px icon rail +
+    // contextual nav) of `STUDIO-REDESIGN-PLAN.md` §2, modelled on Supabase Studio.
+    // `current` always belongs to a group, but `.find` is typed as possibly
+    // undefined; fall back to the first domain (defined by the non-empty tuple
     // type) so the shell always has an active area.
-    const activeGroup = NAV_GROUPS.find((group) => group.tabs.includes(current)) ?? (NAV_GROUPS[0] as (typeof NAV_GROUPS)[number]);
+    const activeGroup = NAV_GROUPS.find((group) => group.tabs.includes(current)) ?? NAV_GROUPS[0];
 
     const selectGroup = useCallback(
         (event: React.MouseEvent<HTMLButtonElement>): void => {
@@ -292,23 +346,32 @@ const StudioLayout = (): ReactElement => {
         [navigate],
     );
 
+    // Every navigable destination, in rail order, for the ⌘K command palette.
+    const commandItems = useMemo<CommandItem[]>(
+        () =>
+            NAV_GROUPS.flatMap((group) =>
+                group.tabs.map((tab) => {
+                    return { group: groupLabel[group.key], label: tabLabel[tab], to: `/${tab}` };
+                }),
+            ),
+        [groupLabel, tabLabel],
+    );
+
     return (
         <div className="grid min-h-0 flex-1 grid-cols-[3rem_13.5rem_minmax(0,1fr)]" data-testid="cirrus-studio">
+            <CommandPalette items={commandItems} />
             {/* Icon rail — one entry per area, settings pinned to the bottom. */}
-            <nav
-                aria-label={t("Studio areas")}
-                className="flex flex-col items-center gap-1 border-e border-border bg-sidebar py-2"
-                data-testid="dash-rail"
-            >
+            <nav aria-label={t("Studio areas")} className="flex flex-col items-center gap-1 border-e border-border bg-sidebar py-2" data-testid="dash-rail">
                 {NAV_GROUPS.map((group) => {
-                    // Every group declares at least one tab; the rail icon routes to it.
+                    // The rail icon routes to the group's first sub-page; its glyph
+                    // is the domain icon (Supabase-style), not necessarily that page's.
                     const railTab = group.tabs[0] as StudioTab;
 
                     return (
                         <button
                             aria-current={activeGroup.key === group.key ? "page" : undefined}
                             aria-label={groupLabel[group.key]}
-                            className="flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-foreground"
+                            className={`flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-foreground${group.key === "settings" ? " mt-auto" : ""}`}
                             data-tab={railTab}
                             data-testid={`dash-rail-${group.key}`}
                             key={group.key}
@@ -316,7 +379,7 @@ const StudioLayout = (): ReactElement => {
                             title={groupLabel[group.key]}
                             type="button"
                         >
-                            <TabIcon tab={railTab} />
+                            <TabIcon tab={GROUP_ICON_TAB[group.key]} />
                         </button>
                     );
                 })}
@@ -405,12 +468,12 @@ const SchemaRoutePanel = ({ initialShardKey }: { readonly initialShardKey?: stri
     return <SchemaViewer initialShardKey={initialShardKey} initialTable={initialTable} />;
 };
 
-/** Sends unknown paths back to the default tab. */
+/** Sends unknown paths back to the Home overview. */
 const NotFoundRedirect = (): null => {
     const navigate = useNavigate();
 
     useEffect(() => {
-        fireAndForget(navigate({ replace: true, to: "/data" }));
+        fireAndForget(navigate({ replace: true, to: "/home" }));
     }, [navigate]);
 
     return null;
@@ -440,6 +503,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         ),
         globals: <GlobalDataBrowser />,
         health: <HealthPanel initialShardKey={initialShardKey} />,
+        home: <HomePanel initialShardKey={initialShardKey} />,
         insights: <InsightsPanel initialShardKey={initialShardKey} />,
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
@@ -447,14 +511,15 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
         schedule: <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />,
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} />,
+        security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         users: <UsersPanel />,
     };
 
-    // `/` renders the default panel directly (no async redirect, so the first
-    // paint is synchronous); `/data` renders it too, so both URLs are valid.
+    // `/` renders the Home overview directly (no async redirect, so the first
+    // paint is synchronous); `/home` renders it too, so both URLs are valid.
     const indexRoute = createRoute({
-        component: () => panels.data,
+        component: () => panels.home,
         getParentRoute: () => rootRoute,
         path: "/",
     });
@@ -471,7 +536,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
     // Browser when a DOM `window` exists; an in-memory history under SSR/tests.
     // `"window" in globalThis` sidesteps both the typeof-undefined and the
     // always-defined-type lints that a `=== undefined` check trips.
-    const history = "window" in globalThis ? createBrowserHistory() : createMemoryHistory({ initialEntries: ["/data"] });
+    const history = "window" in globalThis ? createBrowserHistory() : createMemoryHistory({ initialEntries: ["/home"] });
 
     return createRouter({
         // When mounted under a prefix (e.g. the `/__cirrus` dev route), the router
@@ -515,16 +580,7 @@ const StudioShell = ({ basePath, dataEditable, functions, initialShardKey, sched
  * (`StudioApp` owns one for the top bar too) or the shared default — instead
  * of nesting a second, redundant provider.
  */
-export const Studio = ({
-    basePath,
-    dataEditable,
-    functions,
-    i18n,
-    initialShardKey,
-    locale,
-    scheduledCancel,
-    scheduledLoad,
-}: StudioProps): ReactElement => {
+export const Studio = ({ basePath, dataEditable, functions, i18n, initialShardKey, locale, scheduledCancel, scheduledLoad }: StudioProps): ReactElement => {
     const shell = (
         <StudioShell
             basePath={basePath}
