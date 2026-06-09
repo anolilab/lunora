@@ -386,6 +386,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                     this.recordChangedTable(delta.table);
                 },
                 cdc: config.cdc ?? false,
+                onIndexUse: this.getCtxDbIndexUseHook(),
                 onRead: options.onRead ?? this.getCtxDbReadHook(),
                 scheduler,
                 schema: schema as unknown as SchemaLike,
