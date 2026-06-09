@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import renderStudioHtml from "../src/render-html.js";
+import renderStudioHtml from "../src/render-html";
 
 describe("renderStudioHtml", () => {
     it("injects the basepath and references the given asset URLs", () => {

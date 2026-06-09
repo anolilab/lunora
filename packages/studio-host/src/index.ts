@@ -12,7 +12,7 @@
  * config injected, resolve the admin token the same way the worker does, and
  * load the prebuilt asset bytes.
  */
-export { parseDevVariable, resolveAdminToken } from "./admin-token.js";
-export { default as loadStudioAssets } from "./assets.js";
-export { default as renderStudioHtml } from "./render-html.js";
-export type { StudioAssets, StudioHtmlConfig, WarnLogger } from "./types.js";
+export { parseDevVariable, resolveAdminToken } from "./admin-token";
+export { default as loadStudioAssets } from "./assets";
+export { default as renderStudioHtml } from "./render-html";
+export type { StudioAssets, StudioHtmlConfig, WarnLogger } from "./types";

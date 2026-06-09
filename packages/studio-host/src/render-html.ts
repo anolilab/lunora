@@ -1,4 +1,4 @@
-import type { StudioHtmlConfig } from "./types.js";
+import type { StudioHtmlConfig } from "./types";
 
 /**
  * Serialise a string for safe inline-script embedding: JSON-encode it, then

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
-import type { StudioAssets, WarnLogger } from "./types.js";
+import type { StudioAssets, WarnLogger } from "./types";
 
 /**
  * Read the prebuilt static studio files shipped by `@cirrus/studio`

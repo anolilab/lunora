@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDevVariable } from "../src/admin-token.js";
+import { parseDevVariable } from "../src/admin-token";
 
 describe("parseDevVariable", () => {
     it("reads a quoted value and ignores comments/blank lines", () => {
