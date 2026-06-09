@@ -292,6 +292,9 @@ const MESSAGE_IDS = [
     "Results",
     "Explain",
     "Chart",
+    "History",
+    "Format",
+    "Clear history",
     "No numeric column to chart.",
     "Click Run to execute your query.",
     // Data-grid features (export, columns, selection, cell expand).
@@ -467,6 +470,7 @@ const MESSAGE_IDS = [
     "Upload",
     "Uploading…",
     "Copy URL",
+    "Download",
     "Delete object?",
     "Uploaded {key}",
     "Deleted {key}",

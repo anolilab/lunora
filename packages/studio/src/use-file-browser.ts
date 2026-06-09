@@ -41,6 +41,7 @@ interface FileBrowserModel {
     readonly nextCursor: string | undefined;
     readonly onCopy: (key: string) => void;
     readonly onDelete: (key: string) => void;
+    readonly onDownload: (key: string) => void;
     readonly onExpiryChange: (seconds: number) => void;
     readonly onFile: (file: File) => void;
     readonly onSortKeyChange: (key: string) => void;
@@ -68,6 +69,28 @@ interface UseFileBrowserOptions {
     readonly initialPrefix?: string;
     readonly pageSize: number;
 }
+
+/**
+ * Trigger a browser download of `url` named `filename`. No-op outside the browser
+ * (SSR / tests). Clicks a transient anchor with the `download` attribute set —
+ * mirrors `grid-features`' `downloadFile`. For a cross-origin signed URL the
+ * `download` attribute is advisory (the browser may navigate/open instead of
+ * saving), which is the acceptable fallback for a presigned object URL.
+ */
+const triggerDownload = (url: string, filename: string): void => {
+    if (!("document" in globalThis)) {
+        return;
+    }
+
+    const anchor = globalThis.document.createElement("a");
+
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.rel = "noopener";
+    globalThis.document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+};
 
 /** Write text to the clipboard, guarded for the non-browser (test/SSR) path. */
 const copyToClipboard = async (text: string): Promise<void> => {
@@ -266,6 +289,28 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         [client, expiry],
     );
 
+    // Resolve a (signed) URL for the object and trigger a browser download. The
+    // filename is the key's basename; the link uses the toolbar's share lifetime.
+    const onDownload = useCallback(
+        (key: string): void => {
+            setError(undefined);
+
+            fireAndForget(
+                (async (): Promise<void> => {
+                    try {
+                        const url = await client.signedStorageUrl(key, { expiresInSeconds: expiry });
+                        const filename = key.slice(key.lastIndexOf("/") + 1) || key;
+
+                        triggerDownload(url, filename);
+                    } catch (error_) {
+                        setError(errorMessage(error_));
+                    }
+                })(),
+            );
+        },
+        [client, expiry],
+    );
+
     // Clear the "Copied" indicator a couple of seconds after a copy, so it reads as
     // transient feedback rather than a sticky per-row state.
     useEffect(() => {
@@ -350,6 +395,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         nextCursor,
         onCopy,
         onDelete,
+        onDownload,
         onExpiryChange,
         onFile,
         onSortKeyChange,

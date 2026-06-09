@@ -67,7 +67,7 @@ interface FileRowProps {
  * the current folder; the full key still scopes everything.
  */
 const FileRow = ({ busy, copiedKey, handlers, object, prefix, selected, t }: FileRowProps): ReactElement => {
-    const { copy, name, remove, toggle } = useFileItem(object, prefix, handlers);
+    const { copy, download, name, remove, toggle } = useFileItem(object, prefix, handlers);
 
     return (
         <TableRow data-testid="fb-row">
@@ -79,7 +79,15 @@ const FileRow = ({ busy, copiedKey, handlers, object, prefix, selected, t }: Fil
             <TableCell>{object.httpMetadata?.contentType ?? ""}</TableCell>
             <TableCell className="text-right">
                 <span className="inline-flex items-center gap-1">
-                    <FileActions busy={busy} copied={copiedKey === object.key} objectKey={object.key} onCopy={copy} onDelete={remove} t={t} />
+                    <FileActions
+                        busy={busy}
+                        copied={copiedKey === object.key}
+                        objectKey={object.key}
+                        onCopy={copy}
+                        onDelete={remove}
+                        onDownload={download}
+                        t={t}
+                    />
                 </span>
             </TableCell>
         </TableRow>

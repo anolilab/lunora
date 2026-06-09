@@ -303,6 +303,37 @@ describe("fileBrowser", () => {
             expect(mock.listStorageObjects.mock.calls.length).toBeGreaterThanOrEqual(2);
         });
 
+        it("resolves a signed URL and triggers a download", async () => {
+            expect.assertions(3);
+
+            const mock = createClient();
+
+            // Stub the transient anchor click so jsdom doesn't try to navigate.
+            const click = vi.spyOn(globalThis.HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+
+            render(renderBrowser(mock));
+
+            await screen.findByTestId("fb-table");
+
+            const button = screen.getByTestId("storage-download-a.png");
+
+            expect(button).toBeDefined();
+
+            fireEvent.click(button);
+
+            await waitFor(() => {
+                if (mock.signedStorageUrl.mock.calls.length === 0) {
+                    throw new Error("not resolved yet");
+                }
+            });
+
+            // The download requests a signed link, then clicks the transient anchor.
+            expect(mock.signedStorageUrl).toHaveBeenCalledWith("a.png", { expiresInSeconds: 3600 });
+            expect(click).toHaveBeenCalledWith();
+
+            click.mockRestore();
+        });
+
         it("copies a signed URL to the clipboard", async () => {
             expect.assertions(2);
 

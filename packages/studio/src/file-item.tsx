@@ -11,6 +11,7 @@ import type { TFunction } from "./i18n-context";
 interface FileItemHandlers {
     readonly onCopy: (key: string) => void;
     readonly onDelete: (key: string) => void;
+    readonly onDownload: (key: string) => void;
     readonly onToggleSelect: (key: string) => void;
 }
 
@@ -18,6 +19,8 @@ interface FileItemHandlers {
 interface FileItem {
     /** Copy the object's URL (bound to the full key). */
     readonly copy: () => void;
+    /** Download the object (bound to the full key). */
+    readonly download: () => void;
     /** The display name relative to the current folder prefix. */
     readonly name: string;
     /** Delete the object (bound to the full key). */
@@ -34,11 +37,15 @@ interface FileItem {
  * this wiring is shared.
  */
 const useFileItem = (object: StorageObject, prefix: string, handlers: FileItemHandlers): FileItem => {
-    const { onCopy, onDelete, onToggleSelect } = handlers;
+    const { onCopy, onDelete, onDownload, onToggleSelect } = handlers;
 
     const copy = useCallback((): void => {
         onCopy(object.key);
     }, [onCopy, object.key]);
+
+    const download = useCallback((): void => {
+        onDownload(object.key);
+    }, [onDownload, object.key]);
 
     const remove = useCallback((): void => {
         onDelete(object.key);
@@ -48,7 +55,7 @@ const useFileItem = (object: StorageObject, prefix: string, handlers: FileItemHa
         onToggleSelect(object.key);
     }, [onToggleSelect, object.key]);
 
-    return { copy, name: object.key.slice(prefix.length), remove, toggle };
+    return { copy, download, name: object.key.slice(prefix.length), remove, toggle };
 };
 
 interface FileActionsProps {
@@ -61,19 +68,31 @@ interface FileActionsProps {
     readonly objectKey: string;
     readonly onCopy: () => void;
     readonly onDelete: () => void;
+    readonly onDownload: () => void;
     readonly t: TFunction;
 }
 
 /**
- * The shared copy-URL + confirm-delete action pair, with the canonical
- * `storage-copy-${key}` / `storage-delete-${key}` testids the studio tests rely
- * on. Consumed by both the list row and the gallery tile so the action wiring +
- * testids live in one place.
+ * The shared copy-URL + download + confirm-delete action trio, with the canonical
+ * `storage-copy-${key}` / `storage-download-${key}` / `storage-delete-${key}`
+ * testids the studio tests rely on. Consumed by both the list row and the gallery
+ * tile so the action wiring + testids live in one place.
  */
-const FileActions = ({ busy, buttonClassName, copied, objectKey, onCopy, onDelete, t }: FileActionsProps): ReactElement => (
+const FileActions = ({ busy, buttonClassName, copied, objectKey, onCopy, onDelete, onDownload, t }: FileActionsProps): ReactElement => (
     <>
         <Button className={buttonClassName} data-testid={`storage-copy-${objectKey}`} disabled={busy} onClick={onCopy} size="sm" type="button" variant="ghost">
             {copied ? t("Copied") : t("Copy URL")}
+        </Button>
+        <Button
+            className={buttonClassName}
+            data-testid={`storage-download-${objectKey}`}
+            disabled={busy}
+            onClick={onDownload}
+            size="sm"
+            type="button"
+            variant="ghost"
+        >
+            {t("Download")}
         </Button>
         <ConfirmButton confirmLabel={t("Delete object?")} disabled={busy} onConfirm={onDelete} testId={`storage-delete-${objectKey}`}>
             {t("Delete")}

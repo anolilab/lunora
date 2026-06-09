@@ -33,6 +33,9 @@ interface QueryTemplate {
 
 const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
 const STORAGE_KEY = "cirrus-studio-sql-queries";
+const HISTORY_KEY = "cirrus-studio-sql-history";
+/** How many recent distinct queries the history keeps. */
+const HISTORY_LIMIT = 25;
 /** Line-number gutter sizing, aligned to the editor textarea's padding + line height. */
 const GUTTER_STYLE: CSSProperties = { minWidth: "2.75rem", paddingInline: "0.5rem" };
 /** Which results sub-pane is shown. */
@@ -59,6 +62,128 @@ const loadQueries = (): SavedQuery[] => {
     } catch {
         return [];
     }
+};
+
+/** One run recorded in the browser-local query history. */
+interface HistoryEntry {
+    /** Epoch milliseconds the query was run. */
+    readonly at: number;
+    /** The executed SQL string. */
+    readonly sql: string;
+}
+
+/** Read the persisted run history (browser-local, best-effort, newest first). */
+const loadHistory = (): HistoryEntry[] => {
+    if (!("localStorage" in globalThis)) {
+        return [];
+    }
+
+    try {
+        const raw = globalThis.localStorage.getItem(HISTORY_KEY);
+        const parsed = raw === null ? [] : (JSON.parse(raw) as unknown);
+
+        return Array.isArray(parsed) ? (parsed as HistoryEntry[]) : [];
+    } catch {
+        return [];
+    }
+};
+
+/** SQL keywords upper-cased by {@link formatSql}; longest-first so multi-word clauses match before their prefix. */
+const SQL_KEYWORDS: ReadonlyArray<string> = [
+    "ORDER BY",
+    "GROUP BY",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "INNER JOIN",
+    "OUTER JOIN",
+    "CROSS JOIN",
+    "EXPLAIN QUERY PLAN",
+    "SELECT",
+    "DISTINCT",
+    "FROM",
+    "WHERE",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "JOIN",
+    "ON",
+    "AND",
+    "OR",
+    "AS",
+    "ASC",
+    "DESC",
+    "WITH",
+    "UNION",
+    "EXPLAIN",
+];
+
+/** Clauses that begin a new line in the formatted output. */
+const SQL_NEWLINE_CLAUSES: ReadonlyArray<string> = [
+    "FROM",
+    "WHERE",
+    "ORDER BY",
+    "GROUP BY",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "UNION",
+    "JOIN",
+    "LEFT JOIN",
+    "RIGHT JOIN",
+    "INNER JOIN",
+    "OUTER JOIN",
+    "CROSS JOIN",
+];
+
+/**
+ * A sentinel that brackets stashed string literals while {@link formatSql}
+ * rewrites keywords/whitespace. NUL can't appear in user-typed SQL, so it never
+ * collides with a real token (e.g. a numeric literal like `5`).
+ */
+const SENTINEL = String.fromCodePoint(0);
+/** Matches a stashed-literal placeholder (NUL-index-NUL) on restore. */
+const RESTORE_RE = new RegExp(`${SENTINEL}${String.raw`(\d+)`}${SENTINEL}`, "gu");
+
+/**
+ * A small, pragmatic SQL pretty-printer for the read-only SELECT / WITH / EXPLAIN
+ * this editor allows. It upper-cases known keywords (whole-word, case-insensitive),
+ * collapses runs of whitespace, and breaks a new line before each major clause. It
+ * is intentionally not a full SQL parser — string literals are preserved verbatim
+ * and only reasonable read queries are expected. Idempotent: formatting an already
+ * formatted query yields the same string.
+ */
+const formatSql = (sql: string): string => {
+    // Preserve single-quoted string literals (incl. '' escapes) by stashing them
+    // behind NUL-delimited placeholders so keyword/whitespace rewriting never
+    // touches their contents.
+    const literals: string[] = [];
+    const withPlaceholders = sql.replaceAll(/'(?:[^']|'')*'/gu, (match) => {
+        literals.push(match);
+
+        return `${SENTINEL}${(literals.length - 1).toString()}${SENTINEL}`;
+    });
+
+    // Collapse all whitespace (including newlines) to single spaces, then trim.
+    let out = withPlaceholders.replaceAll(/\s+/gu, " ").trim();
+
+    // Upper-case keywords as whole words (longest-first via the source ordering).
+    for (const keyword of SQL_KEYWORDS) {
+        const pattern = new RegExp(String.raw`\b${keyword.replaceAll(" ", String.raw`\s+`)}\b`, "giu");
+
+        out = out.replaceAll(pattern, keyword);
+    }
+
+    // Break a new line before each major clause (but not at the very start).
+    for (const clause of SQL_NEWLINE_CLAUSES) {
+        const pattern = new RegExp(String.raw`\s+${clause.replaceAll(" ", String.raw`\s+`)}\b`, "gu");
+
+        out = out.replaceAll(pattern, `\n${clause}`);
+    }
+
+    // Restore the stashed string literals.
+    out = out.replaceAll(RESTORE_RE, (_match, index: string) => literals[Number(index)] ?? "");
+
+    return out;
 };
 
 /** A best-effort unique id for a new saved query. */
@@ -177,6 +302,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const t = useT();
 
     const [queries, setQueries] = useState<SavedQuery[]>(loadQueries);
+    const [history, setHistory] = useState<HistoryEntry[]>(loadHistory);
     const [activeId, setActiveId] = useState<null | string>(null);
     const [draft, setDraft] = useState<string>(TEMPLATES[0]?.sql ?? "");
     const [search, setSearch] = useState<string>("");
@@ -196,6 +322,27 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         }
     }, [queries]);
 
+    // Persist the run history whenever it changes.
+    useEffect(() => {
+        if ("localStorage" in globalThis) {
+            globalThis.localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+        }
+    }, [history]);
+
+    // Record a successfully-run query at the head of the history, de-duping an
+    // identical consecutive run and any earlier copy, capped to HISTORY_LIMIT.
+    const recordHistory = useCallback((sql: string): void => {
+        setHistory((current) => {
+            if (current[0]?.sql === sql) {
+                return current;
+            }
+
+            const next: HistoryEntry[] = [{ at: Date.now(), sql }, ...current.filter((entry) => entry.sql !== sql)];
+
+            return next.slice(0, HISTORY_LIMIT);
+        });
+    }, []);
+
     const run = useCallback(
         async (mode: ResultTab): Promise<void> => {
             if (draft.trim() === "") {
@@ -212,6 +359,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                 setError(null);
                 setTab(mode);
                 recordShard(shardKey);
+                recordHistory(sql);
             } catch (error_: unknown) {
                 setResult(null);
                 setError(errorMessage(error_));
@@ -220,7 +368,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                 setRunning(false);
             }
         },
-        [client, draft, shardKey],
+        [client, draft, recordHistory, shardKey],
     );
 
     const onRun = useCallback((): void => {
@@ -301,6 +449,31 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         setResult(null);
         setError(null);
     }, []);
+
+    // Load a past run back into the editor as a fresh draft (not a saved query).
+    const loadFromHistory = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
+        const sql = event.currentTarget.dataset.sql ?? "";
+
+        setActiveId(null);
+        setDraft(sql);
+        setResult(null);
+        setError(null);
+    }, []);
+
+    const clearHistory = useCallback((): void => {
+        setHistory([]);
+    }, []);
+
+    // Pretty-print the current draft in place (auto-saving the active query too).
+    const formatDraft = useCallback((): void => {
+        const next = formatSql(draft);
+
+        setDraft(next);
+
+        if (activeId !== null) {
+            setQueries((current) => current.map((query) => (query.id === activeId ? { ...query, sql: next } : query)));
+        }
+    }, [activeId, draft]);
 
     const showResults = useCallback((): void => {
         setTab("results");
@@ -409,6 +582,50 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                             ))}
                         </ul>
                     </div>
+
+                    {history.length > 0 && (
+                        <div>
+                            <div className="flex items-center justify-between px-1 pb-1">
+                                <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{t("History")}</p>
+                                <button
+                                    className="rounded px-1 text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground"
+                                    data-testid="sql-history-clear"
+                                    onClick={clearHistory}
+                                    type="button"
+                                >
+                                    {t("Clear history")}
+                                </button>
+                            </div>
+                            <ul className="flex flex-col gap-px" data-testid="sql-history">
+                                {history.map((entry) => (
+                                    <li key={`${entry.at.toString()}:${entry.sql}`}>
+                                        <button
+                                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:bg-sidebar-accent"
+                                            data-sql={entry.sql}
+                                            data-testid="sql-history-item"
+                                            onClick={loadFromHistory}
+                                            title={entry.sql}
+                                            type="button"
+                                        >
+                                            <svg
+                                                aria-hidden="true"
+                                                className="size-3.5 shrink-0 opacity-70"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                strokeWidth={1.6}
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path d="M12 8v4l3 2M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" />
+                                            </svg>
+                                            <span className="truncate font-mono">{entry.sql}</span>
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                 </div>
             </aside>
 
@@ -453,6 +670,15 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         </button>
                         <div className="ms-auto flex items-center gap-2">
                             {result !== null && result.columns.length > 0 && <ExportMenu columns={result.columns} name="query-result" rows={result.rows} />}
+                            <button
+                                className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                                data-testid="sql-format"
+                                disabled={running}
+                                onClick={formatDraft}
+                                type="button"
+                            >
+                                {t("Format")}
+                            </button>
                             <ShardInput onChange={setShardKey} testId="sql-shard-input" value={shardKey} />
                             <button
                                 className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
@@ -501,4 +727,5 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     );
 };
 
+export { formatSql };
 export type { SqlEditorPanelProps };

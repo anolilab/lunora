@@ -109,7 +109,7 @@ interface GalleryTileProps {
  * (only the tile layout differs).
  */
 const GalleryTile = ({ busy, copiedKey, handlers, object, prefix, resolveUrl, selected, t }: GalleryTileProps): ReactElement => {
-    const { copy, name, remove, toggle } = useFileItem(object, prefix, handlers);
+    const { copy, download, name, remove, toggle } = useFileItem(object, prefix, handlers);
 
     return (
         <div className="flex flex-col gap-1.5" data-testid="fb-tile">
@@ -133,6 +133,7 @@ const GalleryTile = ({ busy, copiedKey, handlers, object, prefix, resolveUrl, se
                     objectKey={object.key}
                     onCopy={copy}
                     onDelete={remove}
+                    onDownload={download}
                     t={t}
                 />
             </div>

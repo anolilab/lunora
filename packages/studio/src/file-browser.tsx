@@ -90,11 +90,11 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     const vm = useFileBrowser({ initialPrefix, pageSize });
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const { onCopy, onDelete, onFile, toggleSelect } = vm;
+    const { onCopy, onDelete, onDownload, onFile, toggleSelect } = vm;
 
     const handlers = useMemo<FileItemHandlers>(() => {
-        return { onCopy, onDelete, onToggleSelect: toggleSelect };
-    }, [onCopy, onDelete, toggleSelect]);
+        return { onCopy, onDelete, onDownload, onToggleSelect: toggleSelect };
+    }, [onCopy, onDelete, onDownload, toggleSelect]);
 
     const onUploadClick = useCallback((): void => {
         fileInputRef.current?.click();
